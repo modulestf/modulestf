@@ -1,0 +1,38 @@
+# Complete Example
+
+Configuration in this directory creates a {{SERVICE_NAME}} with most features enabled.
+
+## Usage
+
+To run this example you need to execute:
+
+```bash
+$ terraform init
+$ terraform plan
+$ terraform apply
+```
+
+Note that this example may create resources which cost money. Run `terraform destroy` when you don't need these resources.
+
+## Requirements
+
+| Name | Version |
+|------|---------|
+| terraform | >= 1.5.7 |
+| {{provider}} | >= {{provider_version}} |
+
+## Providers
+
+| Name | Version |
+|------|---------|
+| {{provider}} | >= {{provider_version}} |
+
+## Modules
+
+| Name | Source | Version |
+|------|--------|---------|
+| {{module_name}} | ../.. | n/a |
+
+<!-- BEGINNING OF PRE-COMMIT-TERRAFORM DOCS HOOK -->
+<!-- terraform-docs will auto-generate content here -->
+<!-- END OF PRE-COMMIT-TERRAFORM DOCS HOOK -->

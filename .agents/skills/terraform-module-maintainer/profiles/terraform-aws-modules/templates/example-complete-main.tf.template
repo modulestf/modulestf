@@ -1,0 +1,52 @@
+# Configure the provider for this example.
+# Replace with the appropriate provider block for your target provider.
+#
+# Examples:
+#   provider "aws"     { region = "eu-west-1" }
+#   provider "google"  { project = "my-project"; region = "europe-west1" }
+#   provider "azurerm" { features {} }
+
+locals {
+  name = "complete-${basename(path.cwd)}"
+
+  tags = {
+    Example     = local.name
+    Environment = "dev"
+    Terraform   = "true"
+  }
+}
+
+################################################################################
+# {{MODULE_NAME}} Module - Complete
+################################################################################
+
+module "{{module_name}}" {
+  source = "../.."
+
+  name = local.name
+
+  # Populate with real module variables from the coverage matrix.
+  # Demonstrate all major features - not placeholder feature flags.
+
+  tags = local.tags
+}
+
+################################################################################
+# {{MODULE_NAME}} Module - Disabled
+################################################################################
+
+module "disabled" {
+  source = "../.."
+
+  create = false
+
+  # Provide required variables to verify create=false works
+  name = "disabled-${local.name}"
+}
+
+################################################################################
+# Supporting Resources
+################################################################################
+
+# Add supporting resources to demonstrate integration
+# Examples: encryption keys, security groups, networks, policy documents, etc.

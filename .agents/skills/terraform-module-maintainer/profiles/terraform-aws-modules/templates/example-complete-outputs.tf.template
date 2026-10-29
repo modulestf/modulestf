@@ -1,0 +1,8 @@
+################################################################################
+# {{MODULE_NAME}} Module - Complete
+################################################################################
+
+# Expose key module outputs for verification.
+# Use real output names from the module's outputs.tf.
+# Do NOT use placeholder output names like "id" or "arn" -
+# verify they exist in the module first.

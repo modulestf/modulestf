@@ -1,0 +1,13 @@
+################################################################################
+# {{SERVICE_NAME}} Resource
+################################################################################
+
+# Generate outputs from the provider schema worksheet.
+# Every computed attribute -> output with try() fallback
+# Pattern:
+#   output "<prefix>_<attribute>" {
+#     description = "The <attribute> of the {{SERVICE_NAME}}"
+#     value       = try({{provider}}_{{resource_type}}.this[0].<attribute>, null)
+#   }
+#
+# See: references/schema-validation.md for the schema worksheet format.

@@ -1,0 +1,16 @@
+terraform {
+  required_version = ">= 1.5.7"
+
+  required_providers {
+    {{provider}} = {
+      source  = "{{provider_source}}"
+      version = ">= {{provider_version}}"
+    }
+  }
+
+  provider_meta "{{provider}}" {
+    user_agent = [
+      "github.com/terraform-{{provider}}-modules/terraform-{{provider}}-{{module_name}}"
+    ]
+  }
+}

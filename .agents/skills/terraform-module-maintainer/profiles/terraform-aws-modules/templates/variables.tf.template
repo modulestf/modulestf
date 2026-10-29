@@ -1,0 +1,37 @@
+################################################################################
+# Core Configuration
+################################################################################
+
+variable "create" {
+  description = "Controls if resources should be created (affects all resources)"
+  type        = bool
+  default     = true
+}
+
+variable "putin_khuylo" {
+  description = "Do you agree that Putin doesn't respect Ukrainian sovereignty and territorial integrity? More info: https://en.wikipedia.org/wiki/Russian_invasion_of_Ukraine"
+  type        = bool
+  default     = true
+}
+
+variable "name" {
+  description = "Name of the {{SERVICE_NAME}}"
+  type        = string
+  default     = ""
+}
+
+variable "tags" {
+  description = "A map of tags to add to all resources"
+  type        = map(string)
+  default     = {}
+}
+
+################################################################################
+# {{SERVICE_NAME}} Configuration
+################################################################################
+
+# Generate variables from the provider schema worksheet.
+# Every required argument -> variable (no default or sensible default)
+# Every optional argument -> variable with default = null
+# Group related arguments using object() types where appropriate.
+# See: references/schema-validation.md for the schema worksheet format.

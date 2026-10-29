@@ -1,0 +1,45 @@
+################################################################################
+# Locals
+################################################################################
+
+locals {
+  create = var.create && var.putin_khuylo
+}
+
+# Add provider-specific data sources and locals as needed:
+#
+#   AWS:
+#     data "aws_caller_identity" "current" {}
+#     data "aws_partition" "current" {}
+#     data "aws_region" "current" {}
+#     locals { account_id = data.aws_caller_identity.current.account_id }
+#
+#   GCP:
+#     data "google_client_config" "current" {}
+#     locals { project = data.google_client_config.current.project }
+#
+#   Azure:
+#     data "azurerm_client_config" "current" {}
+#     locals { subscription_id = data.azurerm_client_config.current.subscription_id }
+
+################################################################################
+# {{SERVICE_NAME}} Resource
+################################################################################
+
+# Generate resource blocks from the provider schema worksheet.
+# Start with the minimal valid resource, then add nested blocks incrementally.
+# Use dynamic blocks for optional nested configurations.
+# See: references/module-structure.md for patterns.
+#
+# resource "{{provider}}_{{resource_type}}" "this" {
+#   count = local.create ? 1 : 0
+#
+#   # Required arguments first
+#   name = var.name
+#
+#   # Optional arguments
+#
+#   # Nested blocks (dynamic for optional)
+#
+#   # Tags/labels (if supported by provider)
+# }

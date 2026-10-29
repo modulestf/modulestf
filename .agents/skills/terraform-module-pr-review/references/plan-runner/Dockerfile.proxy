@@ -1,0 +1,16 @@
+# Egress proxy for the isolated plan pass. See README.md in this directory.
+# One image, two configurations: init.conf for the init phase, plan.conf for the plan phase.
+FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
+
+RUN apk add --no-cache tinyproxy=1.11.2-r0
+
+COPY tinyproxy.conf allowlist-init allowlist-plan /etc/tinyproxy/
+RUN cd /etc/tinyproxy \
+ && sed 's#@ALLOWLIST@#/etc/tinyproxy/allowlist-init#' tinyproxy.conf > init.conf \
+ && sed 's#@ALLOWLIST@#/etc/tinyproxy/allowlist-plan#' tinyproxy.conf > plan.conf \
+ && rm tinyproxy.conf
+
+USER nobody
+EXPOSE 8888
+ENTRYPOINT ["/usr/bin/tinyproxy", "-d", "-c"]
+CMD ["/etc/tinyproxy/init.conf"]

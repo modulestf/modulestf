@@ -1,0 +1,1 @@
+^(sts|ec2|iam|s3|kms|logs|ssm|lambda|dynamodb|sqs|sns|elasticloadbalancing|autoscaling|rds|ecs|ecr|eks|monitoring|cloudwatch|events|secretsmanager|acm|route53|cloudfront|apigateway|elasticfilesystem|backup|s3files|organizations|kinesis)(\.[a-z]{2}(-gov)?-[a-z]+-[0-9]+)?\.amazonaws\.com:443$

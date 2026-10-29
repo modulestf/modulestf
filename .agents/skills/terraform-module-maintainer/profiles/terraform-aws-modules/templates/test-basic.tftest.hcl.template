@@ -1,0 +1,20 @@
+# Basic test for {{MODULE_NAME}}
+# Verify the module creates resources and exposes expected outputs.
+# Use real output names from the module's outputs.tf.
+
+variables {
+  name   = "test-{{module_name}}"
+  create = true
+}
+
+run "basic_test" {
+  command = plan
+
+  # Add assertions for real module outputs.
+  # Verify from the module's outputs.tf what names are available.
+  # Example:
+  # assert {
+  #   condition     = output.<prefix>_id != ""
+  #   error_message = "Resource ID should not be empty"
+  # }
+}

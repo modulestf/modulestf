@@ -1,0 +1,89 @@
+################################################################################
+# IAM Role (AWS-specific)
+#
+# This template is for AWS IAM patterns. For other providers:
+#   GCP:   Use google_service_account + google_project_iam_member
+#   Azure: Use azurerm_role_assignment + azurerm_user_assigned_identity
+#
+# Adapt the pattern to the target provider's identity model.
+################################################################################
+
+locals {
+  create_role = local.create && var.create_role
+}
+
+resource "aws_iam_role" "this" {
+  count = local.create_role ? 1 : 0
+
+  name                 = var.role_name != "" ? var.role_name : var.name
+  description          = var.role_description
+  path                 = var.role_path
+  permissions_boundary = var.role_permissions_boundary
+  assume_role_policy   = data.aws_iam_policy_document.assume_role[0].json
+
+  tags = merge(var.tags, var.role_tags)
+}
+
+################################################################################
+# Assume Role Policy
+################################################################################
+
+data "aws_iam_policy_document" "assume_role" {
+  count = local.create_role ? 1 : 0
+
+  statement {
+    sid     = "{{SERVICE_NAME}}AssumeRole"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["{{service}}.amazonaws.com"]
+    }
+  }
+}
+
+################################################################################
+# IAM Policies
+################################################################################
+
+# Add service-specific IAM policies here
+# Example patterns:
+
+# CloudWatch Logs Policy
+resource "aws_iam_role_policy" "cloudwatch_logs" {
+  count = local.create_role && var.attach_cloudwatch_logs_policy ? 1 : 0
+
+  name   = "${var.role_name}-cloudwatch-logs"
+  role   = aws_iam_role.this[0].id
+  policy = data.aws_iam_policy_document.cloudwatch_logs[0].json
+}
+
+data "aws_iam_policy_document" "cloudwatch_logs" {
+  count = local.create_role && var.attach_cloudwatch_logs_policy ? 1 : 0
+
+  statement {
+    sid = "CloudWatchLogsAccess"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+    resources = ["arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:*"]
+  }
+}
+
+# Custom Policy Attachment (for flexibility)
+resource "aws_iam_role_policy" "custom" {
+  count = local.create_role && var.custom_policy_json != null ? 1 : 0
+
+  name   = "${var.role_name}-custom"
+  role   = aws_iam_role.this[0].id
+  policy = var.custom_policy_json
+}
+
+resource "aws_iam_role_policy_attachment" "custom" {
+  for_each = local.create_role ? { for idx, arn in var.custom_policy_arns : idx => arn } : {}
+
+  role       = aws_iam_role.this[0].name
+  policy_arn = each.value
+}
