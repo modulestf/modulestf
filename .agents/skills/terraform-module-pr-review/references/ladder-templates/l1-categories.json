@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "l1": [
+    "count-for_each-conditional-change",
+    "default-change",
+    "locals-outputs-change",
+    "type-validation-change",
+    "unknown-propagation-candidate",
+    "wrapper-change"
+  ]
+}
