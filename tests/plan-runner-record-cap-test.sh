@@ -30,7 +30,7 @@ case "$2" in
     tmp_parent="$1"; TMPRUN="$1/plan-runner.abcdef"
     mkdir -p "$TMPRUN"; echo synthetic > "$TMPRUN/pass.env"
     proxy_init=owned-init; proxy_plan=owned-plan
-    volume=owned-volume; net_int=owned-int; net_ext=owned-ext
+    volume=owned-volume; saved=owned-saved; net_int=owned-int; net_ext=owned-ext
     # Record Docker calls outside the directory cleanup removes.
     calls="$1/calls"
     docker() { printf '%s\n' "$*" >> "$calls"; return 0; }
@@ -43,7 +43,7 @@ case "$2" in
     test ! -e "$TMPRUN"
     rg -Fq 'rm -f owned-init' "$calls"
     rg -Fq 'rm -f owned-plan' "$calls"
-    rg -Fq 'volume rm owned-volume' "$calls"
+    rg -Fq 'volume rm owned-volume owned-saved' "$calls"
     rg -Fq 'network rm owned-int owned-ext' "$calls" ;;
   repeated)
     in_runner "$record/output.txt"

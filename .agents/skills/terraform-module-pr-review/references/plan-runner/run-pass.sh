@@ -30,7 +30,11 @@
 # proxy (AWS service endpoints), with the work volume read-only, and is the only place the
 # credentials go. With --base, an example whose plan is a code-error is then re-run at the
 # merge base in two more containers: base-init behind the init proxy, base-plan behind the
-# plan proxy. Examples that planned never touch the base. This script owns the credentials:
+# plan proxy. Examples that planned never touch the base. Every plan is saved with -out into a
+# volume of its own, and the saved plan of an example that planned is then read with terraform
+# show -json in one more container per example, with no network, no credentials and that
+# volume read-only, after the plan container has ended; this script checks the addresses it
+# prints and writes them to the record as addresses-<n>.json. This script owns the credentials:
 # for each plan container it issues a session on the review role --role-arn names, with the
 # profile, for 900 seconds, downscoped by the pinned session policy (../plan-session.sh), and
 # mounts it read-only into that container as a file, never as --env or --env-file, so Docker
@@ -106,7 +110,7 @@ chmod 0700 "$TMPRUN"
 id="$(basename "$TMPRUN" | tr -dc '[:alnum:]' | tr '[:upper:]' '[:lower:]')"
 sfx="$(printf '%s' "$id" | tail -c 6)"
 RUN="/work/pr-review.$sfx" # the plan pass's run directory, inside the work volume
-net_int="plan-int-$id" net_ext="plan-ext-$id" volume="plan-work-$id"
+net_int="plan-int-$id" net_ext="plan-ext-$id" volume="plan-work-$id" saved="plan-saved-$id"
 runner="plan-runner-$id" proxy_init="plan-proxy-init-$id" proxy_plan="plan-proxy-plan-$id"
 # Every name carries this run's id, and cleanup removes exactly these names, never by prefix
 echo "$id" > "$record/run-id.txt"
@@ -128,7 +132,7 @@ cleanup() {
       docker rm -f "${p%%:*}" > /dev/null 2>&1 || true
     fi
   done
-  docker volume rm "$volume" > /dev/null 2>&1 || true
+  docker volume rm "$volume" "$saved" > /dev/null 2>&1 || true
   docker network rm "$net_int" "$net_ext" > /dev/null 2>&1 || true
   case "$TMPRUN" in
     "$tmp_parent"/plan-runner.??????) rm -rf -- "$TMPRUN" ;;
@@ -175,6 +179,7 @@ fi
 load_creds='while IFS= read -r l; do k=${l%%=*}; v=${l#*=}; case $k in PLAN_PASS_AWS_ACCESS_KEY_ID|PLAN_PASS_AWS_SECRET_ACCESS_KEY|PLAN_PASS_AWS_SESSION_TOKEN) export "$k=$v" ;; esac; done < /opt/plan-pass/creds.env' # creds-loader
 
 docker volume create "$volume" > /dev/null
+docker volume create "$saved" > /dev/null
 docker network create --internal --ipv6=false "$net_int" > /dev/null
 docker network create --ipv6=false "$net_ext" > /dev/null
 
@@ -268,6 +273,10 @@ network_check init --allowed registry.terraform.io --refused sts.us-east-1.amazo
 # Prepare: copy the read-only clone into the run directory. No network.
 in_runner "$record/runner.log" --network none "${common[@]}" -v "$clone":/src:ro -v "$volume":/work \
   --entrypoint /bin/bash "$runner_image" -c "mkdir -m 700 '$RUN' && cp -a /src '$RUN/clone'"
+# The saved plans' volume, writable by the plan containers' user: a new volume is root's, and
+# its owner may change its mode with no capability.
+docker run --rm --network none "${hardening[@]}" --user 0:0 -v "$saved":/saved \
+  --entrypoint /bin/chmod "$runner_image" 1777 /saved
 
 # The budget runs from here: init, the plans and the merge base re-runs.
 t0=$SECONDS
@@ -298,7 +307,7 @@ plan_container() { # output file, phase, index, example, budget left: the work v
   issue_session
   in_runner "$1" --network "$net_int" "${common[@]}" "${proxy_env[@]}" \
     -v "$volume":/work:ro -v "$volume":/seed:ro \
-    --tmpfs "$RUN/clone:rw,size=1g,mode=1777" ${base_tmpfs[@]+"${base_tmpfs[@]}"} \
+    --tmpfs "$RUN/clone:rw,size=1g,mode=1777" ${base_tmpfs[@]+"${base_tmpfs[@]}"} -v "$saved":"$RUN/plan/saved" \
     --tmpfs "$RUN/plan/out:rw,size=256m,mode=1777" --tmpfs "$RUN/plan/tmp:rw,size=256m,mode=1777" \
     --tmpfs "$RUN/plan/home:rw,size=64m,mode=1777" -v "$TMPRUN/pass.env":/opt/plan-pass/creds.env:ro \
     --entrypoint /bin/bash "$runner_image" -c \
@@ -331,6 +340,39 @@ for ex in "$@"; do
   esac
 done
 save_proxy_log "$proxy_plan" proxy-plan.log
+
+# The saved plan of each example that planned, read outside the container that ran the head's
+# code: no network, no credentials, both volumes read-only. Only an addresses-json line the
+# host's own checks accept reaches the record, reduced to the patterns below.
+# shellcheck disable=SC2016 # a jq program
+clean_addresses='. as $x
+  | [($x.addresses? | if type == "array" then .[] else empty end)
+     | select(type == "string" and test("^[A-Za-z0-9_.-]{1,300}$"))] | unique | .[:1000]
+  | . as $s
+  | {addresses: $s,
+     attributes: (($x.attributes? | if type == "object" then . else {} end)
+       | with_entries(select(.key as $k | ($s | index($k)) != null)
+           | .value |= ([(if type == "array" then .[] else empty end)
+                         | select(type == "string" and test("^[a-z0-9_]{1,128}$"))] | unique | .[:500]))),
+     module_calls: ($x.module_calls? | if type == "object" then with_entries(select((.key | test("^[A-Za-z0-9_-]{1,64}$"))
+                  and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$")))) else {} end)}'
+n=0
+for ex in "$@"; do
+  n=$((n + 1))
+  [ -f "$TMPRUN/block.$n" ] && grep -Eq '^plan: planned' "$TMPRUN/block.$n" || continue
+  rem=$(left)
+  [ "$rem" -gt 0 ] || break
+  : > "$TMPRUN/show.out"
+  in_runner "$TMPRUN/show.out" --network none "${common[@]}" \
+    -v "$volume":/work:ro -v "$saved":"$RUN/plan/saved":ro \
+    --tmpfs "$RUN/plan/out:rw,size=256m,mode=1777" --tmpfs "$RUN/plan/tmp:rw,size=64m,mode=1777" \
+    --tmpfs "$RUN/plan/home:rw,size=64m,mode=1777" --entrypoint /bin/bash "$runner_image" -c \
+    "exec bash /opt/plan-pass/plan-pass.sh plan '$RUN' '$pname' --mode runner --budget '$rem' --phase show --index '$n' \"\$@\"" \
+    plan-pass "$ex"
+  sed -n 's/^addresses-json: //p' "$TMPRUN/show.out" | head -n 1 | jq -c "$clean_addresses" > "$TMPRUN/addresses.$n" 2> /dev/null || true
+  [ -s "$TMPRUN/addresses.$n" ] && mv "$TMPRUN/addresses.$n" "$record/addresses-$n.json"
+  rm -f "$TMPRUN/addresses.$n"
+done
 
 # Merge base re-run, only for the code-errors: the base worktree and its init behind the init
 # proxy with no credentials, then its plan behind the plan proxy. One proxy runs at a time,

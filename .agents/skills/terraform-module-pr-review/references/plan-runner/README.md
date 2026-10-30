@@ -110,7 +110,9 @@ and `hosted-record.sh` reduces its record to `plan-hosted.json`, classes and cou
 - **Images are never removed by a run.** Each runner revision leaves its own
   `plan-runner:src-<hash>` and `plan-egress-proxy:src-<hash>`. Remove an old pair by its
   exact tag.
-- **A SIGKILL of `run-pass.sh` skips its cleanup.** Its containers, networks and volume
+- **The saved plans' volume has no size limit.** It is an ordinary Docker volume, so a plan
+  container can fill it; the run removes it when it ends, and Cleanup by its exact name.
+- **A SIGKILL of `run-pass.sh` skips its cleanup.** Its containers, networks and volumes
   stay; the pull request skill's Cleanup removes them by the exact names in `run-id.txt`.
   A leftover plan container holds no credential in its configuration; it names only the
   mounted file.
@@ -221,6 +223,15 @@ the skill's plan pass whenever a container runtime is available.
   `plan-pass.sh plan --mode runner --phase plan --index <n> <example>`, which prints that
   example's record lines. A `code-error` with `--base` given ends in `base: deferred`. The
   phase stops at a credentials failure, as the plan pass does, and at the budget.
+- **Show phase:** every plan is saved with `-out` into a second volume, the saved plans'
+  volume, made writable for the containers' user by a capability-free root container that
+  only changes its mode. After the plan phase, one more container per example whose plan
+  block holds `plan: planned` runs `--phase show`: no network, no credentials, the work
+  volume and the saved plans read-only. It reads the saved plan with
+  `terraform show -json` and prints one `addresses-json:` line. The host keeps only the
+  configuration addresses and attribute names that match their patterns and writes them to
+  the record as `addresses-<n>.json` ([plan-pass.md](../plan-pass.md#saved-plans-and-addresses)).
+  It counts against the same budget.
 - **Merge base re-run:** only for the examples whose plan block holds `plan: code-error` and
   `base: deferred`, after the last head plan, so an example that planned costs the budget
   nothing at the base. The plan proxy is removed and the init proxy started again, since

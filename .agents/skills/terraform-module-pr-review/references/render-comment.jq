@@ -57,15 +57,27 @@ def gap_reasons: ["terraform was not installed", "init failed", "not run: enviro
   "not run: symbolic link", "verification input refused", "host results rejected: not JSON",
   "host results rejected: shape", "host results rejected: head_sha", "host results rejected: base_sha",
   "host results rejected: example directories", "host verification did not run",
-  "merge base not available", "merge base not run: environment"];
+  "merge base not available", "merge base not run: environment", "not run: command limit", "not run: budget",
+  "merge base not run: command limit", "merge base not run: budget"];
+
+# The fixed reasons verify-pass.sh coverage gives an example that was not planned.
+def unplanned_reasons: ["no example directory", "no AWS profile named", "not reached by the plan pass",
+  "code-error, merge base not planned", "environment", "needs input", "output unrecognised", "budget",
+  "plan pass ended: credentials", "plan gate G0", "plan gate G1", "plan gate G2", "plan gate G3",
+  "exception: example assumes a role in another account", "exception: needs a Docker daemon"];
 
 def valid_run:
   type == "object"
-  and keys == ["counts", "format", "plan_ran", "triage", "verify_gaps"]
+  and keys == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"]
   and .format == 1
   and (.triage | type == "boolean") and (.plan_ran | type == "boolean")
   and (.verify_gaps | type == "array" and all(.[]; type == "object"
         and keys == ["dir", "reason"] and (.dir | plain_path) and (.reason | IN(gap_reasons[]))))
+  and (.coverage | type == "object" and keys == ["class", "inert", "unplanned"]
+        and (.class | IN("complete", "partial", "none")) and (.inert | type == "boolean")
+        and (.unplanned | type == "array" and all(.[]; type == "object"
+              and keys == ["dir", "reason"] and (.dir | plain_path) and (.reason | IN(unplanned_reasons[]))))
+        and ((.class == "complete") == (.unplanned == [])))
   and (.counts == null or (.counts | type == "object"
         and keys == ["conversation-claims-unread", "instruction-like-text-from-others",
                      "review.quoted-claim-unverifiable"]
@@ -102,7 +114,7 @@ def ladder:
   elif any($g.checks, $g.review_decision, $g.mergeability; . == "fail") then {rule: 3, verdict: "block"}
   elif .triage or any($g[]; . == "unknown")
        or any($f[]; .rule_id | IN("review.check-not-run", "review.no-change-identified"))
-       or .gaps > 0
+       or .gaps > 0 or .unplanned > 0
     then {rule: 4, verdict: "inconclusive"}
   elif .unresolved > 0 then {rule: 5, verdict: "changes suggested"}
   elif has_sev("MEDIUM") then {rule: 6, verdict: "block"}
@@ -168,6 +180,10 @@ def texts: {
   "threads-over-count": "- {count} review thread comments over the count did not reach the review.",
   "verification": "- Verification of `{dir}`: {reason}.",
   "verification-more": "- {count} more example directories with a check that could not run are not listed.",
+  "unplanned": "- `{dir}` was not planned: {reason}.",
+  "unplanned-more": "- {count} more examples that were not planned are not listed.",
+  "unplanned-no-examples": "- The module has no example directory, so no example could be planned.",
+  "unplanned-inert": "- The change reaches no Terraform configuration, so the examples below that were not planned leave nothing unknown.",
   "thread-match": "- `{location}`: this review has a finding at the same path and line.",
   "thread-no-match": "- `{location}`: this review has no finding at the same path and line.",
   "todo-lead-block": "To make this mergeable, resolve each checklist item below and push.",
@@ -355,7 +371,11 @@ def gap_lines($h; $run; $p):
     | tx(.kind; {path: ((.path // "") | repo_path($p)), count: (.count // 0)}) ]
   + [ $run.verify_gaps[:100][]
       | tx("verification"; {dir, reason: (if .reason == "init failed" then "`init` failed" else .reason end)}) ]
-  + ($run.verify_gaps | length - 100 | if . > 0 then [tx("verification-more"; {count: .})] else [] end);
+  + ($run.verify_gaps | length - 100 | if . > 0 then [tx("verification-more"; {count: .})] else [] end)
+  + (if $run.coverage.inert and $run.coverage.unplanned != [] then [tx("unplanned-inert")] else [] end)
+  + [ $run.coverage.unplanned[:100][]
+      | if .reason == "no example directory" then tx("unplanned-no-examples") else tx("unplanned"; {dir, reason}) end ]
+  + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end);
 
 def state_lines($h; $c):
   ($h.signals + {checks: $c.signal}) as $g
@@ -457,14 +477,16 @@ def render($in):
   $in.host as $h | $in.host.prefix as $p
   | {findings: $in.findings, signals: ($h.signals + {checks: $in.checks.signal}),
      unresolved: ($h.unresolved_threads | length), triage: $in.run.triage,
-     gaps: (($h.could_not_run | length) + ($in.run.verify_gaps | length))} as $l
+     gaps: (($h.could_not_run | length) + ($in.run.verify_gaps | length)),
+     unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end)} as $l
   | ($l | ladder) as $v
   | ($v | rationale($l)) as $why
   | ([$in.assessment, "**\($v.verdict | verdict_line)**"]
      + (if $in.run.triage then ["Triage only: the full review of this change has not run yet."] else [] end)
      + [$why]
      + (if $v.rule == 8 then [] else ["### What to do\n\n" + todo_md($l; $v.rule; $p;
-          ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | length) + ($in.run.verify_gaps | length))] end)
+          ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | length) + ($in.run.verify_gaps | length)
+          + $l.unplanned)] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
      + section("Checks that could not run"; gap_lines($h; $in.run; $p); "\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")

@@ -9,8 +9,10 @@
 # 5 MiB. It keeps, per host example block, the example path the runner was given, which must
 # be examples/<name> (the plan record needs an empty module root prefix), the class
 # of its plan: line and, for planned, the three Plan: counts, and the class of its base: line,
-# or null when the block has none. Of the refused hosts it keeps the count. No kept line, no
-# free text and no host name enters the output. A class outside the fixed list, a path outside
+# or null when the block has none, and the planned addresses run-pass.sh wrote for the block as
+# addresses-<n>.json: config addresses and attribute names, each checked against its pattern
+# again. Of the refused hosts it keeps the count. No kept line, no free text and no host name
+# enters the output. A class outside the fixed list, a path outside
 # the safe pattern, a duplicate path, a block with no plan: line, or a record that did not end
 # with the runner's summary line is refused: nothing is written, a fixed reason goes to
 # standard error, and the exit status is 1. Exit 2 is a usage error.
@@ -43,6 +45,12 @@ for f in plan-pass.txt plan-refused-hosts.txt; do
   [ "$(wc -c < "$record/$f")" -le "$IN_CAP" ] || refuse "$f is over the size cap"
 done
 refused="$(grep -c . "$record/plan-refused-hosts.txt" || true)"
+addr="$(mktemp)"; trap 'rm -f "$addr"' EXIT
+for af in "$record"/addresses-*.json; do
+  an="${af##*/addresses-}"; an="${an%.json}"
+  [[ "$an" =~ ^[1-9][0-9]{0,5}$ ]] && [ -f "$af" ] && [ ! -L "$af" ] && [ "$(wc -c < "$af")" -le 1048576 ] || continue
+  jq -c --arg n "$an" '{($n): .}' "$af" >> "$addr" 2> /dev/null || true
+done
 
 # The fixed lists: what plan-pass.sh writes on a plan: line, with a gate hit reduced to its
 # gate, and what it writes on a base: line.
@@ -61,6 +69,15 @@ def counts:
   capture("^Plan: (?:[0-9]+ to import, )?(?<add>[0-9]{1,9}) to add, (?<change>[0-9]{1,9}) to change, (?<destroy>[0-9]{1,9}) to destroy\\.$")
   | map_values(tonumber);
 def path_ok: test("^examples/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$");
+def clean: . as $x
+  | [($x.addresses? | if type == "array" then .[] else empty end)
+     | select(type == "string" and test("^[A-Za-z0-9_.-]{1,300}$"))] | unique | .[:1000]
+  | . as $s
+  | {addresses: $s,
+     attributes: (($x.attributes? | if type == "object" then . else {} end)
+       | with_entries(select(.key as $k | ($s | index($k)) != null)
+           | .value |= ([(if type == "array" then .[] else empty end)
+                         | select(type == "string" and test("^[a-z0-9_]{1,128}$"))] | unique | .[:500])))};
 def main:
   split("\n") as $l
   | if ($l[0] // "") != "plan pass mode: runner" then error("refused: not a runner record") else . end
@@ -82,13 +99,17 @@ def main:
   | map(
       if .plan == null then error("refused: a block with no plan line") else . end
       | (.plan | split(" | ")[0] | head_class) as $c
+      | (if $c == "planned" or $c == "planned-no-changes" then ($addr[.n | tostring] // {}) | clean
+         else {addresses: [], attributes: {}} end) as $ad
       | {path,
          head: {class: $c, plan: (if $c == "planned" then (.plan | split(" | ")[1:] | join(" | ") | counts) // null else null end)},
-         base: (if .base == null then null else {class: (.base | base_class), plan: null} end)})
+         base: (if .base == null then null else {class: (.base | base_class), plan: null} end),
+         addresses: $ad.addresses, attributes: $ad.attributes})
   | {schema_version: 1, head: $head, merge_base: $mb, refused_hosts: $refused, examples: .};
 try main catch (if type == "string" and startswith("refused: ") then . else "refused: a malformed record" end)
 '
-result="$(jq -R -s -c --arg head "$head" --arg mb "$mb" --argjson refused "$refused" "$REDUCE" \
+result="$(jq -R -s -c --arg head "$head" --arg mb "$mb" --argjson refused "$refused" \
+  --argjson addr "$(jq -s 'add // {}' "$addr")" "$REDUCE" \
   "$record/plan-pass.txt")" || refuse "a malformed record"
 case "$result" in
   '"refused: '*) refuse "$(jq -r '.[9:]' <<< "$result")" ;;

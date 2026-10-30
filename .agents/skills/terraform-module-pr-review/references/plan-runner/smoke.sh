@@ -284,6 +284,7 @@ leftover() { # ids...: prints each of those runs' containers, networks and volum
       docker network inspect "$n" > /dev/null 2>&1 && echo "network $n"
     done
     docker volume inspect "plan-work-$id" > /dev/null 2>&1 && echo "volume plan-work-$id"
+    docker volume inspect "plan-saved-$id" > /dev/null 2>&1 && echo "volume plan-saved-$id"
   done
   return 0
 }

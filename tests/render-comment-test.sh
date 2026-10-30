@@ -64,6 +64,7 @@ checks() { # name, pass|fail|unknown [, jq update] -> checks directory
 
 runf() { # name [, jq update] -> run file
   jq -n '{format: 1, triage: false, plan_ran: false, verify_gaps: [],
+    coverage: {class: "complete", inert: false, unplanned: []},
     counts: {"instruction-like-text-from-others": 0, "conversation-claims-unread": 0,
              "review.quoted-claim-unverifiable": 0}} | '"${2-.}" > "$TMP/run-$1.json"
   echo "$TMP/run-$1.json"
@@ -221,6 +222,34 @@ ladder "a review.no-change-identified finding" "inconclusive COMMENT" 4 "$(one r
 ladder "a patch unavailable" "inconclusive COMMENT" 4 "$NONE" "$(host pu '.could_not_run = [{kind: "patch-unavailable", path: "main.tf"}]')"
 ladder "an example not verified" "inconclusive COMMENT" 4 "$NONE" "" "" "$(runf gap '.verify_gaps = [{dir: "examples/complete", reason: "not run: environment"}]')"
 grep -qxF -- '- Verification of `examples/complete`: not run: environment.' "$O/comment.md"; check "ladder: the unverified example is listed in section 5" $?
+# Plan coverage (verify-pass.md, Plan coverage): a non-inert change without complete coverage is
+# an unknown, whatever the findings below rule 4; each unplanned example is listed after the
+# verification gaps, and the What to do count takes them.
+ladder "coverage none for want of a profile" "inconclusive COMMENT" 4 "$NONE" "" "" \
+  "$(runf cov-none '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}, {dir: "examples/b", reason: "no AWS profile named"}]}')"
+t_cov_lines() {
+  awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" > "$TMP/cov-s5.txt"
+  printf '%s\n' '' '- `examples/a` was not planned: no AWS profile named.' '- `examples/b` was not planned: no AWS profile named.' | cmp -s - "$TMP/cov-s5.txt" &&
+    grep -qxF -- '- 2 checks could not run; see Checks that could not run.' "$O/comment.md" &&
+    grep -qxF -- "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-listed"]')" "$O/comment.md"
+}
+t_cov_lines; check "coverage: the unplanned examples are section 5, golden, counted in What to do" $?
+ladder "partial coverage under a LOW finding" "inconclusive COMMENT" 4 "$(one structure.grouping LOW a.tf 1 "S." "F.")" "" "" \
+  "$(runf cov-part '.verify_gaps = [{dir: "examples/c", reason: "init failed"}] | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/d", reason: "plan gate G1"}]}')"
+grep -A3 -xF '### Checks that could not run' "$O/comment.md" | tail -n 2 | cmp -s - <(printf '%s\n' '- Verification of `examples/c`: `init` failed.' '- `examples/d` was not planned: plan gate G1.')
+check "coverage: the verification gaps come first, then the unplanned examples" $?
+ladder "a module with no example directory" "inconclusive COMMENT" 4 "$NONE" "" "" \
+  "$(runf cov-noex '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples", reason: "no example directory"}]}')"
+awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" |
+  cmp -s - <(printf '%s\n' '' "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["unplanned-no-examples"]')")
+check "coverage: no example directory renders its own fixed line" $?
+ladder "an inert change: unplanned examples are information, not unknowns" "approve APPROVE" 8 "$NONE" "" "" \
+  "$(runf cov-inert '.coverage = {class: "none", inert: true, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}')"
+awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" |
+  cmp -s - <(printf '%s\n' '' "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["unplanned-inert"]')" '- `examples/a` was not planned: no AWS profile named.')
+check "coverage: an inert change lists its unplanned examples under the inert line" $?
+! grep -qF 'checks could not run' "$O/comment.md" && ! grep -qF 'check could not run' "$O/comment.md"
+check "coverage: an inert change counts no unplanned example as a gap" $?
 ladder "a triage run with a LOW finding" "inconclusive COMMENT" 4 "$(one structure.grouping LOW a.tf 1 "S." "F.")" "" "" "$(runf triage '.triage = true')"
 grep -qxF 'Triage only: the full review of this change has not run yet.' "$O/comment.md"; check "ladder: the triage line follows the verdict" $?
 ladder "a triage run with a HIGH finding" "block REQUEST_CHANGES" 2 "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")" "" "" "$TMP/run-triage.json"
@@ -486,6 +515,9 @@ printf '%s\n%s\n' "$GOOD" "$GOOD" | jq -s . > "$TMP/dup.json"; refused "a duplic
 G="$(printf '%s\n' "$GOOD" | list good)"
 refused "host.json for another head" "$G" "$(host other '.head_sha = "89abcdef0123456789abcdef0123456789abcdef"')"
 refused "host.json with an extra key" "$G" "$(host extra '.extra = 1')"
+refused "a coverage class that does not match its list" "$G" "" "" "$(runf cov-bad1 '.coverage = {class: "complete", inert: false, unplanned: [{dir: "examples/a", reason: "budget"}]}')"
+refused "an unplanned reason outside the list" "$G" "" "" "$(runf cov-bad2 '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "flaky"}]}')"
+refused "a run file without coverage" "$G" "" "" "$(runf cov-bad3 'del(.coverage)')"
 refused "a run file with an unknown reason" "$G" "" "" "$(runf badreason '.verify_gaps = [{dir: "examples/a", reason: "flaky"}]')"
 refused "a run file with an extra key" "$G" "" "" "$(runf extra '.extra = true')"
 refused "a run file with a negative count" "$G" "" "" "$(runf neg '.counts["conversation-claims-unread"] = -1')"
@@ -518,6 +550,12 @@ MSG="$(bash "$RCU" --head "$HEAD" --findings "$G" --host "$HOST" --checks "$CHK"
 check "refused: a missing output directory" "$([ $? = 2 ] && [ ! -e "$TMP/missing" ]; echo $?)"
 refused "an unknown argument" "$G" "" "" "" "" --extra
 MSG="$(bash "$RCU" --head abc --findings "$G" 2>&1)"; check "refused: a head that is not a SHA" "$([ $? = 2 ]; echo $?)"
+
+RUN150C="$(runf manycov '.coverage = {class: "none", inert: false, unplanned: [range(150) | {dir: "examples/e\(.)", reason: "budget"}]}')"
+render "$G" "" "" "$RUN150C"
+[ "$ST" = 0 ] && [ "$(grep -c -e '^- `examples/e[0-9]*` was not planned: budget\.$' "$O/comment.md")" = 100 ] &&
+  grep -qxF -- '- 50 more examples that were not planned are not listed.' "$O/comment.md"
+check "coverage: more than 100 unplanned examples render the first 100 and a count of the rest" $?
 
 # --- More than 100 verification gaps: all count for the verdict, section 5 lists the first 100
 # and one line with the count of the rest.
@@ -809,6 +847,9 @@ mutate() { # name, perl substitution, case function
   check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
 t_rule2() { render "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")"; [ "$(rule)" = 2 ]; }
+t_cov_rule() { render "$NONE" "" "" "$TMP/run-cov-none.json"; [ "$(rule)" = 4 ] && grep -qF -- '- `examples/a` was not planned: no AWS profile named.' "$O/comment.md"; }
+mutate "unplanned examples left out of the ladder" 's/ or \.unplanned > 0//' t_cov_rule
+mutate "unplanned examples left out of section 5" 's/else tx\("unplanned"; \{dir, reason\}\) end/else empty end/' t_cov_rule
 t_rule0() { render "$(pair compat.output-removed CRITICAL structure.docs-contradict-code HIGH)"; [ "$(rule)" = 1 ]; }
 t_rule4() { render "$NONE" "$(host tu2 '.signals.threads = "unknown"')"; [ "$(rule)" = 4 ]; }
 t_draft() { render "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "$TMP/host-draft.json"; [ "$(verdict)" = "block COMMENT" ]; }
