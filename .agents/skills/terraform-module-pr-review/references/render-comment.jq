@@ -130,22 +130,22 @@ def and_join: if length <= 1 then .[0] else (.[:-1] | join(", ")) + " and " + .[
 # {name} is a placeholder, filled in one pass by tx.
 
 def texts: {
-  "rationale-0": "The only CRITICAL and HIGH findings carry a `compat.*` rule_id (ladder rule 0).",
-  "rationale-open-one": "A {severity} finding is open (ladder rule {rule}).",
-  "rationale-open-many": "{count} {severity} findings are open (ladder rule {rule}).",
-  "rationale-3-one": "Failing host signal: {signals} (ladder rule 3).",
-  "rationale-3-many": "Failing host signals: {signals} (ladder rule 3).",
-  "rationale-4-triage": "A triage run is inconclusive (ladder rule 4).",
-  "rationale-4-checks": "The check results could not be read, so a failing check may exist (ladder rule 4).",
-  "rationale-4-threads": "Review thread resolution could not be read, so an open objection may exist (ladder rule 4).",
-  "rationale-4-review-decision": "The reviews could not be read, so a request for changes may exist (ladder rule 4).",
-  "rationale-4-mergeability": "Mergeability could not be read, so a merge conflict may exist (ladder rule 4).",
-  "rationale-4-no-change": "The workspace did not hold the change (ladder rule 4).",
-  "rationale-4-check-not-run": "A check did not run, so a defect it covers may be open (ladder rule 4).",
-  "rationale-4-listed": "A check this review needs could not run, as listed below (ladder rule 4).",
-  "rationale-5": "Review threads are still unresolved (ladder rule 5).",
-  "rationale-7": "Only LOW findings remain (ladder rule 7).",
-  "rationale-8": "No finding is open (ladder rule 8).",
+  "rationale-0": "The only CRITICAL and HIGH findings carry a `compat.*` rule_id. When only breaking-change findings block, the change waits for the next major release (ladder rule 0).",
+  "rationale-open-one": "A {severity} finding is open. Any {severity} finding blocks merge (ladder rule {rule}).",
+  "rationale-open-many": "{count} {severity} findings are open. Any {severity} finding blocks merge (ladder rule {rule}).",
+  "rationale-3-one": "Failing host signal: {signals}. A failing host signal blocks merge (ladder rule 3).",
+  "rationale-3-many": "Failing host signals: {signals}. A failing host signal blocks merge (ladder rule 3).",
+  "rationale-4-triage": "A triage run leaves its deferred checks unknown. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-checks": "The check results could not be read, so a failing check may exist. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-threads": "Review thread resolution could not be read, so an open objection may exist. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-review-decision": "The reviews could not be read, so a request for changes may exist. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-mergeability": "Mergeability could not be read, so a merge conflict may exist. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-no-change": "The workspace did not hold the change. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-check-not-run": "A check did not run, so a defect it covers may be open. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-listed": "A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-5": "Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5).",
+  "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
+  "rationale-8": "No finding is open. With nothing open, the change is approved (ladder rule 8).",
   "signal-name-checks": "checks",
   "signal-name-review-decision": "review decision",
   "signal-name-mergeability": "mergeability",
@@ -175,7 +175,7 @@ def texts: {
 def tx($k; $v): texts[$k] | gsub("\\{(?<n>[a-z]+)\\}"; $v[.n] | tostring);
 def tx($k): texts[$k];
 
-# The rationale names the rule that fired and nothing more. Rule 4 names its first unknown in
+# The rationale states the fact and the rule that fired, in words and by number. Rule 4 names its first unknown in
 # this order: triage, the host signals, the unknown findings, then the listed checks.
 def rationale($in):
   .rule as $r

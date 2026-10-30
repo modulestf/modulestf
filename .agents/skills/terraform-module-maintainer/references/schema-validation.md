@@ -47,7 +47,7 @@ Use the exact version returned by MCP as the initial minimum (e.g., if latest is
 For each target resource or data source type (e.g., `aws_wafv2_web_acl`, `google_compute_instance`, `azurerm_virtual_network`), two calls. The first finds the type's documentation page at one version; the second returns it:
 
 ```
-mcp__terraform__search_providers(
+mcp__terraform__search_provider_docs(
   provider_namespace="<namespace>",
   provider_name="<provider>",
   provider_version="<x.y.z>",

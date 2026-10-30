@@ -136,18 +136,19 @@ Engine: `candidate`
 **Severity:**
 - CRITICAL when the change is breaking and nothing in the change declares it as breaking.
 - HIGH when the change is breaking and declared as breaking but the migration path is missing: no `moved` block, no upgrade note, no replacement input or output.
+- A change whose only forced consumer action is the raised floor has its migration path when the declared break (the `!` in the release title, or a `BREAKING CHANGE` trailer or section) names the new floor. It needs no notes file, and is HIGH only when the declared break does not name the new floor. A change that forces more than the floor needs the notes file of [Migration notes](../../../terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md#migration-notes).
 
 These three rule_ids rank on separate axes, so each is reported when it applies: `compat.version-constraint-raised` for a core or major floor, `compat.generated-policy-narrowed` for a narrowed policy document, `compat.provider-floor-raised` for a minor or patch floor. The [Severity Levels](../../SKILL.md#severity-levels) report-the-higher-severity-once note covers two rules naming one defect; it never swallows the LOW.
 
 ### Confirm when: `compat.version-constraint-raised`
 
 - The head `required_version` floor is above the base floor, or a provider floor moved into a later major version than the base floor.
-- Severity: CRITICAL when nothing in the change declares the break; HIGH when it is declared but the migration path is missing.
+- Severity: CRITICAL when nothing in the change declares the break; HIGH when it is declared but the migration path is missing. When the floor is all the change forces, a declared break that names the new floor is the migration path.
 
 ### Host templates: `compat.version-constraint-raised`
 
 - `summary`: `{subject} raises the Terraform core floor or crosses a provider major version, so callers on the old versions can no longer use the module.`
-- `suggested_fix`: `needs decision: (a) restore the base floor of {subject} and replace what needs the new one; (b) keep the new floor and declare the change breaking.`
+- `suggested_fix`: `needs decision: (a) restore the base floor of {subject} and replace what needs the new one; (b) keep the new floor and declare the change breaking, naming the new floor.`
 
 ## `compat.generated-policy-narrowed`
 

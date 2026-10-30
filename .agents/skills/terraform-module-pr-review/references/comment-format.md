@@ -11,7 +11,7 @@ Fixed, so two runs are comparable and a reader knows where to look.
 
 1. **Assessment.** One or two sentences addressed to the author: what the change does, whether it looks broadly right, and what class of thing is missing. Size it to the change. A one-line spelling fix gets one short sentence and no thanks for the effort. A large feature with real defects gets a sentence on whether the shape is right and one naming what is missing. Name the actual thing every time. Generic praise and boilerplate thanks tell the author nothing. The assessment may also say that `terraform validate` passed in the examples the change touches, but only with its provenance, in words such as "`terraform validate` passed with the providers this change declares", adding "in a separate job without credentials" when the results came from a host. A pass ran providers the head chose, so it is evidence, never proof ([verify-pass.md](verify-pass.md#limits)): never write an unqualified "verified", and never state a host's passing result as a fact about the code. Or the assessment may say that the examples were not verified and why, with the same reasons section 5 lists per directory: terraform was not installed, `init` failed, the environment stopped it (`not run: environment`: a plugin handshake, a sandbox or OS denial, or the network), `not run: symbolic link`, `verification input refused`, `host results rejected: <reason>`, or `host verification did not run`. In a [triage](github-io.md#triage) run the assessment says nothing about verification: Step 5.5 did not run, and the triage line under the verdict covers it. When `validate` ran and only `plan` was skipped because no AWS profile was named, the assessment says so once for the whole run, and section 5 lists nothing for it. When a profile was named and the plan pass stopped at a gate, the assessment says once: ``a `plan` was not run: the plan pass stopped at a gate``, and names neither the gate nor the file. When it ended as another note, it says ``a `plan` was not run: the plan pass ended without a result``. Section 5 lists neither. No kept line from a runner-mode plan pass, one whose record says `plan pass mode: runner` or carries plan evidence with no `plan pass mode:` line, appears anywhere in the body, whole or in part: not in the assessment, not in a finding summary, not in a Fix line. Such a pass ran the head's code with credentials, and a secret interleaved with text of that code's choosing passes the [leak scan](#leak-scan). When the plan pass planned an example, the assessment may name the counts on its kept `Plan:` summary line, such as `12 to add, 0 to change, 0 to destroy`, with the example's directory, and nothing else from the plan. It may also say, as a class, that the other examples the plan pass ran planned too, in words such as "the other examples the plan pass ran also planned", when the record has a `plan:` line for each of them and each is `planned` or `planned-no-changes`. An example with no `plan:` line in the record is not one the plan pass ran, and the statement never covers it. That statement names the class from the record's fixed `plan:` line, never a kept line, a count or a directory of those examples, as [plan-pass.md](plan-pass.md#what-crosses-to-the-reviewer) has a finding name the class.
 2. **Verdict line.** The verdict from [verdict.md](verdict.md), in bold, with no `Verdict:` prefix, and, if a comment-only clamp applies, what it reduced the action to. A render-only clamp is never named in the body. It describes this run, not the change, and a body this run does not post can still reach the forge later, posted by hand or by a hosted adapter, where a line saying no action was proposed would be false. Its reason is shown beside the body where the run presents it, with the target, which satisfies [verdict.md](verdict.md#clamps)'s "say so next to the verdict" for a render-only run. Block reads `Changes requested before merge.`, changes suggested reads `Changes suggested.`, inconclusive reads `Inconclusive.`, approve reads `Good to merge.`, approve with nits reads `Good to merge, with nits.`, and hold for the next major reads `Breaking. Hold for the next major release.` The findings are still listed below it. In a [triage](github-io.md#triage) run a second line follows the verdict line, in plain text: `Triage only: the full review of this change has not run yet.` It is part of the body, since it describes what the review covered, and it appears only in a triage run.
-3. **Rationale.** One or two sentences naming the ladder rule that produced the verdict, and nothing more. No new judgement, no praise, no summary of the change, no restating the verdict.
+3. **Rationale.** Two short sentences: the fact the verdict rests on, then the ladder rule that produced the verdict, in plain words and with its number. Nothing more: no new judgement, no praise, no summary of the change.
 4. **Findings.** Grouped by severity, CRITICAL first, then by rule as [Grouping Findings](#grouping-findings) defines, which keeps the order the reviewer returned them in. When the list holds more than 10 findings, some groups render collapsed, as [Collapsing Findings](#collapsing-findings) defines. A finding that shares its rule with no other finding of its severity is one line: `rule_id`, repository-relative path and line, then the summary. Under it, a nested `Fix:` line carries its `suggested_fix`, so a person or the maintainer skill can make the change from the comment alone. A finding with a null line shows the path alone. Findings are rendered whole here; a `review.check-not-run` finding is a finding and belongs in this section, not in the next one. The optional `source` and `confirmed_by` fields of [findings-schema.md](../../terraform-module-reviewer/references/findings-schema.md#optional-fields) are not rendered and do not split a group. A `review.tool-disputed` finding is the disputed note: it renders after every severity, under the bold label `Disputed tool findings`, in the forms [Grouping Findings](#grouping-findings) defines, and never under LOW, since the ladder does not read it ([verdict.md](verdict.md)). It is not counted toward the threshold of [Collapsing Findings](#collapsing-findings) and never collapses. The rationale never names it.
 5. **Checks that could not run.** This skill's own degraded reads: thread resolution unknown, a file whose patch was unavailable, quoted prose truncated, and every example directory whose verification did not run, one line each with its reason: terraform was not installed, `init` failed, `not run: environment`, `not run: symbolic link`, `verification input refused`, `host results rejected: <reason>` with `<reason>` one of the fixed words in [verify-pass.md](verify-pass.md#results-from-a-host), or `host verification did not run`. It also lists every example whose `validate` failed at the head and whose merge base re-run did not run, with `merge base not available` or `merge base not run: environment`; that line names only the re-run, and the head's failure stays a result. One directory is enough; a run where the others verified still lists it. Each directory listed for one of these reasons is an unknown at [verdict.md](verdict.md#the-ladder) rule 4, so the verdict is inconclusive unless a rule above rule 4 fired. A directory where `validate` ran and only `plan` was skipped because no AWS profile was named is not listed, not even as one line for the run: `plan` is opt-in, a run without a profile is the default, and the assessment already says once that no plan ran. A plan pass note - a gate, the environment, needs input, the budget, output unrecognised, a plan pass that did not run or ended - is not a gap either and is not listed here ([plan-pass.md](plan-pass.md#what-crosses-to-the-reviewer)). An example directory recorded as `not run: version bump only` is not a gap and is not listed here, and neither is anything about conversation comments: those go in section 8. Each says what could not be read and why. A `terraform plan` or `terraform validate` that ran and failed is a result, not a gap: it produced a finding, and it belongs in the findings section above. Only a check that never ran may be mentioned here. In a triage run Step 5.5 does not run, and nothing is listed for it: the triage line under the verdict covers it.
 6. **Pull request state.** The four host signals, one line, only when one of them is failing or unknown. Also, whenever the review decision left out an earlier review by the posting login, one line naming it even when every signal passes. Use the review's own state and commit, and pick the tail by the proposed event, which is known at this step. For `APPROVE` or `REQUEST_CHANGES`: `Earlier review from this account: changes requested on <short sha>; this review replaces it.` For `COMMENT`: `Earlier review from this account: changes requested on <short sha>; it stays in effect until this account approves or requests changes.` A `COMMENT` never replaces an earlier approval or request for changes, so the second tail is the true one there. If the user confirms a different event than the one proposed, re-render the line before the body is shown again. The line keeps the posting user's earlier objection visible. Also, even when every signal passes, the related issues lines from [github-io.md](github-io.md#what-it-renders): one per open issue that merging would not close, naming the exact text to add, or the single line saying why the check did not run. They describe the pull request, not the code, and never explain the verdict. Also, even when every signal passes, when the accepted check runs file the task names ([host-pass.md](host-pass.md#check-runs-file)) has an `own_check_dropped` above 0, one line, exactly ``Checks: the host's own check `<name>` excluded.``, with `<name>` the file's `own_check`. Also, even when every signal passes, when that file has an `own_jobs_dropped` above 0, one line, exactly ``Checks: the jobs of the host's own workflow runs excluded.`` When that file has `own_jobs_unreadable` true, one line, exactly ``Checks: the host's own jobs could not be read.`` When `check` rejected that file, one line, exactly ``Checks: the host's check runs file was rejected.``
@@ -214,7 +214,7 @@ The change adds Amazon S3 Files support through a new `modules/file-system` subm
 
 **Changes requested before merge.**
 
-Three HIGH findings are open (ladder rule 2).
+Three HIGH findings are open. Any HIGH finding blocks merge (ladder rule 2).
 
 ### Findings
 
@@ -330,7 +330,7 @@ The body is posted under a person's name, so it has to read like that person wro
 
 - Short, direct sentences. Plain ASCII: no em or en dashes, no curly quotes, no ellipsis character.
 - No forced triads. List two things when there are two.
-- No restating the verdict in the rationale. The rationale names the ladder rule and stops.
+- The rationale states the fact the verdict rests on, then the ladder rule in plain words with its number, and stops. It does not repeat the verdict line.
 - No "not X but Y" contrasts, and no one-line closers that sum up what was already said.
 - No stock AI words: crucial, robust, seamless, leverage, delve, comprehensive, and the like.
 - The verdict line and the rationale stay plain: no praise, no thanks.
@@ -371,22 +371,22 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 
 | Key | Text |
 |-----|------|
-| `rationale-0` | The only CRITICAL and HIGH findings carry a `compat.*` rule_id (ladder rule 0). |
-| `rationale-open-one` | A {severity} finding is open (ladder rule {rule}). |
-| `rationale-open-many` | {count} {severity} findings are open (ladder rule {rule}). |
-| `rationale-3-one` | Failing host signal: {signals} (ladder rule 3). |
-| `rationale-3-many` | Failing host signals: {signals} (ladder rule 3). |
-| `rationale-4-triage` | A triage run is inconclusive (ladder rule 4). |
-| `rationale-4-checks` | The check results could not be read, so a failing check may exist (ladder rule 4). |
-| `rationale-4-threads` | Review thread resolution could not be read, so an open objection may exist (ladder rule 4). |
-| `rationale-4-review-decision` | The reviews could not be read, so a request for changes may exist (ladder rule 4). |
-| `rationale-4-mergeability` | Mergeability could not be read, so a merge conflict may exist (ladder rule 4). |
-| `rationale-4-no-change` | The workspace did not hold the change (ladder rule 4). |
-| `rationale-4-check-not-run` | A check did not run, so a defect it covers may be open (ladder rule 4). |
-| `rationale-4-listed` | A check this review needs could not run, as listed below (ladder rule 4). |
-| `rationale-5` | Review threads are still unresolved (ladder rule 5). |
-| `rationale-7` | Only LOW findings remain (ladder rule 7). |
-| `rationale-8` | No finding is open (ladder rule 8). |
+| `rationale-0` | The only CRITICAL and HIGH findings carry a `compat.*` rule_id. When only breaking-change findings block, the change waits for the next major release (ladder rule 0). |
+| `rationale-open-one` | A {severity} finding is open. Any {severity} finding blocks merge (ladder rule {rule}). |
+| `rationale-open-many` | {count} {severity} findings are open. Any {severity} finding blocks merge (ladder rule {rule}). |
+| `rationale-3-one` | Failing host signal: {signals}. A failing host signal blocks merge (ladder rule 3). |
+| `rationale-3-many` | Failing host signals: {signals}. A failing host signal blocks merge (ladder rule 3). |
+| `rationale-4-triage` | A triage run leaves its deferred checks unknown. Any unknown makes the review inconclusive (ladder rule 4). |
+| `rationale-4-checks` | The check results could not be read, so a failing check may exist. Any unknown makes the review inconclusive (ladder rule 4). |
+| `rationale-4-threads` | Review thread resolution could not be read, so an open objection may exist. Any unknown makes the review inconclusive (ladder rule 4). |
+| `rationale-4-review-decision` | The reviews could not be read, so a request for changes may exist. Any unknown makes the review inconclusive (ladder rule 4). |
+| `rationale-4-mergeability` | Mergeability could not be read, so a merge conflict may exist. Any unknown makes the review inconclusive (ladder rule 4). |
+| `rationale-4-no-change` | The workspace did not hold the change. Any unknown makes the review inconclusive (ladder rule 4). |
+| `rationale-4-check-not-run` | A check did not run, so a defect it covers may be open. Any unknown makes the review inconclusive (ladder rule 4). |
+| `rationale-4-listed` | A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4). |
+| `rationale-5` | Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5). |
+| `rationale-7` | Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7). |
+| `rationale-8` | No finding is open. With nothing open, the change is approved (ladder rule 8). |
 | `signal-name-checks` | checks |
 | `signal-name-review-decision` | review decision |
 | `signal-name-mergeability` | mergeability |
@@ -428,7 +428,7 @@ module can change it.
 
 **Changes requested before merge.**
 
-A MEDIUM finding is open (ladder rule 6).
+A MEDIUM finding is open. Any MEDIUM finding blocks merge (ladder rule 6).
 
 ### Findings
 
@@ -454,7 +454,7 @@ module can change it.
 
 **Inconclusive.**
 
-Review thread resolution could not be read, so an open objection may exist (ladder rule 4).
+Review thread resolution could not be read, so an open objection may exist. Any unknown makes the review inconclusive (ladder rule 4).
 
 ### Findings
 
@@ -486,7 +486,7 @@ the retention window.
 
 **Good to merge, with nits.**
 
-Only LOW findings remain (ladder rule 7).
+Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).
 ```
 
 Size the assessment to the change. A one-line spelling fix gets one sentence and stops:

@@ -184,9 +184,9 @@ ladder "a HIGH compat break alone" "block REQUEST_CHANGES" 2 "$(one compat.claim
 ladder "a CRITICAL non-compat finding" "block REQUEST_CHANGES" 1 "$(one structure.docs-contradict-code CRITICAL a.tf 1 "S." "F.")"
 ladder "a HIGH finding and a failing check" "block REQUEST_CHANGES" 2 "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")" "" "$(checks fail fail)"
 ladder "a failing check" "block REQUEST_CHANGES" 3 "$NONE" "" "$(checks fail fail)"
-grep -qxF 'Failing host signal: checks (ladder rule 3).' "$O/comment.md"; check "ladder: rule 3 names the signal" $?
+grep -qxF 'Failing host signal: checks. A failing host signal blocks merge (ladder rule 3).' "$O/comment.md"; check "ladder: rule 3 names the signal" $?
 ladder "a conflict with a queued check" "block REQUEST_CHANGES" 3 "$NONE" "$(host conflict '.signals.mergeability = "fail"')" "$(checks unknown unknown)"
-grep -qxF 'Failing host signal: mergeability (ladder rule 3).' "$O/comment.md"; check "ladder: the conflict is named, not the queued check" $?
+grep -qxF 'Failing host signal: mergeability. A failing host signal blocks merge (ladder rule 3).' "$O/comment.md"; check "ladder: the conflict is named, not the queued check" $?
 ladder "changes requested by a reviewer" "block REQUEST_CHANGES" 3 "$NONE" "$(host cr '.signals.review_decision = "fail"')"
 ladder "a queued check" "inconclusive COMMENT" 4 "$NONE" "" "$(checks unknown unknown)"
 ladder "thread resolution unread and no finding" "inconclusive COMMENT" 4 "$NONE" "$(host tu '.signals.threads = "unknown"')"
@@ -349,7 +349,7 @@ The change looks right.
 
 **Changes requested before merge.**
 
-Failing host signal: mergeability (ladder rule 3).
+Failing host signal: mergeability. A failing host signal blocks merge (ladder rule 3).
 
 ### Checks that could not run
 

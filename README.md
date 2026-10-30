@@ -34,7 +34,7 @@ The pull request review calls the reviewer, and both call `change-scope`. The ru
    ln -sfn "$PWD"/modulestf/.agents/skills/* ~/.agents/skills/   # Codex
    ```
 
-2. Add HashiCorp's [Terraform MCP server](https://github.com/hashicorp/terraform-mcp-server) to your agent under the name `terraform`, so its tools appear as `mcp__terraform__get_latest_provider_version`, `mcp__terraform__search_providers` and `mcp__terraform__get_provider_details`. The skills read provider schemas from it, not from memory. Without it, every rule that needs a provider fact is reported as not run, so a pull request review is inconclusive at best.
+2. Add HashiCorp's [Terraform MCP server](https://github.com/hashicorp/terraform-mcp-server) to your agent under the name `terraform`, so its tools appear as `mcp__terraform__get_latest_provider_version`, `mcp__terraform__search_provider_docs` and `mcp__terraform__get_provider_details`. The skills read provider schemas from it, not from memory. Without it, every rule that needs a provider fact is reported as not run, so a pull request review is inconclusive at best.
 3. Log in to GitHub with `gh auth login` as yourself, and install `terraform`, `git` and `jq`.
 4. Ask your agent:
 
