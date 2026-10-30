@@ -38,7 +38,7 @@ Source: [code-conventions.md#what-this-file-is-and-what-it-is-not](code-conventi
 - The repository is named `terraform-aws-<service>`, and the module manages that one AWS service.
 - The root holds `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`, `README.md` and `LICENSE`. `LICENSE` is Apache 2.0. Other `.tf` files at the root are free.
 - The root `variables.tf` declares `putin_khuylo`, second in the core group after `create`, and the root's `local.create` is `var.create && var.putin_khuylo`. A root `create` local that reads `var.create` alone is missing it. Submodules under `modules/<name>/` are not required to carry it, and in this family none does.
-- The root `versions.tf`, and each `modules/<name>/versions.tf` that requires `hashicorp/aws`, carries `provider_meta "aws" { user_agent = ["github.com/terraform-aws-modules/terraform-aws-<name>"] }` inside the `terraform` block, `<name>` being the repository name after `terraform-aws-`, in a submodule too. Examples and tests carry none, and `wrappers/` is generated. Judge a `versions.tf` the change adds or edits, or every one in a new module; when the block or its `user_agent` is missing, say to add exactly that block. A `user_agent` entry naming another owner or another repository counts as wrong: say to replace it with the entry above.
+- The root `versions.tf`, and each `modules/<name>/versions.tf` that requires `hashicorp/aws`, carries `provider_meta "aws" { user_agent = ["github.com/terraform-aws-modules/terraform-aws-<name>"] }` inside the `terraform` block, `<name>` being the repository name after `terraform-aws-`, in a submodule too. Examples and tests carry none, and `wrappers/` is generated, judged under Generated content. Judge the change, not the repository's history: a `versions.tf` the change adds, every one in a new module or submodule included, or a block the change removes or alters. A `versions.tf` that had no block at the base and is edited for another reason is not a hit. When the block or its `user_agent` is missing, say to add exactly that block. A `user_agent` entry naming another owner or another repository counts as wrong: say to replace it with the entry above.
 - The root carries `.editorconfig`, `.gitignore`, `.releaserc.json` and `.pre-commit-config.yaml`, and `.github/workflows/` holds exactly `pre-commit.yml`, `release.yml`, `lock.yml`, `pr-title.yml` and `stale-actions.yaml`.
 - A new module starts with `examples/basic/` (required arguments only) and `examples/complete/` (every major feature), each with its own `main.tf`, `outputs.tf`, `versions.tf` and `README.md`. The complete example carries a `module "disabled"` call with `create = false`. Older modules name their examples differently; that is a finding only when the change is to the module's own file set.
 - A submodule under `modules/<name>/` is a complete module: its own `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf` and `README.md`, and an example of its own under `examples/`.
@@ -46,7 +46,7 @@ Source: [code-conventions.md#what-this-file-is-and-what-it-is-not](code-conventi
 
 IDs: `profile.required-file-missing`, `profile.layout-divergence`, `profile.provider-meta-missing`, `examples.disabled-call-missing`, `examples.submodule-missing`.
 
-Source: [PROFILE.md#module-layout](PROFILE.md#module-layout) `f55e3043104c`
+Source: [PROFILE.md#module-layout](PROFILE.md#module-layout) `8805057970de`
 
 ### Generated content
 
@@ -89,11 +89,11 @@ Source: [code-conventions.md#pull-request-title-and-the-reason-for-a-break](code
 
 ### Migration notes
 
-Notes for a change that forces consumers to act live in `docs/MIGRATION_<from>_to_<to>.md`, for example `docs/MIGRATION_v2_to_v3.md`, never in `README.md`.
+Notes for a change that forces consumers to act live in `docs/MIGRATION_<from>_to_<to>.md`, for example `docs/MIGRATION_v2_to_v3.md`, never in `README.md`. A change that only raises a provider or Terraform core floor needs no notes file: the declared break names the new floor.
 
 ID: `profile.migration-notes-misplaced`.
 
-Source: [PROFILE.md#migration-notes](PROFILE.md#migration-notes) `f7531e1c82d5`
+Source: [PROFILE.md#migration-notes](PROFILE.md#migration-notes) `8c4cad32c3a5`
 
 ### Regions
 
@@ -220,7 +220,7 @@ Every level-2 section of the profile files this guide draws on is either a sourc
 | [Placeholder reference](templates-map.md#placeholder-reference) | How a maintainer creates a module, not a review rule | `52a0f59b8354` |
 | [Copy workflow](templates-map.md#copy-workflow) | How a maintainer creates a module, not a review rule | `0034737f5088` |
 | [The template comes first](pr-description.md#the-template-comes-first) | Pull request description rules are for the author; the profile grades no description | `32dbf49b69ff` |
-| [Required sections](pr-description.md#required-sections-in-order) | As above | `1ad31974816b` |
+| [Required sections](pr-description.md#required-sections-in-order) | As above | `b33b7eb0bd1c` |
 | [Closing keywords](pr-description.md#closing-keywords) | As above, and the issues a pull request closes are state only the code host holds | `346dad2e511e` |
 | [What fails](pr-description.md#what-fails) | As above | `8c68c146a190` |
 | [Worked example](pr-description.md#worked-example) | As above | `fbcd03db7a73` |

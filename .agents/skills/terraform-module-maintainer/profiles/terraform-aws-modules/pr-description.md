@@ -66,7 +66,8 @@ evidence, and the prose is what this file governs.
       example. State the mechanism, not the preference - what breaks under the alternative,
       or what the caller has to write to work around it.
 - [ ] When the delivered shape differs from the shape the issue asked for, say so here.
-- [ ] A link to `docs/MIGRATION_<from>_to_<to>.md` when the change forces consumers to act.
+- [ ] A link to `docs/MIGRATION_<from>_to_<to>.md` when the change needs one. A change that
+      only raises a provider or Terraform core floor does not.
       See [Migration notes](PROFILE.md#migration-notes).
 
 ### 3. Breaking Changes

@@ -72,7 +72,9 @@ Do not restate guidance that the terraform-skill plugin or the maintainer refere
 Any claim about a provider argument, attribute, nested block, nesting mode, or version comes from the source the need list assigns to that type and version in Step 1: a host fact sheet, a host `absent` entry, a page from the host page cache, or the Terraform MCP tools for the exact provider and version the module declares, as the [Budget](references/large-changes.md#budget) says. Never from memory. The MCP tools:
 
 1. `mcp__terraform__get_latest_provider_version` for the provider
-2. `mcp__terraform__search_providers` at the version, then `mcp__terraform__get_provider_details` on the document it finds, for every resource and data source type touched by the change
+2. `mcp__terraform__search_provider_docs` at the version, then `mcp__terraform__get_provider_details` on the document it finds, for every resource and data source type touched by the change
+
+When the host can start a fetch helper, the pages are read through it, even for a change of one type, as the [Budget](references/large-changes.md#budget) says.
 
 That returns the provider's documentation page for one type at one version: Required and Optional markers, nested blocks and exported attributes as documented, and no argument types or nesting modes. A claim that needs a type or a nesting mode, such as an ARN where an ID is expected, cannot be confirmed from it: the review never makes one, and a quoted one stays `review.quoted-claim-unverifiable`, never a finding.
 

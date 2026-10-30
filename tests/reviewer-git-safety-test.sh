@@ -24,8 +24,8 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT
 form="$(awk '/^## The form/{f=1} f&&/^```sh$/{c=1;next} c&&/^```$/{exit} c' "$DOC")"
 if [ -z "$form" ]; then echo "FAIL setup: no sh block under 'The form' in $DOC"; exit 1; fi
 eval "$form"
-declare -F safe_git >/dev/null && declare -F safe_git_refuse >/dev/null ||
-  { echo "FAIL setup: the form does not define safe_git and safe_git_refuse"; exit 1; }
+declare -F safe_git >/dev/null && declare -F safe_git_partial >/dev/null && declare -F safe_git_refuse >/dev/null ||
+  { echo "FAIL setup: the form does not define safe_git, safe_git_partial and safe_git_refuse"; exit 1; }
 
 MARK="$TMP/marker"
 mkdir -p "$TMP/bin"
@@ -174,6 +174,21 @@ rm -rf "$TMP/r"; git clone -q --depth 1 "file://$SERVER" "$TMP/r" 2>/dev/null
 if refused; then ok "refuse: a shallow clone"; else fail refuse "a shallow clone was not refused"; fi
 fresh
 if refused; then fail refuse "a full clone was refused"; else ok "refuse: a full clone is not refused"; fi
+
+# safe_git_partial gates the head revision query: a partial clone stops it, a shallow
+# clone does not, because rev-parse HEAD reads one ref and no history.
+partial() { ( cd "$TMP/r" && safe_git_partial ) >/dev/null 2>&1; }
+rm -rf "$TMP/r"; git clone -q --depth 1 "file://$SERVER" "$TMP/r" 2>/dev/null
+if partial; then fail head "a shallow clone was taken for a partial one"
+elif [ "$( cd "$TMP/r" && safe_git rev-parse HEAD )" = "$(git -C "$TMP/r" rev-parse HEAD)" ] &&
+  [ -e "$TMP/r/.git/shallow" ]; then ok "head: rev-parse HEAD runs in a shallow clone"
+else fail head "rev-parse HEAD did not print the head of a shallow clone"; fi
+fresh; cfg core.repositoryformatversion 1; cfg extensions.partialClone origin
+if partial; then ok "head: extensions.partialClone alone stops the head query"; else fail head "extensions.partialClone alone did not stop the head query"; fi
+fresh; cfg remote.origin.url "file://$SERVER"; cfg remote.origin.promisor true
+if partial; then ok "head: remote promisor alone stops the head query"; else fail head "a promisor remote alone did not stop the head query"; fi
+fresh
+if partial; then fail head "a full clone stopped the head query"; else ok "head: a full clone does not stop the head query"; fi
 
 # Replace refs: the workspace makes HEAD read as a commit with the base tree.
 fresh

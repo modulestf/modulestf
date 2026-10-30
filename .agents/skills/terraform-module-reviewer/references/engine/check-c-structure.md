@@ -245,13 +245,13 @@ Engine: `candidate`
 - A `versions.tf` the change touches declares a lower floor than the thing it calls - the root against a submodule under `modules/` it calls, or an example against the module it calls - against [Version floors](../../../terraform-module-maintainer/profiles/terraform-aws-modules/code-conventions.md#version-floors). Scope is those files and their counterparts; a caller declaring more than its callee is silent.
 
 **Severity:**
-- HIGH when a caller declares a lower floor than the thing it calls (`structure.version-floor-understated`), and CRITICAL when the two constraint sets do not intersect at all - an upper bound excluding the callee's floor - because no version satisfies both and the configuration cannot initialize.
+- MEDIUM when a caller declares a lower floor than the thing it calls but the two constraint sets still intersect (`structure.version-floor-understated`): the configuration still initializes, and only a must-pass convention of the family is violated. CRITICAL when the two sets do not intersect at all - an upper bound excluding the callee's floor - because no version satisfies both and the configuration cannot initialize.
 
 ### Confirm when: `structure.version-floor-understated`
 
 - The change touches the caller's or the callee's `versions.tf`.
 - The caller's floor is below the callee's floor.
-- The lead picks CRITICAL when the two constraint sets do not intersect, HIGH otherwise.
+- The lead picks CRITICAL when the two constraint sets do not intersect, MEDIUM otherwise.
 
 ### Host templates: `structure.version-floor-understated`
 

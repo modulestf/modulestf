@@ -116,7 +116,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `structure.validation-missing` | none | - | - | never | llm | config-semantic | touched-block | no | root, submodule | interface-diff | MEDIUM | - | - |
 | `structure.validation-overreaching` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
 | `structure.variable-untyped` | none | - | - | file | candidate | config-semantic | newly-introduced | no | root, submodule | candidates, interface-diff | MEDIUM | lead | lead |
-| `structure.version-floor-understated` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule, example | candidates, interface-diff | CRITICAL, HIGH | lead | lead |
+| `structure.version-floor-understated` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule, example | candidates, interface-diff | CRITICAL, MEDIUM | lead | lead |
 | `structure.wrong-file` | none | - | - | never | candidate | config-semantic | newly-introduced | no | root, submodule | candidates, file-index | MEDIUM | lead | small |
 
 ## Dedup Overlap

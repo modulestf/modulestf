@@ -77,7 +77,8 @@ A submodule names the repository, not itself. The reference is
 A submodule that requires no `hashicorp/aws` has no block, and neither do `examples/` and
 `tests/`: they are callers, not the module. Each `wrappers/**/versions.tf` carries an empty
 `provider_meta "aws" {}` with no `user_agent`, as the wrapper generator writes it: that file is
-generated content, never authored, and this paragraph does not apply to it. Read on
+generated content, never authored, judged against its generator as [Quality gate](#quality-gate)
+says, and this paragraph does not apply to it. Read on
 2026-09-24 from terraform-aws-eks, terraform-aws-s3-bucket, terraform-aws-vpc,
 terraform-aws-lambda, terraform-aws-rds and terraform-aws-iam: every root and submodule that
 requires `hashicorp/aws` carries the block, all 28 wrapper `versions.tf` files carry the empty
@@ -293,6 +294,13 @@ the feature touches.
 
 A change that forces consumers to act keeps its migration notes in the module, at
 `docs/MIGRATION_<from>_to_<to>.md` - for example `docs/MIGRATION_v2_to_v3.md`.
+
+A change whose only forced consumer action is a raised provider or Terraform core floor
+needs no such file. Its migration path is the declared break - the `!` in the release title,
+or a `BREAKING CHANGE` trailer or section - naming the new floor. The file is required when
+the change forces more than that: it removes or renames an input or output, makes an input
+required, narrows a type or a generated policy, changes a default, or moves a resource
+address without a `moved` block.
 
 Not in `README.md`. The terraform-docs region there is generated and overwrites anything
 written inside it, and notes placed outside that region push the generated documentation
