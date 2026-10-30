@@ -66,9 +66,10 @@ def valid_behaviour:
   and (.entries | type == "array" and all(.[]; type == "object" and (.path | plain_path)
         and (.trigger_ids | type == "array" and all(.[]; tid))))
   and ([.entries[].trigger_ids[]] - [.triggers[].id] == []);
-def attrs: ["known", "length", "value", "sensitive", "redacted", "unknown_inputs", "action", "unchanged_vs_prior"];
+def attrs: ["known", "wholly_unknown", "unknown_mask", "length", "value", "sensitive", "redacted", "unknown_inputs",
+  "action", "unchanged_vs_prior", "error"];
 def valid_eval($b; $c):
-  type == "object" and .schema_version == 1
+  type == "object" and .schema_version == 1 and .capped == $b.capped
   and (.triggers | type == "array" and all(.[]; type == "object"
         and (.state | IN("inert", "verified", "covered", "refuted", "unverifiable"))
         and ((has("changes") | not) or (.changes | type == "array" and length <= 256 and all(.[]; type == "object"
