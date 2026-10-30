@@ -292,13 +292,17 @@ check "a unified diff is a usage error" "$([ $? = 2 ]; echo $?)"
 
 # --- Changes claims-eval reports cross as record lines, without their inputs.
 setup
-jq '.triggers[0].changes = [{level: "L1", case: "empty-element", attribute: "value", explained: false, inputs: {vpc_security_group_ids: [""]}}, {level: "L1", case: "unknown-element", attribute: "length", explained: true, inputs: {}}]' "$TMP/eval-556.json" > "$TMP/eval.out"
+jq '.triggers[0].changes = [{level: "L1", case: "empty-element", attribute: "value", explained: false, inputs: {vpc_security_group_ids: [""]}}, {level: "L1", case: "unknown-element", attribute: "length", explained: true, explained_by: ["C-1", "C-2"], inputs: {}}]' "$TMP/eval-556.json" > "$TMP/eval.out"
 classify; evalp --claims "$TMP/claims-556.json"
 grep -qxF 'change T-001 L1 case empty-element value: unexplained' "$O/record.txt" \
-  && grep -qxF 'change T-001 L1 case unknown-element length: explained' "$O/record.txt"
+  && grep -qxF 'change T-001 L1 case unknown-element length: explained by C-1, C-2' "$O/record.txt"
 check "changes: one record line each" $?
 ! grep -qF 'vpc_security_group_ids' "$O/record.txt"; check "changes: no input crosses" $?
 refuse_e "a change with a bad case id" '.triggers[0].changes = [{level: "L1", case: "a b", attribute: "value", explained: false, inputs: {}}]'
+refuse_e "an explained_by id outside the pattern" '.triggers[0].changes = [{level: "L1", case: "c", attribute: "length", explained: true, explained_by: ["X-1"], inputs: {}}]'
+refuse_e "an explained_by id the claims file has not" '.triggers[0].changes = [{level: "L1", case: "c", attribute: "length", explained: true, explained_by: ["C-9"], inputs: {}}]'
+refuse_e "21 explained_by ids" '.triggers[0].changes = [{level: "L1", case: "c", attribute: "length", explained: true, explained_by: ([range(21)] | map("C-1")), inputs: {}}]'
+refuse_e "an unexplained change with explained_by ids" '.triggers[0].changes = [{level: "L1", case: "c", attribute: "length", explained: false, explained_by: ["C-1"], inputs: {}}]'
 refuse_e "a change with an unknown attribute" '.triggers[0].changes = [{level: "L1", case: "c", attribute: "colour", explained: false, inputs: {}}]'
 setup
 jq '.capped = 0 | .triggers[0].changes = [{level: "L1", case: "c1", attribute: "wholly_unknown", explained: false, inputs: {}}, {level: "L1", case: "c2", attribute: "unknown_mask", explained: false, inputs: {}}, {level: "L3", case: "c3", attribute: "error", explained: false, inputs: {}}]' "$TMP/eval-556.json" > "$TMP/eval.out"

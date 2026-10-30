@@ -74,7 +74,12 @@ def valid_eval($b; $c):
         and (.state | IN("inert", "verified", "covered", "refuted", "unverifiable"))
         and ((has("changes") | not) or (.changes | type == "array" and length <= 256 and all(.[]; type == "object"
               and (.level | IN("L1", "L2", "L3", "L4")) and (.case | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$"))
-              and (.attribute | IN(attrs[])) and (.explained | type == "boolean"))))))
+              and (.attribute | IN(attrs[])) and (.explained | type == "boolean")
+              # The claims that explain it, at most 20 ids of the claims file, on an explained change only.
+              and ((has("explained_by") | not) or (.explained_by | type == "array" and length <= 20
+                    and all(.[]; type == "string" and test("^C-[0-9]+$"))
+                    and (. - ($c.claims | map(.claim_id)) == [])))
+              and (.explained or ((.explained_by // []) == [])))))))
   and ((.triggers | map(.id) | sort) == ($b.triggers | map(.id) | sort))
   and (.claims | type == "array" and all(.[]; type == "object" and (.state | IN("verified", "refuted", "unverifiable"))))
   and (.discarded_claims | type == "array" and all(.[]; type == "object"))
@@ -188,7 +193,7 @@ evaluate() {
        + [$b.triggers[] as $t | "trigger \($t.id) `\($t.file)`\(if $t.line == null then "" else " line \($t.line)" end) \($t.category): \(first($e.triggers[] | select(.id == $t.id) | .state))"]
        # Each base and head difference claims-eval found, for the compatibility judgement; no input crosses.
        + [$e.triggers[] as $t | ($t.changes // [])[]
-          | "change \($t.id) \(.level) case \(.case) \(.attribute): \(if .explained then "explained" else "unexplained" end)"]
+          | "change \($t.id) \(.level) case \(.case) \(.attribute): \(if .explained then "explained" + (if (.explained_by // []) == [] then "" else " by " + (.explained_by | join(", ")) end) else "unexplained" end)"]
        # Only strings that pass their closed pattern reach the record: the model wrote this file.
        + [$c.claims[] | "claim \(.claim_id)"
           + (if (.params | type == "object") and (.params.node | tid) and (.params.revision | IN("base", "head")) and (.predicate_type | IN(preds[]))
