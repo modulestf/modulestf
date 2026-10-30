@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016 # the perl and jq programs below are single-quoted on purpose
-# The verification ladder's L1 and L3 pass of terraform-module-pr-review, as one file. Rules and
+# The verification ladder's L1, L2 and L3 pass of terraform-module-pr-review, as one file. Rules and
 # reasons: ladder-pass.md. Run it with bash by an absolute path in the skill as installed,
 # never from the head, the workspace or a copy the head could have written:
 #
@@ -17,6 +17,8 @@
 #       --head <sha> --out <ladder.json> [--coverage <coverage.json>] [--schema <schema.json>]
 #       L1: one fixture pair per trigger that asks for L1, checked by mtf-facts
 #       fixture-check, planned and shown in the sandbox, projected into the ladder record.
+#       L2: per trigger that asks for L2, its count or for_each expression on a terraform_data
+#       resource, run as terraform test with one run block that only plans, per case.
 #       L3: per trigger that asks for L3, the curated fixture of its resource from
 #       ladder-fixtures/, the real provider from this run's acquisition, a prior state and
 #       a control run; needs --schema, the schema acquisition wrote.
@@ -633,7 +635,8 @@ fi
 FIX_PL='
 use strict; use warnings; use JSON::PP;
 my ($tfile, $tmpl, $root, $l3tmpl, $attr, $rtype) = @ARGV;
-my $L3 = defined $l3tmpl;
+my $L3 = defined $l3tmpl && $l3tmpl ne "-";
+my $L2 = !$L3 && ($rtype // "") eq "L2";   # L2: the count or for_each of terraform_data.subject
 my $J = JSON::PP->new->canonical;
 sub done { print $J->encode(shift), "\n"; exit 0 }
 sub nope { done({ok => JSON::PP::false, reason => substr(shift, 0, 200)}) }
@@ -801,6 +804,9 @@ nope("a default change in a counted or for_each context") if defined $omit && $w
 # its block; a counted, for_each or default context has no single instance to plan.
 nope("count, each and default contexts are unverifiable at L3") if $L3 && (defined $omit || $wrap ne "none");
 if ($L3) { $subj = {type => "resource", labels => [$rtype, "this"]}; $sec = "subject" }
+# L2 splices it into the count or for_each of terraform_data.subject, whose instances are the observation.
+nope("count, each and default contexts are unverifiable at L2") if $L2 && (defined $omit || $wrap ne "none");
+if ($L2) { nope("no L2 template for attribute $attr") unless $attr =~ /\A(count|for_each)\z/; $subj = {type => "resource", labels => ["terraform_data", "subject"]}; $sec = "subject-l2-$attr" }
 my ($oi) = grep { defined $omit && $in[$_]{name} eq $omit } 0 .. $#in;
 mkdir "$root/expect" or die;
 for my $s (@sides) {
@@ -816,10 +822,11 @@ for my $s (@sides) {
   open $fh, ">", "$root/$s/subject.tf" or die;
   print $fh fill($sec, EXPR => $e, LOCAL => defined $oi ? "local.ladder_in_$oi" : "", $L3 ? (ATTR => $attr) : ());
   close $fh;
+  if ($L2) { open $fh, ">", "$root/$s/ladder.tftest.hcl" or die; print $fh fill("test"); close $fh }
   open $fh, ">", "$root/expect/$s.json" or die;
   print $fh $J->encode({schema_version => 1, files => {"main.tf" => {blocks => \@blocks},
     "subject.tf" => {blocks => [$subj],
-      single_expressions => [{block => $subj->{type}, labels => $subj->{labels}, attribute => $L3 ? $attr : $wrap eq "none" ? "value" : "input"}]}}});
+      single_expressions => [{block => $subj->{type}, labels => $subj->{labels}, attribute => $L3 || $L2 ? $attr : $wrap eq "none" ? "value" : "input"}]}}});
 }
 done({ok => JSON::PP::true, wrap => $wrap, sides => \@sides, canaries => [map { $_->[0] } @canaries],
   cases => [map { {id => $_->{id}, inputs => $_->{inputs}, unknown_inputs => $_->{unknown}, addr => $_->{addr}} } @cases]});
@@ -839,6 +846,13 @@ def subj: if $wrap == "l3" then (first(.resource_changes[]? | select(.address ==
         after_sensitive: (.after_sensitive[$attr] // false), before: .before[$attr], action: (.actions | act),
         control: (((.after // {}) | del(.[$attr])) == $baseline.after and ((.after_unknown // {}) | del(.[$attr]) | anytrue | not)
           and ((.actions | act) as $a | $baseline.actions | index([$a]) != null))} end)
+  elif $wrap == "l2-for_each" or $wrap == "l2-count" then
+    # L2: the instances of terraform_data.subject, as instance key -> planned input, or their number.
+    [.resource_changes[]? | select(.mode == "managed" and (.address | startswith("terraform_data.subject")))] as $r
+    | if $wrap == "l2-count" then {after: ($r | length), after_unknown: false, after_sensitive: false}
+      else {after: ($r | map({key: (.index | tostring), value: .change.after.input}) | from_entries),
+        after_unknown: ($r | map({key: (.index | tostring), value: (.change.after_unknown.input // false)}) | from_entries),
+        after_sensitive: ($r | map(.change.after_sensitive.input // false) | any)} end
   elif $wrap == "none" then (.output_changes.subject // null)
   else (first(.resource_changes[]? | select(.address == $cs.addr) | .change) // null
     | if . == null then null else {after: .after.input, after_unknown: (.after_unknown.input // false),
@@ -884,6 +898,11 @@ l1() { # trigger file, id: one run record
   local tf=$1 id=$2 F="$L/fixtures/$2" meta wrap addr side c out rc why t fx="" base="" head="" obsb="[]" obsh="[]" o
   local fixj nob='{"base":[],"head":[]}'
   LV=L1
+  # A dynamic block trigger carries only its for_each: when that is unchanged, the change is in
+  # the content, which no fixture holds, and evaluating the for_each would show no difference.
+  if jq -e '.category == "dynamic-block-change" and .base_expr == .head_expr' "$tf" > /dev/null 2>&1; then
+    record "$id" unverifiable "the for_each is unchanged; the change is in the content" "" "" "$nob"; return
+  fi
   if [ "$L1_OK" != 1 ]; then record "$id" unverifiable "sandbox unproven" "" "" "{\"base\":[],\"head\":[],\"sandbox\":$SBXJ}"; return; fi
   mode_exec
   left 1 > /dev/null || { record "$id" unverifiable "budget" "" "" "$nob"; return; }
@@ -959,6 +978,116 @@ l1() { # trigger file, id: one run record
     '{base:$b, head:$h, fixture:$f, sandbox:($s | {kind, proven, profile_sha256})}')"
 }
 
+# --- L2 ------------------------------------------------------------------------------------------
+# terraform test runs apply unless told otherwise, so a side runs only when its one test
+# file holds nothing but run blocks whose only line is "command = plan": no JSON test file,
+# no mock file, no directory. fixture-check checks the test grammar too; this does not rely
+# on it. Exit 0 plan only, 1 refused.
+PLANONLY_PL='
+use strict; use warnings;
+my $dir = shift; opendir my $d, $dir or exit 1;
+my @e = grep { !/\A\.\.?\z/ } readdir $d;
+my @t = grep { /\.tftest\.hcl\z/ } @e;
+exit 1 if @t != 1 || grep { /\.tftest\.json\z|\.tfmock\.hcl\z/ || -d "$dir/$_" || -l "$dir/$_" } @e;
+open my $f, "<", "$dir/$t[0]" or exit 1;
+my ($in, $plan, $runs) = (0, 0, 0);
+while (my $l = <$f>) {
+  next if $l =~ /\A\s*\z/;
+  if (!$in) { $l =~ /\Arun "[A-Za-z0-9_-]+" \{\n\z/ or exit 1; ($in, $plan) = (1, 0); $runs++; next }
+  if ($l eq "}\n") { exit 1 unless $plan == 1; $in = 0; next }
+  $l eq "  command = plan\n" or exit 1; $plan++;
+}
+exit(($runs > 0 && !$in) ? 0 : 1);
+'
+# The outcome of one terraform test -json run: "plan" with the plan of a run that passed with
+# no error, "error" when the run failed with no plan and every error is an invalid count or
+# for_each argument in subject.tf (the expression failing for these inputs), else "other".
+TEST_JQ='
+[.[] | select(type == "object")] as $m
+| [$m[] | select(.type == "test_run" and .test_run.run == "ladder" and .test_run.progress == "complete") | .test_run.status] as $st
+| [$m[] | select(.type == "diagnostic" and .diagnostic.severity == "error") | .diagnostic] as $err
+| [$m[] | select(.type == "test_plan") | .test_plan] as $pl
+| if $st == ["pass"] and ($err | length) == 0 and ($pl | length) == 1 then {kind: "plan", plan: $pl[0]}
+  elif ($st | length) == 1 and $st[0] != "pass" and ($pl | length) == 0 and ($err | length) > 0
+    and all($err[]; (.summary == "Invalid for_each argument" or .summary == "Invalid count argument") and .range.filename == "subject.tf")
+  then {kind: "error"} else {kind: "other"} end'
+# One L2 run: the trigger's count or for_each expression on terraform_data.subject, the
+# inputs as at L1, terraform test with one plan-only run per case and side. The observation
+# is the planned instances: key -> each.value for for_each, their number for count.
+l2() { # trigger file, id
+  local tf=$1 id=$2 F="$L/fixtures/$2-L2" nob='{"base":[],"head":[]}' attr meta side t rc o why c ci n
+  local base="" head="" obsb="[]" obsh="[]" fx fixj fob
+  LV=L2
+  if [ "$L1_OK" != 1 ]; then record "$id" unverifiable "sandbox unproven" "" "" "{\"base\":[],\"head\":[],\"sandbox\":$SBXJ}"; return; fi
+  mode_exec
+  left 1 > /dev/null || { record "$id" unverifiable "budget" "" "" "$nob"; return; }
+  attr="$(jq -r '.attribute // ""' "$tf")"
+  [[ "$attr" =~ ^(count|for_each)$ ]] || { [[ "$attr" =~ ^[a-z0-9_.-]{1,64}$ ]] || attr=other; record "$id" unverifiable "no L2 template for attribute $attr" "" "" "$nob"; return; }
+  # The cases count against claims-eval's sweep cap together with L1's.
+  [ "$(jq --argjson cap "$SWEEP_CASES" '(.cases // [] | length) * (if (.levels | index("L1")) then 2 else 1 end) <= $cap' "$tf")" = true ] \
+    || { record "$id" unverifiable "no case budget left for L2" "" "" "$nob"; return; }
+  mkdir -m 700 "$F" || { record "$id" unverifiable "fixture directory" "" "" "$nob"; return; }
+  meta="$(perl -e "$FIX_PL" "$tf" "$TPL/l1.tf.tmpl" "$F" - "$attr" L2 2> /dev/null)" || meta='{"ok":false,"reason":"fixture builder failed"}'
+  if [ "$(printf '%s' "$meta" | jq -r '.ok')" != true ]; then
+    record "$id" unverifiable "$(printf '%s' "$meta" | jq -r '.reason // "fixture builder failed"')" "" "" "$nob"; return
+  fi
+  find "$F" -type f -exec chmod 444 {} + ; find "$F" -type d -exec chmod 555 {} +
+  fixj='{}'
+  for side in $(printf '%s' "$meta" | jq -r '.sides[]'); do
+    [ -n "$FACTS" ] || { record "$id" unverifiable "mtf-facts is not installed" "" "" "$nob"; return; }
+    t="$(left 60)" || { record "$id" unverifiable "budget" "" "" "$nob"; return; }
+    sbx exec "$F/$side" "$t" "$MIB" "$L/out/fc.json" "$FACTS" fixture-check "$F/$side" --level L2 \
+      --expect "$F/expect/$side.json" --json; rc=$?
+    if [ "$rc" -eq 1 ]; then
+      why="$(jq -r '[.violations[]? | .rule | select(type == "string" and test("^[a-z0-9._-]{1,64}$"))] | unique | .[:5] | join(", ")' "$L/out/fc.json" 2> /dev/null)"
+      record "$id" unverifiable "fixture-check $side: ${why:-violations}" "" "" "$nob"; return
+    fi
+    o="$(jq -r 'select(.schema_version == 1 and .ok == true) | .tree_sha256 | select(type == "string" and test("^[0-9a-f]{64}$"))' "$L/out/fc.json" 2> /dev/null)"
+    [ "$rc" -eq 0 ] && [ -n "$o" ] || { record "$id" unverifiable "fixture-check $side exited $rc" "" "" "$nob"; return; }
+    perl -e "$PLANONLY_PL" "$F/$side" || { record "$id" unverifiable "test file $side: not plan only" "" "" "$nob"; return; }
+    fixj="$(printf '%s' "$fixj" | jq -c --arg s "$side" --arg h "$o" '. + {("\($s)_tree_sha256"): $h}')"
+    if [ "$side" = base ]; then base=$o; else head=$o; fi
+  done
+  fixj="$(printf '%s' "$fixj" | jq -c --argjson v "$(for f in "$F"/vars/*.tfvars.json; do c="${f##*/}"; jq -cn --arg c "${c%.tfvars.json}" --arg h "$(sha256 "$f")" '{($c): $h}'; done | jq -cs 'add // {}')" \
+    '. + {vars_sha256: $v}')"
+  fx="$(printf 'base:%s\nhead:%s\n' "$base" "$head" | perl -MDigest::SHA=sha256_hex -0777 -ne 'print sha256_hex($_)')"
+  fob="{\"base\":[],\"head\":[],\"fixture\":$fixj}"
+  n="$(printf '%s' "$meta" | jq '.cases | length')"
+  for ((ci = 0; ci < n; ci++)); do
+    c="$(printf '%s' "$meta" | jq -r --argjson i "$ci" '.cases[$i].id')"
+    for side in $(printf '%s' "$meta" | jq -r '.sides[]'); do
+      # The guard again right before the command: the side is read-only, so this is the file it runs.
+      perl -e "$PLANONLY_PL" "$F/$side" || { record "$id" unverifiable "test file $side: not plan only" "$fx" "" "$fob"; return; }
+      t="$(left 120)" || { record "$id" unverifiable "budget" "$fx" "" "$fob"; return; }
+      sbx exec "$F/$side" "$t" $((8 * MIB)) "$L/out/test.json" "$TF" test -json -verbose -no-color "-var-file=$F/vars/$c.tfvars.json"; rc=$?
+      o="$(jq -cs "$TEST_JQ" "$L/out/test.json" 2> /dev/null)" || o='{"kind":"other"}'
+      case "$(printf '%s' "$o" | jq -r .kind)/$rc" in
+        error/1)
+          o="$(printf '%s' "$meta" | jq -c --argjson i "$ci" '.cases[$i] | {obs: {case: .id, error: true, known: false, wholly_unknown: false,
+            length: null, sensitive: false, redacted: false, unknown_mask: null, unknown_inputs, inputs, action: null, unchanged_vs_prior: null}}')" ;;
+        plan/0)
+          printf '%s' "$o" | jq -c .plan > "$L/plans/$id-L2-$side-$ci.json"
+          o="$(jq -c --arg wrap "l2-$attr" --arg attr "" --argjson baseline null --argjson canaries "$(printf '%s' "$meta" | jq -c .canaries)" \
+            --argjson cs "$(printf '%s' "$meta" | jq -c --argjson i "$ci" '.cases[$i]')" "$PROJ_JQ" "$L/plans/$id-L2-$side-$ci.json" 2> /dev/null)"
+          if [ -z "$o" ] || [ "$(printf '%s' "$o" | jq -r '.canaries and .known')" != true ]; then
+            record "$id" unverifiable "canary $side $c" "$fx" invalid "$fob"; return
+          fi
+          if [ "$(printf '%s' "$o" | jq -r '.obs.sensitive')" = true ]; then
+            record "$id" unverifiable "sensitive subject $side $c" "$fx" "" "$fob"; return
+          fi ;;
+        plan/*|error/*) record "$id" unverifiable "test $side $c exited $rc" "$fx" "" "$fob"; return ;;
+        *) if [ "$rc" -eq 0 ]; then record "$id" unverifiable "test $side $c: no plan" "$fx" "" "$fob"
+           else record "$id" unverifiable "test $side $c exited $rc" "$fx" "" "$fob"; fi; return ;;
+      esac
+      if [ "$side" = base ]; then obsb="$(printf '%s' "$obsb" | jq -c --argjson o "$o" '. + [$o.obs]')"
+      else obsh="$(printf '%s' "$obsh" | jq -c --argjson o "$o" '. + [$o.obs]')"; fi
+    done
+    [ "$(du -sk "$S" | cut -f1)" -le "$SCRATCH_CAP_KB" ] || { record "$id" unverifiable "scratch over its cap" "$fx" "" "$fob"; return; }
+  done
+  record "$id" ran "" "$fx" valid "$(jq -cn --argjson b "$obsb" --argjson h "$obsh" --argjson f "$fixj" --argjson s "$SBXJ" \
+    '{base:$b, head:$h, fixture:$f, sandbox:($s | {kind, proven, profile_sha256})}')"
+}
+
 # --- L3 ------------------------------------------------------------------------------------------
 L3_MAX_CASES=4     # cases of one trigger at L3
 SWEEP_CASES=32     # claims-eval's cap on the cases of one trigger over all its levels
@@ -1011,7 +1140,7 @@ l3() { # trigger file, id
     def unk: .unknown == true or ((.unknown_elements // []) | length > 0);
     def plain: .unknown != true and .null != true and .omitted != true and ((.unknown_elements // []) | length == 0)
       and ([.value | .. | select(. == null)] | length == 0);
-    (if (.levels | index("L1")) then (.cases // [] | length) else 0 end) as $n1
+    ((.cases // [] | length) * ([.levels[] | select(. == "L1" or . == "L2")] | length)) as $n1
     | ([$max, $sweep - $n1] | min) as $k
     | {k: $k, cases: [(.cases // [])[] | select(.inputs | type == "object" and any(.[]; unk))][:([$k, 0] | max)],
        control: (first((.cases // [])[] | select(.inputs | type == "object" and length > 0 and all(.[]; plain))) // null)}' \
@@ -1104,7 +1233,7 @@ l3() { # trigger file, id
 
 : > "$L/runs.jsonl"
 jq -r '.l1[]' "$TPL/l1-categories.json" > "$L/etc/l1-categories.txt"
-jq -c '.triggers[] | select((.levels | index("L1")) or (.levels | index("L3")))' "$BEH" | head -n "$MAX_TRIGGERS" > "$L/etc/l1-triggers.jsonl"
+jq -c '.triggers[] | select((.levels | index("L1")) or (.levels | index("L2")) or (.levels | index("L3")))' "$BEH" | head -n "$MAX_TRIGGERS" > "$L/etc/l1-triggers.jsonl"
 while IFS= read -r t; do
   printf '%s\n' "$t" > "$L/etc/trigger.json"
   id="$(jq -r .id "$L/etc/trigger.json")"
@@ -1117,6 +1246,7 @@ while IFS= read -r t; do
       l1 "$L/etc/trigger.json" "$id"
     fi
   fi
+  if jq -e '.levels | index("L2")' "$L/etc/trigger.json" > /dev/null; then l2 "$L/etc/trigger.json" "$id"; fi
   if jq -e '.levels | index("L3")' "$L/etc/trigger.json" > /dev/null; then l3 "$L/etc/trigger.json" "$id"; fi
 done < "$L/etc/l1-triggers.jsonl"
 

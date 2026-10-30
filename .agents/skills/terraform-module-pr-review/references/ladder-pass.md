@@ -1,6 +1,6 @@
 # Ladder pass
 
-The L1 and L3 levels of the verification ladder as one script, [ladder-pass.sh](ladder-pass.sh). It takes the triggers of the classifier report (`mtf-facts behaviour --json`), evaluates each trigger's base and head expression offline in a network-denied sandbox, at L1 alone and at L3 in a curated provider fixture, and writes the ladder record that `mtf-facts claims-eval` reads. It never reads a file of the clone: a fixture holds only the trigger's own expression text, spliced into the skill's template. The script runs with bash and needs `perl`, `jq`, `terraform`, `mtf-facts` and, for acquisition, `curl`.
+The L1, L2 and L3 levels of the verification ladder as one script, [ladder-pass.sh](ladder-pass.sh). It takes the triggers of the classifier report (`mtf-facts behaviour --json`), evaluates each trigger's base and head expression offline in a network-denied sandbox, at L1 alone, at L2 as the count or for_each of a resource under a plan-only `terraform test`, and at L3 in a curated provider fixture, and writes the ladder record that `mtf-facts claims-eval` reads. It never reads a file of the clone: a fixture holds only the trigger's own expression text, spliced into the skill's template. The script runs with bash and needs `perl`, `jq`, `terraform`, `mtf-facts` and, for acquisition, `curl`.
 
 ## Commands
 
@@ -10,7 +10,7 @@ Run each by the absolute path of the installed skill, never from the head or the
 |---|---|---|
 | `bash ladder-pass.sh probe <run-dir>` | Builds the sandbox, runs the canary in it, prints the canary lines, then `terraform` with its version and `sandbox proven <kind>`, or `sandbox unproven: <reason>`; after an acquisition in the run also `provider sandbox proven <kind>` or `provider sandbox unproven: <reason>` | 0 proven, 1 not |
 | `bash ladder-pass.sh acquire <run-dir> --pins <pins.json> --cache <dir> --schema-out <schema.json>` | Acquisition: the pinned providers into the run's read-only mirror, and `terraform providers schema -json` for `mtf-facts behaviour --schema` | 0 done, 1 `acquisition failed: <reason>`, 2 usage |
-| `bash ladder-pass.sh run <run-dir> --behaviour <b.json> --base <sha> --head <sha> --out <ladder.json> [--coverage <coverage.json>] [--schema <schema.json>]` | L1 for every trigger whose `levels` holds `L1`, L3 for every one that holds `L3`, at most 40 triggers and 10 minutes, then the ladder record | 0 record written, 2 usage or refused input |
+| `bash ladder-pass.sh run <run-dir> --behaviour <b.json> --base <sha> --head <sha> --out <ladder.json> [--coverage <coverage.json>] [--schema <schema.json>]` | L1 for every trigger whose `levels` holds `L1`, L2 for every one that holds `L2`, L3 for every one that holds `L3`, at most 40 triggers and 10 minutes, then the ladder record | 0 record written, 2 usage or refused input |
 
 Every command also takes `--owner-pid <pid>`: the long-lived process that owns the review, such as the agent or the runner, named in the run's lease. Pass the same process on every call.
 
@@ -24,8 +24,8 @@ Everything lives in `<run-dir>/ladder`, mode 0700, outside the clone.
 |---|---|
 | `lease` | `<owner pid> <owner start time> <expiry> <token>`, rewritten on every call; owner `0` and start `-` without `--owner-pid`, expiry a day ahead |
 | `scratch/` | The only path the sandbox may write: an empty `home/` and `tmp/`, the plans while they are written. Removed when the script exits |
-| `fixtures/<trigger>/base`, `head` | `main.tf` and `subject.tf` per side, read-only, checked by fixture-check; `vars/` holds one var file per case, `expect/` the block manifest of each side; `fixtures/<trigger>-L3/` the same for L3 |
-| `plans/` | The raw saved plans, mode 0700, kept for the host |
+| `fixtures/<trigger>/base`, `head` | `main.tf` and `subject.tf` per side, read-only, checked by fixture-check; `vars/` holds one var file per case, `expect/` the block manifest of each side; `fixtures/<trigger>-L3/` the same for L3, `fixtures/<trigger>-L2/` for L2 with `ladder.tftest.hcl` in each side |
+| `plans/` | The raw saved plans, and at L2 the plan of each test run, mode 0700, kept for the host |
 | `mirror/` | The providers acquisition verified, packed layout, read-only |
 | `providers/`, `providers.manifest` | The providers `terraform init` unpacked from the mirror, read-only and outside scratch, with a sentinel file for the canary; the manifest lists every entry with its type and the sha256 of each file |
 | `etc/` | The sandbox profiles, the CLI configuration (filesystem mirror only, no direct installation), and `provider.tfrc`, which adds `dev_overrides` from each pinned source to its binary in `providers/` |
@@ -78,6 +78,20 @@ Each side directory holds `main.tf` (variables, stand-ins, locals, canaries) and
 
 Then `terraform validate` on each side: an undeclared name or a broken fixture fails here, and the run is unverifiable. Then, per case and side, `terraform plan -refresh=false -lock=false -out` and `terraform show -json` of the saved plan. A plan that fails with errors located only in `subject.tf` is the expression failing for those inputs, such as `concat(null)`: an observation with `error` true. Any other plan failure makes the run unverifiable.
 
+A `dynamic-block-change` trigger carries only the block's `for_each`, and L1 evaluates that collection, whose length, keys and values are the blocks the dynamic block makes. When the base and head `for_each` texts are equal, the change is in the content, which no fixture holds, so the run is `unverifiable` with the reason `the for_each is unchanged; the change is in the content`, never a run that shows no difference.
+
+## L2
+
+L2 runs `terraform test` on the trigger's `count` or `for_each`, so the instances a module creates are observed, and an unknown key fails as it would in a plan. A trigger runs at L2 when its `levels` hold `L2`: a `count-for_each-conditional-change` whose attribute is `count` or `for_each` of a resource or module block. Any other attribute is `unverifiable` with `no L2 template for attribute <name>`.
+
+- The fixture is built as at L1: the same inputs, stand-ins, canaries and case var files. `subject.tf` is `resource "terraform_data" "subject"` with the expression as its `for_each` (and `input = each.value`) or its `count`, last in the block. `terraform_data` stands in for the resource type, because the instances a `count` or `for_each` makes do not depend on it. A `count.index`, `each` or default context is `unverifiable`.
+- `ladder.tftest.hcl` in each side is the template's run block and nothing else: `run "ladder"` with `command = plan`. The fixture uses only the built-in provider, so there is no `mock_provider` to declare.
+- `mtf-facts fixture-check <side> --level L2 --expect <manifest> --json` checks both sides, the test file by its own grammar. The script does not rely on it: before any test, and again before each one, a side runs only when its one `.tftest.hcl` holds nothing but run blocks whose only line is `command = plan`, with no `.tftest.json`, no `.tfmock.hcl` and no directory. Otherwise the run is `unverifiable` with `test file <side>: not plan only`. A run block without `command` would apply.
+- Per case and side, in the L1 sandbox profile: `terraform test -json -verbose -no-color -var-file=<case>`. A run that passes with no error and exactly one `test_plan` message is projected as at L1. The subject is the map of instance key to planned input for `for_each`, or the number of instances for `count`. A failed run with no plan, whose every error is `Invalid for_each argument` or `Invalid count argument` located in `subject.tf`, is an observation with `error` true. Anything else is `unverifiable` with a fixed reason.
+- The cases count against the sweep cap of `claims-eval` together with L1's: when the trigger's cases at both levels pass 32, the run is `unverifiable` with `no case budget left for L2`.
+
+A `moved` block or a renamed address has no L2. A plan-only test has no prior state, and seeding one needs apply, so a move cannot be observed.
+
 ## L3
 
 L3 plans the resource a trigger changes with the real provider, from a curated fixture of the [fixture library](#fixture-library), so a claim about what the provider does with a value, such as an Optional and Computed attribute keeping its prior value, is observed and not read from memory. A trigger runs at L3 when its `levels` hold `L3` (an `unknown-propagation-candidate`). Before the first L3 command `run` checks every hash of `providers/` against the manifest and proves the provider profile; before each L3 command it checks that the tree's entries and each binary's inode, size and modification time are unchanged, and does not start the command otherwise.
@@ -93,7 +107,7 @@ For pull request 556 the base, `compact()` over a list with an unknown security 
 
 ## Fixture library
 
-[ladder-fixtures/](ladder-fixtures/) holds one directory per resource type and provider version, `<type>/<provider type>-<version>/`, such as [aws_rds_cluster/aws-6.70.0](ladder-fixtures/aws_rds_cluster/aws-6.70.0/). Each holds:
+[ladder-fixtures/](ladder-fixtures/) holds one directory per resource type and provider version, `<type>/<provider type>-<version>/`, such as [aws_rds_cluster/aws-6.70.0](ladder-fixtures/aws_rds_cluster/aws-6.70.0/) and [aws_db_instance/aws-6.70.0](ladder-fixtures/aws_db_instance/aws-6.70.0/), both with the target `vpc_security_group_ids`. `mtf-facts fixture-check` must curate the type too. Each holds:
 
 | File | Holds |
 |---|---|
@@ -113,6 +127,8 @@ The record follows the team contract: `schema_version`, `head_sha`, `base_sha`, 
 - `reason` is a fixed string: one of the builder's sentences, or fixed words with a side, a case id, an exit status, a category word or rule ids of fixture-check (`fixture-check head: manifest.block-set`). No text of the clone, of a terraform error or of the canary reaches it, so a reason is safe to quote in a comment.
 - `fixture_sha256` is the sha256 of `base:<tree>\nhead:<tree>\n`, from the two tree hashes of fixture-check.
 - `observations` is `{base: [obs], head: [obs], fixture, sandbox}`, one obs per case id in the classifier's order, an empty list for a side without an expression. An obs is the allowlisted projection of the plan: `case` (the case id), `error`, `known` (wholly known), `wholly_unknown`, `length` (known length of a list, or of a wholly known object), `unknown_mask` (`false` when known), `value` (whenever the value is not wholly unknown, with null at the unknown parts of a partly unknown one; never when sensitive or over 4 KiB, which sets `redacted`), `sensitive`, `redacted`, `unknown_inputs` (the inputs unknown in that case), `inputs` (the case as the classifier gave it), and `action` and `unchanged_vs_prior`, null at L1. `sandbox` is the kind, whether it was proven, the profile sha256 and a reason code: `no-sandbox-tool`, `no-terraform`, `no-perl`, `path-characters`, `canary-failed`, `canary-leak`, `canary-incomplete`, `canary-class-missing`, `scratch-unreadable`, `no-network-namespace`, `plugin-socket`, `no-provider-tree` or `other`. Canary lines, paths and command output stay in `ladder/out` on the host.
+
+An L2 run has `level` `L2` and the L1 observations, the subject being the instances. Its sandbox is the L1 profile, with no `profile` key.
 
 An L3 run has `level` `L3`, observations of the target attribute with `action` and `unchanged_vs_prior` set, `fixture` with the `library` entry, `prior_sha256` and `control` (`case`, `action`, `baseline`), and `sandbox` with `profile` `provider`. Its reasons are fixed words too, such as `no provider schema`, `provider tree changed`, `cleanup`, `control does not match the baseline` or `no curated fixture for <type> at the pinned provider`.
 

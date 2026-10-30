@@ -50,6 +50,36 @@ init)
     d=".terraform/providers/\$src/\$ver/\${os}_\$m"; mkdir -p "\$d"; echo bin > "\$d/terraform-provider-\${src##*/}_v\${ver}_x5"; chmod 755 "\$d"/*
   done ;;
 providers) cat "\$S/schema.json" ;;
+test)
+  # L2: the instances of terraform_data.subject from the case's first input, upper-cased
+  # when the subject says upper(); a wholly unknown input is the unknown keys error.
+  echo "\$*" >> "\$S/test-args.log"
+  for a in "\$@"; do case "\$a" in -var-file=*) vf=\${a#-var-file=} ;; esac; done
+  ls "\$PWD" > "\$S/test-dir.txt"
+  jl() { jq -cn "\$@"; }
+  jl '{type:"version", terraform:"1.9.8"}'
+  [ -f "\$S/test.badjson" ] && { echo 'not json'; exit 1; }
+  if [ "\$(jq -r .ladder_mode_0 "\$vf")" = unknown ] || [ -f "\$S/test.othererror" ]; then
+    f=subject.tf; s="Invalid for_each argument"; grep -q 'count = ' subject.tf && s="Invalid count argument"
+    [ -f "\$S/test.othererror" ] && { f=main.tf; s="Unsupported argument"; }
+    jl --arg f "\$f" --arg s "\$s" '{type:"diagnostic", diagnostic:{severity:"error", summary:\$s, range:{filename:\$f}}}'
+    jl '{type:"test_run", test_run:{run:"ladder", progress:"complete", status:"error"}}'
+    exit 1
+  fi
+  [ -f "\$S/test.noplan" ] || {
+  cu=true; [ -f "\$S/canary.known" ] && cu=false
+  up=false; grep -q 'upper(' subject.tf && up=true
+  jq -c --argjson up "\$up" --argjson cu "\$cu" --arg names "\$(grep -Eo 'output "canary_ladder_ue?_[0-9]+"' main.tf | cut -d'"' -f2)" \
+    --argjson cnt "\$(grep -q 'count = ' subject.tf && echo true || echo false)" '
+    ([.ladder_val_0[] | if \$up then ascii_upcase else . end]) as \$k
+    | {type:"test_plan", test_plan:{output_changes:({canary_known:{after:"known", after_unknown:false}}
+        + ([\$names | split("\n")[] | select(. != "") | {(.): {after_unknown: \$cu}}] | add // {})),
+       resource_changes:(if \$cnt then [range(\$k | length) as \$i | {address:"terraform_data.subject[\(\$i)]", mode:"managed", index:\$i,
+           change:{actions:["create"], after:{input:null}, after_unknown:{id:true, output:true}, after_sensitive:{}}}]
+         else [\$k[] | {address:"terraform_data.subject[\"\(.)\"]", mode:"managed", index:., change:{actions:["create"], after:{input:.},
+           after_unknown:{id:true, output:true}, after_sensitive:{}}}] end)}}' "\$vf"; }
+  jl '{type:"test_run", test_run:{run:"ladder", progress:"complete", status:"pass"}}'
+  exit 0 ;;
 plan)
   [ -f "\$S/plan.fail" ] && { printf 'Error: Invalid function argument\n\n  on main.tf line 9\n' >&2; exit 1; }
   [ -f "\$S/plan.subject" ] && { printf 'Error: Invalid function argument\n\n  on subject.tf line 2, in output "subject":\n' >&2; exit 1; }
@@ -58,19 +88,20 @@ plan)
 show)
   dir=\$(sed -n 1p "\$3"); vf=\$(sed -n 2p "\$3"); c=\${vf##*/}; c=\${c%.tfvars.json}; cat "\$dir"/*.tf > "\$S/m.tf"; m="\$S/m.tf"
   cu=true; [ -f "\$S/canary.known" ] && cu=false
-  if grep -q 'resource "aws_rds_cluster" "this"' "\$dir/subject.tf"; then
+  typ=\$(grep -Eo '^resource "aws_(rds_cluster|db_instance)" "this"' "\$dir/subject.tf" | cut -d'"' -f2)
+  if [ -n "\$typ" ]; then
     # L3: the control case "known" updates to a known value; compact() keeps the prior value;
     # anything else plans the target unknown.
-    b="\$(cat "$REF/ladder-fixtures/aws_rds_cluster/aws-6.70.0/baseline.json")"
+    b="\$(cat "$REF/ladder-fixtures/\$typ/aws-6.70.0/baseline.json")"
     if [ "\$c" = known ]; then a='{"vpc_security_group_ids":["a"]}'; u='{}'; act='["update"]'
     elif grep -q 'compact(' "\$dir/subject.tf"; then a='{"vpc_security_group_ids":["sg-0old0000000000000"]}'; u='{}'; act='["no-op"]'
     else a='{"vpc_security_group_ids":null}'; u='{"vpc_security_group_ids":true}'; act='["update"]'; fi
     bad=false; [ -f "\$S/control.bad" ] && bad=true
-    jq -n --argjson b "\$b" --argjson a "\$a" --argjson u "\$u" --argjson act "\$act" --argjson cu "\$cu" --argjson bad "\$bad" \
+    jq -n --argjson b "\$b" --argjson a "\$a" --argjson u "\$u" --argjson act "\$act" --argjson cu "\$cu" --argjson bad "\$bad" --arg typ "\$typ" \
       --arg names "\$(grep -Eo 'output "canary_ladder_ue?_[0-9]+"' "\$m" | cut -d'"' -f2)" '
       {errored:false, output_changes:({canary_known:{after:"known", after_unknown:false}}
         + ([\$names | split("\n")[] | select(. != "") | {(.): {after_unknown: \$cu}}] | add // {})),
-       resource_changes:[{address:"aws_rds_cluster.this", mode:"managed", change:{actions:\$act,
+       resource_changes:[{address:"\(\$typ).this", mode:"managed", change:{actions:\$act,
          before:(\$b.after + {vpc_security_group_ids:["sg-0old0000000000000"]}),
          after:(\$b.after + \$a + (if \$bad then {engine:"mysql"} else {} end)), after_unknown:\$u, after_sensitive:{}}}]}'
     exit 0
@@ -98,7 +129,7 @@ shift 2; lvl=; res=; pins=; exp=; js=
 while [ \$# -gt 0 ]; do case "\$1" in --level) lvl=\$2; shift 2 ;; --resource) res=\$2; shift 2 ;; --pins) pins=\$2; shift 2 ;;
   --expect) exp=\$2; shift 2 ;; --json) js=1; shift ;; *) exit 2 ;; esac; done
 [ -n "\$js" ] && [ -f "\$exp" ] || exit 2
-case "\$lvl" in L1) [ -z "\$res\$pins" ] || exit 2 ;; L3) [ "\$res" = aws_rds_cluster ] && jq -e '.providers | length > 0' "\$pins" > /dev/null || exit 2 ;; *) exit 2 ;; esac
+case "\$lvl" in L1|L2) [ -z "\$res\$pins" ] || exit 2 ;; L3) case "\$res" in aws_rds_cluster|aws_db_instance) ;; *) exit 2 ;; esac; jq -e '.providers | length > 0' "\$pins" > /dev/null || exit 2 ;; *) exit 2 ;; esac
 jq -e '.schema_version == 1 and (.files["main.tf"].blocks | length) > 0 and (.files["main.tf"] | has("single_expressions") | not) and (.files["subject.tf"].single_expressions | length) == 1' "\$exp" > /dev/null || exit 2
 rm -f "$ST/last-expect.json" "$ST/last-expect-\$lvl.json"; cp "\$exp" "$ST/last-expect.json"; cp "\$exp" "$ST/last-expect-\$lvl.json"
 [ -f "$ST/fc.violation" ] && { echo '{"schema_version":1,"ok":false,"tree_sha256":"'\$(printf 'a%.0s' {1..64})'","violations":[{"file":"main.tf","line":3,"rule":"expr.reference-denied"}]}'; exit 1; }
@@ -124,7 +155,7 @@ good_canary() {
     echo "end canary"
   } > "$ST/canary.txt"
 }
-reset() { rm -f "$ST"/{log,leak.log,sbx.log,plan-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad}; good_canary; }
+reset() { rm -f "$ST"/{log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan}; good_canary; }
 BASE=d72cba285514b5e2e83bea7dd1272c1c206a4f64
 HEAD=3b19adcd09b08528221d3286b30338b1e0cf6f16
 RUND="$TMP/runs/pr-review.abcdef"; mkdir -p "$RUND/clone"
@@ -261,6 +292,67 @@ echo '{"class":"partial","examples":[{"dir":"examples/a","head":"plan-ok","base"
 trig 'x' 'y' '[]' wrapper-change '["L3"]'; run --coverage "$TMP/cov.json" > /dev/null
 check "a coverage object passes into the record" "$(q "$TMP/l.json" '.coverage.class == "partial" and (.coverage.examples | length) == 1')"
 
+# --- dynamic blocks: L1 on the for_each expression, never when only the content changed
+reset; trig 'var.vpc_security_group_ids' 'var.vpc_security_group_ids' '[]' dynamic-block-change; run > /dev/null
+check "a dynamic block whose for_each is unchanged is unverifiable, no fixture" "$([ "$(r0 reason)" = 'the for_each is unchanged; the change is in the content' ] && ! grep -q '^facts' "$ST/log"; echo $?)"
+reset; trig 'var.vpc_security_group_ids' 'compact(var.vpc_security_group_ids)' '[]' dynamic-block-change; run > /dev/null
+check "a dynamic block's for_each change runs at L1" "$([ "$(r0 level)" = L1 ] && [ "$(r0 state)" = ran ]; echo $?)"
+
+# --- L2: terraform test, plan only, on the instances of a count or for_each meta-argument
+CASES2='[{"id":"typical","inputs":{"vpc_security_group_ids":{"value":["a","b"],"unknown":false,"null":false,"omitted":false}}},
+  {"id":"empty","inputs":{"vpc_security_group_ids":{"value":[],"unknown":false,"null":false,"omitted":false}}},
+  {"id":"unknown","inputs":{"vpc_security_group_ids":{"value":null,"unknown":true,"null":false,"omitted":false}}}]'
+trig2() { # [attribute] [head expression] [cases]: a for_each key change, L1 and L2
+  trig 'toset(var.vpc_security_group_ids)' "${2:-toset([for s in var.vpc_security_group_ids : upper(s)])}" '[]' \
+    count-for_each-conditional-change '["L1","L2"]' "${3:-$CASES2}"
+  jq --arg a "${1:-for_each}" '.triggers[0].address = "aws_security_group_rule.this" | .triggers[0].attribute = $a' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"
+}
+r2() { jq -r "[.runs[] | select(.level == \"L2\")][0].$1" "$TMP/l.json"; }
+q2() { q "$TMP/l.json" "[.runs[] | select(.level == \"L2\")][0] | $1"; }
+F2="$RUND/ladder/fixtures/T-001-L2"
+reset; trig2
+check "the L2 run exits 0 with an L1 and an L2 run" "$([ "$(run)" = 0 ] && q "$TMP/l.json" '[.runs[].level] == ["L1","L2"]' | grep -qx 0; echo $?)"
+check "L2 ran with a valid control and its fixture hash" "$(q2 '.state == "ran" and .reason == null and .control == "valid" and (.fixture_sha256 | test("^[0-9a-f]{64}$")) and (.observations.fixture.head_tree_sha256 | test("^b{64}$"))')"
+check "L2 observes the planned instance keys and values at each revision" "$(q2 '(.observations.base[0] | .case == "typical" and .known and .length == 2 and .value == {a:"a", b:"b"} and .error == false) and (.observations.head[0].value == {A:"A", B:"B"})')"
+check "L2 observes no instance as an empty map" "$(q2 '[.observations.base[1], .observations.head[1]] | all(.case == "empty" and .known and .length == 0 and .value == {})')"
+check "unknown keys are an error observation at both revisions" "$(q2 '[.observations.base[2], .observations.head[2]] | all(.case == "unknown" and .error and (.known | not) and (has("value") | not))')"
+check "fixture-check is asked for level L2 with the manifest, no pins" "$(grep -q 'facts fixture-check .*-L2/base --level L2 --expect .*-L2/expect/base.json --json' "$ST/log" && ! grep -q 'level L2 .*--pins' "$ST/log"; echo $?)"
+check "the L2 manifest binds the .tf files and the meta-argument as the single expression" "$(q "$ST/last-expect-L2.json" '(.files | keys) == ["main.tf","subject.tf"] and .files["subject.tf"].blocks == [{type:"resource",labels:["terraform_data","subject"]}] and .files["subject.tf"].single_expressions == [{block:"resource",labels:["terraform_data","subject"],attribute:"for_each"}]')"
+check "the side holds the module and one test file whose only run plans" "$([ "$(ls "$F2/head" | tr '\n' ' ')" = "ladder.tftest.hcl main.tf subject.tf " ] && [ "$(cat "$F2/head/ladder.tftest.hcl")" = "$(printf 'run "ladder" {\n  command = plan\n}')" ]; echo $?)"
+check "the expression is the for_each, last, with each.value as the input" "$([ "$(sed -n 2,3p "$F2/head/subject.tf")" = "$(printf '  input    = each.value\n  for_each = toset([for s in local.ladder_in_0 : upper(s)])')" ]; echo $?)"
+check "terraform test runs per case and side with the case var file, verbose JSON, never plan" "$([ "$(grep -c -- '-json -verbose -no-color -var-file=.*-L2/vars/' "$ST/test-args.log")" = 6 ] && ! grep -q -- '-L2/' "$ST/plan-args.log"; echo $?)"
+check "the L2 sandbox is the exec profile" "$(q2 '.observations.sandbox | .proven and (has("profile") | not)')"
+reset; trig2 count 'length(var.vpc_security_group_ids) + 1'; run > /dev/null
+check "a count change observes the number of instances" "$([ "$(q2 '.state == "ran" and .observations.base[0].value == 2 and .observations.base[1].value == 0 and .observations.base[2].error')" = 0 ] && grep -qx '  count = length(local.ladder_in_0) + 1' "$F2/head/subject.tf"; echo $?)"
+reset; trig2; : > "$ST/test.othererror"; run > /dev/null
+check "any other test error makes L2 unverifiable, with a fixed reason" "$([ "$(r2 reason)" = 'test base typical exited 1' ]; echo $?)"
+reset; trig2; : > "$ST/test.noplan"; run > /dev/null
+check "a passing test without a plan makes L2 unverifiable" "$([ "$(r2 reason)" = 'test base typical: no plan' ]; echo $?)"
+reset; trig2; : > "$ST/test.badjson"; run > /dev/null
+check "test output that is not JSON makes L2 unverifiable" "$([ "$(r2 state)" = unverifiable ] && r2 reason | grep -q '^test base typical'; echo $?)"
+reset; trig2; : > "$ST/canary.known"; run > /dev/null
+check "a stand-in that plans known makes the L2 control invalid" "$([ "$(r2 control)" = invalid ] && r2 reason | grep -q '^canary base'; echo $?)"
+reset; trig2; : > "$ST/fc.violation"; run > /dev/null
+check "a fixture-check violation stops L2 before any test" "$([ "$(r2 reason)" = 'fixture-check base: expr.reference-denied' ] && [ ! -s "$ST/test-args.log" ]; echo $?)"
+reset; trig2 name; run > /dev/null
+check "an attribute other than count or for_each has no L2 template" "$([ "$(r2 reason)" = 'no L2 template for attribute name' ]; echo $?)"
+reset; trig2 for_each '' "$(printf '%s' "$CASES2" | jq -c '[range(17) as $i | {id:"k\($i)", inputs:.[0].inputs}]')"; run > /dev/null
+check "L2 runs only when its cases and L1's fit the sweep cap" "$([ "$(r2 reason)" = 'no case budget left for L2' ]; echo $?)"
+reset; sed -i.bak 's/^denied ipv6 .*/open ipv6 tcp:x:443 connected/' "$ST/canary.txt"; trig2; run > /dev/null
+check "an unproven sandbox leaves L2 unverifiable" "$([ "$(r2 reason)" = 'sandbox unproven' ]; echo $?)"
+# The plan-only guard, end to end on a copy whose template asks for apply: refused before any test.
+mkdir -p "$TMP/apply"; cp -R "$REF"/. "$TMP/apply/"
+perl -0pi -e 's/command = plan/command = apply/' "$TMP/apply/ladder-templates/l1.tf.tmpl"
+reset; trig2; bash "$TMP/apply/ladder-pass.sh" run "$RUND" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" > /dev/null 2>&1
+check "a test file with a run that does not plan is refused before terraform test" "$([ "$(r2 reason)" = 'test file base: not plan only' ] && [ ! -s "$ST/test-args.log" ]; echo $?)"
+# The guard itself, taken from the script, on test directories of every refused shape.
+perl -0777 -ne "print \$1 if /PLANONLY_PL='(.*?)\n'\n/s" "$LP" > "$TMP/planonly.pl"
+po() { rm -rf "$TMP/po"; mkdir -p "$TMP/po"; printf '%b' "$1" > "$TMP/po/${2:-t.tftest.hcl}"; [ -n "${3:-}" ] && mkdir -p "$TMP/po/$3"; perl "$TMP/planonly.pl" "$TMP/po"; echo $?; }
+check "the guard accepts run blocks that each plan" "$([ "$(po 'run "a" {\n  command = plan\n}\n\nrun "b" {\n  command = plan\n}\n')" = 0 ]; echo $?)"
+check "the guard refuses apply, a missing command and a second command" "$([ "$(po 'run "a" {\n  command = apply\n}\n')" = 1 ] && [ "$(po 'run "a" {\n}\n')" = 1 ] && [ "$(po 'run "a" {\n  command = plan\n  command = apply\n}\n')" = 1 ]; echo $?)"
+check "the guard refuses anything else in a run or at the top" "$([ "$(po 'run "a" {\n  command = plan\n  variables {\n  }\n}\n')" = 1 ] && [ "$(po 'mock_provider "aws" {\n  source = "x"\n}\nrun "a" {\n  command = plan\n}\n')" = 1 ] && [ "$(po 'run "a" { command = plan }\n')" = 1 ]; echo $?)"
+check "the guard refuses a JSON test file, a mock file, a tests directory and no test file" "$([ "$(po '{}' t.tftest.json)" = 1 ] && [ "$(po 'x' m.tfmock.hcl)" = 1 ] && [ "$(po 'run "a" {\n  command = plan\n}\n' t.tftest.hcl tests)" = 1 ] && [ "$(po 'x' main.tf)" = 1 ]; echo $?)"
+
 # --- the lease sweep: only runs whose owner is gone, or ownerless leases past their day
 now=$(date +%s)
 for x in dead1x alive1 reuse1 noown1 noown2; do mkdir -p "$TMP/runs/pr-review.$x/ladder"; done
@@ -344,7 +436,8 @@ FX="$REF/ladder-fixtures/aws_rds_cluster/aws-6.70.0"
 jq -n --arg p "$PLAT" --arg s "$SUM" '{schema_version:1, artifact_hosts:["releases.hashicorp.com"],
   providers:[{source:"registry.terraform.io/hashicorp/aws", version:"6.70.0",
     platforms:{($p):{url:"https://releases.hashicorp.com/terraform-provider-aws/6.70.0/a.zip", sha256:$s}}}]}' > "$TMP/pins.json"
-schema_aws() { jq -n --slurpfile r "$FX/resource-schema.json" '{format_version:"1.0", provider_schemas:{"registry.terraform.io/hashicorp/aws":{resource_schemas:{aws_rds_cluster:$r[0]}}}}' > "$ST/schema.json"; }
+FXD="$REF/ladder-fixtures/aws_db_instance/aws-6.70.0"
+schema_aws() { jq -n --slurpfile r "$FX/resource-schema.json" --slurpfile d "$FXD/resource-schema.json" '{format_version:"1.0", provider_schemas:{"registry.terraform.io/hashicorp/aws":{resource_schemas:{aws_rds_cluster:$r[0], aws_db_instance:$d[0]}}}}' > "$ST/schema.json"; }
 reset; schema_aws
 check "acquisition of the aws pin succeeds" "$([ "$(acq)" = 0 ]; echo $?)"
 PV="$RUND/ladder/providers"
@@ -392,8 +485,10 @@ reset; trig3 "$(printf '%s' "$CASES3" | jq -c '.[:2]')"; run --schema "$TMP/aws-
 check "no all-known case leaves L3 without a control" "$([ "$(r3 reason)" = "no all-known case for the control" ]; echo $?)"
 reset; trig3; jq '.triggers[0].attribute = "tags"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run --schema "$TMP/aws-schema.json" > /dev/null
 check "an attribute outside the fixture's targets is unverifiable" "$([ "$(r3 reason)" = "the attribute is not a target of the fixture" ]; echo $?)"
+reset; trig3; jq '.triggers[0].address = "aws_instance.this"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run --schema "$TMP/aws-schema.json" > /dev/null
+check "a resource type without a curated fixture is unverifiable" "$([ "$(r3 reason)" = "no curated fixture for aws_instance at the pinned provider" ]; echo $?)"
 reset; trig3; jq '.triggers[0].address = "aws_db_instance.this"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run --schema "$TMP/aws-schema.json" > /dev/null
-check "a resource type without a curated fixture is unverifiable" "$([ "$(r3 reason)" = "no curated fixture for aws_db_instance at the pinned provider" ]; echo $?)"
+check "aws_db_instance plans from its own curated fixture, with its control" "$([ "$(q3 '.state == "ran" and .control == "valid" and .observations.fixture.library == "aws_db_instance/aws-6.70.0" and (.observations.base[] | select(.case == "empty") | .action == "no-op" and .unchanged_vs_prior) and (.observations.head[] | select(.case == "empty") | .action == "update" and (.known | not))')" = 0 ] && grep -q 'level L3 --resource aws_db_instance ' "$ST/log"; echo $?)"
 reset; trig3 "$(printf '%s' "$CASES3" | jq -c '[range(28) as $i | {id:"k\($i)", inputs:.[2].inputs}] + .')"; run --schema "$TMP/aws-schema.json" > /dev/null
 check "L3 takes only the cases the sweep cap leaves after L1" "$(q3 '[.observations.base[].case] == ["typical"]')"
 reset; trig3; grep -v 'unix-pt' "$ST/canary.txt" > "$ST/canary.prov"; run --schema "$TMP/aws-schema.json" > /dev/null
@@ -462,6 +557,17 @@ output "extra" {
   value = 2' '[]'
     lp run "$LR" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/live.json" > "$TMP/live.out" 2>&1
     check "live: an expression that closes its block fails the manifest, no plan" "$(q "$TMP/live.json" '.runs[0].state == "unverifiable" and (.runs[0].reason | test("^fixture-check head: .*manifest.block-set"))')"
+    # L2: a for_each key change under terraform test, plan only: base keys against head keys.
+    trig2
+    lp run "$LR" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" > "$TMP/live2.out" 2>&1
+    if [ "$(r2 reason)" = "fixture-check base exited 2" ]; then
+      live_skip "this mtf-facts has no fixture-check --level L2"
+    else
+      check "live: L2 ran with a valid control" "$(q2 '.state == "ran" and .control == "valid"')"
+      check "live: L2 base keys are the input, head keys upper-cased" "$(q2 '.observations.base[0].value == {a:"a", b:"b"} and .observations.head[0].value == {A:"A", B:"B"}')"
+      check "live: L2 no instance for an empty input" "$(q2 '[.observations.base[1], .observations.head[1]] | all(.known and .value == {})')"
+      check "live: L2 unknown keys are the for_each error at both revisions" "$(q2 '[.observations.base[2], .observations.head[2]] | all(.error)')"
+    fi
     # L3: the real hashicorp/aws 6.70.0 from the pin file. Acquisition downloads it once
     # (outside the sandbox, to its pinned host, the hash checked) into LADDER_LIVE_CACHE.
     if [ -z "${LADDER_LIVE_CACHE:-}" ] && [ "${LADDER_LIVE_REQUIRED:-0}" != 1 ]; then
@@ -476,6 +582,11 @@ output "extra" {
       check "live: L3 ran with a valid control (pull request 556)" "$(q3 '.state == "ran" and .control == "valid" and .observations.fixture.control.baseline')"
       check "live: at the base no change is planned, the prior value kept" "$(q3 '.observations.base[] | select(.case == "empty") | .action == "no-op" and .known and .unchanged_vs_prior == true')"
       check "live: at the head the attribute is known after apply" "$(q3 '.observations.head[] | select(.case == "empty") | .action == "update" and .known == false')"
+      SG3='[{"text":"aws_security_group.this[*].id","kind":"resource","type":"string","multi":"count"}]' trig3
+      jq '.triggers[0].address = "aws_db_instance.this"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"
+      lp run "$LR" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" --schema "$TMP/live-schema.json" > "$TMP/live3d.out" 2>&1
+      check "live: aws_db_instance L3 ran with a valid control" "$(q3 '.state == "ran" and .control == "valid" and .observations.fixture.library == "aws_db_instance/aws-6.70.0"')"
+      check "live: aws_db_instance at the base plans no change, at the head known after apply" "$(q3 '(.observations.base[] | select(.case == "empty") | .action == "no-op" and .unchanged_vs_prior == true) and (.observations.head[] | select(.case == "empty") | .action == "update" and .known == false)')"
       check "live: no provider process is left" "$(! ps -A -o comm= | grep -qF "$LR/ladder/providers/"; echo $?)"
     fi
   fi

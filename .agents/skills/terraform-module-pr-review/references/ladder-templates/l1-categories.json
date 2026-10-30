@@ -3,6 +3,7 @@
   "l1": [
     "count-for_each-conditional-change",
     "default-change",
+    "dynamic-block-change",
     "locals-outputs-change",
     "type-validation-change",
     "unknown-propagation-candidate",
