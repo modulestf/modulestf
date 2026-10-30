@@ -40,12 +40,12 @@ output "subject" {
 
 #-- subject-count
 resource "terraform_data" "subject" {
-  count = 1
+  count = var.ladder_count_index + 1
   input = __EXPR__
 }
 
 #-- subject-for-each
 resource "terraform_data" "subject" {
-  for_each = { "k" = var.ladder_each }
+  for_each = { (var.ladder_each_key) = "v" }
   input    = __EXPR__
 }

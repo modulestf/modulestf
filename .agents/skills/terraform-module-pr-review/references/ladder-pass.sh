@@ -519,7 +519,7 @@ for my $r (@{ref $t->{referenced_inputs} eq "ARRAY" ? $t->{referenced_inputs} : 
 my $det = $t->{contextual_ref_details};
 my @refs = ref $det eq "ARRAY" ? @$det : ();
 nope("contextual references without details") if !@refs && ref $t->{contextual_refs} eq "ARRAY" && @{$t->{contextual_refs}};
-my ($wrap, $eachy) = ("none");
+my $wrap = "none";
 for my $r (@refs) {
   nope("a contextual reference has no text and kind") unless ref $r eq "HASH" && defined $r->{text} && !ref $r->{text} && defined $r->{kind} && !ref $r->{kind} && length $r->{text} <= 256;
   my ($k, $x) = ($r->{kind}, $r->{text});
@@ -534,10 +534,8 @@ for my $r (@refs) {
     nope("a count or each reference L1 cannot model") unless $x eq "count.index";
     nope("count and each in one expression") if $wrap eq "for_each"; $wrap = "count";
   } elsif ($k eq "each") {
-    nope("a count or each reference L1 cannot model") unless $x =~ /\Aeach\.(key|value)\z/;
+    nope("an each.value reference is unverifiable at L1") unless $x eq "each.key";
     nope("count and each in one expression") if $wrap eq "count"; $wrap = "for_each";
-    my $y = $1 eq "value" ? ptype($r->{type}) : {k => "string"};
-    $y or nope("an each.value reference with no type"); $eachy //= $y;
   } elsif ($k eq "path" || $k eq "terraform") { nope("path and terraform references are unverifiable at L1")
   } else { nope("local, module, self and other references are unverifiable at L1") }
 }
@@ -551,7 +549,9 @@ my $cs = $t->{cases};
 nope("no cases") unless ref $cs eq "ARRAY" && @$cs;
 nope("over 32 cases") if @$cs > 32;
 my (%ids, @cases);
-my @names = map { $_->{name} } @in;
+# count.index and each.key are inputs too: the case picks the instance the subject is read at.
+my $winput = $wrap eq "count" ? "count.index" : $wrap eq "for_each" ? "each.key" : undef;
+my @names = ((map { $_->{name} } @in), defined $winput ? $winput : ());
 for my $c (@$cs) {
   nope("a case has no id or inputs") unless ref $c eq "HASH" && defined $c->{id} && !ref $c->{id} && $c->{id} =~ /\A[A-Za-z0-9_.:-]{1,64}\z/ && ref $c->{inputs} eq "HASH";
   nope("two cases share an id") if $ids{$c->{id}}++;
@@ -573,8 +573,19 @@ for my $c (@$cs) {
     if ($p->{y}{e}) { $v{"ladder_unk_$i"} = [map { "$_" } @$ue]; $v{"ladder_esample_$i"} = sample($p->{y}{e}, "one") }
     if (defined $omit && $p->{name} eq $omit) { $v{ladder_omit} = $mode eq "omitted" ? JSON::PP::true : JSON::PP::false }
   }
-  $v{ladder_each} = sample($eachy, "one") if $eachy;
-  push @cases, {id => $c->{id}, vars => \%v, inputs => $c->{inputs},
+  my $addr = "";
+  if (defined $winput) {
+    my $s = $c->{inputs}{$winput};
+    nope("a count.index or each.key input that is not a known value") unless ref $s eq "HASH" && !grep { $s->{$_} } qw(unknown null omitted);
+    if ($wrap eq "count") {
+      nope("a count.index input that is not a small index") unless defined $s->{value} && !ref $s->{value} && $s->{value} =~ /\A[0-9]\z/;
+      $v{ladder_count_index} = 0 + $s->{value}; $addr = "terraform_data.subject[$s->{value}]";
+    } else {
+      nope("an each.key input outside the key characters") unless defined $s->{value} && !ref $s->{value} && $s->{value} =~ /\A[A-Za-z0-9_.-]{0,64}\z/;
+      $v{ladder_each_key} = "$s->{value}"; $addr = "terraform_data.subject[\"$s->{value}\"]";
+    }
+  }
+  push @cases, {id => $c->{id}, vars => \%v, inputs => $c->{inputs}, addr => $addr,
     unknown => [map { $in[$_]{name} } grep { my $s = $c->{inputs}{$in[$_]{name}}; $s->{unknown} || (ref $s->{unknown_elements} eq "ARRAY" && @{$s->{unknown_elements}}) } 0 .. $#in]};
 }
 # main.tf: the variables, the stand-ins whose output is a typed unknown, a canary each,
@@ -601,7 +612,8 @@ for my $i (0 .. $#in) {
   push @locals, "  ladder_in_$i = var.ladder_mode_$i == \"unknown\" ? terraform_data.ladder_u_$i.output : var.ladder_mode_$i == \"known\" ? $known : null\n";
 }
 $vars{ladder_omit} = {k => "bool"} if defined $omit;
-$vars{ladder_each} = $eachy if $eachy;
+$vars{ladder_count_index} = {k => "number"} if $wrap eq "count";
+$vars{ladder_each_key} = {k => "string"} if $wrap eq "for_each";
 my $main = "";
 $main .= fill("variable", NAME => $_, TYPE => emit($vars{$_})) for sort keys %vars;
 $main .= $_ for @standins;
@@ -640,14 +652,14 @@ for my $s (@sides) {
       single_expressions => [{block => $subj->{type}, labels => $subj->{labels}, attribute => $wrap eq "none" ? "value" : "input"}]}}});
 }
 done({ok => JSON::PP::true, wrap => $wrap, sides => \@sides, canaries => [map { $_->[0] } @canaries],
-  cases => [map { {id => $_->{id}, inputs => $_->{inputs}, unknown_inputs => $_->{unknown}} } @cases]});
+  cases => [map { {id => $_->{id}, inputs => $_->{inputs}, unknown_inputs => $_->{unknown}, addr => $_->{addr}} } @cases]});
 '
 
 # Projects one plan shown as JSON into an observation, and checks the canaries.
 PROJ_JQ='
 def anytrue: [.. | select(. == true)] | length > 0;
 def subj: if $wrap == "none" then (.output_changes.subject // null)
-  else (first(.resource_changes[]? | select(.address == $addr) | .change) // null
+  else (first(.resource_changes[]? | select(.address == $cs.addr) | .change) // null
     | if . == null then null else {after: .after.input, after_unknown: (.after_unknown.input // false),
         after_sensitive: (.after_sensitive.input // false)} end) end;
 . as $p | ($p | subj) as $s
@@ -660,10 +672,11 @@ def subj: if $wrap == "none" then (.output_changes.subject // null)
       | {case: $cs.id, error: false, known: $known, wholly_unknown: $whole, unknown_inputs: $cs.unknown_inputs, inputs: $cs.inputs,
          length: (if $whole then null elif ($s.after | type) == "array" then ($s.after | length)
                   elif ($s.after | type) == "object" and $known then ($s.after | length) else null end),
-         sensitive: $sens, redacted: ($known and ($sens | not) and $big),
-         unknown_mask: (if ($u | tojson | length) > 4096 then null else $u end),
+         sensitive: $sens, redacted: (($whole | not) and ($sens | not) and $big),
+         unknown_mask: (if $known then false elif ($u | tojson | length) > 4096 then null else $u end),
          action: null, unchanged_vs_prior: null}
-      + (if $known and ($sens | not) and ($big | not) then {value: $s.after} else {} end) end) }'
+      # A value whenever one is known, with null at the unknown parts of a partly unknown one.
+      + (if ($whole | not) and ($sens | not) and ($big | not) then {value: $s.after} else {} end) end) }'
 
 subject_error() { # plan error output: 0 when every error it holds is located in subject.tf
   perl -e 'my ($n, $s, $cur) = (0, 0, 0); while (<>) { if (/\A\s*Error:/) { $n++; $cur = 1; next }
@@ -695,7 +708,6 @@ l1() { # trigger file, id: one run record
     record "$id" unverifiable "$(printf '%s' "$meta" | jq -r '.reason // "fixture builder failed"')" "" "" "$nob"; return
   fi
   wrap="$(printf '%s' "$meta" | jq -r .wrap)"
-  case "$wrap" in count) addr='terraform_data.subject[0]' ;; for_each) addr='terraform_data.subject["k"]' ;; *) addr= ;; esac
   find "$F" -type f -exec chmod 444 {} + ; find "$F" -type d -exec chmod 555 {} +
   fixj='{}'
   for side in $(printf '%s' "$meta" | jq -r '.sides[]'); do
@@ -741,7 +753,7 @@ l1() { # trigger file, id: one run record
         sbx exec "$F/$side" "$t" $((8 * MIB)) "$L/out/show.json" "$TF" show -json "$out"; rc=$?
         mv -- "$out" "$L/plans/$id-$side-$ci.tfplan" 2> /dev/null
         [ "$rc" -eq 0 ] || { record "$id" unverifiable "show $side $c exited $rc" "$fx" "" "$fob"; return; }
-        o="$(jq -c --arg wrap "$wrap" --arg addr "$addr" --argjson canaries "$(printf '%s' "$meta" | jq -c .canaries)" \
+        o="$(jq -c --arg wrap "$wrap" --argjson canaries "$(printf '%s' "$meta" | jq -c .canaries)" \
           --argjson cs "$(printf '%s' "$meta" | jq -c --argjson i "$ci" '.cases[$i]')" "$PROJ_JQ" "$L/out/show.json" 2> /dev/null)"
         if [ -z "$o" ] || [ "$(printf '%s' "$o" | jq -r '.canaries and .known')" != true ]; then
           record "$id" unverifiable "canary $side $c" "$fx" invalid "$fob"; return

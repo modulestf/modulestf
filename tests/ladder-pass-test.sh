@@ -225,8 +225,8 @@ trig 'x' 'y' '[]' resource-added-or-removed; run > /dev/null
 check "a category without an L1 template is unverifiable" "$(r0 reason | grep -q 'no L1 template for category resource-added-or-removed'; echo $?)"
 trig 'x' 'y' '[]' wrapper-change '["L3"]'; run > /dev/null
 check "a trigger that does not ask for L1 gets no run" "$(q "$TMP/l.json" '.runs == []')"
-trig '' 'count.index' '[{"text":"count.index","kind":"count","type":null,"multi":null}]'; run > /dev/null
-check "count.index wraps the subject in a counted terraform_data" "$(grep -q 'count = 1' "$RUND/ladder/fixtures/T-001/head/subject.tf" && q "$TMP/l.json" '.runs[0].state == "ran" and .runs[0].observations.base == [] and .runs[0].observations.head[0].value == 0' | grep -qx 0; echo $?)"
+trig '' 'count.index' '[{"text":"count.index","kind":"count","type":null,"multi":null}]' wrapper-change '["L1"]' '[{"id":"i0","inputs":{"vpc_security_group_ids":{"value":["a"],"unknown":false,"null":false,"omitted":false},"count.index":{"value":0,"unknown":false,"null":false,"omitted":false}}}]'; run > /dev/null
+check "count.index wraps the subject in a counted terraform_data" "$(grep -q "count = var.ladder_count_index + 1" "$RUND/ladder/fixtures/T-001/head/subject.tf" && q "$TMP/l.json" '.runs[0].state == "ran" and .runs[0].observations.base == [] and .runs[0].observations.head[0].value == 0' | grep -qx 0; echo $?)"
 echo '{"class":"partial","examples":[{"dir":"examples/a","head":"plan-ok","base":null,"addresses":[]}]}' > "$TMP/cov.json"
 trig 'x' 'y' '[]' wrapper-change '["L3"]'; run --coverage "$TMP/cov.json" > /dev/null
 check "a coverage object passes into the record" "$(q "$TMP/l.json" '.coverage.class == "partial" and (.coverage.examples | length) == 1')"
