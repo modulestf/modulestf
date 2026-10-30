@@ -29,6 +29,11 @@ cat > "$TMP/bin/terraform" <<EOF
 #!/bin/sh
 echo "\${PWD##*/} \$1" >> "$TMP/tf.log"
 case "\$1" in
+show)
+  # The saved plan is read with no credentials, from the file the plan wrote
+  [ -z "\$AWS_ACCESS_KEY_ID" ] || echo "show with credentials" >> "$TMP/tf.log"
+  for a; do f="\$a"; done; [ -f "\$f" ] || { echo "Error: no saved plan"; exit 1; }
+  printf '{"resource_changes":[{"address":"module.s3.aws_s3_bucket.this[\\\\"k1\\\\"]","change":{"after":{"bucket":"b","tags":null},"after_unknown":{"arn":true,"id":false}}},{"address":"module.s3.aws_s3_bucket.this[\\\\"k2\\\\"]","change":{"after":{"region":"r"}}},{"address":"weird name","change":{}}],"configuration":{"root_module":{"module_calls":{"s3":{"source":"terraform-aws-modules/s3-bucket/aws"},"local":{"source":"../../"}}}}}\n' ;;
 init)
   printf 'provider "registry.terraform.io/hashicorp/aws" {\n}\n' >> .terraform.lock.hcl
   if [ "\${PWD##*/}" = ok ]; then
@@ -40,7 +45,8 @@ init)
 plan)
   [ -n "\$AWS_ACCESS_KEY_ID" ] || { echo "Error: no valid credential sources"; exit 1; }
   case "\${PWD##*/}" in
-  ok) echo "Plan: 1 to add, 0 to change, 0 to destroy." ;;
+  ok) for a; do case "\$a" in -out=*) echo saved > "\${a#-out=}" ;; esac; done
+    echo "Plan: 1 to add, 0 to change, 0 to destroy." ;;
   err) printf 'Error: bucket 123456789012 is not valid\n\n  on main.tf line 1\n'; exit 1 ;;
   leak) printf 'Error: invalid key s3cr3t-value-xyz\n\n'; exit 1 ;;
   split) printf 'Error: invalid key s3cr3t-val\nue-xyz\n\n'; exit 1 ;;
@@ -400,14 +406,25 @@ for sh in bash zsh; do
   check "$sh: a clone-wide G0 hit stops the example" \
     "$(has "$out" 'plan: plan gate G0 terraform.tfvars (1 hits)')"
 
-  # Thirteen examples: the thirteenth is over the budget.
+  # Thirteen examples: no cap on the number, the budget is the only bound.
   R="$(newrun)"
   run g0 "$R" > /dev/null
   set -- examples/gate examples/gate examples/gate examples/gate examples/gate examples/gate \
     examples/gate examples/gate examples/gate examples/gate examples/gate examples/gate examples/ok
+  : > "$TMP/tf.log"
   out="$(run plan "$R" demo --role-arn "$ROLE" "$@")"
-  check "$sh: at most 12 examples" "$(has "$out" 'plan: budget')"
+  check "$sh: no cap of 12 examples: the thirteenth is planned" \
+    "$([ "$(has "$out" 'plan: budget')" = 1 ] && [ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ]; echo $?)"
   set --
+  # Saved plans: the plan writes one with -out, and only a planned example's is read back,
+  # by terraform show -json with no credentials, into its addresses file.
+  check "$sh: the plan is saved and read back with show" \
+    "$(grep -qx 'ok plan' "$TMP/tf.log" && grep -qx 'ok show' "$TMP/tf.log" && ! grep -q 'show with credentials' "$TMP/tf.log"; echo $?)"
+  A="$R/plan-addresses/addresses-13.json"
+  check "$sh: the addresses file of the planned example: config addresses, attribute names only" \
+    "$(jq -e '. == {addresses:["module.s3.aws_s3_bucket.this"], attributes:{"module.s3.aws_s3_bucket.this":["arn","bucket","region"]}, module_calls:{"local":"../../"}}' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: no addresses file for an example that did not plan" "$([ ! -s "$R/plan-addresses/addresses-1.json" ]; echo $?)"
+  check "$sh: the saved plans go with the pass's own files" "$(test ! -e "$R/plan"; echo $?)"
 
   # Modes. Runner mode relaxes the code-execution gates and is refused outside a container.
   R="$(newrun)"
@@ -532,16 +549,32 @@ good="$(hrec good 'host example 1: examples/complete' 'example: examples/complet
   'host example 5: examples/nochange' 'plan: planned-no-changes' \
   'host example 6: examples/imports' 'plan: planned | Plan: 2 to import, 1 to add, 0 to change, 4 to destroy.' \
   'host example 7: examples/new' 'plan: code-error' 'base: new under this change (absent at base)')"
+echo '{"addresses":["module.s3.aws_s3_bucket.this","x[\"k\"]"],"attributes":{"module.s3.aws_s3_bucket.this":["bucket","Name"],"y":["z"]}}' > "$good/addresses-1.json"
+echo '{"addresses":["aws_b.c"]}' > "$good/addresses-2.json"
 check "hosted-record: a good record is reduced" "$(hr "$good")"
 check "hosted-record: the exact top-level keys, head and merge base" \
   "$(hq "keys == [\"examples\",\"head\",\"merge_base\",\"refused_hosts\",\"schema_version\"] and .schema_version == 1 and .head == \"$HH\" and .merge_base == \"$HM\"")"
 check "hosted-record: one entry per example, in order" \
   "$(hq '[.examples[].path] == ["examples/complete","examples/broken","examples/gated","examples/late","examples/nochange","examples/imports","examples/new"]')"
 check "hosted-record: planned keeps the three counts only" \
-  "$(hq '.examples[0] == {path: "examples/complete", head: {class: "planned", plan: {add: 3, change: 1, destroy: 0}}, base: null}')"
+  "$(hq '.examples[0] == {path: "examples/complete", head: {class: "planned", plan: {add: 3, change: 1, destroy: 0}}, base: null,
+    addresses: ["module.s3.aws_s3_bucket.this"], attributes: {"module.s3.aws_s3_bucket.this": ["bucket"]}}')"
+# host-pass.sh's rules for plan-hosted.json, taken from the script: the reduced record passes,
+# with its addresses; an address or attribute outside its pattern fails.
+HPJ="$(sed -n "/^PLAN_HOSTED_JQ='\$/,/^'\$/p" "${PP%/*}/host-pass.sh" | sed '1d;$d')"
+hp() { jq -n -r --arg head "$HH" --slurpfile p "$1" --slurpfile h "$TMP/hp-host.json" --slurpfile f "$TMP/hp-files.json" "$HPJ"; }
+echo "{\"prefix\": \"\", \"merge_base\": \"$HM\"}" > "$TMP/hp-host.json"; echo '[]' > "$TMP/hp-files.json"
+check "host-pass: the reduced record with its addresses is accepted" "$([ "$(hp "$TMP/hr.json")" = ok ] && echo 0 || echo 1)"
+jq '.examples[0].addresses += ["a b"]' "$TMP/hr.json" > "$TMP/hp-bad1.json"
+check "host-pass: an address outside the pattern is refused" "$([ "$(hp "$TMP/hp-bad1.json")" = "plan record content" ] && echo 0 || echo 1)"
+jq '.examples[0].attributes.other = ["x"]' "$TMP/hr.json" > "$TMP/hp-bad2.json"
+check "host-pass: attributes of an address not planned are refused" "$([ "$(hp "$TMP/hp-bad2.json")" = "plan record content" ] && echo 0 || echo 1)"
+jq 'del(.examples[0].addresses)' "$TMP/hr.json" > "$TMP/hp-bad3.json"
+check "host-pass: an example without addresses is refused" "$([ "$(hp "$TMP/hp-bad3.json")" = "plan record content" ] && echo 0 || echo 1)"
 check "hosted-record: an import count is not kept" "$(hq '.examples[5].head.plan == {add: 1, change: 0, destroy: 4}')"
 check "hosted-record: a code-error keeps its class and its base result" \
-  "$(hq '.examples[1] == {path: "examples/broken", head: {class: "code-error", plan: null}, base: {class: "reproduces at base", plan: null}}')"
+  "$(hq '.examples[1] == {path: "examples/broken", head: {class: "code-error", plan: null}, base: {class: "reproduces at base", plan: null},
+    addresses: [], attributes: {}}')"
 check "hosted-record: a gate hit is reduced to its gate" "$(hq '.examples[2].head.class == "plan gate G2"')"
 check "hosted-record: budget, no changes and absent at base are kept as classes" \
   "$(hq '.examples[3].head.class == "budget" and .examples[4].head == {class: "planned-no-changes", plan: null} and .examples[6].base.class == "new under this change (absent at base)"')"

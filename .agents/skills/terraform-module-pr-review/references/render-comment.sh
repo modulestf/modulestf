@@ -13,15 +13,23 @@
 #   --host        host.json from host-pass.sh run, checked against --head
 #   --checks      the directory host-pass.sh checks wrote, checked with host-pass.sh check; a
 #                 rejected one makes the Checks signal unknown and says so
+#   Compatibility: this version requires the run file's coverage key and checks plan-hosted.json
+#   with addresses and attributes per example; a host that pins this repository must move its
+#   render, its host records and its plan job to the same commit (host-pass.md, Compatibility).
 #   --run         this run's own facts, one object with exactly these keys:
 #                 {"format": 1, "triage": bool, "plan_ran": bool,
 #                  "verify_gaps": [{"dir": "<repository-relative>", "reason": "<fixed reason>"}],
+#                  "coverage": {"class": "complete|partial|none", "inert": bool,
+#                               "unplanned": [{"dir": "<repository-relative>", "reason": "<fixed reason>"}]},
 #                  "counts": {"instruction-like-text-from-others": n,
 #                             "conversation-claims-unread": n, "review.quoted-claim-unverifiable": n}}
 #                 counts is null when the reviewer gave none, never 0 in their place: section 8
 #                 then says "Counts: not reported by the review run." (host-pass.md, Host Facts)
-#                 Section 5 lists the first 100 verify_gaps and one line counting the rest; the
-#                 verdict counts them all. The file's size cap bounds how many there can be.
+#                 Section 5 lists the first 100 verify_gaps and one line counting the rest, then
+#                 the first 100 unplanned examples and one line counting the rest; the verdict
+#                 counts them all. coverage comes from verify-pass.sh coverage; an unplanned
+#                 example is an unknown at ladder rule 4. The file's size cap bounds how many
+#                 there can be.
 #   --assessment  section 1, the one part the model writes: printable ASCII, at most two short
 #                 paragraphs, no line that starts like a heading, a bold line, HTML or a list item
 #   --run-dir     the run directory, which the leak scan looks for and --out must lie outside

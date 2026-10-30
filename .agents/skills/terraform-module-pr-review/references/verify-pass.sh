@@ -6,20 +6,30 @@
 # workspace or a copy the head could have written:
 #
 #   <bash|zsh> /abs/path/verify-pass.sh run <run-dir> --files <files.json> --base <sha> \
-#       --out <out.json> [--prefix <module-root>] [--dir <example-dir>]...
-#       terraform init -backend=false and terraform validate in each example directory the
-#       change touches, the version bump skip, the records, the merge base re-run. Writes
-#       the results as one JSON object to <out.json>. --dir limits the pass to the named
-#       example directories, for a re-run outside the sandbox (verify-pass.md, Commands).
+#       --out <out.json> [--prefix <module-root>] [--budget <seconds>] [--dir <example-dir>]...
+#       terraform init -backend=false and terraform validate in each selected example
+#       directory, the version bump skip, the records, the merge base re-run, each command
+#       under its own time and output limit and the whole pass under one budget (1800
+#       seconds unless --budget says otherwise). Writes the results as one JSON object to
+#       <out.json>. --dir limits the pass to the named example directories, for a re-run
+#       outside the sandbox (verify-pass.md, Commands).
+#   <bash|zsh> /abs/path/verify-pass.sh select <run-dir> --files <files.json> [--prefix <module-root>]
+#       Prints the example selection as one JSON object: how it was made, and the example
+#       directories in order with their reasons (verify-pass.md, Example selection).
 #   <bash|zsh> /abs/path/verify-pass.sh check <run-dir> --files <files.json> --base <sha> \
 #       --head <sha> --results <results.json> [--prefix <module-root>]
-#       Checks results a host produced: shape, the two SHAs, and the example directories
-#       against this run's own list. Prints "results accepted" and exits 0, or prints
+#       Checks results a host produced: shape, the two SHAs, and the selection and example
+#       directories against this run's own. Prints "results accepted" and exits 0, or prints
 #       "results rejected: <reason>" and exits 1. Never runs terraform.
 #   <bash|zsh> /abs/path/verify-pass.sh merge <run-dir> --results <inside.json> \
 #       --outside <outside.json> --out <out.json>
 #       Replaces each entry of the run inside the sandbox with the entry of the same
 #       directory from the run outside it, marked "outside": true (verify-pass.md, Commands).
+#   <bash|zsh> /abs/path/verify-pass.sh coverage <run-dir> --files <files.json> --out <out.json> \
+#       [--prefix <module-root>] (--plan <record> [--addresses <dir>] | --hosted <plan-hosted.json> | --no-plan)
+#       The plan coverage of the selection: per example the plan class, the base result and
+#       the planned addresses, the class complete, partial or none, and the examples not
+#       planned with a fixed reason (verify-pass.md, Plan coverage). Never runs terraform.
 #
 # <run-dir> is the absolute run directory Workspace printed, "<root>/pr-review.XXXXXX", holding
 # the clone at <run-dir>/clone. Exit 2 is a usage error or a refused input; nothing is written.
@@ -27,7 +37,7 @@
 CMD=${1:-}
 RUN=${2:-}
 die() { echo "verify-pass.sh: $1" >&2; exit 2; }
-case "$CMD" in run|check|merge) ;; *) die "usage: verify-pass.sh run|check|merge <run-dir> ..." ;; esac
+case "$CMD" in run|select|check|merge|coverage) ;; *) die "usage: verify-pass.sh run|select|check|merge|coverage <run-dir> ..." ;; esac
 ROOT="${RUN%/*}"
 case "$ROOT" in /?*) ;; *) die "the run directory must be absolute" ;; esac
 case "$RUN" in "$ROOT"/pr-review.??????) ;; *) die "not a run directory: $RUN" ;; esac
@@ -36,11 +46,17 @@ DIR="$RUN/clone"
 CROOT="$(cd "$DIR" && pwd -P)"
 shift 2
 
-FILES=; BASESHA=; OUT=; PREFIX=; HEADSHA=; RESULTS=; ONLY=; OUTSIDE=
+FILES=; BASESHA=; OUT=; PREFIX=; HEADSHA=; RESULTS=; ONLY=; OUTSIDE=; BUDGET=1800
+PLANREC=; ADDRS=; HOSTED=; NOPLAN=
 NL='
 '
 while [ $# -gt 0 ]; do
+  if [ "$1" = --no-plan ]; then NOPLAN=1; shift; continue; fi
   case "$1" in
+    --budget) BUDGET=${2:-} ;;
+    --plan) PLANREC=${2:-} ;;
+    --addresses) ADDRS=${2:-} ;;
+    --hosted) HOSTED=${2:-} ;;
     --files) FILES=${2:-} ;;
     --base) BASESHA=${2:-} ;;
     --out) OUT=${2:-} ;;
@@ -81,22 +97,64 @@ if [ "$CMD" = merge ]; then
   exit 0
 fi
 
-sha_ok "$BASESHA" || die "--base must be a full commit SHA"
+case "$CMD" in run|check) sha_ok "$BASESHA" || die "--base must be a full commit SHA" ;; esac
 [ -f "$FILES" ] || die "--files must name a readable file"
 PREFIX="${PREFIX%/}"
 case "$PREFIX" in /*|*..*|.) die "--prefix must be repository-relative" ;; esac
 [ -n "$PREFIX" ] && PREFIX="$PREFIX/"
-MROOT="$CROOT/${PREFIX%/}"
+MROOT="$CROOT${PREFIX:+/${PREFIX%/}}"
+printf '%s\n' "$BUDGET" | grep -Eqx '[1-9][0-9]{0,4}' || die "--budget must be a number of seconds, 1 to 99999"
 
-W="$RUN/verify"
+# Work files: run uses $RUN/verify, the read-only commands a directory of their own, so a
+# check or a coverage run never removes a pass's files.
+case "$CMD" in run) W="$RUN/verify" ;; *) W="$RUN/verify-$CMD" ;; esac
 if ! { rm -rf -- "$W" && mkdir -m 700 "$W"; }; then die "cannot create $W"; fi
-trap 'rm -rf -- "$W"' EXIT
+PGIDS=""
+stop_all() { # kill every process group this pass started, then remove the work files
+  for g in $(printf '%s\n' "$PGIDS"); do kill -KILL -- "-$g" 2> /dev/null; done
+  wait 2> /dev/null
+  rm -rf -- "$W"
+}
+trap stop_all EXIT
+trap 'stop_all; exit 130' INT TERM
 
-# The example directories the change touches, one line each: "<reason><TAB><dir>", in path
-# order. Exit 3: not an array of file objects. Exit 4: a path holds a control character.
+# One command in its own process group, from a directory, under a time limit and a 1 MiB
+# output cap: either kill takes the whole group and leaves <out>.cap, and run_capped then
+# returns 124. With CAP_QUIET_ERR set, standard error is dropped instead of kept.
+CAP_PL='
+setpgrp(0, 0); my ($out, $dir, $lim) = splice(@ARGV, 0, 3);
+my $stop = sub { open(my $m, ">", "$out.cap"); close $m; kill "KILL", -getpgrp() };
+$SIG{ALRM} = $stop; alarm($lim > 0 ? $lim : 1);
+chdir $dir or exit 125;
+open(my $o, ">", $out) or exit 125;
+my $pid = open(my $in, "-|"); exit 125 unless defined $pid;
+if (!$pid) {
+  if ($ENV{CAP_QUIET_ERR}) { open(STDERR, ">", "/dev/null") } else { open(STDERR, ">&", \*STDOUT) }
+  open(STDIN, "<", "/dev/null"); exec @ARGV; exit 127;
+}
+my ($n, $buf) = (0, "");
+while (my $r = sysread($in, $buf, 65536)) {
+  if ($n + $r >= 1048576) { syswrite($o, $buf, 1048576 - $n); close $o; $stop->() }
+  syswrite($o, $buf); $n += $r;
+}
+close $in; exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
+'
+run_capped() { # seconds, output file, directory, then the command
+  rlim=$1; rout=$2; rdir=$3; shift 3
+  rm -f -- "$rout.cap"
+  perl -e "$CAP_PL" "$rout" "$rdir" "$rlim" "$@" < /dev/null &
+  rpid=$!; PGIDS="$PGIDS $rpid"
+  wait "$rpid"; rrc=$?
+  [ -e "$rout.cap" ] && return 124
+  return "$rrc"
+}
+
+# The selected example directories, one line each: "<reason><TAB><affected><TAB><dir>", in
+# the order of the selection file, whose lines are "<affected><TAB><dir>". Exit 3: not an
+# array of file objects. Exit 4: a path holds a control character.
 DIRS_PL='
 use strict; use warnings; use JSON::PP; use Cwd qw(realpath);
-my ($files, $root, $pre) = @ARGV; $pre //= "";
+my ($files, $root, $pre, $sel) = @ARGV; $pre //= "";
 my $d = do { local $/; open my $fh, "<", $files or exit 3; eval { decode_json(<$fh>) } };
 exit 3 unless ref $d eq "ARRAY";
 for my $f (@$d) {
@@ -168,25 +226,39 @@ sub bump {
   }
   return $n > 0;
 }
-my %dirs; my $ex = "${pre}examples/";
-for my $f (@$d) {
-  for my $p (grep { defined } $f->{filename}, $f->{previous_filename}) {
-    next unless index($p, $ex) == 0;
-    my ($name, $more) = split m{/}, substr($p, length $ex), 2;
-    next unless length $name && $name ne "." && $name ne "..";
-    $dirs{"$ex$name"} = 1;
-  }
-}
-for my $dir (sort keys %dirs) {
+open my $sh, "<", $sel or exit 3;
+while (my $l = <$sh>) {
+  chomp $l; my ($aff, $dir) = split /\t/, $l, 2;
   my $abs = "$root/$dir";
   next unless -e $abs || -l $abs;
   my $r = realpath($abs);
-  unless (defined $r && $r eq $abs) { print "skipped-symlink\t$dir\n"; next }
+  unless (defined $r && $r eq $abs) { print "skipped-symlink\t$aff\t$dir\n"; next }
   next unless -d $abs;
   opendir my $dh, $abs or next;
   my @tf = grep { /\.tf\z/ && -f "$abs/$_" } readdir $dh;
   next unless @tf;
-  print bump($dir) ? "skipped-version-bump" : "verified", "\t$dir\n";
+  print bump($dir) ? "skipped-version-bump" : "verified", "\t$aff\t$dir\n";
+}
+'
+
+# Every example directory of the module root, one line each: "real<TAB><dir>" for a directory
+# holding a .tf file directly, "link<TAB><dir>" for a symbolic link to a directory, in byte
+# order. Exit 4: a name outside [A-Za-z0-9._-].
+ALL_PL='
+use strict; use warnings;
+my ($root, $pre) = @ARGV; my $ex = "$root/${pre}examples";
+opendir my $dh, $ex or exit 0;
+for my $n (sort grep { $_ ne "." && $_ ne ".." } readdir $dh) {
+  my $p = "$ex/$n"; my $kind;
+  if (-l $p) { next unless -d $p; $kind = "link" }
+  else {
+    next unless -d $p;
+    opendir my $d2, $p or next;
+    next unless grep { /\.tf\z/ && -f "$p/$_" } readdir $d2;
+    $kind = "real";
+  }
+  exit 4 unless $n =~ /\A[A-Za-z0-9._-]+\z/;
+  print "$kind\t${pre}examples/$n\n";
 }
 '
 
@@ -256,26 +328,99 @@ $line = substr($line, 0, 300);
 print $env ? "environment" : "code", "\n", $line, "\n";
 '
 
-dirs_list() { # the example directories and their reasons, into the named file
-  perl -e "$DIRS_PL" "$FILES" "$CROOT" "$PREFIX" > "$1"
+# The example selection (verify-pass.md, Example selection). mtf-facts is resolved from a
+# working directory outside the workspace, as the reviewer's facts-engine.md resolves it, and
+# a path inside the clone or the run directory counts as no binary. Writes $W/sel.tsv,
+# "<affected><TAB><dir>" per selected example in order, and $W/selection.json.
+facts_bin() {
+  fb="$(cd / && command -v mtf-facts 2> /dev/null)" || return 1
+  case "$fb" in /*) ;; *) return 1 ;; esac
+  fb="$(cd / && perl -MCwd=realpath -e 'my $r = realpath($ARGV[0]); print $r if defined $r' "$fb")"
+  [ -n "$fb" ] && [ -f "$fb" ] && [ -x "$fb" ] || return 1
+  case "$fb/" in "$CROOT"/*|"$(cd "$RUN" && pwd -P)"/*) return 1 ;; esac
+  printf '%s\n' "$fb"
+}
+# shellcheck disable=SC2016 # a jq program
+AFFECTED_JQ='
+def name_ok: type == "string" and test("^examples/[A-Za-z0-9._-]+$") and (test("^examples/[.][.]?$") | not);
+($all | map(.dir)) as $dirs | ($all | map(select(.kind == "real") | .dir)) as $real
+| type == "object" and .schema_version == 1 and (.inert | type == "boolean")
+  and (.fallback == null or (.fallback | IN("unparsed", "dynamic-source", "no-change-input")))
+  and (.inert == false or .fallback == null)
+  and (.changed | type == "array" and all(.[]; type == "string"))
+  and (.examples | type == "array" and all(.[]; type == "object" and (.dir | name_ok)
+        and (.reason | IN("touched", "caller", "all"))))
+  and (.fallback == null or all(.examples[]; .reason == "all"))
+  and ([.examples[].dir] | length == (unique | length))
+  and all(.examples[]; .dir as $d | $dirs | index([$pre + $d]) != null)
+  and all($real[]; . as $d | any($in.examples[]; $pre + .dir == $d))
+'
+select_examples() {
+  perl -e "$ALL_PL" "$CROOT" "$PREFIX" > "$W/all.tsv" || die "an example directory name outside [A-Za-z0-9._-]"
+  TAB="$(printf '\t')"
+  while IFS="$TAB" read -r kind rel; do jq -cn --arg k "$kind" --arg d "$rel" '{kind:$k, dir:$d}'; done < "$W/all.tsv" \
+    | jq -s . > "$W/all.json"
+  tool=absent
+  if fb="$(facts_bin)"; then
+    tool=failed
+    if [ -n "$PREFIX" ]; then
+      jq --arg p "$PREFIX" '[.[] | select((.filename | startswith($p)) or ((.previous_filename // "") | startswith($p)))
+        | .filename |= ltrimstr($p) | if .previous_filename then .previous_filename |= ltrimstr($p) else . end]' \
+        "$FILES" > "$W/affected-files.json" 2> /dev/null || die "--files is not a JSON array of file objects"
+    else
+      cp -- "$FILES" "$W/affected-files.json"
+    fi
+    if CAP_QUIET_ERR=1 run_capped 70 "$W/affected.json" / "$fb" affected "$MROOT" --diff "$W/affected-files.json" --json \
+      && jq -e . "$W/affected.json" > /dev/null 2>&1; then
+      tool=invalid
+      jq -e --slurpfile all "$W/all.json" --arg pre "$PREFIX" '. as $in | $all[0] as $all | '"$AFFECTED_JQ" \
+        "$W/affected.json" > /dev/null 2>&1 && tool=mtf-facts
+    fi
+  fi
+  if [ "$tool" = mtf-facts ]; then
+    # The tool's order, then any linked example it left out. An inert change keeps the whole
+    # list: inert comes from the change, so it never empties what is verified and planned.
+    jq -r --slurpfile all "$W/all.json" --arg pre "$PREFIX" '
+      [.examples[] | $pre + .dir] as $t
+      | (.examples[] | "\(.reason)\t\($pre)\(.dir)"),
+        ($all[0][] | select(.kind == "link") | .dir as $d | select(($t | index($d)) == null) | "all\t\($d)")
+      ' "$W/affected.json" > "$W/sel.tsv"
+    jq -c '{tool: "mtf-facts", fallback, inert}' "$W/affected.json" > "$W/selection.json"
+  else
+    awk -F '\t' '{ print "all\t" $2 }' "$W/all.tsv" > "$W/sel.tsv"
+    jq -cn --arg t "$tool" '{tool: $t, fallback: null, inert: false}' > "$W/selection.json"
+  fi
+}
+dirs_list() { # the selected example directories, their reasons and affected reasons, into the named file
+  select_examples
+  perl -e "$DIRS_PL" "$FILES" "$CROOT" "$PREFIX" "$W/sel.tsv" > "$1"
   case $? in
     0) ;;
     4) die "a changed path holds a control character" ;;
     *) die "--files is not a JSON array of file objects" ;;
   esac
 }
+dirs_jsonl() { # list.tsv -> one {dir, reason, affected} per line
+  TAB="$(printf '\t')"
+  while IFS="$TAB" read -r reason aff rel; do
+    jq -cn --arg dir "$rel" --arg reason "$reason" --arg aff "$aff" '{dir:$dir, reason:$reason, affected:$aff}'
+  done < "$1"
+}
+
+if [ "$CMD" = select ]; then
+  dirs_list "$W/list.tsv"
+  dirs_jsonl "$W/list.tsv" | jq -s --slurpfile s "$W/selection.json" '{selection: $s[0], dirs: .}'
+  exit 0
+fi
 
 if [ "$CMD" = check ]; then
   [ -f "$RESULTS" ] || die "--results must name a readable file"
   sha_ok "$HEADSHA" || die "--head must be a full commit SHA"
   dirs_list "$W/list.tsv"
-  TAB="$(printf '\t')"
-  while IFS="$TAB" read -r reason rel; do
-    jq -cn --arg dir "$rel" --arg reason "$reason" '{dir:$dir, reason:$reason}'
-  done < "$W/list.tsv" > "$W/list.jsonl"
+  dirs_jsonl "$W/list.tsv" > "$W/list.jsonl"
   reject() { echo "results rejected: $1"; exit 1; }
   jq -e . "$RESULTS" > /dev/null 2>&1 || reject "not JSON"
-  jq -e 'type == "object" and keys == ["base_sha","dirs","head_sha","terraform_version"]' \
+  jq -e 'type == "object" and keys == ["base_sha","dirs","head_sha","selection","terraform_version"]' \
     "$RESULTS" > /dev/null 2>&1 || reject "shape"
   jq -e --arg h "$HEADSHA" '.head_sha == $h' "$RESULTS" > /dev/null 2>&1 || reject "head_sha"
   jq -e --arg b "$BASESHA" '.base_sha == $b' "$RESULTS" > /dev/null 2>&1 || reject "base_sha"
@@ -285,17 +430,22 @@ if [ "$CMD" = check ]; then
     def side($recs): type == "object" and keys == ["init","line","record","validate"]
       and (.init | num) and (.validate | num) and (.line | line)
       and (.record | type == "string") and (.record as $r | $recs | any(.[]; . == $r));
-    def head_ok: side(["code-result","init-failed","not-run-environment","terraform-absent"])
+    def limited: (.record == "not-run-limit" or .record == "not-run-budget")
+      and .line == null and (.validate == null or .init == 0);
+    def head_ok: side(["code-result","init-failed","not-run-budget","not-run-environment","not-run-limit","terraform-absent"])
       and (if .record == "terraform-absent" then .init == null and .validate == null and .line == null
            elif .record == "init-failed" then .init != null and .init != 0 and .validate == null
            elif .record == "code-result" then .init == 0 and .validate != null
-           else .init != null end);
-    def base_ok: side(["absent-at-base","base-unavailable","code-result","init-failed","not-run-environment"])
+           elif .record == "not-run-environment" then .init != null
+           else limited end);
+    def base_ok: side(["absent-at-base","base-unavailable","code-result","init-failed","not-run-budget","not-run-environment","not-run-limit"])
       and (if (.record == "absent-at-base" or .record == "base-unavailable")
-           then .init == null and .validate == null and .line == null else .init != null end);
+           then .init == null and .validate == null and .line == null
+           elif .record == "not-run-limit" or .record == "not-run-budget" then limited
+           else .init != null end);
     (.terraform_version == null or (.terraform_version | type == "string" and test("^[0-9]+[.][0-9]+[.][0-9]+[0-9A-Za-z.+-]*$")))
     and (.dirs | type == "array")
-    and all(.dirs[]; type == "object" and keys == ["base","dir","head","outside","reason"]
+    and all(.dirs[]; type == "object" and keys == ["affected","base","dir","head","outside","reason"]
       and (.dir | type == "string") and .outside == false
       and (if .reason == "skipped-version-bump" or .reason == "skipped-symlink" then .head == null and .base == null
            elif .reason == "verified" then (.head | head_ok)
@@ -303,7 +453,8 @@ if [ "$CMD" = check ]; then
                   then (.base | base_ok) else .base == null end)
            else false end))
   ' "$RESULTS" > /dev/null 2>&1 || reject "shape"
-  jq -e --slurpfile l "$W/list.jsonl" '[.dirs[] | {dir, reason}] == $l' "$RESULTS" > /dev/null 2>&1 \
+  jq -e --slurpfile l "$W/list.jsonl" --slurpfile s "$W/selection.json" \
+    '[.dirs[] | {dir, reason, affected}] == $l and .selection == $s[0]' "$RESULTS" > /dev/null 2>&1 \
     || reject "example directories"
   echo "results accepted"
   exit 0
@@ -311,12 +462,120 @@ fi
 
 case "$OUT" in /?*) ;; *) die "--out must be an absolute path" ;; esac
 [ -d "${OUT%/*}/" ] || die "the directory of --out must exist"
+
+if [ "$CMD" = coverage ]; then
+  n=0; [ -n "$PLANREC" ] && n=$((n + 1)); [ -n "$HOSTED" ] && n=$((n + 1)); [ -n "$NOPLAN" ] && n=$((n + 1))
+  [ "$n" -eq 1 ] || die "coverage needs exactly one of --plan, --hosted and --no-plan"
+  [ -z "$ADDRS" ] || [ -n "$PLANREC" ] || die "--addresses goes with --plan"
+  dirs_list "$W/list.tsv"
+  dirs_jsonl "$W/list.tsv" > "$W/list.jsonl"
+  # The plan results as blocks {n, dir, plan, base}: a laptop record keyed by its example:
+  # lines in order, a runner record by the host's own "host example <n>:" lines, so a block
+  # the head's code printed cannot claim another example.
+  # shellcheck disable=SC2016 # jq programs
+  NORM='
+def classes: ["planned", "planned-no-changes", "code-error", "environment", "needs input",
+  "output unrecognised", "budget", "plan pass ended: credentials", "plan gate G0", "plan gate G1",
+  "plan gate G2", "plan gate G3", "exception: example assumes a role in another account",
+  "exception: needs a Docker daemon"];
+def base_results: ["reproduces at base", "new under this change",
+  "new under this change (absent at base)", "not available"];
+def gate: if test("^plan gate G[0-3]( |$)") then .[0:12] else . end;
+def norm: gate | if IN(classes[]) then . else "output unrecognised" end;
+def bnorm: gate | if IN(classes[]) or IN(base_results[]) then . else "not available" end;
+'
+  if [ -n "$NOPLAN" ]; then
+    echo '[]' > "$W/blocks.json"
+  elif [ -n "$PLANREC" ]; then
+    [ -f "$PLANREC" ] && [ ! -L "$PLANREC" ] && [ "$(wc -c < "$PLANREC")" -le 5242880 ] \
+      || die "--plan must name a regular file of at most 5 MiB"
+    jq -R -s "$NORM"'
+      split("\n") as $l
+      | any($l[]; startswith("host example ")) as $runner
+      | reduce $l[] as $x ({b: [], n: 0};
+          if $runner and ($x | startswith("host example ")) then
+            (($x | capture("^host example (?<n>[1-9][0-9]{0,5}): (?<p>.*)$")) // null) as $h
+            | if $h == null then . else .b += [{n: ($h.n | tonumber), dir: $h.p, plan: null, base: null}] end
+          elif ($runner | not) and ($x | startswith("example: ")) then
+            .n += 1 | .b += [{n: .n, dir: $x[9:], plan: null, base: null}]
+          elif (.b | length) == 0 then .
+          elif ($x | startswith("plan: ")) and .b[-1].plan == null then .b[-1].plan = ($x[6:] | split(" | ")[0] | norm)
+          elif ($x | startswith("base: ")) and .b[-1].base == null then .b[-1].base = ($x[6:] | bnorm)
+          else . end)
+      | .b' "$PLANREC" > "$W/blocks.json" || die "--plan cannot be read"
+  else
+    [ -f "$HOSTED" ] && [ ! -L "$HOSTED" ] && [ "$(wc -c < "$HOSTED")" -le 1048576 ] \
+      || die "--hosted must name a regular file of at most 1 MiB"
+    jq "$NORM"'
+      if type == "object" and (.examples | type == "array") then
+        [.examples | to_entries[] | .key as $k | .value
+         | select(type == "object" and (.path | type == "string"))
+         | {n: ($k + 1), dir: .path, plan: (.head.class | if type == "string" then norm else "output unrecognised" end),
+            base: (.base.class? // null | if type == "string" then bnorm else null end),
+            addr: {addresses: .addresses, attributes: .attributes}}]
+      else error("not a plan record") end' "$HOSTED" > "$W/blocks.json" 2> /dev/null || die "--hosted is not a plan record"
+  fi
+  # The planned addresses of each block, from addresses-<n>.json in --addresses: data only
+  : > "$W/addr.jsonl"
+  if [ -n "$ADDRS" ] && [ -d "$ADDRS" ] && [ ! -L "$ADDRS" ]; then
+    for af in "$ADDRS"/addresses-*.json; do
+      an="${af##*/addresses-}"; an="${an%.json}"
+      printf '%s\n' "$an" | grep -Eqx '[1-9][0-9]{0,5}' || continue
+      [ -f "$af" ] && [ ! -L "$af" ] && [ "$(wc -c < "$af")" -le 1048576 ] || continue
+      jq -c --arg n "$an" '{($n): .}' "$af" >> "$W/addr.jsonl" 2> /dev/null || true
+    done
+  fi
+  jq -n --slurpfile b "$W/blocks.json" --slurpfile l "$W/list.jsonl" --slurpfile s "$W/selection.json" \
+    --slurpfile a "$W/addr.jsonl" --arg noplan "${NOPLAN:-}" --arg pre "$PREFIX" '
+    ($a | add // {}) as $addr
+    | def clean: . as $x
+        | [($x.addresses | if type == "array" then .[] else empty end)
+           | select(type == "string" and test("^[A-Za-z0-9_.-]{1,300}$"))] | unique | .[:1000]
+        | . as $s
+        | {addresses: $s,
+           attributes: (($x.attributes | if type == "object" then . else {} end)
+             | with_entries(select(.key as $k | ($s | index($k)) != null)
+                 | .value |= ([(if type == "array" then .[] else empty end)
+                               | select(type == "string" and test("^[a-z0-9_]{1,128}$"))] | unique | .[:500]))),
+           module_calls: ($x.module_calls | if type == "object" then with_entries(select((.key | test("^[A-Za-z0-9_-]{1,64}$"))
+                        and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$")))) else {} end)};
+    # A local module source resolved against the example directory, repository-relative, or
+    # null when it climbs out of the repository
+    def resolve($d): ($d + "/" + .) | split("/")
+      | reduce .[] as $p ([]; if . == null then null elif $p == "" or $p == "." then .
+          elif $p == ".." then (if length == 0 then null else .[:-1] end) else . + [$p] end)
+      | if . == null then null elif length == 0 then "." else join("/") end;
+    def planned: IN("planned", "planned-no-changes");
+    [ $l[] | .dir as $d
+      | (first($b[0][] | select(.dir == $d)) // null) as $k
+      | (if $k == null or $k.plan == null then "not run" else $k.plan end) as $h
+      | (if $k == null then null else $k.base end) as $bs
+      | ((if $h | planned then ($k.addr // $addr[$k.n | tostring] // {}) | clean
+          else {addresses: [], attributes: {}, module_calls: {}} end)) as $ad
+      | {dir: $d, head: $h, base: $bs, addresses: $ad.addresses, attributes: $ad.attributes,
+         module_calls: ($ad.module_calls | with_entries(.value |= resolve($d)) | with_entries(select(.value != null))),
+         covered: (($h | planned) or ($h == "code-error"
+           and ($bs | IN("reproduces at base", "new under this change", "new under this change (absent at base)")))),
+         why: (if $noplan != "" then "no AWS profile named" elif $h == "not run" then "not reached by the plan pass"
+               elif $h == "code-error" then "code-error, merge base not planned" else $h end)} ] as $e
+    | ($e | map(select(.covered)) | length) as $c
+    # No example at all is complete only for an inert change; otherwise nothing could be planned
+    | (($e | length) == 0 and ($s[0].inert | not)) as $none
+    | {schema_version: 1, selection: $s[0], inert: $s[0].inert,
+       class: (if $none then "none" elif $c == ($e | length) then "complete" elif $c == 0 then "none" else "partial" end),
+       examples: [$e[] | {dir, head, base, addresses, attributes, module_calls}],
+       unplanned: (if $none then [{dir: ($pre + "examples"), reason: "no example directory"}]
+                   else [$e[] | select(.covered | not) | {dir, reason: .why}] end)}
+  ' > "$OUT.tmp" && mv -- "$OUT.tmp" "$OUT" || die "cannot write $OUT"
+  exit 0
+fi
+
 HEAD="$(git -C "$DIR" rev-parse HEAD 2> /dev/null)"
 sha_ok "$HEAD" || die "the clone has no head commit"
 dirs_list "$W/list.tsv"
 if [ -n "$ONLY" ]; then
   printf '%s' "$ONLY" | while IFS= read -r rel; do
-    cut -f2 "$W/list.tsv" | grep -qxF -- "$rel" || { echo "verify-pass.sh: not an example directory of this change: $rel" >&2; exit 2; }
+    cut -f3 "$W/list.tsv" | grep -qxF -- "$rel" || { echo "verify-pass.sh: not an example directory of this change: $rel" >&2; exit 2; }
   done || exit 2
 fi
 perl -e "$HOSTS_PL" "$FILES" > "$W/hosts.txt" || die "--files is not a JSON array of file objects"
@@ -324,23 +583,34 @@ mkdir -p "$RUN/plugin-cache"
 
 mkdir "$W/home"
 env | sed -n 's/^\(TF_TOKEN_[A-Za-z0-9_]*\)=.*/\1/p' > "$W/tokens.txt"
-tf() { # directory, arguments: terraform with no credential and no inherited terraform settings
-  (cd -- "$1" && shift && while IFS= read -r v; do unset "$v"; done < "$W/tokens.txt" \
-    && env -u AWS_PROFILE -u AWS_DEFAULT_PROFILE -u AWS_ACCESS_KEY_ID \
-    -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN -u AWS_ROLE_ARN \
-    -u AWS_WEB_IDENTITY_TOKEN_FILE -u AWS_CONTAINER_CREDENTIALS_FULL_URI \
-    -u AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -u AWS_CONTAINER_AUTHORIZATION_TOKEN \
-    -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN \
-    -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_SSH -u GIT_SSH_COMMAND \
-    -u TF_CLI_ARGS -u TF_CLI_ARGS_init -u TF_CLI_ARGS_validate -u TF_DATA_DIR -u TF_WORKSPACE \
-    HOME="$W/home" NETRC=/dev/null TF_CLI_CONFIG_FILE=/dev/null \
-    AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
-    TF_PLUGIN_CACHE_DIR="$RUN/plugin-cache" TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE=true \
-    TF_IN_AUTOMATION=1 TF_INPUT=0 CHECKPOINT_DISABLE=1 GIT_TERMINAL_PROMPT=0 \
-    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=2 \
-    GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null \
-    GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1= \
-    terraform "$@")
+# terraform with no credential and no inherited terraform settings
+TFENV=(env)
+while IFS= read -r v; do TFENV+=(-u "$v"); done < "$W/tokens.txt"
+TFENV+=(-u AWS_PROFILE -u AWS_DEFAULT_PROFILE -u AWS_ACCESS_KEY_ID
+  -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN -u AWS_ROLE_ARN
+  -u AWS_WEB_IDENTITY_TOKEN_FILE -u AWS_CONTAINER_CREDENTIALS_FULL_URI
+  -u AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -u AWS_CONTAINER_AUTHORIZATION_TOKEN
+  -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN
+  -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_SSH -u GIT_SSH_COMMAND
+  -u TF_CLI_ARGS -u TF_CLI_ARGS_init -u TF_CLI_ARGS_validate -u TF_DATA_DIR -u TF_WORKSPACE
+  -u CAP_QUIET_ERR
+  HOME="$W/home" NETRC=/dev/null TF_CLI_CONFIG_FILE=/dev/null
+  AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true
+  TF_PLUGIN_CACHE_DIR="$RUN/plugin-cache" TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE=true
+  TF_IN_AUTOMATION=1 TF_INPUT=0 CHECKPOINT_DISABLE=1 GIT_TERMINAL_PROMPT=0
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=2
+  GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+  GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1=
+  terraform)
+T0=$SECONDS
+left() { echo $((BUDGET - (SECONDS - T0))); }
+LIMBUDGET=0
+tf() { # seconds, directory, arguments: one terraform command into $W/out.txt, under the budget
+  tl=$1; td=$2; shift 2
+  bl=$(left); LIMBUDGET=0
+  if [ "$bl" -lt "$tl" ]; then tl=$bl; LIMBUDGET=1; fi
+  [ "$tl" -ge 1 ] || tl=1 # alarm 0 would mean no limit at all
+  run_capped "$tl" "$W/out.txt" "$td" "${TFENV[@]}" "$@"
 }
 side() { # init validate record line: one JSON object
   jq -cn --argjson init "${1:-null}" --argjson validate "${2:-null}" --arg record "$3" --arg line "$4" \
@@ -358,40 +628,51 @@ classify() { # output file, tree root: sets CLASS and LINE
   perl -e "$CLASS_PL" "$1" "$W/hosts.txt" "$flag" > "$W/class.txt"
   CLASS="$(sed -n 1p "$W/class.txt")"; LINE="$(sed -n 2p "$W/class.txt")"
 }
-verify() { # tree root, module root, example directory: prints one side object
+limited() { # a command the budget, its time limit or the output cap stopped: the record
+  if [ "$LIMBUDGET" = 1 ] || [ "$(left)" -le 0 ]; then echo not-run-budget; else echo not-run-limit; fi
+}
+verify() { # tree root, module root, example directory: sets SIDEJ to one side object
   INIT=; VALID=; LINE=
-  tf "$1/$3" init -backend=false -input=false -no-color > "$W/out.txt" 2>&1
+  if [ "$(left)" -le 0 ]; then SIDEJ="$(side "" "" not-run-budget "")"; return; fi
+  tf 180 "$1/$3" init -backend=false -input=false -no-color
   INIT=$?
+  if [ "$INIT" -eq 124 ] && [ -e "$W/out.txt.cap" ]; then SIDEJ="$(side "$INIT" "" "$(limited)" "")"; return; fi
   if [ "$INIT" -ne 0 ]; then
     classify "$W/out.txt" "$2"
-    if [ "$CLASS" = environment ]; then side "$INIT" "" not-run-environment "$LINE"
-    else side "$INIT" "" init-failed "$LINE"; fi
+    if [ "$CLASS" = environment ]; then SIDEJ="$(side "$INIT" "" not-run-environment "$LINE")"
+    else SIDEJ="$(side "$INIT" "" init-failed "$LINE")"; fi
     return
   fi
-  tf "$1/$3" validate -no-color > "$W/out.txt" 2>&1
+  if [ "$(left)" -le 0 ]; then SIDEJ="$(side 0 "" not-run-budget "")"; return; fi
+  tf 60 "$1/$3" validate -no-color
   VALID=$?
-  [ "$VALID" -eq 0 ] && { side 0 0 code-result ""; return; }
+  if [ "$VALID" -eq 124 ] && [ -e "$W/out.txt.cap" ]; then SIDEJ="$(side 0 "" "$(limited)" "")"; return; fi
+  [ "$VALID" -eq 0 ] && { SIDEJ="$(side 0 0 code-result "")"; return; }
   classify "$W/out.txt" "$2"
-  if [ "$CLASS" = environment ]; then side 0 "$VALID" not-run-environment "$LINE"
-  else side 0 "$VALID" code-result "$LINE"; fi
-}
-clone_git() {
-  GIT_LFS_SKIP_SMUDGE=1 git -C "$DIR" -c core.hooksPath=/dev/null \
-    -c filter.lfs.smudge=cat -c filter.lfs.process= \
-    -c filter.lfs.required=false "$@"
+  if [ "$CLASS" = environment ]; then SIDEJ="$(side 0 "$VALID" not-run-environment "$LINE")"
+  else SIDEJ="$(side 0 "$VALID" code-result "$LINE")"; fi
 }
 BTREE="$RUN/verify-base"
-base_ready() { # the merge base worktree for a re-run, added once
+BASEFAIL=
+base_git() { # git arguments: one git command in the clone, with the Workspace options, under what is left of the budget
+  bl=$(left); [ "$bl" -gt 0 ] || return 1
+  run_capped "$bl" "$W/git.txt" / env GIT_LFS_SKIP_SMUDGE=1 git -C "$DIR" -c core.hooksPath=/dev/null \
+    -c filter.lfs.smudge=cat -c filter.lfs.process= -c filter.lfs.required=false "$@"
+}
+base_ready() { # the merge base worktree for a re-run, added once; a fetch or add the budget stops fails
+  [ -z "$BASEFAIL" ] || return 1
   [ -d "$BTREE" ] && return 0
-  git -C "$DIR" cat-file -e "${BASESHA}^{commit}" 2> /dev/null \
-    || clone_git fetch -q --depth=1 -- origin "$BASESHA" > /dev/null 2>&1 || return 1
-  clone_git worktree add -q --detach -- "$BTREE" "$BASESHA" > /dev/null 2>&1
+  if ! git -C "$DIR" cat-file -e "${BASESHA}^{commit}" 2> /dev/null; then
+    base_git fetch -q --depth=1 -- origin "$BASESHA" || { BASEFAIL=1; return 1; }
+  fi
+  base_git worktree add -q --detach -- "$BTREE" "$BASESHA" || { BASEFAIL=1; return 1; }
 }
 
 TFV=
 if command -v terraform > /dev/null 2>&1; then
   mkdir "$W/empty"
-  TFV="$(tf "$W/empty" version -json 2> /dev/null | jq -r '.terraform_version // empty' 2> /dev/null)"
+  CAP_QUIET_ERR=1 tf 30 "$W/empty" version -json
+  TFV="$(jq -r '.terraform_version // empty' "$W/out.txt" 2> /dev/null)"
   printf '%s\n' "$TFV" | grep -Eqx '[0-9]+[.][0-9]+[.][0-9]+[0-9A-Za-z.+-]*' || TFV=
   HAVE_TF=1
 else
@@ -400,18 +681,18 @@ fi
 
 TAB="$(printf '\t')"
 : > "$W/dirs.jsonl"
-while IFS="$TAB" read -r reason rel; do
+while IFS="$TAB" read -r reason aff rel; do
   if [ -n "$ONLY" ]; then printf '%s' "$ONLY" | grep -qxF -- "$rel" || continue; fi
   if [ "$reason" != verified ]; then
-    jq -cn --arg dir "$rel" --arg reason "$reason" \
-      '{dir:$dir, reason:$reason, head:null, base:null, outside:false}' >> "$W/dirs.jsonl"
+    jq -cn --arg dir "$rel" --arg reason "$reason" --arg aff "$aff" \
+      '{dir:$dir, reason:$reason, affected:$aff, head:null, base:null, outside:false}' >> "$W/dirs.jsonl"
     continue
   fi
   BASEJ=null
   if [ "$HAVE_TF" = 0 ]; then
     HEADJ="$(side "" "" terraform-absent "")"
   else
-    HEADJ="$(verify "$CROOT" "$MROOT" "$rel")"
+    verify "$CROOT" "$MROOT" "$rel"; HEADJ=$SIDEJ
     if [ "$(printf '%s' "$HEADJ" | jq -r 'select(.record == "code-result" and .validate != 0) | "rerun"')" = rerun ]; then
       if ! base_ready; then
         BASEJ="$(side "" "" base-unavailable "")"
@@ -420,18 +701,20 @@ while IFS="$TAB" read -r reason rel; do
       else
         BROOT="$(cd "$BTREE" && pwd -P)"
         if [ "$(cd "$BROOT/$rel" 2> /dev/null && pwd -P)" = "$BROOT/$rel" ]; then
-          BASEJ="$(verify "$BROOT" "$BROOT/${PREFIX%/}" "$rel")"
+          verify "$BROOT" "$BROOT/${PREFIX%/}" "$rel"; BASEJ=$SIDEJ
         else # a symbolic link, or reached through one, at the base: never entered
           BASEJ="$(side "" "" base-unavailable "")"
         fi
       fi
     fi
   fi
-  jq -cn --arg dir "$rel" --argjson head "$HEADJ" --argjson base "$BASEJ" \
-    '{dir:$dir, reason:"verified", head:$head, base:$base, outside:false}' >> "$W/dirs.jsonl"
+  jq -cn --arg dir "$rel" --arg aff "$aff" --argjson head "$HEADJ" --argjson base "$BASEJ" \
+    '{dir:$dir, reason:"verified", affected:$aff, head:$head, base:$base, outside:false}' >> "$W/dirs.jsonl"
 done < "$W/list.tsv"
 
 if ! { jq -n --arg head "$HEAD" --arg base "$BASESHA" --arg ver "$TFV" --slurpfile dirs "$W/dirs.jsonl" \
-  '{head_sha:$head, base_sha:$base, terraform_version:(if $ver == "" then null else $ver end), dirs:$dirs}' \
+  --slurpfile sel "$W/selection.json" \
+  '{head_sha:$head, base_sha:$base, terraform_version:(if $ver == "" then null else $ver end),
+    selection:$sel[0], dirs:$dirs}' \
   > "$OUT.tmp" && mv -- "$OUT.tmp" "$OUT"; }; then die "cannot write $OUT"; fi
 exit 0

@@ -8,7 +8,7 @@
 #       <run-dir>/g0-base.txt. Run it before any terraform command touches that tree.
 #   <bash|zsh> /abs/path/plan-pass.sh plan <run-dir> <profile> [--role-arn <arn>] [--mode laptop|runner] [--base <sha>] <example-dir>...
 #       The plan pass over the named example directories, repository-relative, in the order
-#       given, at most 12 in laptop mode. Prints "plan pass mode:" once, then the record lines per example on
+#       given, until the budget runs out. Prints "plan pass mode:" once, then the record lines per example on
 #       standard output: "example:", "plan:", "scope:", "modules:" and "base:", and a
 #       "gate-hit" line per hit. --mode laptop is the default; --mode runner relaxes the
 #       code-execution gates and is refused outside a container (plan-pass.md, Modes).
@@ -18,7 +18,13 @@
 #       example and saves each one's state under <run-dir>/plan, with no credential call;
 #       --phase plan --index <n> <example-dir> then plans that one example from the saved
 #       state and prints its record lines, with no summary. The runner runs each phase in its
-#       own container behind its own egress proxy (plan-pass.md, Modes).
+#       own container behind its own egress proxy (plan-pass.md, Modes). --phase show --index
+#       <n> <example-dir>, in a container with no network and no credentials, prints the saved
+#       plan's addresses as one "addresses-json:" line for the host to check.
+#       Every plan is saved with -out under <run-dir>/plan/saved. In laptop mode the saved head
+#       plan of a planned example is read with terraform show -json after the plan has ended,
+#       and its addresses are written to <run-dir>/plan-addresses/addresses-<n>.json, <n> the
+#       example's place in the list (plan-pass.md, Saved plans and addresses).
 #       Laptop mode needs --role-arn: the plan credentials are a session on that review role,
 #       downscoped by plan-session-policy.json and issued by plan-session.sh, never the
 #       profile's own (plan-pass.md, Credentials). Runner mode gets its session from the runner.
@@ -311,7 +317,7 @@ case "$GMODE" in laptop|runner) ;; *) echo "plan pass not run: mode unknown"; ex
 case "$PHASE" in
   '') ;;
   init) [ "$GMODE" = runner ] || { echo "plan pass not run: phase needs runner mode"; exit 0; } ;;
-  plan|base-init|base-plan) [ "$GMODE" = runner ] || { echo "plan pass not run: phase needs runner mode"; exit 0; }
+  plan|base-init|base-plan|show) [ "$GMODE" = runner ] || { echo "plan pass not run: phase needs runner mode"; exit 0; }
     printf '%s\n' "$INDEX" | grep -Eqx '[1-9][0-9]{0,3}' && [ "$#" -eq 1 ] ||
       { echo "plan pass not run: phase $PHASE needs --index and one example"; exit 0; } ;;
   *) echo "plan pass not run: phase unknown"; exit 0 ;;
@@ -357,7 +363,7 @@ else PROV_RE='registry\.terraform\.io/hashicorp/(aws|random|time|tls|cloudinit)'
 PLAN="$RUN/plan"
 if [ -z "$PHASE" ] || [ "$PHASE" = init ]; then
   mkdir -m 700 "$PLAN"
-  mkdir "$PLAN/data" "$PLAN/cache" "$PLAN/home" "$PLAN/tmp" "$PLAN/out" "$PLAN/state"
+  mkdir "$PLAN/data" "$PLAN/cache" "$PLAN/home" "$PLAN/tmp" "$PLAN/out" "$PLAN/state" "$PLAN/saved"
   : > "$PLAN/cli.tfrc"; : > "$PLAN/aws-config"; : > "$PLAN/aws-credentials"
 fi
 PGIDS=""
@@ -501,14 +507,17 @@ post_init() { # example key, absolute example directory
   done
 }
 CAP_PL='
-setpgrp(0, 0); my $out = shift;
+setpgrp(0, 0); my $out = shift; my $cap = $ENV{CAP_BYTES} || 1048576;
 open(my $o, ">", $out) or exit 125;
 my $pid = open(my $in, "-|"); exit 125 unless defined $pid;
-if (!$pid) { open(STDERR, ">&", \*STDOUT); open(STDIN, "<", "/dev/null"); exec @ARGV; exit 127 }
+if (!$pid) {
+  if ($ENV{CAP_QUIET_ERR}) { open(STDERR, ">", "/dev/null") } else { open(STDERR, ">&", \*STDOUT) }
+  open(STDIN, "<", "/dev/null"); exec @ARGV; exit 127;
+}
 my ($n, $buf) = (0, "");
 while (my $r = sysread($in, $buf, 65536)) {
-  if ($n + $r >= 1048576) {
-    syswrite($o, $buf, 1048576 - $n); close $o;
+  if ($n + $r >= $cap) {
+    syswrite($o, $buf, $cap - $n); close $o;
     open(my $m, ">", "$out.cap"); close $m;
     kill "KILL", -getpgrp();
   }
@@ -565,6 +574,32 @@ exit 3 if $bad;
 my ($first) = split /\n/, $b; print substr($first // "", 0, 160), "\n";
 '
 kept() { PROFILE="$PROFILE" LEAKS="$LEAKS" perl -e "$EVID_PL"; }
+# The addresses of a saved plan's resource changes, each index key removed, and per address
+# the top-level attributes it plans a value for: names only, never a value or a key, which can
+# carry what the account returned.
+# shellcheck disable=SC2016 # a jq program
+ADDR_JQ='
+. as $plan
+| [.resource_changes[]? | select(type == "object" and (.address | type == "string"))
+ | {a: (.address | gsub("\\[[^\\]]*\\]"; "")), c: (.change // {})}
+ | select(.a | test("^[A-Za-z0-9_.-]{1,300}$"))]
+| {addresses: (map(.a) | unique | .[:1000]),
+   attributes: (group_by(.a) | map({key: .[0].a, value: ([.[].c
+     | ((.after | if type == "object" then to_entries[] | select(.value != null) | .key else empty end),
+        (.after_unknown | if type == "object" then to_entries[] | select(.value == true) | .key else empty end))]
+     | map(select(test("^[a-z0-9_]{1,128}$"))) | unique | .[:500])}) | from_entries),
+   module_calls: ($plan.configuration.root_module.module_calls | if type == "object" then
+     with_entries(.value |= (.source? // null)) | with_entries(select((.key | test("^[A-Za-z0-9_-]{1,64}$"))
+                and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$")))) else {} end)}
+'
+SHOWTO=
+pe_show() { # key: the saved plan as JSON, reduced to its addresses on standard output
+  [ -f "$PLAN/saved/$1.tfplan" ] || return 0
+  AK=; SK=; ST=; set_env "$1"
+  CAP_BYTES=16777216 CAP_QUIET_ERR=1 run_capped "$(left 120)" "$PLAN/out/$1-show.json" "${TFENV[@]}" \
+    terraform show -json -no-color "$PLAN/saved/$1.tfplan" || return 0
+  jq -c "$ADDR_JQ" "$PLAN/out/$1-show.json" 2> /dev/null
+}
 pe_init() { # absolute example directory, key, root (the clone or the base worktree), saved g0 file
   # Everything before the credentials: gates, init, post_init. CLASS "ready" means plan next.
   CROOT=$3; CLASS=; KEPT=; VERSIONS=; SCOPE=; out=; INCD=
@@ -595,7 +630,7 @@ pe_plan() { # key: the credentials and the plan, then the kept line
     if ! get_creds; then CLASS='plan pass ended: credentials'
     else
       set_env "$1"
-      run_capped "$(left 300)" "$PLAN/out/$1-plan.txt" "${TFENV[@]}" terraform plan -input=false -lock=false -refresh=true -no-color -compact-warnings
+      run_capped "$(left 300)" "$PLAN/out/$1-plan.txt" "${TFENV[@]}" terraform plan -input=false -lock=false -refresh=true -no-color -compact-warnings "-out=$PLAN/saved/$1.tfplan"
       rc=$?; CLASS="$(class_of "$rc" "$PLAN/out/$1-plan.txt" plan)"; out="$PLAN/out/$1-plan.txt"
     fi
     AK=; SK=; ST=
@@ -604,6 +639,12 @@ pe_plan() { # key: the credentials and the plan, then the kept line
     planned) KEPT="$(grep -E -m 1 '^Plan: .* to destroy\.$' "$out" | kept)" ;;
     code-error) KEPT="$(kept < "$out.block")" ;;
   esac
+  # Laptop mode: the head plan's addresses, read by a terraform process of its own after the
+  # plan has ended, with no credentials (plan-pass.md, Saved plans and addresses). run_capped
+  # sets out, so this comes after the kept line.
+  if [ -n "$SHOWTO" ]; then
+    case "$CLASS" in planned|planned-no-changes) pe_show "$1" > "$SHOWTO" ;; esac
+  fi
 }
 plan_example() { # absolute example directory, key, root (the clone or the base worktree), saved g0 file
   pe_init "$@"
@@ -683,6 +724,16 @@ if [ "$PHASE" = plan ]; then
   fi
   exit 0
 fi
+if [ "$PHASE" = show ]; then
+  # A container of its own, with no network and no credentials, after the plan container
+  # ended: the saved plan's addresses, which the host checks before it records them
+  rel_ex=$1; key="e$INDEX"
+  case "$rel_ex" in /*|*..*) exit 0 ;; esac
+  cd "$HROOT/$rel_ex" 2> /dev/null || exit 0
+  a="$(pe_show "$key")"
+  [ -z "$a" ] || echo "addresses-json: $a"
+  exit 0
+fi
 if [ "$PHASE" = base-plan ]; then
   rel_ex=$1; key="e$INDEX"
   if [ -f "$PLAN/state/$key-base.absent" ]; then echo "base: new under this change (absent at base)"
@@ -699,13 +750,15 @@ if [ "$PHASE" = base-plan ]; then
   fi
   exit 0
 fi
+rm -rf -- "$RUN/plan-addresses" && mkdir -m 700 "$RUN/plan-addresses"
 for rel_ex in "$@"; do
   EXN=$((EXN + 1))
   echo "example: $rel_ex"
-  if [ "$GMODE" = laptop ] && [ "$EXN" -gt 12 ]; then echo "plan: budget"; continue; fi
   case "$rel_ex" in /*|*..*) echo "plan: plan gate G0 not an example directory"; continue ;; esac
   key="e$EXN" # unique per example: two directories may share a last name
+  SHOWTO=; [ "$GMODE" = laptop ] && SHOWTO="$RUN/plan-addresses/addresses-$EXN.json"
   plan_example "$HROOT/$rel_ex" "$key" "$HROOT" "$RUN/g0.txt"
+  SHOWTO=
   echo "plan: $CLASS${KEPT:+ | $KEPT}"
   case "$CLASS" in planned|planned-no-changes) NPLAN=$((NPLAN + 1)) ;; exception:*) NEXC=$((NEXC + 1)) ;; esac
   [ -n "$SCOPE" ] && echo "scope: ${SCOPE% }"

@@ -547,8 +547,8 @@ JQ
 
 # plan-hosted.json, the hosted plan job's record (plan-pass.md, Hosted runner): the exact keys,
 # every type and class, an empty module root prefix, head and merge base equal to the checked
-# ones, and examples the runner plans for this change, each once. Prints "ok" or a fixed
-# reason. The example rule is a consistency check, not a security boundary.
+# ones, each example once with its planned addresses checked against their patterns. Prints
+# "ok" or a fixed reason.
 # shellcheck disable=SC2016 # a jq program
 PLAN_HOSTED_JQ='
 def nat: type == "number" and . >= 0 and . == floor and . <= 999999999;
@@ -562,23 +562,24 @@ def part($base): type == "object" and keys == ["class", "plan"]
   and (.class | type == "string" and (IN(classes[]) or ($base and IN(base_results[]))))
   and (.plan == null or (.class == "planned" and (.plan | type == "object"
        and keys == ["add", "change", "destroy"] and all(.[]; nat))));
+def addrs: type == "array" and length <= 1000 and all(.[]; type == "string" and test("^[A-Za-z0-9_.-]{1,300}\\z"));
 "examples/" as $ex
-| ([$f[0][] | .filename, (.previous_filename // empty)]) as $names
-| ([$names[] | select(startswith($ex)) | .[($ex | length):] | split("/")[0] | select(length > 0) | $ex + .]) as $touched
-| any($names[]; endswith(".tf") and (startswith($ex) | not)) as $outside
 | if ($p | length) != 1 or ($p[0] | type) != "object" then "plan record content"
   elif $h[0].prefix != "" then "plan record prefix"
   elif $p[0].head != $head then "plan record head"
   elif $h[0].merge_base == null or $p[0].merge_base != $h[0].merge_base then "plan record merge base"
   elif ($p[0] | (keys != ["examples", "head", "merge_base", "refused_hosts", "schema_version"])
         or .schema_version != 1 or (.refused_hosts | nat | not) or (.examples | type != "array")
-        or (.examples | all(.[]; type == "object" and keys == ["base", "head", "path"]
+        or (.examples | all(.[]; type == "object" and keys == ["addresses", "attributes", "base", "head", "path"]
               and (.path | type == "string" and startswith($ex)
                    and (.[($ex | length):] | test("^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}\\z")))
-              and (.head | part(false)) and (.base == null or (.base | part(true)))) | not))
+              and (.head | part(false)) and (.base == null or (.base | part(true)))
+              and (.addresses | addrs) and (. as $e | .attributes | type == "object"
+                and all(keys[]; IN($e.addresses[]))
+                and all(.[]; type == "array" and length <= 500
+                  and all(.[]; type == "string" and test("^[a-z0-9_]{1,128}\\z"))))) | not))
     then "plan record content"
   elif ($p[0].examples | map(.path) | (unique | length) != length) then "plan record examples"
-  elif ($outside | not) and ($p[0].examples | any(.[]; .path | IN($touched[]) | not)) then "plan record examples"
   else "ok" end
 '
 
