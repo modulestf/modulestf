@@ -555,7 +555,7 @@ grep -qxF "profile constants" "$TMP/failed" ||
 # and no other row.
 RSK=.agents/skills/terraform-module-reviewer
 RF="$RSK/references/rule-facts.md"
-ID_RE='`(compat|coverage|structure|examples|profile|scope|review)\.[a-z0-9-]+`'
+ID_RE='`(compat|coverage|structure|examples|profile|scope|review|claim)\.[a-z0-9-]+`'
 # Columns are found by their header, so a column added or moved changes no reader. Cells are
 # trimmed and lose their backticks; a column the header lacks reads as MISSING.
 REG_COLS="engine class scope cross_area area_kinds bundle_sections severities confirm_class proposed_confirm_class"

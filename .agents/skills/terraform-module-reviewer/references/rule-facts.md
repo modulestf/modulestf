@@ -26,9 +26,12 @@ The registry columns are for the deterministic facts engine designed in [the fac
 
 | `rule_id` | Provider facts | Page facts | Page entry when | Carry | `engine` | `class` | `scope` | `cross_area` | `area_kinds` | `bundle_sections` | `severities` | `confirm_class` | `proposed_confirm_class` |
 |-----------|----------------|------------|-----------------|-------|----------|---------|---------|--------------|--------------|-------------------|--------------|-----------------|--------------------------|
+| `claim.fix-not-effective` | none | - | - | never | llm | config-semantic | touched-expression | no | root, submodule | none | HIGH | - | - |
+| `claim.refuted` | none | - | - | never | llm | config-semantic | touched-expression | yes | root, submodule | none | HIGH | - | - |
 | `compat.break-unexplained` | none | - | - | never | llm | config-semantic | any-file-in-area | yes | root | tool-findings, candidates, interface-diff | MEDIUM | - | - |
 | `compat.claim-contradicts-analysis` | none | - | - | never | llm | config-semantic | any-file-in-area | yes | root | tool-findings, candidates, interface-diff | HIGH | - | - |
 | `compat.default-changed` | none | - | - | never | candidate | config-semantic | touched-expression | no | root, submodule | candidates, interface-diff | CRITICAL, HIGH, MEDIUM | lead | mid |
+| `compat.expression-behaviour-changed` | none | - | - | never | llm | config-semantic | touched-expression | no | root, submodule | interface-diff | CRITICAL, HIGH, LOW | - | - |
 | `compat.generated-policy-narrowed` | none | - | - | never | candidate | config-semantic | touched-block | no | root, submodule | candidates | CRITICAL, HIGH | lead | mid |
 | `compat.provider-floor-raised` | schema | - | - | never | candidate | config-semantic | touched-expression | no | root, submodule | candidates, interface-diff, schema-coverage | LOW | lead | mid |
 | `compat.resource-address-changed` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule | candidates, interface-diff | CRITICAL, HIGH | lead | mid |
@@ -79,6 +82,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `review.quoted-claim-unverifiable` | none | - | - | never | llm | config-semantic | any-file-in-area | yes | root | none | none | - | - |
 | `review.tool-disputed` | none | - | - | never | llm | path | any-file-in-area | no | root, submodule, example | tool-findings | LOW | - | - |
 | `review.untrusted-instruction` | none | - | - | never | llm | path | any-file-in-area | yes | root, submodule, example | none | HIGH | - | - |
+| `review.verification-incomplete` | none | - | - | never | llm | path | any-file-in-area | yes | root | none | MEDIUM | - | - |
 | `scope.boundary` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | interface-diff | HIGH | - | - |
 | `scope.composition` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | interface-diff | MEDIUM | - | - |
 | `scope.layout` | none | - | - | never | llm | path | newly-introduced | no | root, submodule | file-index | HIGH | - | - |
