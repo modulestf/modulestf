@@ -61,7 +61,7 @@ def gap_reasons: ["terraform was not installed", "init failed", "not run: enviro
   "merge base not run: command limit", "merge base not run: budget"];
 
 # The fixed reasons verify-pass.sh coverage gives an example that was not planned.
-def unplanned_reasons: ["no AWS profile named", "not reached by the plan pass",
+def unplanned_reasons: ["no example directory", "no AWS profile named", "not reached by the plan pass",
   "code-error, merge base not planned", "environment", "needs input", "output unrecognised", "budget",
   "plan pass ended: credentials", "plan gate G0", "plan gate G1", "plan gate G2", "plan gate G3",
   "exception: example assumes a role in another account", "exception: needs a Docker daemon"];
@@ -182,6 +182,7 @@ def texts: {
   "verification-more": "- {count} more example directories with a check that could not run are not listed.",
   "unplanned": "- `{dir}` was not planned: {reason}.",
   "unplanned-more": "- {count} more examples that were not planned are not listed.",
+  "unplanned-no-examples": "- The module has no example directory, so no example could be planned.",
   "unplanned-inert": "- The change reaches no Terraform configuration, so the examples below that were not planned leave nothing unknown.",
   "thread-match": "- `{location}`: this review has a finding at the same path and line.",
   "thread-no-match": "- `{location}`: this review has no finding at the same path and line.",
@@ -372,7 +373,8 @@ def gap_lines($h; $run; $p):
       | tx("verification"; {dir, reason: (if .reason == "init failed" then "`init` failed" else .reason end)}) ]
   + ($run.verify_gaps | length - 100 | if . > 0 then [tx("verification-more"; {count: .})] else [] end)
   + (if $run.coverage.inert and $run.coverage.unplanned != [] then [tx("unplanned-inert")] else [] end)
-  + [ $run.coverage.unplanned[:100][] | tx("unplanned"; {dir, reason}) ]
+  + [ $run.coverage.unplanned[:100][]
+      | if .reason == "no example directory" then tx("unplanned-no-examples") else tx("unplanned"; {dir, reason}) end ]
   + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end);
 
 def state_lines($h; $c):

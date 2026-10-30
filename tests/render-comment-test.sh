@@ -238,6 +238,11 @@ ladder "partial coverage under a LOW finding" "inconclusive COMMENT" 4 "$(one st
   "$(runf cov-part '.verify_gaps = [{dir: "examples/c", reason: "init failed"}] | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/d", reason: "plan gate G1"}]}')"
 grep -A3 -xF '### Checks that could not run' "$O/comment.md" | tail -n 2 | cmp -s - <(printf '%s\n' '- Verification of `examples/c`: `init` failed.' '- `examples/d` was not planned: plan gate G1.')
 check "coverage: the verification gaps come first, then the unplanned examples" $?
+ladder "a module with no example directory" "inconclusive COMMENT" 4 "$NONE" "" "" \
+  "$(runf cov-noex '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples", reason: "no example directory"}]}')"
+awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" |
+  cmp -s - <(printf '%s\n' '' "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["unplanned-no-examples"]')")
+check "coverage: no example directory renders its own fixed line" $?
 ladder "an inert change: unplanned examples are information, not unknowns" "approve APPROVE" 8 "$NONE" "" "" \
   "$(runf cov-inert '.coverage = {class: "none", inert: true, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}')"
 awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" |
@@ -844,7 +849,7 @@ mutate() { # name, perl substitution, case function
 t_rule2() { render "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")"; [ "$(rule)" = 2 ]; }
 t_cov_rule() { render "$NONE" "" "" "$TMP/run-cov-none.json"; [ "$(rule)" = 4 ] && grep -qF -- '- `examples/a` was not planned: no AWS profile named.' "$O/comment.md"; }
 mutate "unplanned examples left out of the ladder" 's/ or \.unplanned > 0//' t_cov_rule
-mutate "unplanned examples left out of section 5" 's/\[ \$run\.coverage\.unplanned\[:100\]\[\] \| tx\("unplanned"; \{dir, reason\}\) \]/[]/' t_cov_rule
+mutate "unplanned examples left out of section 5" 's/else tx\("unplanned"; \{dir, reason\}\) end/else empty end/' t_cov_rule
 t_rule0() { render "$(pair compat.output-removed CRITICAL structure.docs-contradict-code HIGH)"; [ "$(rule)" = 1 ]; }
 t_rule4() { render "$NONE" "$(host tu2 '.signals.threads = "unknown"')"; [ "$(rule)" = 4 ]; }
 t_draft() { render "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "$TMP/host-draft.json"; [ "$(verdict)" = "block COMMENT" ]; }
