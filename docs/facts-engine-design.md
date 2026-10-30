@@ -127,7 +127,7 @@ The output binds the head SHA, the merge-base SHA, the binary digest, the rule-r
 ### Build and supply chain
 
 - Repository: `modulestf/facts`, public, Apache-2.0. It holds the Go code, the golden fixtures and the releases. The rule registry stays in the skills.
-- Registry pin: facts CI reads `rule-facts.md` from the public `modulestf/skills` snapshot at a pinned commit, with no token, and fails if `mtf-facts rules` does not match the registry's `tool` and `candidate` ids. The snapshot can lag the skills here; that drift is accepted, and a registry change is followed by a publish and a pin bump.
+- Registry pin: facts CI reads `rule-facts.md` from this repository at a pinned commit, with no token, and fails if `mtf-facts rules` does not match the registry's `tool` and `candidate` ids. The pin can lag master; that drift is accepted, and a registry change is followed by a pin bump in facts.
 - Registry hash: SHA-256 of the `rule-facts.md` content only. Changes to rule prose in `references/engine/` do not need a new release. The workflow compares the hash in the envelope with the hash of `rule-facts.md` at its own pinned skills commit.
 - Build: reproducible CI build with pinned Go, `-trimpath` and vendored modules. A release asset is built per tag, with a GitHub artifact attestation (`actions/attest-build-provenance`). The workflow template pins the version and SHA-256, and runs `gh attestation verify` on the asset before running it. To update, cut a new tag and a new pin, with the golden tests passing.
 

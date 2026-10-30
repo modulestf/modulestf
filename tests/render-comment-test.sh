@@ -387,7 +387,7 @@ t_table; check "strings: the Host Render Strings table equals the script's strin
 # --- Leak scan: a match blocks every file and says what matched and where.
 
 t_leak_path() {
-  render "$(one structure.grouping LOW a.tf 1 "See /home/runner/work/x for details." "F.")"
+  render "$(one structure.grouping LOW a.tf 1 "See /home/alice/src/x for details." "F.")"
   [ "$ST" = 1 ] && empty_out && printf '%s' "$MSG" | grep -qF 'leak scan: /home/ in finding F-'
 }
 t_leak_path; check "leak scan: an absolute path in a summary blocks the render" $?
