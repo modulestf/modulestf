@@ -28,8 +28,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # mtf-facts with fixture-check --level L2 and the curated aws_db_instance, pinned by a commit of its master.
-  MTF_FACTS_COMMIT: e01117fb275a7432ea73ed1b0eb9db658abb55de
+  # mtf-facts with L2 selection and evaluation, fixture-check --level L2 and the curated
+  # aws_db_instance, pinned by a commit of its master.
+  MTF_FACTS_COMMIT: 84d1cc3f650967bcb9e289a14b6ddfb9a6754537
 
 jobs:
   linux:

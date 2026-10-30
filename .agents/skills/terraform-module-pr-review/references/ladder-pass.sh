@@ -900,8 +900,12 @@ l1() { # trigger file, id: one run record
   local tf=$1 id=$2 F="$L/fixtures/$2" meta wrap addr side c out rc why t fx="" base="" head="" obsb="[]" obsh="[]" o
   local fixj nob='{"base":[],"head":[]}'
   LV=L1
-  # A dynamic block trigger carries only its for_each: when that is unchanged, the change is in
-  # the content, which no fixture holds, and evaluating the for_each would show no difference.
+  # A dynamic block trigger carries only its for_each. Unless the classifier says that is all
+  # that changed, or when it is unchanged, the change is in the iterator, labels or content,
+  # which no fixture holds, and evaluating the for_each would show no difference.
+  if jq -e '.category == "dynamic-block-change" and .for_each_only != true' "$tf" > /dev/null 2>&1; then
+    record "$id" unverifiable "the dynamic block changed beyond its for_each" "" "" "$nob"; return
+  fi
   if jq -e '.category == "dynamic-block-change" and .base_expr == .head_expr' "$tf" > /dev/null 2>&1; then
     record "$id" unverifiable "the for_each is unchanged; the change is in the content" "" "" "$nob"; return
   fi
@@ -1002,8 +1006,8 @@ while (my $l = <$f>) {
 exit(($runs > 0 && !$in) ? 0 : 1);
 '
 # The outcome of one terraform test -json run: "plan" with the plan of a run that passed with
-# no error, "error" when the run failed with no plan and every error is an invalid count or
-# for_each argument in subject.tf (the expression failing for these inputs), else "other".
+# no error, "error" when the run failed with no plan and every error lies in subject.tf (the
+# expression failing for these inputs, as at L1; validate ran first), else "other".
 TEST_JQ='
 [.[] | select(type == "object")] as $m
 | [$m[] | select(.type == "test_run" and .test_run.run == "ladder" and .test_run.progress == "complete") | .test_run.status] as $st
@@ -1011,7 +1015,7 @@ TEST_JQ='
 | [$m[] | select(.type == "test_plan") | .test_plan] as $pl
 | if $st == ["pass"] and ($err | length) == 0 and ($pl | length) == 1 then {kind: "plan", plan: $pl[0]}
   elif ($st | length) == 1 and $st[0] != "pass" and ($pl | length) == 0 and ($err | length) > 0
-    and all($err[]; (.summary == "Invalid for_each argument" or .summary == "Invalid count argument") and .range.filename == "subject.tf")
+    and all($err[]; .range.filename == "subject.tf")
   then {kind: "error"} else {kind: "other"} end'
 # One L2 run: the trigger's count or for_each expression on terraform_data.subject, the
 # inputs as at L1, terraform test with one plan-only run per case and side. The observation
@@ -1025,9 +1029,6 @@ l2() { # trigger file, id
   left 1 > /dev/null || { record "$id" unverifiable "budget" "" "" "$nob"; return; }
   attr="$(jq -r '.attribute // ""' "$tf")"
   [[ "$attr" =~ ^(count|for_each)$ ]] || { [[ "$attr" =~ ^[a-z0-9_.-]{1,64}$ ]] || attr=other; record "$id" unverifiable "no L2 template for attribute $attr" "" "" "$nob"; return; }
-  # The cases count against claims-eval's sweep cap together with L1's.
-  [ "$(jq --argjson cap "$SWEEP_CASES" '(.cases // [] | length) * (if (.levels | index("L1")) then 2 else 1 end) <= $cap' "$tf")" = true ] \
-    || { record "$id" unverifiable "no case budget left for L2" "" "" "$nob"; return; }
   mkdir -m 700 "$F" || { record "$id" unverifiable "fixture directory" "" "" "$nob"; return; }
   meta="$(perl -e "$FIX_PL" "$tf" "$TPL/l1.tf.tmpl" "$F" - "$attr" L2 2> /dev/null)" || meta='{"ok":false,"reason":"fixture builder failed"}'
   if [ "$(printf '%s' "$meta" | jq -r '.ok')" != true ]; then
@@ -1054,6 +1055,13 @@ l2() { # trigger file, id
     '. + {vars_sha256: $v}')"
   fx="$(printf 'base:%s\nhead:%s\n' "$base" "$head" | perl -MDigest::SHA=sha256_hex -0777 -ne 'print sha256_hex($_)')"
   fob="{\"base\":[],\"head\":[],\"fixture\":$fixj}"
+  # A static check first, as at L1: an undeclared name or a broken fixture fails here, so an
+  # error of a case below located in subject.tf is the expression's own.
+  for side in $(printf '%s' "$meta" | jq -r '.sides[]'); do
+    t="$(left 60)" || { record "$id" unverifiable "budget" "$fx" "" "$fob"; return; }
+    sbx exec "$F/$side" "$t" "$MIB" "$L/out/validate.txt" "$TF" validate -no-color; rc=$?
+    [ "$rc" -eq 0 ] || { record "$id" unverifiable "validate $side exited $rc" "$fx" "" "$fob"; return; }
+  done
   n="$(printf '%s' "$meta" | jq '.cases | length')"
   for ((ci = 0; ci < n; ci++)); do
     c="$(printf '%s' "$meta" | jq -r --argjson i "$ci" '.cases[$i].id')"

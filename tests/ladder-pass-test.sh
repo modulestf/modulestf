@@ -59,9 +59,10 @@ test)
   jl() { jq -cn "\$@"; }
   jl '{type:"version", terraform:"1.9.8"}'
   [ -f "\$S/test.badjson" ] && { echo 'not json'; exit 1; }
-  if [ "\$(jq -r .ladder_mode_0 "\$vf")" = unknown ] || [ -f "\$S/test.othererror" ]; then
+  if [ "\$(jq -r .ladder_mode_0 "\$vf")" = unknown ] || [ -f "\$S/test.othererror" ] || jq -e '.ladder_val_0 | type == "array" and any(. == null)' "\$vf" > /dev/null; then
     f=subject.tf; s="Invalid for_each argument"; grep -q 'count = ' subject.tf && s="Invalid count argument"
     [ -f "\$S/test.othererror" ] && { f=main.tf; s="Unsupported argument"; }
+    jq -e '.ladder_val_0 | type == "array" and any(. == null)' "\$vf" > /dev/null && s="Invalid for_each set argument"
     jl --arg f "\$f" --arg s "\$s" '{type:"diagnostic", diagnostic:{severity:"error", summary:\$s, range:{filename:\$f}}}'
     jl '{type:"test_run", test_run:{run:"ladder", progress:"complete", status:"error"}}'
     exit 1
@@ -294,9 +295,11 @@ trig 'x' 'y' '[]' wrapper-change '["L3"]'; run --coverage "$TMP/cov.json" > /dev
 check "a coverage object passes into the record" "$(q "$TMP/l.json" '.coverage.class == "partial" and (.coverage.examples | length) == 1')"
 
 # --- dynamic blocks: L1 on the for_each expression, never when only the content changed
-reset; trig 'var.vpc_security_group_ids' 'var.vpc_security_group_ids' '[]' dynamic-block-change; run > /dev/null
+reset; trig 'var.vpc_security_group_ids' 'var.vpc_security_group_ids' '[]' dynamic-block-change; jq '.triggers[0].for_each_only = true' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run > /dev/null
 check "a dynamic block whose for_each is unchanged is unverifiable, no fixture" "$([ "$(r0 reason)" = 'the for_each is unchanged; the change is in the content' ] && ! grep -q '^facts' "$ST/log"; echo $?)"
 reset; trig 'var.vpc_security_group_ids' 'compact(var.vpc_security_group_ids)' '[]' dynamic-block-change; run > /dev/null
+check "a dynamic block the classifier does not mark for_each_only is unverifiable, no fixture" "$([ "$(r0 reason)" = 'the dynamic block changed beyond its for_each' ] && ! grep -q '^facts' "$ST/log"; echo $?)"
+reset; trig 'var.vpc_security_group_ids' 'compact(var.vpc_security_group_ids)' '[]' dynamic-block-change; jq '.triggers[0].for_each_only = true' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run > /dev/null
 check "a dynamic block's for_each change runs at L1" "$([ "$(r0 level)" = L1 ] && [ "$(r0 state)" = ran ]; echo $?)"
 
 # --- L2: terraform test, plan only, on the instances of a count or for_each meta-argument
@@ -325,8 +328,12 @@ check "terraform test runs per case and side with the case var file, verbose JSO
 check "the L2 sandbox is the exec profile" "$(q2 '.observations.sandbox | .proven and (has("profile") | not)')"
 reset; trig2 count 'length(var.vpc_security_group_ids) + 1'; run > /dev/null
 check "a count change observes the number of instances" "$([ "$(q2 '.state == "ran" and .observations.base[0].value == 2 and .observations.base[1].value == 0 and .observations.base[2].error')" = 0 ] && grep -qx '  count = length(local.ladder_in_0) + 1' "$F2/head/subject.tf"; echo $?)"
+reset; trig2 for_each '' "$(printf '%s' "$CASES2" | jq -c '.[:1] + [{id:"null-element", inputs:{vpc_security_group_ids:{value:[null], unknown:false, null:false, omitted:false}}}]')"; run > /dev/null
+check "a null set element is the for_each set error observation at both revisions" "$(q2 '.state == "ran" and ([.observations.base[1], .observations.head[1]] | all(.case == "null-element" and .error))')"
 reset; trig2; : > "$ST/test.unknownvalue"; run > /dev/null
-check "an unknown planned value keeps the instance count as the length" "$(q2 '.state == "ran" and (.observations.base[0] | (.known | not) and (.wholly_unknown | not) and .length == 2 and .unknown_mask == {a:true, b:true})')"
+check "an unknown planned value keeps the instance count as the length, and the value with null there" "$(q2 '.state == "ran" and (.observations.base[0] | (.known | not) and (.wholly_unknown | not) and .length == 2 and .unknown_mask == {a:true, b:true} and .value == {a:null, b:null})')"
+reset; trig2; : > "$ST/validate.fail"; run > /dev/null
+check "a validate error makes L2 unverifiable before any test" "$([ "$(r2 reason)" = 'validate base exited 1' ] && [ ! -s "$ST/test-args.log" ]; echo $?)"
 reset; trig2; : > "$ST/test.othererror"; run > /dev/null
 check "any other test error makes L2 unverifiable, with a fixed reason" "$([ "$(r2 reason)" = 'test base typical exited 1' ]; echo $?)"
 reset; trig2; : > "$ST/test.noplan"; run > /dev/null
@@ -340,7 +347,9 @@ check "a fixture-check violation stops L2 before any test" "$([ "$(r2 reason)" =
 reset; trig2 name; run > /dev/null
 check "an attribute other than count or for_each has no L2 template" "$([ "$(r2 reason)" = 'no L2 template for attribute name' ]; echo $?)"
 reset; trig2 for_each '' "$(printf '%s' "$CASES2" | jq -c '[range(17) as $i | {id:"k\($i)", inputs:.[0].inputs}]')"; run > /dev/null
-check "L2 runs only when its cases and L1's fit the sweep cap" "$([ "$(r2 reason)" = 'no case budget left for L2' ]; echo $?)"
+check "L2 has its own cap of 32 cases: 17 cases at L1 and at L2 both run" "$(q2 '.state == "ran" and (.observations.base | length) == 17')"
+reset; trig2 for_each '' "$(printf '%s' "$CASES2" | jq -c '[range(33) as $i | {id:"k\($i)", inputs:.[0].inputs}]')"; run > /dev/null
+check "over 32 cases leaves L2 unverifiable" "$([ "$(r2 reason)" = 'over 32 cases' ]; echo $?)"
 reset; sed -i.bak 's/^denied ipv6 .*/open ipv6 tcp:x:443 connected/' "$ST/canary.txt"; trig2; run > /dev/null
 check "an unproven sandbox leaves L2 unverifiable" "$([ "$(r2 reason)" = 'sandbox unproven' ]; echo $?)"
 # The plan-only guard, end to end on a copy whose template asks for apply: refused before any test.
@@ -570,6 +579,23 @@ output "extra" {
       check "live: L2 base keys are the input, head keys upper-cased" "$(q2 '.observations.base[0].value == {a:"a", b:"b"} and .observations.head[0].value == {A:"A", B:"B"}')"
       check "live: L2 no instance for an empty input" "$(q2 '[.observations.base[1], .observations.head[1]] | all(.known and .value == {})')"
       check "live: L2 unknown keys are the for_each error at both revisions" "$(q2 '[.observations.base[2], .observations.head[2]] | all(.error)')"
+      # End to end: the classifier selects L2 for a for_each change, the ladder runs it on the
+      # classifier's own cases, and claims-eval reads the L2 runs.
+      E2="$TMP/e2e"; mkdir -p "$E2/base" "$E2/head"
+      for s in base head; do
+        fe='toset(var.names)'; [ "$s" = head ] && fe='toset([for n in var.names : upper(n)])'
+        printf 'variable "names" {\n  type = list(string)\n}\n\nresource "aws_iam_user" "this" {\n  for_each = %s\n  name     = each.key\n}\n' "$fe" > "$E2/$s/main.tf"
+      done
+      if ! PATH="$ORIGPATH" mtf-facts behaviour "$E2/head" --base "$E2/base" --json > "$E2/b.json" 2> /dev/null \
+        || [ "$(jq -c '.triggers[0].levels' "$E2/b.json" 2> /dev/null)" != '["L1","L2"]' ]; then
+        live_skip "this mtf-facts does not select L2 for a for_each change"
+      else
+        lp run "$LR" --behaviour "$E2/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" > "$TMP/live-e2e.out" 2>&1
+        check "live end to end: L2 ran on every case the classifier requires" "$(n=$(jq '.triggers[0].cases | length' "$E2/b.json"); q2 ".state == \"ran\" and .control == \"valid\" and (.observations.base | length) == $n and (.observations.head | length) == $n")"
+        check "live end to end: base keys against head keys" "$(q2 '(.observations.base[] | select(.case == "typical") | .value == {a:"a"}) and (.observations.head[] | select(.case == "typical") | .value == {A:"A"})')"
+        PATH="$ORIGPATH" mtf-facts claims-eval --behaviour "$E2/b.json" --ladder "$TMP/l.json" --head-sha "$HEAD" --base-sha "$BASE" --json > "$E2/ce.json" 2> /dev/null
+        check "live end to end: claims-eval lists the L2 key changes, unexplained" "$(q "$E2/ce.json" '.triggers[0] | .state == "unverifiable" and ([.changes[] | select(.level == "L2" and .case == "typical" and .attribute == "value" and (.explained | not))] | length) == 1')"
+      fi
     fi
     # L3: the real hashicorp/aws 6.70.0 from the pin file. Acquisition downloads it once
     # (outside the sandbox, to its pinned host, the hash checked) into LADDER_LIVE_CACHE.
