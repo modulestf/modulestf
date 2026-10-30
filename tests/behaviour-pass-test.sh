@@ -58,7 +58,7 @@ cat > "$TMP/claims-556.json" <<'EOF'
 EOF
 # Contract 4, with no ladder run: every trigger and claim unverifiable.
 cat > "$TMP/eval-556.json" <<'EOF'
-{"schema_version":1,
+{"schema_version":1,"capped":0,
  "triggers":[{"id":"T-001","state":"unverifiable","reason":"no L1 run"},{"id":"T-002","state":"unverifiable","reason":"no L1 or L3 run, no coverage"}],
  "claims":[{"claim_id":"C-1","state":"unverifiable","reason":"no L1 run"},{"claim_id":"C-2","state":"unverifiable","reason":"no L1 run"}],
  "discarded_claims":[{"claim_id":"C-3","reason":"plan predicates need L3 or L4"}]}
@@ -184,7 +184,7 @@ cmp -s "$TMP/ladder.json" "$TMP/ladder-seen.json"; check "a ladder record is pas
 # --- Inert: no trigger, the record says so and the run object is empty.
 setup
 printf '{"schema_version":1,"inert":true,"entries":[{"path":"README.md","change_kind":"modified","inert":true,"trigger_ids":[]}],"triggers":[],"capped":0}\n' > "$TMP/behaviour.out"
-printf '{"schema_version":1,"triggers":[],"claims":[],"discarded_claims":[]}\n' > "$TMP/eval.out"
+printf '{"schema_version":1,"capped":0,"triggers":[],"claims":[],"discarded_claims":[]}\n' > "$TMP/eval.out"
 printf '[{"filename":"README.md","status":"modified","additions":1,"deletions":1,"patch":"@@ -1 +1 @@\\n-a\\n+b"}]\n' > "$TMP/files-readme.json"
 DIFF="$TMP/files-readme.json" classify; evalp
 check "inert: the record" "$([ "$(cat "$O/record.txt")" = "behaviour: ran, 0 triggers, 0 over the cap, inert" ]; echo $?)"
@@ -193,6 +193,7 @@ check "inert: the run object" "$(q '. == {status: "ran", reason: null, triggers:
 # --- Capped triggers are carried.
 setup
 jq '.capped = 3' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
+jq '.capped = 3' "$TMP/eval-556.json" > "$TMP/eval.out"
 classify; evalp --claims "$TMP/claims-556.json"
 check "capped: the run object carries the count" "$(q '.capped == 3 and .status == "ran"')"
 check "capped: the record head line" "$([ "$(head -n 1 "$O/record.txt")" = "behaviour: ran, 2 triggers, 3 over the cap" ]; echo $?)"
@@ -299,6 +300,13 @@ check "changes: one record line each" $?
 ! grep -qF 'vpc_security_group_ids' "$O/record.txt"; check "changes: no input crosses" $?
 refuse_e "a change with a bad case id" '.triggers[0].changes = [{level: "L1", case: "a b", attribute: "value", explained: false, inputs: {}}]'
 refuse_e "a change with an unknown attribute" '.triggers[0].changes = [{level: "L1", case: "c", attribute: "colour", explained: false, inputs: {}}]'
+setup
+jq '.capped = 0 | .triggers[0].changes = [{level: "L1", case: "c1", attribute: "wholly_unknown", explained: false, inputs: {}}, {level: "L1", case: "c2", attribute: "unknown_mask", explained: false, inputs: {}}, {level: "L3", case: "c3", attribute: "error", explained: false, inputs: {}}]' "$TMP/eval-556.json" > "$TMP/eval.out"
+classify; evalp --claims "$TMP/claims-556.json"
+grep -qxF 'change T-001 L1 case c1 wholly_unknown: unexplained' "$O/record.txt" && grep -qxF 'change T-001 L3 case c3 error: unexplained' "$O/record.txt"
+check "changes: the wholly_unknown, unknown_mask and error attributes cross" $?
+refuse_e "a capped count other than the behaviour's" '.capped = 3'
+refuse_e "a capped count that is not a number" '.capped = "0"'
 
 # --- A path the record cannot carry unambiguously is refused.
 refuse_b "a path with a space" '.triggers[0].file = "a b.tf"'
