@@ -69,15 +69,16 @@ test)
   [ -f "\$S/test.noplan" ] || {
   cu=true; [ -f "\$S/canary.known" ] && cu=false
   up=false; grep -q 'upper(' subject.tf && up=true
-  jq -c --argjson up "\$up" --argjson cu "\$cu" --arg names "\$(grep -Eo 'output "canary_ladder_ue?_[0-9]+"' main.tf | cut -d'"' -f2)" \
+  uv=false; [ -f "\$S/test.unknownvalue" ] && uv=true
+  jq -c --argjson up "\$up" --argjson uv "\$uv" --argjson cu "\$cu" --arg names "\$(grep -Eo 'output "canary_ladder_ue?_[0-9]+"' main.tf | cut -d'"' -f2)" \
     --argjson cnt "\$(grep -q 'count = ' subject.tf && echo true || echo false)" '
     ([.ladder_val_0[] | if \$up then ascii_upcase else . end]) as \$k
     | {type:"test_plan", test_plan:{output_changes:({canary_known:{after:"known", after_unknown:false}}
         + ([\$names | split("\n")[] | select(. != "") | {(.): {after_unknown: \$cu}}] | add // {})),
        resource_changes:(if \$cnt then [range(\$k | length) as \$i | {address:"terraform_data.subject[\(\$i)]", mode:"managed", index:\$i,
            change:{actions:["create"], after:{input:null}, after_unknown:{id:true, output:true}, after_sensitive:{}}}]
-         else [\$k[] | {address:"terraform_data.subject[\"\(.)\"]", mode:"managed", index:., change:{actions:["create"], after:{input:.},
-           after_unknown:{id:true, output:true}, after_sensitive:{}}}] end)}}' "\$vf"; }
+         else [\$k[] | {address:"terraform_data.subject[\"\(.)\"]", mode:"managed", index:., change:{actions:["create"], after:{input:(if \$uv then null else . end)},
+           after_unknown:{id:true, output:true, input:\$uv}, after_sensitive:{}}}] end)}}' "\$vf"; }
   jl '{type:"test_run", test_run:{run:"ladder", progress:"complete", status:"pass"}}'
   exit 0 ;;
 plan)
@@ -155,7 +156,7 @@ good_canary() {
     echo "end canary"
   } > "$ST/canary.txt"
 }
-reset() { rm -f "$ST"/{log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan}; good_canary; }
+reset() { rm -f "$ST"/{log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan,test.unknownvalue}; good_canary; }
 BASE=d72cba285514b5e2e83bea7dd1272c1c206a4f64
 HEAD=3b19adcd09b08528221d3286b30338b1e0cf6f16
 RUND="$TMP/runs/pr-review.abcdef"; mkdir -p "$RUND/clone"
@@ -324,6 +325,8 @@ check "terraform test runs per case and side with the case var file, verbose JSO
 check "the L2 sandbox is the exec profile" "$(q2 '.observations.sandbox | .proven and (has("profile") | not)')"
 reset; trig2 count 'length(var.vpc_security_group_ids) + 1'; run > /dev/null
 check "a count change observes the number of instances" "$([ "$(q2 '.state == "ran" and .observations.base[0].value == 2 and .observations.base[1].value == 0 and .observations.base[2].error')" = 0 ] && grep -qx '  count = length(local.ladder_in_0) + 1' "$F2/head/subject.tf"; echo $?)"
+reset; trig2; : > "$ST/test.unknownvalue"; run > /dev/null
+check "an unknown planned value keeps the instance count as the length" "$(q2 '.state == "ran" and (.observations.base[0] | (.known | not) and (.wholly_unknown | not) and .length == 2 and .unknown_mask == {a:true, b:true})')"
 reset; trig2; : > "$ST/test.othererror"; run > /dev/null
 check "any other test error makes L2 unverifiable, with a fixed reason" "$([ "$(r2 reason)" = 'test base typical exited 1' ]; echo $?)"
 reset; trig2; : > "$ST/test.noplan"; run > /dev/null

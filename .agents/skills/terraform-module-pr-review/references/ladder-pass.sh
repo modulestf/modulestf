@@ -865,7 +865,9 @@ def subj: if $wrap == "l3" then (first(.resource_changes[]? | select(.address ==
       | ($u == true) as $whole | (($u | anytrue) | not) as $known
       | (($s.after | tojson | length) > 4096) as $big
       | {case: $cs.id, error: false, known: $known, wholly_unknown: $whole, unknown_inputs: $cs.unknown_inputs, inputs: $cs.inputs,
-         length: (if $whole then null elif ($s.after | type) == "array" then ($s.after | length)
+         # At L2 the instance keys are always known (an unknown key fails the plan), so the
+         # number of instances is the length even when a planned value is unknown.
+         length: (if $whole then null elif $wrap == "l2-for_each" or ($s.after | type) == "array" then ($s.after | length)
                   elif ($s.after | type) == "object" and $known then ($s.after | length) else null end),
          sensitive: $sens, redacted: (($whole | not) and ($sens | not) and $big),
          unknown_mask: (if $known then false elif ($u | tojson | length) > 4096 then null else $u end),
