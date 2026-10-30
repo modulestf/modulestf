@@ -1,8 +1,8 @@
 #!/bin/bash
 # Self-check for the host render of terraform-module-pr-review (references/render-comment.sh and
 # render-comment.jq): the worked examples of comment-format.md byte for byte, the verdict of
-# every rule of verdict.md's ladder and the clamps on the proposed event, the leak scan, the
-# at-mention step and refused inputs. A negative self-check mutates temp copies of the script
+# every rule of verdict.md's ladder and the clamps on the proposed event, the What to do section
+# and the Fix block of grouping rule 7, the leak scan, the at-mention step and refused inputs. A negative self-check mutates temp copies of the script
 # and confirms each weakened copy is caught. No network. Needs bash and jq.
 # Run: tests/render-comment-test.sh
 set -uo pipefail
@@ -92,6 +92,12 @@ empty_out() { [ -z "$(ls -A "$O")" ]; }
 # The Nth markdown fence of comment-format.md, without its fence lines.
 fence() { awk -v want="$1" '/^```markdown$/ { k++; if (k == want) { on = 1; next } } on && /^```$/ { exit } on' "$CF"; }
 nofix() { grep -v '^ *- Fix: '; }
+# Run 1 of pull request 410 predates the Fix lines, the Fix blocks of grouping rule 7 and the
+# What to do section, so all three are removed from a render before it is compared with run 1.
+run1() {
+  perl -0pe 's/### What to do\n\n.*?\n\n(?=### Findings)//s;
+    s/\n\n<details><summary>Fix for each location \(\d+\)<\/summary>\n\n.*?\n\n<\/details>(?:\n(?=\n- ))?//gs' | nofix
+}
 
 # --- Worked example (comment-format.md, Worked Example): three renders of one change.
 
@@ -112,7 +118,7 @@ check "worked example 2: inconclusive at rule 4, proposes COMMENT" "$([ "$(verdi
 
 fence 8 | sed -n 1,2p > "$TMP/assess-worked3.txt"
 render "$(printf '%s\n' "$WL" | list worked3)" "" "" "" "$TMP/assess-worked3.txt"
-awk '/^### / { exit } { print }' "$O/comment.md" | sed '$d' > "$TMP/worked3-head.md"
+awk '/^### Findings$/ { exit } { print }' "$O/comment.md" | sed '$d' > "$TMP/worked3-head.md"
 check "worked example 3: the body up to its findings byte for byte" "$(cmp -s "$TMP/worked3-head.md" <(fence 8); echo $?)"
 check "worked example 3: approve with nits at rule 7" "$([ "$(verdict)" = "approve with nits COMMENT" ] && [ "$(rule)" = 7 ]; echo $?)"
 
@@ -152,13 +158,13 @@ n=0
 check "pull request 410: 30 findings, 3 HIGH, 16 MEDIUM, 11 LOW" "$(jq -e 'length == 30 and ([.[] | .severity] | group_by(.) | map(length)) == [3, 11, 16]' "$TMP/pr410.json" > /dev/null; echo $?)"
 
 jq -r -L "$REF" 'include "render-comment"; findings_md(2; 1000; "")' "$TMP/pr410.json" |
-  awk '/^\*\*MEDIUM\*\*$/ { on = 1 } on' | nofix > "$TMP/grouped.md"
+  awk '/^\*\*MEDIUM\*\*$/ { on = 1 } on' | run1 > "$TMP/grouped.md"
 check "pull request 410: grouped MEDIUM and LOW byte for byte" "$(cmp -s "$TMP/grouped.md" <(fence 2); echo $?)"
 
 fence 5 | sed -n 1p > "$TMP/assess-410.txt"
 H410="$(host pr410 '.conversation.considered = 1')"
 render "$TMP/pr410.json" "$H410" "" "" "$TMP/assess-410.txt"
-check "pull request 410: grouped and collapsed body byte for byte" "$(nofix < "$O/comment.md" | cmp -s - <(fence 5); echo $?)"
+check "pull request 410: grouped and collapsed body byte for byte" "$(run1 < "$O/comment.md" | cmp -s - <(fence 5); echo $?)"
 check "pull request 410: block at rule 2" "$([ "$(verdict)" = "block REQUEST_CHANGES" ] && [ "$(rule)" = 2 ]; echo $?)"
 check "pull request 410: findings.json in body order with the seven fields" "$(jq -e --slurpfile in "$TMP/pr410.json" '
   length == 30 and (map(.id) | sort) == ($in[0] | map(.id) | sort)
@@ -173,10 +179,28 @@ n=0
 one() { f "$@" | list "case$n"; } # one finding -> file
 pair() { { f "$1" "$2" a.tf 1 "First." "Fix."; f "$3" "$4" b.tf 2 "Second." "Fix."; } | list "case$n"; }
 NONE="$(printf '' | list none)"
+# The What to do section of the last render, without trailing blank lines; empty when absent.
+todo() {
+  awk '/^### What to do$/ { on = 1; print; next } on && /^### / { exit }
+    on { if ($0 == "") b++; else { while (b > 0) { print ""; b-- } print } }' "$O/comment.md"
+}
+# The four facts comment-format.md, What to Do, says the ladder makes hold. The renderer does
+# not check them, so every ladder case does.
+invariant() {
+  case "$(rule)" in
+    1|2|3|5|6) todo | grep -q '^- \[ \] ' ;;
+    7) jq -e 'all(.[]; .severity == "LOW")' "$O/findings.json" > /dev/null && ! todo | grep -q '^- \[ \] ' ;;
+    8) jq -e 'all(.[]; .rule_id == "review.tool-disputed")' "$O/findings.json" > /dev/null && [ -z "$(todo)" ] ;;
+    0) todo | grep -q '^- `[^`]*`.* restores compatibility\.$' ;;
+    4) [ -n "$(todo)" ] ;;
+    *) false ;;
+  esac
+}
 ladder() { # name, expected "verdict EVENT", expected rule, render args...
   local name="$1" want="$2" r="$3"; shift 3
   render "$@"
   check "ladder: $name -> $want, rule $r" "$([ "$ST" = 0 ] && [ "$(verdict)" = "$want" ] && [ "$(rule)" = "$r" ]; echo $?)"
+  check "ladder: $name, What to do invariant" "$(invariant; echo $?)"
 }
 ladder "a CRITICAL compat break alone" "hold for the next major COMMENT" 0 "$(pair compat.output-removed CRITICAL structure.grouping MEDIUM)"
 ladder "a CRITICAL compat break and a HIGH non-compat finding" "block REQUEST_CHANGES" 1 "$(pair compat.output-removed CRITICAL structure.docs-contradict-code HIGH)"
@@ -235,7 +259,7 @@ n=0
 { for i in 1 2 3 4 5 6 7 8 9 10; do f structure.argument-order LOW "f$i.tf" 1 "L$i." "F."; done
   f review.tool-disputed LOW a.tf 1 "D." "F."; } | list ten > /dev/null
 render "$TMP/ten.json"
-check "collapse: a disputed note does not count toward the threshold" "$([ "$ST" = 0 ] && ! grep -q '<details>' "$O/comment.md"; echo $?)"
+check "collapse: a disputed note does not count toward the threshold" "$([ "$ST" = 0 ] && ! grep -q '<details><summary><code>' "$O/comment.md"; echo $?)"
 
 # --- Sections 6 and 8 from host.json.
 
@@ -331,7 +355,7 @@ t_fold_medium; check "collapse: MEDIUM highest stays in full, LOW folds with its
 n=0
 { for i in 1 2 3 4 5 6 7 8 9 10 11; do f structure.argument-order LOW "f$i.tf" 1 "L$i." "F."; done; } | list allow > /dev/null
 render "$TMP/allow.json"
-check "collapse: over 10 findings all LOW stay in full" "$([ "$(rule)" = 7 ] && ! grep -q '<details>' "$O/comment.md" && [ "$(grep -c '^- `structure.argument-order` (11):$' "$O/comment.md")" = 1 ]; echo $?)"
+check "collapse: over 10 findings all LOW stay in full" "$([ "$(rule)" = 7 ] && ! grep -q '<details><summary><code>' "$O/comment.md" && [ "$(grep -c '^- `structure.argument-order` (11):$' "$O/comment.md")" = 1 ]; echo $?)"
 
 # --- Every fixed line of sections 5 and 6 at once, the whole body compared.
 
@@ -350,6 +374,12 @@ The change looks right.
 **Changes requested before merge.**
 
 Failing host signal: mergeability. A failing host signal blocks merge (ladder rule 3).
+
+### What to do
+
+To make this mergeable, resolve each checklist item below and push.
+
+- [ ] Resolve the merge conflict.
 
 ### Checks that could not run
 
@@ -500,6 +530,271 @@ t_many_gaps() {
 }
 t_many_gaps; check "more than 100 verification gaps render the first 100 and a count of the rest" "$?"
 
+# --- What to do (comment-format.md, What to Do) and the Fix block of grouping rule 7.
+
+# todo_is name, expected lines...: the What to do section of the last render, byte for byte.
+todo_is() { local name="$1"; shift; check "what to do: $name" "$([ "$ST" = 0 ] && todo | cmp -s - <(printf '%s\n' "$@"); echo $?)"; }
+LEAD_BLOCK='To make this mergeable, resolve each checklist item below and push.'
+LEAD_4='This review is incomplete, so a later run may add items. The items below are known.'
+LEAD_7='Nothing blocks merge. The items below are optional.'
+LEAD_0='This change is breaking. Merge it in the next major release. To merge it sooner, restore compatibility with the fixes named below. Any checklist items below also block merge.'
+GEN='Documentation tables are generated. After the edits above, run `pre-commit run -a` and commit the result. Do not edit them by hand.'
+
+# Pull request 88 of terraform-aws-modules/terraform-aws-cloudwatch: six MEDIUM findings of one
+# rule, rule 6, a Fix block, and five fixes that name generated content. The assessment is pinned.
+pr88() { # example directory, old floor, "three times " or "", what goes stale
+  f structure.version-floor-understated MEDIUM "examples/$1/versions.tf" 7 \
+    "This example declares hashicorp/aws >= $2 while the modules/log-group it calls $3now declares >= 6.25, so the example states a lower floor than its callee; the two sets still intersect, so it initializes." \
+    "In the terraform block of examples/$1/versions.tf, set required_providers.aws version to \">= 6.25\", the floor modules/log-group declares, per code-conventions.md \"A caller does not declare less than what it calls\". Generated content made stale: $4"
+}
+t_pr88() {
+  { pr88 complete-log-metric-filter-and-alarm 5.81 "" "the terraform-docs region of examples/complete-log-metric-filter-and-alarm/README.md."
+    pr88 log-account-policy 5.81 "three times " "the terraform-docs region of examples/log-account-policy/README.md."
+    pr88 log-anomaly-detector 5.81 "" "the terraform-docs region of examples/log-anomaly-detector/README.md."
+    pr88 log-group-with-data-protection-policy 5.0 "three times " "the terraform-docs region of examples/log-group-with-data-protection-policy/README.md."
+    pr88 log-subscription-filter 5.81 "" "none, the directory has no README.md."
+    pr88 query-definition 5.81 "" "the terraform-docs region of examples/query-definition/README.md."
+  } | list pr88 > /dev/null
+  printf '%s\n' 'The change adds `deletion_protection_enabled` to `modules/log-group` and `wrappers/log-group`, and the pass-through, the wrapper line and the generated docs match the code. The `>= 6.25` floor is declared as breaking and names the new floor. What is missing is the same floor in the six examples that call `modules/log-group`. `terraform validate` passed in `examples/log-group-with-log-stream` with the providers this change declares, and a `plan` of that example planned: 7 to add, 0 to change, 0 to destroy.' > "$TMP/assess-88.txt"
+  render "$TMP/pr88.json" "" "" "" "$TMP/assess-88.txt"
+  cat > "$TMP/pr88.md" <<'EOF'
+The change adds `deletion_protection_enabled` to `modules/log-group` and `wrappers/log-group`, and the pass-through, the wrapper line and the generated docs match the code. The `>= 6.25` floor is declared as breaking and names the new floor. What is missing is the same floor in the six examples that call `modules/log-group`. `terraform validate` passed in `examples/log-group-with-log-stream` with the providers this change declares, and a `plan` of that example planned: 7 to add, 0 to change, 0 to destroy.
+
+**Changes requested before merge.**
+
+Six MEDIUM findings are open. Any MEDIUM finding blocks merge (ladder rule 6).
+
+### What to do
+
+To make this mergeable, resolve each checklist item below and push.
+
+- [ ] `structure.version-floor-understated` (6): apply the Fix at `examples/complete-log-metric-filter-and-alarm/versions.tf:7`, `examples/log-account-policy/versions.tf:7`, `examples/log-anomaly-detector/versions.tf:7`, `examples/log-group-with-data-protection-policy/versions.tf:7`, `examples/log-subscription-filter/versions.tf:7`, `examples/query-definition/versions.tf:7`.
+- [ ] Documentation tables are generated. After the edits above, run `pre-commit run -a` and commit the result. Do not edit them by hand.
+
+### Findings
+
+**MEDIUM**
+
+- `structure.version-floor-understated` (6):
+  - `examples/complete-log-metric-filter-and-alarm/versions.tf:7` - This example declares hashicorp/aws >= 5.81 while the modules/log-group it calls now declares >= 6.25, so the example states a lower floor than its callee; the two sets still intersect, so it initializes.
+  - `examples/log-account-policy/versions.tf:7` - This example declares hashicorp/aws >= 5.81 while the modules/log-group it calls three times now declares >= 6.25, so the example states a lower floor than its callee; the two sets still intersect, so it initializes.
+  - `examples/log-anomaly-detector/versions.tf:7` - This example declares hashicorp/aws >= 5.81 while the modules/log-group it calls now declares >= 6.25, so the example states a lower floor than its callee; the two sets still intersect, so it initializes.
+  - `examples/log-group-with-data-protection-policy/versions.tf:7` - This example declares hashicorp/aws >= 5.0 while the modules/log-group it calls three times now declares >= 6.25, so the example states a lower floor than its callee; the two sets still intersect, so it initializes.
+  - `examples/log-subscription-filter/versions.tf:7` - This example declares hashicorp/aws >= 5.81 while the modules/log-group it calls now declares >= 6.25, so the example states a lower floor than its callee; the two sets still intersect, so it initializes.
+  - `examples/query-definition/versions.tf:7` - This example declares hashicorp/aws >= 5.81 while the modules/log-group it calls now declares >= 6.25, so the example states a lower floor than its callee; the two sets still intersect, so it initializes.
+
+<details><summary>Fix for each location (6)</summary>
+
+- `examples/complete-log-metric-filter-and-alarm/versions.tf:7` - Fix: In the terraform block of examples/complete-log-metric-filter-and-alarm/versions.tf, set required_providers.aws version to ">= 6.25", the floor modules/log-group declares, per code-conventions.md "A caller does not declare less than what it calls". Generated content made stale: the terraform-docs region of examples/complete-log-metric-filter-and-alarm/README.md.
+- `examples/log-account-policy/versions.tf:7` - Fix: In the terraform block of examples/log-account-policy/versions.tf, set required_providers.aws version to ">= 6.25", the floor modules/log-group declares, per code-conventions.md "A caller does not declare less than what it calls". Generated content made stale: the terraform-docs region of examples/log-account-policy/README.md.
+- `examples/log-anomaly-detector/versions.tf:7` - Fix: In the terraform block of examples/log-anomaly-detector/versions.tf, set required_providers.aws version to ">= 6.25", the floor modules/log-group declares, per code-conventions.md "A caller does not declare less than what it calls". Generated content made stale: the terraform-docs region of examples/log-anomaly-detector/README.md.
+- `examples/log-group-with-data-protection-policy/versions.tf:7` - Fix: In the terraform block of examples/log-group-with-data-protection-policy/versions.tf, set required_providers.aws version to ">= 6.25", the floor modules/log-group declares, per code-conventions.md "A caller does not declare less than what it calls". Generated content made stale: the terraform-docs region of examples/log-group-with-data-protection-policy/README.md.
+- `examples/log-subscription-filter/versions.tf:7` - Fix: In the terraform block of examples/log-subscription-filter/versions.tf, set required_providers.aws version to ">= 6.25", the floor modules/log-group declares, per code-conventions.md "A caller does not declare less than what it calls". Generated content made stale: none, the directory has no README.md.
+- `examples/query-definition/versions.tf:7` - Fix: In the terraform block of examples/query-definition/versions.tf, set required_providers.aws version to ">= 6.25", the floor modules/log-group declares, per code-conventions.md "A caller does not declare less than what it calls". Generated content made stale: the terraform-docs region of examples/query-definition/README.md.
+
+</details>
+EOF
+  [ "$ST" = 0 ] && [ "$(rule)" = 6 ] && cmp -s "$O/comment.md" "$TMP/pr88.md"
+}
+t_pr88; check "what to do: pull request 88, the whole body byte for byte" $?
+
+HI="$(f structure.docs-contradict-code HIGH a.tf 1 "S." "F." | list wt-hi)"
+render "$HI" "" "$(checks wt-fail fail)"
+todo_is "rule 2 and a failing check" '### What to do' '' "$LEAD_BLOCK" '' '- [ ] Fix the failing checks.' \
+  '- [ ] `structure.docs-contradict-code`: apply the Fix at `a.tf:1`.'
+render "$HI" "$(host wt-conflict '.signals.mergeability = "fail" | .unresolved_threads = [{path: "a.tf", line: 1}, {path: "b.tf", line: null}]')"
+todo_is "rule 2, a merge conflict and two open threads" '### What to do' '' "$LEAD_BLOCK" '' '- [ ] Resolve the merge conflict.' \
+  '- [ ] Resolve the 2 open review threads.' '- [ ] `structure.docs-contradict-code`: apply the Fix at `a.tf:1`.'
+render "$NONE" "$(host wt-r3 '.signals.mergeability = "fail" | .signals.review_decision = "fail"')" "$(checks wt-r3 fail)"
+todo_is "rule 3 alone, every failing signal in order" '### What to do' '' "$LEAD_BLOCK" '' '- [ ] Fix the failing checks.' \
+  '- [ ] Resolve the merge conflict.' '- [ ] Address the requested changes.'
+t_r4() {
+  { f review.check-not-run MEDIUM . null "Check B did not run." "no code change: none."
+    f structure.grouping LOW a.tf 1 "S." "F. Generated content made stale: the terraform-docs region of README.md."
+  } | list wt-r4 > /dev/null
+  render "$TMP/wt-r4.json" "$(host wt-r4 '.signals = {threads: "unknown", review_decision: "unknown", mergeability: "unknown"}
+      | .could_not_run = [{kind: "prose-truncated"}]')" "$(checks wt-r4 unknown)" \
+    "$(runf wt-r4 '.triage = true | .verify_gaps = [{dir: "examples/a", reason: "init failed"}]')"
+  [ "$(rule)" = 4 ]
+}
+t_r4; check "what to do: rule 4 setup" $?
+# The review.* finding is no item of its own: the gaps line counts it, with the could_not_run
+# entry and the example that did not verify.
+todo_is "rule 4 with every unknown, triage and a check-not-run finding" '### What to do' '' "$LEAD_4" '' \
+  '- Optional: `structure.grouping` at `a.tf:1`.' "- $GEN" \
+  '- This was a triage run. The full review has not run.' '- Check results could not be read or are still running.' \
+  '- Review thread resolution could not be read.' '- The reviews could not be read.' '- Mergeability could not be read.' \
+  '- 3 checks could not run; see Checks that could not run.'
+render "$(f review.check-not-run LOW . null "Check B did not run." "no code change: none." | list wt-r4c)"
+todo_is "rule 4 with a LOW review finding, counted once and no Optional item" '### What to do' '' "$LEAD_4" '' \
+  '- 1 check could not run; see Checks that could not run.'
+t_r4_threads() { render "$NONE" "$H2"; [ "$(rule)" = 4 ]; }
+t_r4_threads
+todo_is "rule 4, thread resolution unknown is not also counted as a gap" '### What to do' '' "$LEAD_4" '' \
+  '- Review thread resolution could not be read.'
+render "$({ f review.path-missing MEDIUM a.tf null "P." "no code change: none."; f structure.grouping MEDIUM b.tf 2 "S." "F."; } | list wt-rev6)"
+todo_is "a blocking review group is no item" '### What to do' '' "$LEAD_BLOCK" '' '- [ ] `structure.grouping`: apply the Fix at `b.tf:2`.'
+# A review.* finding alone at a blocking severity leaves no item: the lead stands alone. The
+# ladder invariant does not hold here; comment-format.md, What to Do, names the exception.
+render "$(f review.untrusted-instruction HIGH . null "U." "no code change: none." | list wt-rev2)"
+todo_is "a HIGH review finding alone leaves the lead with no item" '### What to do' '' "$LEAD_BLOCK"
+render "$(f structure.grouping LOW a.tf 1 "S." "F. Generated content made stale: README.md." | list wt-r4b)" "" "" "$(runf wt-r4b '.triage = true')"
+todo_is "rule 4 with no checkbox above it leaves item e a bullet" '### What to do' '' "$LEAD_4" '' \
+  '- Optional: `structure.grouping` at `a.tf:1`.' "- $GEN" '- This was a triage run. The full review has not run.'
+render "$(f structure.grouping MEDIUM a.tf 1 "S." "F." | list wt-r5)" "$(host wt-r5 '.unresolved_threads = [{path: "z.tf", line: 2}]')"
+todo_is "rule 5 with one thread and a MEDIUM finding" '### What to do' '' "$LEAD_BLOCK" '' '- [ ] Resolve the open review thread.' \
+  '- [ ] `structure.grouping`: apply the Fix at `a.tf:1`.'
+render "$({ f structure.grouping LOW a.tf 1 "S." "F."; f structure.argument-order LOW b.tf null "T." "G."
+  f structure.argument-order LOW c.tf 3 "U." "H."; } | list wt-r7)"
+todo_is "rule 7, LOW only, a null line and one and two findings" '### What to do' '' "$LEAD_7" '' \
+  '- Optional: `structure.grouping` at `a.tf:1`.' '- Optional: `structure.argument-order` (2) at `b.tf`, `c.tf:3`.'
+R0="$({ f compat.output-removed CRITICAL a.tf 1 "S." "F. Generated content made stale: the terraform-docs region of README.md."
+  f compat.output-removed CRITICAL b.tf 2 "T." "G."; f compat.variable-removed HIGH c.tf null "U." "H."
+  f structure.grouping LOW d.tf 4 "V." "I."; } | list wt-r0)"
+render "$R0"
+todo_is "rule 0, the groups as plain bullets and item e a bullet" '### What to do' '' "$LEAD_0" '' \
+  '- `compat.output-removed` (2): the Fix at `a.tf:1`, `b.tf:2` restores compatibility.' \
+  '- `compat.variable-removed`: the Fix at `c.tf` restores compatibility.' '- Optional: `structure.grouping` at `d.tf:4`.' "- $GEN"
+render "$R0" "" "$(checks wt-r0 fail)"
+todo_is "rule 0 with a failing check, which makes item e a checkbox" '### What to do' '' "$LEAD_0" '' '- [ ] Fix the failing checks.' \
+  '- `compat.output-removed` (2): the Fix at `a.tf:1`, `b.tf:2` restores compatibility.' \
+  '- `compat.variable-removed`: the Fix at `c.tf` restores compatibility.' '- Optional: `structure.grouping` at `d.tf:4`.' "- [ ] $GEN"
+R0M="$(jq '. + [{id: "F-900", rule_id: "structure.flag-polarity", severity: "MEDIUM", file: "e.tf", line: 5, summary: "W.", suggested_fix: "J.", source: "llm"}]' "$TMP/wt-r0.json" > "$TMP/wt-r0m.json"; echo "$TMP/wt-r0m.json")"
+render "$R0M"
+todo_is "rule 0, a MEDIUM non-compat group is a checkbox and makes item e one" '### What to do' '' "$LEAD_0" '' \
+  '- `compat.output-removed` (2): the Fix at `a.tf:1`, `b.tf:2` restores compatibility.' \
+  '- `compat.variable-removed`: the Fix at `c.tf` restores compatibility.' '- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.' \
+  '- Optional: `structure.grouping` at `d.tf:4`.' "- [ ] $GEN"
+render "$NONE"
+check "what to do: rule 8 renders no section" "$([ "$(rule)" = 8 ] && ! grep -q 'What to do' "$O/comment.md"; echo $?)"
+render "$(f review.tool-disputed LOW a.tf 1 "D." "F. Generated content made stale: README.md." | list wt-r8d)"
+check "what to do: rule 8 with a disputed note renders no section" "$([ "$(rule)" = 8 ] && ! grep -q 'What to do' "$O/comment.md"; echo $?)"
+render "$({ f structure.docs-contradict-code HIGH a.tf 1 "S." "F."; f structure.grouping MEDIUM b.tf 2 "T." "G."
+  f structure.grouping MEDIUM c.tf 3 "U." "H."; f structure.argument-order LOW d.tf 4 "V." "I."; } | list wt-mixed)"
+todo_is "mixed blocking and LOW groups under block" '### What to do' '' "$LEAD_BLOCK" '' \
+  '- [ ] `structure.docs-contradict-code`: apply the Fix at `a.tf:1`.' '- [ ] `structure.grouping` (2): apply the Fix at `b.tf:2`, `c.tf:3`.' \
+  '- Optional: `structure.argument-order` at `d.tf:4`.'
+
+# Commit and repository targets: the host render takes a pull request only, so the rule that
+# they carry no What to do section is held in comment-format.md, under each target's heading.
+t_targets() {
+  awk '/^## A Commit Target$/ { on = 1; next } on && /^## / { exit } on' "$CF" | grep -qF 'No What to do section renders, heading included: it is for a pull request only.' &&
+    awk '/^## A Repository Target$/ { on = 1; next } on && /^## / { exit } on' "$CF" | grep -qF 'No What to do section renders either, as for a commit.'
+}
+t_targets; check "what to do: commit and repository targets render no section" $?
+
+# Locations: eight are listed in full, past eight the count of the rest.
+locs_case() { # count of findings -> renders one LOW group of that many locations
+  local i; for i in $(seq 1 "$1"); do f structure.argument-order LOW "f$i.tf" 1 "S." "F."; done | list "wt-loc$1" > /dev/null
+  render "$TMP/wt-loc$1.json"
+}
+L8='`f1.tf:1`, `f2.tf:1`, `f3.tf:1`, `f4.tf:1`, `f5.tf:1`, `f6.tf:1`, `f7.tf:1`, `f8.tf:1`'
+locs_case 8; todo_is "eight locations, all listed" '### What to do' '' "$LEAD_7" '' "- Optional: \`structure.argument-order\` (8) at $L8."
+locs_case 9; todo_is "nine locations, the ninth counted" '### What to do' '' "$LEAD_7" '' "- Optional: \`structure.argument-order\` (9) at $L8, and 1 more."
+locs_case 10; todo_is "ten locations, two counted" '### What to do' '' "$LEAD_7" '' "- Optional: \`structure.argument-order\` (10) at $L8, and 2 more."
+
+# Item e: which phrases add it.
+stale_case() { # name, expected 0 (item) or 1 (none), fixes...
+  local name="$1" want="$2" i=0 fx; shift 2
+  for fx in "$@"; do i=$((i + 1)); f structure.grouping LOW "s$i.tf" 1 "S$i." "$fx"; done | list wt-stale > /dev/null
+  render "$TMP/wt-stale.json"
+  check "what to do: item e, $name" "$([ "$(rule)" = 7 ] && { todo | grep -qxF -- "- $GEN"; [ $? = "$want" ]; }; echo $?)"
+}
+stale_case "absent" 1 "Do it."
+stale_case "none at the end" 1 "Do it. Generated content made stale: none"
+stale_case "none." 1 "Do it. Generated content made stale: none."
+stale_case "none, no README" 1 "Do it. Generated content made stale: none, no README.md."
+stale_case "nonempty" 0 "Do it. Generated content made stale: nonempty."
+stale_case "None" 0 "Do it. Generated content made stale: None."
+stale_case "none of" 0 "Do it. Generated content made stale: none of the README.md regions."
+stale_case "two findings, one with a qualifying marker" 0 "Do it. Generated content made stale: none." "Do it. Generated content made stale: the terraform-docs region of README.md."
+stale_case "two findings, neither qualifying" 1 "Do it. Generated content made stale: none." "Do it."
+render "$(f structure.grouping MEDIUM a.tf 1 "S." "F. Generated content made stale: README.md." | list wt-ebox)"
+todo_is "item e as a checkbox under a blocking group" '### What to do' '' "$LEAD_BLOCK" '' '- [ ] `structure.grouping`: apply the Fix at `a.tf:1`.' "- [ ] $GEN"
+
+# The Fix block: two entries keep their Fix lines nested, three move them under the group.
+t_fold2() {
+  render "$({ f structure.grouping MEDIUM a.tf 1 "A." "Fix A."; f structure.grouping MEDIUM b.tf null "B." "Fix B."; } | list wt-f2)"
+  awk '/^### Findings$/ { on = 1; getline; next } on' "$O/comment.md" | cmp -s - <(printf '%s\n' '**MEDIUM**' '' \
+    '- `structure.grouping` (2):' '  - `a.tf:1` - A.' '    - Fix: Fix A.' '  - `b.tf` - B.' '    - Fix: Fix B.')
+}
+t_fold2; check "fix block: a group of two entries keeps its Fix lines nested" $?
+t_fold3() {
+  render "$({ f structure.argument-order MEDIUM z.tf 9 "Z." "Fix Z."
+    f structure.grouping MEDIUM a.tf 1 "A." "Fix A."; f structure.grouping MEDIUM b.tf null "B." "Fix B."
+    f structure.grouping MEDIUM c.tf 3 "C." "Fix C."; f structure.grouping MEDIUM d.tf 4 "C." "Fix C."
+    f structure.flag-polarity MEDIUM e.tf 5 "E." "Fix E."; } | list wt-f3)"
+  cat > "$TMP/wt-f3.md" <<'EOF'
+### What to do
+
+To make this mergeable, resolve each checklist item below and push.
+
+- [ ] `structure.argument-order`: apply the Fix at `z.tf:9`.
+- [ ] `structure.grouping` (4): apply the Fix at `a.tf:1`, `b.tf`, `c.tf:3`, `d.tf:4`.
+- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.
+
+### Findings
+
+**MEDIUM**
+
+- `structure.argument-order` - `z.tf:9` - Z.
+  - Fix: Fix Z.
+- `structure.grouping` (4):
+  - `a.tf:1` - A.
+  - `b.tf` - B.
+  - `c.tf:3`, `d.tf:4` - C.
+
+<details><summary>Fix for each location (4)</summary>
+
+- `a.tf:1` - Fix: Fix A.
+- `b.tf` - Fix: Fix B.
+- `c.tf:3`, `d.tf:4` - Fix: Fix C.
+
+</details>
+
+- `structure.flag-polarity` - `e.tf:5` - E.
+  - Fix: Fix E.
+EOF
+  awk '/^### What to do$/ { on = 1 } on' "$O/comment.md" | cmp -s - "$TMP/wt-f3.md"
+}
+t_fold3; check "fix block: a group of three entries moves its Fix lines into one block, byte for byte" $?
+unfolded() { # name, the third finding's file, summary, fix
+  render "$({ f structure.grouping LOW a.tf 1 "A." "Fix A."; f structure.grouping LOW b.tf 2 "B." "Fix B."
+    f structure.grouping LOW "$2" 3 "$3" "$4"; } | list wt-unf)"
+  check "fix block: $1 renders unfolded" "$([ "$ST" = 0 ] && ! grep -q 'Fix for each location' "$O/comment.md" \
+    && [ "$(grep -c '^    - Fix: ' "$O/comment.md")" = 3 ]; echo $?)"
+}
+unfolded "a fix holding </details>" c.tf "C." 'Close the </details> tag.'
+unfolded "a summary holding <DETAILS" c.tf 'An open <DETAILS block.' "Fix C."
+unfolded "a location holding </details" 'x/</details>.tf' "C." "Fix C."
+t_newline() { # a newline cannot pass the input grammar, so the grouping is checked directly
+  jq -n -L "$REF" --arg s "$(printf 'Two\nlines.')" 'include "render-comment";
+    [{id: "F-001", rule_id: "structure.grouping", severity: "LOW", file: "a.tf", line: 1, summary: "A.", suggested_fix: "F."},
+     {id: "F-002", rule_id: "structure.grouping", severity: "LOW", file: "b.tf", line: 1, summary: "B.", suggested_fix: "F."},
+     {id: "F-003", rule_id: "structure.grouping", severity: "LOW", file: "c.tf", line: 1, summary: $s, suggested_fix: "F."}]
+    | findings_md(7; 10; "") | (contains("Fix for each location") | not) and contains("    - Fix: F.")' > /dev/null
+}
+t_newline; check "fix block: a newline in a summary renders unfolded" $?
+
+# The leak scan and the at-mention step reach the new section.
+t_leak_todo() {
+  render "$(f structure.grouping MEDIUM a.tf 1 "S." "F." | list wt-leak)" "$(host wt-leak '.prefix = "x/home/y"')"
+  [ "$ST" = 1 ] && empty_out && printf '%s' "$MSG" | grep -qF 'leak scan: /home/ in the host records' &&
+  jq -e -n -L "$REF" --slurpfile f "$TMP/wt-leak.json" --slurpfile h "$TMP/host-wt-leak.json" --slurpfile r "$RUNF" '
+    include "render-comment";
+    render({findings: $f[0], host: $h[0], run: $r[0], assessment: "A.",
+            checks: {accepted: true, signal: "pass", own_check: null, own_check_dropped: 0, own_jobs_dropped: 0, own_jobs_unreadable: false}})
+    | .parts[-1] | .src == "the host records" and (.text | contains("### What to do\n\n" + texts["todo-lead-block"]))' > /dev/null
+}
+t_leak_todo; check "what to do: the leak scan covers the section" $?
+t_mention_todo() {
+  render "$({ f structure.grouping MEDIUM a/@team.tf 1 "A." "Ask @alice."; f structure.grouping MEDIUM b.tf 2 "B." "Fix B."
+    f structure.grouping MEDIUM c.tf 3 "C." "Fix C."; } | list wt-at)"
+  [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] `structure.grouping` (3): apply the Fix at `a/@team.tf:1`, `b.tf:2`, `c.tf:3`.' &&
+    grep -qxF -- '- `a/@team.tf:1` - Fix: Ask `@alice`.' "$O/comment.md"
+}
+t_mention_todo; check "what to do: at-mentions in the section and the Fix block" $?
+
 # --- Negative self-check: each mutation of a temp copy must make its named case fail.
 
 mutate() { # name, perl substitution, case function
@@ -522,7 +817,7 @@ t_worked() { render "$WF" "$H2" "" "" "$TMP/assess-worked.txt"; cmp -s "$O/comme
 t_assess_head() { render "$G" "" "" "" "$TMP/a-head.txt"; [ "$ST" = 2 ] && empty_out; }
 t_assess_setext() { render "$G" "" "" "" "$TMP/a-setext.txt"; [ "$ST" = 2 ] && empty_out; }
 t_assess_three() { render "$G" "" "" "" "$TMP/a-three.txt"; [ "$ST" = 2 ] && empty_out; }
-t_collapsed() { render "$TMP/pr410.json" "$H410" "" "" "$TMP/assess-410.txt"; nofix < "$O/comment.md" | cmp -s - <(fence 5); }
+t_collapsed() { render "$TMP/pr410.json" "$H410" "" "" "$TMP/assess-410.txt"; run1 < "$O/comment.md" | cmp -s - <(fence 5); }
 mutate "the leak scan ignored" 's/\[ -z "\$leak" \] \|\|/true ||/' t_leak_path
 mutate "no at-mention wrap" 's/\| \.body \|= wrap_mentions//' t_mention
 mutate "HIGH not read by the ladder" 's/elif has_sev\("HIGH"\)/elif false/' t_rule2
@@ -546,6 +841,30 @@ mutate "null counts refused" 's/\.counts == null or //' t_null_counts
 mutate "the 100 verification gap cap restored" 's/\(\.verify_gaps \| type == "array" and all/(.verify_gaps | type == "array" and length <= 100 and all/' t_many_gaps
 mutate "every verification gap listed" 's/\$run\.verify_gaps\[:100\]\[\]/\$run.verify_gaps[]/' t_many_gaps
 mutate "any counts accepted" 's/\(\.counts == null or \(/(true or (/' t_partial_counts
+t_none_fires() { render "$(f structure.grouping LOW a.tf 1 "S." "Do it. Generated content made stale: None." | list wt-nf)"; todo | grep -qxF -- "- $GEN"; }
+t_rule8_none() { render "$NONE"; [ "$ST" = 0 ] && ! grep -q 'What to do' "$O/comment.md"; }
+t_loc9() { locs_case 9; todo | grep -qxF -- "- Optional: \`structure.argument-order\` (9) at $L8, and 1 more."; }
+t_rule0_plain() { render "$R0"; todo | grep -qxF -- '- `compat.output-removed` (2): the Fix at `a.tf:1`, `b.tf:2` restores compatibility.'; }
+t_unf_fix() {
+  render "$({ f structure.grouping LOW a.tf 1 "A." "Fix A."; f structure.grouping LOW b.tf 2 "B." "Fix B."
+    f structure.grouping LOW c.tf 3 "C." 'Close the </details> tag.'; } | list wt-unf2)"
+  [ "$ST" = 0 ] && ! grep -q 'Fix for each location' "$O/comment.md"
+}
+mutate "a What to do lead reworded" 's/resolve each checklist item below and push/resolve every checklist item below and push/' t_pr88
+mutate "a What to do lead changed in the script only" 's/The items below are optional\./The items below are nits./' t_table
+mutate "item e never a checkbox" 's/\{box: any\(\$abc\[\]; \.box\), t: tx\("todo-generated"\)\}/{box: false, t: tx("todo-generated")}/' t_pr88
+mutate "the none suppression made case-insensitive" 's/"\^ none\(/"^ (?i)none(/' t_none_fires
+mutate "the Fix block from four entries" 's/\(\.entries \| length\) >= 3/(.entries | length) >= 4/' t_fold3
+mutate "the Fix block guard dropped" 's/\n  and all\(\.items\[\]; all\(\.summary, \.suggested_fix, loc\(\$p\); test\("<\/\?details\|\\n"; "i"\) \| not\)\)//' t_unf_fix
+mutate "What to do rendered at rule 8" 's/if \$v\.rule == 8 then \[\] else/if false then [] else/' t_rule8_none
+mutate "nine locations listed" 's/\$l\[:8\]/\$l[:9]/' t_loc9
+mutate "rule 0 groups as checkboxes" 's/if \$rule == 0 and/if false and/' t_rule0_plain
+t_rule0_mixed() { render "$R0M"; todo | grep -qxF -- '- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.'; }
+mutate "every rule 0 group a compat bullet" 's/\$rule == 0 and \(\.rule \| startswith\("compat\."\)\)/$rule == 0/' t_rule0_mixed
+t_rev_noitem() { render "$TMP/wt-rev6.json"; [ "$ST" = 0 ] && ! todo | grep -qF 'review.path-missing'; }
+mutate "review groups listed as items" 's/select\(\.rule \| startswith\("review\."\) \| not\)/select(true)/' t_rev_noitem
+t_r4_once() { render "$NONE" "$H2"; [ "$(rule)" = 4 ] && ! todo | grep -qF 'could not run; see'; }
+mutate "thread resolution counted as a gap too" 's/select\(\.kind != "thread-resolution-unknown"\)/select(true)/' t_r4_once
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

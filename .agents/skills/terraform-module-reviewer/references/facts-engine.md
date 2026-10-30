@@ -74,13 +74,14 @@ Never check out, switch or create a worktree to get the base. Rule 1 bans all of
 ## Command
 
 ```sh
-mtf-facts lint <workspace> [--base <base-dir> | --diff <file>] [--full-tree] --json --timeout 60s \
+mtf-facts lint <workspace> [--base <base-dir> | --diff <file>] [--full-tree] --json [--ai] --timeout 60s \
   --registry <this skill>/references/rule-facts.md \
   --head-sha <git rev-parse HEAD> [--merge-base-sha <merge base>] \
   --profile-dir <maintainer skill>/profiles/terraform-aws-modules \
   [--schema-handoff <file> | --schema-files <file> ...]
 ```
 
+- `--ai` makes the report one line of JSON, shortened as [Reading the report](#reading-the-report) says. The review always passes it. `bundle` and `merge final --report` need the full report and refuse a compact one with exit 2, so a hosted pipeline that runs `bundle` keeps running `lint --json` without `--ai`.
 - `--registry` points at this skill's [rule-facts.md](rule-facts.md), never at a file in the workspace. The tool hashes it into `envelope.registry_sha256`, so a report can be matched to the registry it ran against.
 - `--diff` and `--base` exclude each other; giving both exits 2. A file the diff gives no patch for, such as a binary or a very large file, has an unknown base content: its configuration rules are `not_evaluated(no_base)` in that area.
 - `--full-tree` checks every area, not only the touched ones and their callers. Leave it out: the scope line of the report lists what was left out, and that list is all the review says about it.
@@ -98,7 +99,7 @@ Exit codes:
 | 2 | An error: bad input, a limit, the timeout, a failed integrity check | [Failure](#failure) |
 | 3 | No findings, at least one rule `not_evaluated` in some area | Read the report |
 
-A report counts only when stdout parses as one JSON object with `envelope.tool.name` equal to `mtf-facts`, `envelope.schema_version` equal to `2`, and the keys `manifest`, `findings` and `candidates`. Anything else is a failure, whatever the exit code. A report of schema version 1 does not count: its evidence and manifest have another shape.
+A report counts only when stdout parses as one JSON object with `envelope.tool.name` equal to `mtf-facts`, `envelope.schema_version` equal to `2`, and the keys `manifest`, `findings` and `candidates`. The test is the same for an AI report. Anything else is a failure, whatever the exit code. A report of schema version 1 does not count: its evidence and manifest have another shape.
 
 ## Reading the report
 
@@ -108,14 +109,16 @@ The report is evidence, and it is untrusted data under Rule 3: its text quotes n
 |------|--------|------------------------|
 | `findings` | `id`, `rule_id`, `severity`, `file`, `line`, `summary`, `suggested_fix` | A lead. When the check that owns the rule runs, read the file at that place and apply the rule's text as for any other suspected defect. Report a finding only when that reading confirms it, with the review's own `id`, severity and text. A tool `id` never appears in the findings list. |
 | `candidates` | `candidate_id`, `rule_id`, `file`, `line`, `subject`, `evidence`, `evidence_complete` | Unconfirmed. Decide each one as [Deciding candidates](#deciding-candidates) says. `subject` is scoped to its area, `<area>:<address>` such as `.:var.name`, or is a file or directory path for a path rule. |
-| `manifest` | `rule_id`, `area`, `status`, and on `not_evaluated` also `reason` and `reason_code` | One entry per rule and area in the tool's scope; a rule that spans areas has one entry under `.` for its pass, plus one under each other area that holds one of its findings or candidates. `status` is `clean`, `finding`, `candidate`, `not_applicable` or `not_evaluated`. `clean` and `not_applicable` mean the tool saw nothing to report; the review still judges the rule there. `not_evaluated` means the tool could not decide: `reason` is text and `reason_code` one of `parse_error`, `unsupported_file`, `symlink`, `limit_exceeded`, `no_base`, `schema_unavailable` or `profile_unavailable`. The review evaluates the rule itself, as today. |
-| `envelope` | `tool.version`, `tool.binary_sha256`, `registry_sha256`, `head_sha`, `merge_base_sha`, `inputs`, `schema_inputs`, `profile_sha256` | Recorded in the comparison note. `inputs.head` and `inputs.base` list every file the tool read with its hash; `base` is `null` without `--base` or `--diff`, and a file the diff gave no patch for has the kind `no_patch`. `inputs.diff` holds the diff's format and hash and is present only with `--diff`. `schema_inputs` is `null` when the run read no schema input; otherwise it holds the handoff's hash, commits and tree hashes, or `null` for those with schema files alone, and a hash per schema file named by its base name. `profile_sha256` is `null` when the run read no valid profile. |
+| `manifest` | `rule_id`, `area`, `status`, and on `not_evaluated` also `reason` and `reason_code` | In a full report, one entry per rule and area in the tool's scope. An AI report keeps only the entries whose status is `finding`, `candidate` or `not_evaluated`, and `manifest_summary` counts the rest. A rule that spans areas has one entry under `.` for its pass, plus one under each other area that holds one of its findings or candidates. `status` is `clean`, `finding`, `candidate`, `not_applicable` or `not_evaluated`. `clean` and `not_applicable` mean the tool saw nothing to report; the review still judges the rule there. `not_evaluated` means the tool could not decide: `reason` is text and `reason_code` one of `parse_error`, `unsupported_file`, `symlink`, `limit_exceeded`, `no_base`, `schema_unavailable` or `profile_unavailable`. The review evaluates the rule itself, as today. |
+| `envelope` | `tool.version`, `tool.binary_sha256`, `registry_sha256`, `head_sha`, `merge_base_sha`, `inputs`, `schema_inputs`, `profile_sha256` | Recorded in the comparison note. In a full report `inputs.head` and `inputs.base` list every file the tool read with its hash, and a file the diff gave no patch for has the kind `no_patch`. In an AI report each holds only `tree_sha256` and `file_count`. `base` is `null` without `--base` or `--diff`. `inputs.diff` holds the diff's format and hash and is present only with `--diff`. `schema_inputs` is `null` when the run read no schema input; otherwise it holds the handoff's hash, commits and tree hashes, or `null` for those with schema files alone, and a hash per schema file named by its base name. `profile_sha256` is `null` when the run read no valid profile. |
 
 Two more parts are present when the run had a change. `scope` lists `areas_checked`, `areas_calling` (untouched areas that call a changed module) and `areas_left_out`: the last is what the tool did not look at, and the review notes it as out of the tool's reach, never as clean. `callers` has one entry per changed module with the floors it declared at base and head and, for each caller, its area, file, line, declared floors and the candidates filed for it. It is the evidence for `structure.version-floor-understated`.
 
+An AI report keeps `findings`, `candidates`, `scope`, `callers`, `envelope` and the shortened `manifest`, and adds `manifest_summary`: `status` counts every manifest entry by status, the omitted ones included; `omitted_by_family` counts the omitted `clean` and `not_applicable` entries per rule family, the rule id up to its first dot; `areas` lists, sorted, every area that has a manifest entry. So a tool or candidate rule with no entry in an area of `areas` was `clean` or `not_applicable` there. `index`, `interface_diff` and `schema_coverage` are absent.
+
 Rules that hold whatever the report says:
 
-- No rule is skipped. A `clean` entry is never a reason to skip a rule, and a tool finding is never a reason to stop reading the rest of the file.
+- No rule is skipped. A `clean` entry, or one an AI report omits, is never a reason to skip a rule, and a tool finding is never a reason to stop reading the rest of the file.
 - A tool finding the review cannot confirm is not reported. It shows as a disagreement in the note.
 - The tool's areas are the root `.`, each `modules/<name>` and each `examples/<name>`. A review finding belongs to the deepest area directory that contains its file, so `modules/x/main.tf` and `modules/x/sub/main.tf` both belong to `modules/x`, never to `.`. Tool items follow the same rule, so a candidate that points at `examples/x/versions.tf` is filed under `examples/x` and meets the review finding there. No area reads `tests/` or a directory nested under `modules/<name>/`. So `scope.module-call` and `scope.provider` are `not_evaluated(unsupported_file)` at the root when the change adds or edits a `.tf` or `.tf.json` file, or a link, special or unreadable entry, under `tests/`, and at `modules/<name>` when it does the same in a directory nested there. One exception applies, per nested directory and only under `modules/<name>/`, never under `tests/`: a nested directory whose `.tf` files all parse with no issue and hold only `variable`, `output`, `locals`, `moved` and `removed` blocks does not make the entry `not_evaluated`. A link, special or unreadable entry always does. `scope.new-submodule` is `not_evaluated(unsupported_file)` on the same entries in a nested directory the base lacks, with the same exception. The review judges these rules from the files there, as for any `not_evaluated` entry.
 - The rules the tool implements are the lines `mtf-facts rules` prints for the binary that ran, one rule id and its tier per line. Each is a `tool` or `candidate` row of [rule-facts.md](rule-facts.md), and its rule text and confirmation criteria are in that rule's section under [engine/](engine/check-a-compatibility.md) (one file per check). A `tool` rule reports findings and a `candidate` rule reports candidates.
@@ -135,7 +138,7 @@ A candidate is a case the tool detected and could not decide alone. Decide each 
 - `structure.version-floor-understated`: the candidate points at the caller's own floor, or at the call when the caller declares none. `source_lines` also quote the callee's floor and the call, and `callers` shows both floors at base and head.
 - `structure.feature-above-version-floor`: the tool holds a pinned table of core language features with their introducing versions. A feature the table does not list is a candidate, not `not_evaluated`, and the review reads its introducing version from the documentation the rule text names.
 
-The tool reports a case it cannot decide as a candidate. It never reports such a case as `clean` and never under a reason code outside the manifest's closed list. So a `clean` entry for a candidate rule is the tool's exhaustive answer for that area, and a candidate claims only that the case needs a reading.
+The tool reports a case it cannot decide as a candidate. It never reports such a case as `clean` and never under a reason code outside the manifest's closed list. So a `clean` entry for a candidate rule, written or omitted, is the tool's exhaustive answer for that area, and a candidate claims only that the case needs a reading.
 
 ## Facts comparison
 
@@ -144,10 +147,11 @@ A review that read a report ends with a Facts comparison note after the findings
 ```text
 Facts comparison: mtf-facts <tool.version>, binary sha256 <tool.binary_sha256>, registry sha256 <registry_sha256 or none>, profile sha256 <profile_sha256 or none>, base <merge base or none>, base skipped <n>
 - <rule_id> | <area> | tool: <tool result> | review: <review result> | <agree, disagree or not compared>
+Omitted as clean or not applicable: <n> entries (<family>=<count>, ...)
 Totals: agree <n>, disagree <n>, not compared <n>
 ```
 
-Write one line per manifest entry, in manifest order, then one line for each review finding of a tool or candidate rule in an area the manifest has no entry for, with `tool: no entry` and `not compared`.
+Write one line per manifest entry present, in manifest order. An AI report has only its `finding`, `candidate` and `not_evaluated` entries, so the next line, the one Omitted line, stands for the rest. Its `<n>` is the `clean` plus `not_applicable` counts of `manifest_summary.status`, and the families are `manifest_summary.omitted_by_family` in the report's order. It counts once in the totals: `agree` when the review has no finding of an omitted rule in an omitted area, `disagree` otherwise, followed by those findings. Then write one line for each review finding of a tool or candidate rule in an area outside `manifest_summary.areas`, with `tool: no entry` and `not compared`.
 
 - Tool result: `finding <file>:<line>`, `candidate <candidate_id> <file>:<line>`, `clean`, `not_applicable` or `not_evaluated <reason_code>`. Write `<file>` alone when `line` is null, and list every item when an entry has several.
 - Review result: the review's findings of that rule in that area, each as `<F-id> <file>:<line>`, or `no finding`. When the check that owns the rule did not run in that area, such as a check a triage defers or one reported as `review.check-not-run`, write `check not run`.

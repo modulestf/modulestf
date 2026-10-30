@@ -18,13 +18,15 @@ Fixed, so two runs are comparable and a reader knows where to look.
 7. **Existing threads.** Only when a thread is known to be unresolved. One line each: the path, the line, and whether this run returned a finding at the same path and line. Never the thread's body. A path and a line match mechanically; whether a thread and a finding mean the same thing is a judgement, and this skill makes none.
 8. **Conversation comments.** A few lines, only when a conversation or bot comment was considered, something was omitted, or a note applies. Considered means selected: handed to the reviewer as a `kind=conversation` item, or a `kind=bot` item for the bot line. It says how many were considered, then lists the omissions and notes from [github-io.md](github-io.md#omissions-and-notes) as their fixed strings, a counted omission as `<category>:<n>`: `Conversation comments considered: 2. Not considered: over-size:1, minimized-excluded:3. Notes: instruction-like-text-from-others:1.` Bot comments get their own line in the same shape, after it, only when a bot comment was considered or a `bot-` category applies: `Bot comments considered: 3. Not considered: bot-over-size:1.` The notes go on the first line only. The two classes share one fetch, so a whole-class omission omits both and is one line in place of both: `Conversation and bot comments not considered: fetch-failed.` A note with a count is listed only when the count is at least 1. Never a comment's body or its author. The line records what the review saw; it is not a gap and never explains the verdict. When the reviewer's summary line carries `review.quoted-claim-unverifiable:<n>` with `<n>` at least 1, the section also carries this line, after the first one when that one appears: `Claims quoted from the discussion and not confirmed from the code: <n>.` The count covers claims from every item kind, not only conversation comments. It is parsed like the counted notes, decimal digits alone or the line is dropped, and it alone is enough for the section to appear. It names no claim, no path and no author. When a host renders a judgment run whose reply gave no counts, none of the count notes and no claims line appears, and the section ends with the one line `Counts: not reported by the review run.`, which alone is enough for the section to appear; a count is never shown as 0 in their place.
 
-Sections 1 to 3 carry no heading: the assessment and the rationale are paragraphs and the verdict line is bold. Sections 4 to 8 each open with a `###` heading naming the section: `### Findings`, `### Checks that could not run`, `### Pull request state`, `### Existing threads`, `### Conversation comments`. An omitted section drops its heading too. Where a section above says one line, it means the content under that heading. Inside section 4 each severity is a bold label on its own line, not a heading.
+A pull request body also carries the What to do section, between sections 3 and 4, as [What to Do](#what-to-do) defines. It keeps the section numbers above unchanged.
 
-Nothing else. No checklist, no emoji, no closing pleasantry, no offer to make the change.
+Sections 1 to 3 carry no heading: the assessment and the rationale are paragraphs and the verdict line is bold. The What to do section and sections 4 to 8 each open with a `###` heading naming the section: `### What to do`, `### Findings`, `### Checks that could not run`, `### Pull request state`, `### Existing threads`, `### Conversation comments`. An omitted section drops its heading too. Where a section above says one line, it means the content under that heading. Inside section 4 each severity is a bold label on its own line, not a heading.
+
+Nothing else. No checklist outside the What to do section, no emoji, no closing pleasantry, no offer to make the change.
 
 ## A Commit Target
 
-A commit target, from [github-io.md](github-io.md#commit-target), renders the same order with three sections gone and two changed. Sections 6, 7 and 8 do not render, headings included: a commit has no pull request state, no review threads, and no conversation comments read as input. Section 2 uses the commit verdict lines in [verdict.md](verdict.md#absent-host-signals), which say nothing about merging, and names no clamp: every clamp that reaches a commit is render-only, and a render-only clamp is shown beside the body, never in it. Section 5 can never carry a thread resolution line, since no thread is read. The assessment is addressed to the commit's author. The leak scan below runs before the body is shown, exactly as for a pull request.
+A commit target, from [github-io.md](github-io.md#commit-target), renders the same order with three sections gone and two changed. Sections 6, 7 and 8 do not render, headings included: a commit has no pull request state, no review threads, and no conversation comments read as input. Section 2 uses the commit verdict lines in [verdict.md](verdict.md#absent-host-signals), which say nothing about merging, and names no clamp: every clamp that reaches a commit is render-only, and a render-only clamp is shown beside the body, never in it. Section 5 can never carry a thread resolution line, since no thread is read. No What to do section renders, heading included: it is for a pull request only. The assessment is addressed to the commit's author. The leak scan below runs before the body is shown, exactly as for a pull request.
 
 ## A Repository Target
 
@@ -32,7 +34,30 @@ A repository target, defined in [verdict.md](verdict.md#absent-host-signals), re
 
 `No host signals: this reviews a whole repository at <short sha>, with no pull request or commit, so the verdict comes from the findings alone (ladder rules 0 to 2, 4 and 6 to 8).`
 
-A commit comment sits on its commit, so where it appears says what it reviewed. A repository review has no such place, so the line says it instead, and says why no check result, thread or review decision appears. Sections 7 and 8 do not render. Section 5 carries no thread resolution line. The assessment is addressed to the module's author. The run is render-only, so no clamp appears in the body. The leak scan and the at-mention step run as for a pull request.
+A commit comment sits on its commit, so where it appears says what it reviewed. A repository review has no such place, so the line says it instead, and says why no check result, thread or review decision appears. Sections 7 and 8 do not render. No What to do section renders either, as for a commit. Section 5 carries no thread resolution line. The assessment is addressed to the module's author. The run is render-only, so no clamp appears in the body. The leak scan and the at-mention step run as for a pull request.
+
+## What to Do
+
+A pull request body carries `### What to do` after the rationale and before `### Findings`. It lists what would change the verdict. It is a total function of the ladder rule that fired, the host signals, the number of unresolved threads, and each finding's severity, `rule_id`, count and location. It reads no summary and no fix, except that item 5 below searches each fix for one fixed phrase. It never rewords a finding or a fix. It does not render for approve, ladder rule 8, and never for a commit or a repository target. It never collapses, and [Collapsing Findings](#collapsing-findings) does not count it.
+
+A blocking group is a group of [Grouping Findings](#grouping-findings) whose severity is CRITICAL, HIGH or MEDIUM, whatever ladder rule fired. The disputed note forms no group here, and neither does a `review.*` rule, at any severity: those findings say how far the review reached, which the author cannot act on. They stay in section 4, and rule 4 counts them in item 6.
+
+The section opens with one lead sentence chosen by the ladder rule, then one list. The leads are rows of [Host Render Strings](#host-render-strings): `todo-lead-block` for rules 1, 2, 3, 5 and 6, `todo-lead-4` for rule 4, `todo-lead-7` for rule 7, and `todo-lead-0` for rule 0. The items follow in this order, each from its row of that table:
+
+1. The host signals: `todo-checks` when the Checks signal fails, `todo-mergeability` when Mergeability fails, and `todo-review-decision` when the Review decision fails.
+2. The open threads, when at least one is unresolved: `todo-threads-one` for one, `todo-threads-many` for more.
+3. The blocking groups, in the order of the findings: `todo-fix-one` for a group of one finding, `todo-fix-many` for more. Under rule 0 a group whose `rule_id` starts with `compat.` takes `todo-compat-one` or `todo-compat-many` instead.
+4. The LOW groups, in the order of the findings, in every verdict with a LOW finding: `todo-optional-one` and `todo-optional-many`.
+5. Generated documentation: `todo-generated`, once, when a fix names generated content, as below.
+6. Rule 4 only: `todo-triage` in a triage run. Then `todo-checks-unknown`, `todo-threads-unknown`, `todo-review-decision-unknown` and `todo-mergeability-unknown`, each when its signal is unknown. Then `todo-gaps-one` or `todo-gaps-many` when its `{count}` is above 0. It counts every `review.*` finding but the disputed note, every `could_not_run` entry but `thread-resolution-unknown`, which `todo-threads-unknown` covers, and every example directory that did not verify, those past the first 100 included.
+
+An item opens with `- [ ] ` on items 1 and 2, on item 3 except a `todo-compat-*` one, and on item 5 when items 1 to 3 hold at least one `- [ ] ` item. Every other item opens with `- `.
+
+In items 3 and 4, `{rule_id}` is the group's rule and `{count}` the number of its findings. `{locations}` lists every location of the group, its entries expanded in order, each in its own code span as section 4 writes it, separated by a comma and a space. A null line shows the path alone. Past eight locations, the first eight are listed and `todo-more` follows with the count of the rest.
+
+Item 5 searches the `suggested_fix` of every finding for the fixed phrase `Generated content made stale:` of the [Suggested Fix Contract](../../terraform-module-reviewer/references/findings-schema.md#suggested-fix-contract). An occurrence is suppressed when the text after its colon is one space and a lowercase `none`, then a period, a comma or the end of the fix. The item renders when at least one occurrence is not suppressed. So `none`, `none.` and `none, the directory has no README.md.` add nothing, while `None`, `none of` and `nonempty` add the item.
+
+The ladder makes four things hold, which the renderer does not check and `tests/render-comment-test.sh` does: every block verdict and rule 5 have a `- [ ] ` item, rule 7 has only LOW findings, rule 8 has no finding open, and rule 0 has a `compat.*` group. The first has one exception: a block whose only CRITICAL, HIGH or MEDIUM findings carry a `review.*` rule, such as `review.untrusted-instruction` or `review.path-missing`, has no item, and the section is its lead alone.
 
 ## Grouping Findings
 
@@ -47,7 +72,8 @@ Within one severity:
 3. A group of one finding renders as one line: ``- `rule_id` - <location> - <summary>``.
 4. A group of several findings and one entry renders as one line: ``- `rule_id` (<n>) - <locations> - <summary>``, where `<n>` is the number of findings in the group.
 5. A group with several entries renders as ``- `rule_id` (<n>):``, then one nested line per entry, indented two spaces: `  - <locations> - <summary>`.
-6. Every entry's line is followed by its Fix line, one level deeper: `  - Fix: <suggested_fix>` under a line of rule 3 or 4, and `    - Fix: <suggested_fix>` under a nested entry of rule 5. It is a list item of its own so that it renders on its own line; an indented line of plain text would join the summary's paragraph.
+6. Every entry's line is followed by its Fix line, one level deeper: `  - Fix: <suggested_fix>` under a line of rule 3 or 4, and `    - Fix: <suggested_fix>` under a nested entry of rule 5. It is a list item of its own so that it renders on its own line; an indented line of plain text would join the summary's paragraph. Rule 7 is the one exception.
+7. A group of rule 5 with three or more entries keeps its entry lines and moves their Fix lines into one block under the group: a blank line, `<details><summary>Fix for each location (<n>)</summary>`, a blank line, one line per entry in entry order, `- <locations> - Fix: <suggested_fix>`, a blank line, then `</details>`. `<n>` is the number of findings in the group, and the summary text is the `fix-fold` row of [Host Render Strings](#host-render-strings). A blank line separates the block from what follows. A group of one or two entries keeps its nested Fix lines. So does any group where a summary, a `suggested_fix` or a location contains `<details` or `</details` in any case, or a newline, since that text could close the block early or open another.
 
 In these forms the separators are a space, a hyphen and a space, `<locations>` is the entry's list from rule 2, `<summary>` is the reviewer's summary, unchanged, and `<suggested_fix>` is the reviewer's `suggested_fix`, unchanged, a `needs decision:` or `no code change:` prefix included. The prefix is what tells a reader, and the maintainer skill, that a person has to choose or that no file changes.
 
@@ -65,7 +91,7 @@ The first render of terraform-aws-modules/terraform-aws-s3-bucket pull request 4
 | MEDIUM | 16 | 16 | 8 / 19 | 4196 | 3988 |
 | LOW | 11 | 11 | 5 / 9 | 2080 | 1544 |
 
-This example and the collapsed one below record run 1's render as measured, before the Fix line existed. That run kept no `suggested_fix`, so their Fix lines are left out rather than written after the fact, and the counts are that render's. [Example: Fix lines](#example-fix-lines) shows the line itself.
+This example and the collapsed one below record run 1's render as measured, before the Fix line existed. That run kept no `suggested_fix`, so their Fix lines are left out rather than written after the fact, and so are the Fix blocks of grouping rule 7, which hold only Fix lines. Run 1 also predates the [What to Do](#what-to-do) section, so the collapsed body has none, and the counts are that render's. [Example: Fix lines](#example-fix-lines) shows the line itself.
 
 `compat.provider-floor-raised` shows both forms of merge. Five of its six findings carry the same summary and become one entry with five locations. The sixth, at `versions.tf:7`, words its summary differently and stays a separate entry. `structure.comment-unsourced` has five findings and five different summaries, so it gains one line and loses four repeated `rule_id` values, and every summary stays.
 
@@ -180,7 +206,7 @@ Above 10, the first of these rules that matches decides how a group renders:
 3. In full, when its severity is the highest present in the list. Those findings produced the verdict.
 4. Collapsed.
 
-A collapsed group renders as a block:
+A group in full keeps the Fix block of [Grouping Findings](#grouping-findings) rule 7. A collapsed group renders as a block:
 
 ```markdown
 <details><summary><code>rule_id</code> (<n>)</summary>
@@ -365,7 +391,7 @@ Before the body is shown, wrap every at-mention that is not already inside a cod
 
 ## Host Render Strings
 
-A host may render the body with no model, from the merged findings and its own records: [render-comment.sh](render-comment.sh). Its fixed sentences are these, exactly, and `tests/render-comment-test.sh` checks that the script's strings equal this table. A word in braces is filled in: `{severity}` and `{rule}` from the verdict, `{count}` a number, spelled `Two` to `Ten` in a rationale and in digits elsewhere, `{signals}` the failing signal names joined with `, ` and a final ` and `, `{path}` and `{dir}` repository-relative, `{reason}` the verification reason of section 5 with `init` in a code span, and `{location}` a thread's path, with `:` and its line when it has one.
+A host may render the body with no model, from the merged findings and its own records: [render-comment.sh](render-comment.sh). Its fixed sentences are these, exactly, and `tests/render-comment-test.sh` checks that the script's strings equal this table. A word in braces is filled in: `{severity}` and `{rule}` from the verdict, `{count}` a number, spelled `Two` to `Ten` in a rationale and in digits elsewhere, `{signals}` the failing signal names joined with `, ` and a final ` and `, `{path}` and `{dir}` repository-relative, `{reason}` the verification reason of section 5 with `init` in a code span, `{location}` a thread's path, with `:` and its line when it has one, `{rule_id}` a group's `rule_id`, and `{locations}` a group's locations as [What to Do](#what-to-do) lists them. The `todo-*` rows are the What to do section, each item without its `- [ ] ` or `- ` opener, and `fix-fold` is the summary of the Fix block of [Grouping Findings](#grouping-findings) rule 7.
 
 The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row of the first unknown in this order: a triage run, the Checks, Threads, Review decision and Mergeability signals, a `review.no-change-identified` finding, a `review.check-not-run` finding, then the lines of section 5. Rule 3 names every failing signal. The signal line of section 6 joins the Checks, Mergeability, Review decision and Threads phrases with a space, in that order. Section 5 takes one row per `could_not_run` kind of [host-pass.md](host-pass.md#host-facts) and one `verification` row per example directory that did not verify, for the first 100 of them, then one `verification-more` row with the count of the rest, so the section stays bounded. Section 7 takes one row per unresolved thread.
 
@@ -411,6 +437,31 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `verification-more` | - {count} more example directories with a check that could not run are not listed. |
 | `thread-match` | - `{location}`: this review has a finding at the same path and line. |
 | `thread-no-match` | - `{location}`: this review has no finding at the same path and line. |
+| `todo-lead-block` | To make this mergeable, resolve each checklist item below and push. |
+| `todo-lead-4` | This review is incomplete, so a later run may add items. The items below are known. |
+| `todo-lead-7` | Nothing blocks merge. The items below are optional. |
+| `todo-lead-0` | This change is breaking. Merge it in the next major release. To merge it sooner, restore compatibility with the fixes named below. Any checklist items below also block merge. |
+| `todo-checks` | Fix the failing checks. |
+| `todo-mergeability` | Resolve the merge conflict. |
+| `todo-review-decision` | Address the requested changes. |
+| `todo-threads-one` | Resolve the open review thread. |
+| `todo-threads-many` | Resolve the {count} open review threads. |
+| `todo-fix-one` | `{rule_id}`: apply the Fix at {locations}. |
+| `todo-fix-many` | `{rule_id}` ({count}): apply the Fix at {locations}. |
+| `todo-compat-one` | `{rule_id}`: the Fix at {locations} restores compatibility. |
+| `todo-compat-many` | `{rule_id}` ({count}): the Fix at {locations} restores compatibility. |
+| `todo-optional-one` | Optional: `{rule_id}` at {locations}. |
+| `todo-optional-many` | Optional: `{rule_id}` ({count}) at {locations}. |
+| `todo-more` | , and {count} more |
+| `todo-generated` | Documentation tables are generated. After the edits above, run `pre-commit run -a` and commit the result. Do not edit them by hand. |
+| `todo-triage` | This was a triage run. The full review has not run. |
+| `todo-checks-unknown` | Check results could not be read or are still running. |
+| `todo-threads-unknown` | Review thread resolution could not be read. |
+| `todo-review-decision-unknown` | The reviews could not be read. |
+| `todo-mergeability-unknown` | Mergeability could not be read. |
+| `todo-gaps-one` | 1 check could not run; see Checks that could not run. |
+| `todo-gaps-many` | {count} checks could not run; see Checks that could not run. |
+| `fix-fold` | Fix for each location ({count}) |
 
 The lines of sections 6 and 8 that [host-pass.md](host-pass.md#host-facts) and [Section Order](#section-order) already give word for word are rendered as written there. Each line of sections 6 and 8 is its own paragraph, and the triage line is its own paragraph under the verdict line.
 
@@ -429,6 +480,13 @@ module can change it.
 **Changes requested before merge.**
 
 A MEDIUM finding is open. Any MEDIUM finding blocks merge (ladder rule 6).
+
+### What to do
+
+To make this mergeable, resolve each checklist item below and push.
+
+- [ ] `coverage.optional-argument-unexposed`: apply the Fix at `modules/logging/main.tf:31`.
+- Optional: `structure.grouping` at `variables.tf:88`.
 
 ### Findings
 
@@ -455,6 +513,14 @@ module can change it.
 **Inconclusive.**
 
 Review thread resolution could not be read, so an open objection may exist. Any unknown makes the review inconclusive (ladder rule 4).
+
+### What to do
+
+This review is incomplete, so a later run may add items. The items below are known.
+
+- [ ] `coverage.optional-argument-unexposed`: apply the Fix at `modules/logging/main.tf:31`.
+- Optional: `structure.grouping` at `variables.tf:88`.
+- Review thread resolution could not be read.
 
 ### Findings
 
@@ -487,6 +553,12 @@ the retention window.
 **Good to merge, with nits.**
 
 Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).
+
+### What to do
+
+Nothing blocks merge. The items below are optional.
+
+- Optional: `structure.grouping` at `variables.tf:88`.
 ```
 
 Size the assessment to the change. A one-line spelling fix gets one sentence and stops:

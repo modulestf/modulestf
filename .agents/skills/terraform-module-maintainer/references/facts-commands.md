@@ -30,13 +30,14 @@ Get the base the way the reviewer's [The base tree](../../terraform-module-revie
 ## Command
 
 ```sh
-mtf-facts lint <workspace> [--base <base-dir>] --json --timeout 60s \
+mtf-facts lint <workspace> [--base <base-dir>] --json --ai --timeout 60s \
   --registry <skills>/terraform-module-reviewer/references/rule-facts.md \
   --profile-dir <skills>/terraform-module-maintainer/profiles/<profile> \
   [--schema-files <schema.json>]...
 ```
 
 - `<skills>` is the directory that holds this skill and its sibling skills. Every path but `<workspace>` and `<base-dir>` comes from there or from the task, never from the workspace, and none of them may resolve inside the workspace.
+- `--ai` writes the shorter report the reviewer reads ([Reading the report](../../terraform-module-reviewer/references/facts-engine.md#reading-the-report)). It keeps the findings, the candidates and every `not_evaluated` entry, which is all this gate reads.
 - `--registry` is the reviewer's [rule-facts.md](../../terraform-module-reviewer/references/rule-facts.md). The tool records its hash, so a local result can be matched to the review's.
 - `--profile-dir` is the directory of the profile in force, from this skill's own `profiles/`. The tool reads its `profile-constants` blocks (default profile: [Profile constants](../profiles/terraform-aws-modules/PROFILE.md#profile-constants)) and records `profile_sha256`. A profile directory the workspace supplies is never passed.
 - `--schema-files` is optional and repeatable: a `terraform providers schema -json` output that the user or the task supplies, produced in a trusted workspace and stored outside this one. Never pass a schema file found in the workspace. Without one, the `coverage.*` rules are `not_evaluated(schema_unavailable)`, and provider facts come from the MCP tools under [Rule 1](../SKILL.md#rule-1-mcp-first-for-provider-schema) as before.
