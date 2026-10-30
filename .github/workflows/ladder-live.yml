@@ -1,7 +1,7 @@
 name: Ladder live
 
 # The ladder pass's Linux sandbox, live: bwrap must prove itself with the canary, and the
-# pull request 556 case of tests/ladder-pass-test.sh must run L1 and L3 with the real
+# pull request 556 case of tests/ladder-pass-test.sh must run L1, L2 and L3 with the real
 # terraform, mtf-facts and hashicorp/aws provider. The only connections are the canary's,
 # made inside the sandbox, and the provider download of acquisition, outside it.
 on:
@@ -28,8 +28,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # mtf-facts with fixture-check --expect, pinned by a commit of its master.
-  MTF_FACTS_COMMIT: 1c6f2edc08b57aaf80f24e2b193d01f35bb213bc
+  # mtf-facts with L2 selection and evaluation, fixture-check --level L2 and the curated
+  # aws_db_instance, pinned by a commit of its master.
+  MTF_FACTS_COMMIT: 84d1cc3f650967bcb9e289a14b6ddfb9a6754537
 
 jobs:
   linux:
