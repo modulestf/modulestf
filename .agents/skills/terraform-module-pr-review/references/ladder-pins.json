@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "artifact_hosts": ["releases.hashicorp.com"],
+  "providers": [
+    {
+      "source": "registry.terraform.io/hashicorp/aws",
+      "version": "6.70.0",
+      "platforms": {
+        "darwin_amd64": {
+          "url": "https://releases.hashicorp.com/terraform-provider-aws/6.70.0/terraform-provider-aws_6.70.0_darwin_amd64.zip",
+          "sha256": "068ca7ed4fc77e3d63d7fac54515a426a32f3dc143b55a6ad00963fe68289955"
+        },
+        "darwin_arm64": {
+          "url": "https://releases.hashicorp.com/terraform-provider-aws/6.70.0/terraform-provider-aws_6.70.0_darwin_arm64.zip",
+          "sha256": "7e899a44a1da95fefb1b04b231cf7cdb5871f482f60a710ede78bf25ac265724"
+        },
+        "linux_amd64": {
+          "url": "https://releases.hashicorp.com/terraform-provider-aws/6.70.0/terraform-provider-aws_6.70.0_linux_amd64.zip",
+          "sha256": "58acc041b080778ded75320e241ebcf6cf2ed145bede644b86a4784ce46086c6"
+        },
+        "linux_arm64": {
+          "url": "https://releases.hashicorp.com/terraform-provider-aws/6.70.0/terraform-provider-aws_6.70.0_linux_arm64.zip",
+          "sha256": "8b141d13f4b84d7a47bc5a4855d0fc985191317b3249603532d4de03db5741c5"
+        }
+      }
+    }
+  ]
+}

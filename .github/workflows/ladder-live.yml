@@ -1,0 +1,66 @@
+name: Ladder live
+
+# The ladder pass's Linux sandbox, live: bwrap must prove itself with the canary, and the
+# pull request 556 case of tests/ladder-pass-test.sh must run L1 with the real terraform
+# and mtf-facts. The only connections are the canary's, made inside the sandbox.
+on:
+  pull_request:
+    paths:
+      - .agents/skills/terraform-module-pr-review/references/ladder-*
+      - .agents/skills/terraform-module-pr-review/references/ladder-templates/**
+      - tests/ladder-pass-test.sh
+      - .github/workflows/ladder-live.yml
+  push:
+    paths:
+      - .agents/skills/terraform-module-pr-review/references/ladder-*
+      - .agents/skills/terraform-module-pr-review/references/ladder-templates/**
+      - tests/ladder-pass-test.sh
+      - .github/workflows/ladder-live.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ladder-live-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # mtf-facts with fixture-check --expect, pinned by a commit of its master.
+  MTF_FACTS_COMMIT: 1c6f2edc08b57aaf80f24e2b193d01f35bb213bc
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.3
+          cache: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.14.0
+          terraform_wrapper: false
+      - name: Install bubblewrap and mtf-facts
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+          go install "github.com/modulestf/facts/cmd/mtf-facts@$MTF_FACTS_COMMIT"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Allow unprivileged user namespaces
+        # Ubuntu's AppArmor restricts them by default, and bwrap needs one.
+        run: |
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2> /dev/null)" = 1 ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Probe the sandbox
+        run: |
+          d="$(mktemp -d "$RUNNER_TEMP/pr-review.XXXXXX")"
+          bash .agents/skills/terraform-module-pr-review/references/ladder-pass.sh probe "$d" | tee probe.txt
+          grep -qx 'sandbox proven bwrap' probe.txt
+      - name: Ladder pass test, live case required
+        env:
+          LADDER_LIVE_REQUIRED: 1
+        run: bash tests/ladder-pass-test.sh
