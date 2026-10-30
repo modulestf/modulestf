@@ -1,6 +1,6 @@
 # render-comment.jq: the pure parts of render-comment.sh, as jq functions. Every rule here is
-# stated in verdict.md (The Ladder, Clamps), comment-format.md (Section Order, Grouping
-# Findings, Collapsing Findings, Leak Scan, At-mentions), render-output.md and host-pass.md
+# stated in verdict.md (The Ladder, Clamps), comment-format.md (Section Order, What to Do,
+# Grouping Findings, Collapsing Findings, Leak Scan, At-mentions), render-output.md and host-pass.md
 # (Host Facts). The shell reads and writes; these functions decide.
 # Loaded with: jq -L <references dir> 'include "render-comment"; ...'
 
@@ -169,10 +169,35 @@ def texts: {
   "verification": "- Verification of `{dir}`: {reason}.",
   "verification-more": "- {count} more example directories with a check that could not run are not listed.",
   "thread-match": "- `{location}`: this review has a finding at the same path and line.",
-  "thread-no-match": "- `{location}`: this review has no finding at the same path and line."
+  "thread-no-match": "- `{location}`: this review has no finding at the same path and line.",
+  "todo-lead-block": "To make this mergeable, resolve each checklist item below and push.",
+  "todo-lead-4": "This review is incomplete, so a later run may add items. The items below are known.",
+  "todo-lead-7": "Nothing blocks merge. The items below are optional.",
+  "todo-lead-0": "This change is breaking. Merge it in the next major release. To merge it sooner, restore compatibility with the fixes named below. Any checklist items below also block merge.",
+  "todo-checks": "Fix the failing checks.",
+  "todo-mergeability": "Resolve the merge conflict.",
+  "todo-review-decision": "Address the requested changes.",
+  "todo-threads-one": "Resolve the open review thread.",
+  "todo-threads-many": "Resolve the {count} open review threads.",
+  "todo-fix-one": "`{rule_id}`: apply the Fix at {locations}.",
+  "todo-fix-many": "`{rule_id}` ({count}): apply the Fix at {locations}.",
+  "todo-compat-one": "`{rule_id}`: the Fix at {locations} restores compatibility.",
+  "todo-compat-many": "`{rule_id}` ({count}): the Fix at {locations} restores compatibility.",
+  "todo-optional-one": "Optional: `{rule_id}` at {locations}.",
+  "todo-optional-many": "Optional: `{rule_id}` ({count}) at {locations}.",
+  "todo-more": ", and {count} more",
+  "todo-generated": "Documentation tables are generated. After the edits above, run `pre-commit run -a` and commit the result. Do not edit them by hand.",
+  "todo-triage": "This was a triage run. The full review has not run.",
+  "todo-checks-unknown": "Check results could not be read or are still running.",
+  "todo-threads-unknown": "Review thread resolution could not be read.",
+  "todo-review-decision-unknown": "The reviews could not be read.",
+  "todo-mergeability-unknown": "Mergeability could not be read.",
+  "todo-gaps-one": "1 check could not run; see Checks that could not run.",
+  "todo-gaps-many": "{count} checks could not run; see Checks that could not run.",
+  "fix-fold": "Fix for each location ({count})"
 };
 
-def tx($k; $v): texts[$k] | gsub("\\{(?<n>[a-z]+)\\}"; $v[.n] | tostring);
+def tx($k; $v): texts[$k] | gsub("\\{(?<n>[a-z_]+)\\}"; $v[.n] | tostring);
 def tx($k): texts[$k];
 
 # The rationale states the fact and the rule that fired, in words and by number. Rule 4 names its first unknown in
@@ -214,12 +239,23 @@ def groups:
 
 def locs($p): map(loc($p)) | join(", ");
 
+# A group of 3 or more entries moves its Fix lines into one block under it, unless a field
+# could open or close an HTML block or break a line.
+def folds($p): (.entries | length) >= 3
+  and all(.items[]; all(.summary, .suggested_fix, loc($p); test("</?details|\n"; "i") | not));
+
 def full_group($p):
   (.items | length) as $n
   | if $n == 1 or (.entries | length) == 1 then
       .entries[0] as $e
       | "- `\(.rule)`\(if $n == 1 then "" else " (\($n))" end) - \($e | locs($p)) - \($e[0].summary)\n"
         + "  - Fix: \($e[0].suggested_fix)"
+    elif folds($p) then
+      "- `\(.rule)` (\($n)):"
+      + ([.entries[] | "\n  - \(locs($p)) - \(.[0].summary)"] | join(""))
+      + "\n\n<details><summary>\(tx("fix-fold"; {count: $n}))</summary>\n\n"
+      + ([.entries[] | "- \(locs($p)) - Fix: \(.[0].suggested_fix)"] | join("\n"))
+      + "\n\n</details>"
     else
       "- `\(.rule)` (\($n)):"
       + ([.entries[] | "\n  - \(locs($p)) - \(.[0].summary)\n    - Fix: \(.[0].suggested_fix)"] | join(""))
@@ -230,12 +266,15 @@ def collapsed_group($p):
   + ([.entries[] | "- \(locs($p)) - \(.[0].summary)\n  - Fix: \(.[0].suggested_fix)"] | join("\n"))
   + "\n\n</details>";
 
-# Consecutive groups in full form one list; a collapsed block stands apart by a blank line.
+# Consecutive groups in full form one list; a collapsed block, and a group whose Fix block
+# ends it, stand apart from what follows by a blank line.
 def join_blocks:
   reduce .[] as $b ({s: null, k: null};
     if .s == null then {s: $b.t, k: $b.k}
-    else {s: (.s + (if .k == "full" and $b.k == "full" then "\n" else "\n\n" end) + $b.t), k: $b.k} end)
+    else {s: (.s + (if .k == "full" and ($b.k | IN("full", "fold")) then "\n" else "\n\n" end) + $b.t), k: $b.k} end)
   | .s;
+
+def full_block($p): {k: (if folds($p) then "fold" else "full" end), t: full_group($p)};
 
 # --- Collapsing Findings. $rule is the ladder rule, $limit the threshold (10).
 
@@ -251,10 +290,56 @@ def findings_md($rule; $limit; $p):
           (if ($fold | not) or $s == "CRITICAL" or $s == "HIGH" then "full"
            elif .rule == "review.check-not-run" then (if $rule == 4 then "full" else "collapsed" end)
            elif $s == $top then "full" else "collapsed" end) as $k
-          | {k: $k, t: (if $k == "full" then full_group($p) else collapsed_group($p) end)})
+          | if $k == "full" then full_block($p) else {k: $k, t: collapsed_group($p)} end)
         | join_blocks) ]
-  + (if $d == [] then [] else ["**Disputed tool findings**\n\n" + ($d | groups | map(full_group($p)) | join("\n"))] end)
+  + (if $d == [] then [] else ["**Disputed tool findings**\n\n" + ($d | groups | map(full_block($p)) | join_blocks)] end)
   | join("\n\n");
+
+# --- What to do (comment-format.md, What to Do). Built from the verdict, the host signals, the
+# thread count and each finding's severity, rule_id, count and location; never from a summary or
+# a fix, except that a fix is searched for the fixed phrase of item e.
+
+def stale_live: # a "Generated content made stale:" whose rest does not start " none." / " none," / " none"
+  "Generated content made stale:" as $m | split($m) as $s
+  | any(range(1; $s | length); $s[.:] | join($m) | test("^ none(\\.|,|\\z)") | not);
+
+def loc_list($p): # the first eight locations, then the count of the rest
+  map(loc($p)) as $l
+  | ($l[:8] | join(", ")) + (if ($l | length) > 8 then tx("todo-more"; {count: (($l | length) - 8)}) else "" end);
+
+# $gaps: the section 5 entries less the thread resolution one, which has its own item.
+def todo_md($l; $rule; $p; $gaps):
+  ($l.findings | map(select(.rule_id != "review.tool-disputed"))) as $f
+  | $l.signals as $g
+  | def grp($k): (.items | length) as $n
+      | tx($k + (if $n == 1 then "-one" else "-many" end); {rule_id: .rule, count: $n, locations: ([.entries[][]] | loc_list($p))});
+  # review.* groups are no item: the author cannot act on them. Rule 4 counts them as gaps.
+  [sev_order[] as $s | $f | map(select(.severity == $s)) | groups[] | select(.rule | startswith("review.") | not)
+   | . + {sev: $s}] as $gs
+  | ($gaps + ($f | map(select(.rule_id | startswith("review."))) | length)) as $gaps
+  | ([ ("checks", "mergeability", "review-decision") as $s
+       | select($g[$s | gsub("-"; "_")] == "fail") | {box: true, t: tx("todo-" + $s)} ]
+     + (if $l.unresolved == 1 then [{box: true, t: tx("todo-threads-one")}]
+        elif $l.unresolved > 1 then [{box: true, t: tx("todo-threads-many"; {count: $l.unresolved})}] else [] end)
+     + [ $gs[] | select(.sev != "LOW")
+         | if $rule == 0 and (.rule | startswith("compat.")) then {box: false, t: grp("todo-compat")}
+           else {box: true, t: grp("todo-fix")} end ]) as $abc
+  | ($abc
+     + [ $gs[] | select(.sev == "LOW") | {box: false, t: grp("todo-optional")} ]
+     + (if any($l.findings[]; .suggested_fix | stale_live) then [{box: any($abc[]; .box), t: tx("todo-generated")}] else [] end)
+     + (if $rule != 4 then [] else
+          [ (select($l.triage) | "todo-triage"),
+            (select($g.checks == "unknown") | "todo-checks-unknown"),
+            (select($g.threads == "unknown") | "todo-threads-unknown"),
+            (select($g.review_decision == "unknown") | "todo-review-decision-unknown"),
+            (select($g.mergeability == "unknown") | "todo-mergeability-unknown")
+          | {box: false, t: tx(.)} ]
+          + (if $gaps == 1 then [{box: false, t: tx("todo-gaps-one")}]
+             elif $gaps > 1 then [{box: false, t: tx("todo-gaps-many"; {count: $gaps})}] else [] end)
+        end)) as $items
+  | tx(if $rule == 0 then "todo-lead-0" elif $rule == 4 then "todo-lead-4" elif $rule == 7 then "todo-lead-7"
+       else "todo-lead-block" end)
+    + (if $items == [] then "" else "\n\n" + ($items | map((if .box then "- [ ] " else "- " end) + .t) | join("\n")) end);
 
 # findings.json: the order the body shows them, the seven fields, the path repository-relative.
 def body_order($p):
@@ -378,6 +463,8 @@ def render($in):
   | ([$in.assessment, "**\($v.verdict | verdict_line)**"]
      + (if $in.run.triage then ["Triage only: the full review of this change has not run yet."] else [] end)
      + [$why]
+     + (if $v.rule == 8 then [] else ["### What to do\n\n" + todo_md($l; $v.rule; $p;
+          ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | length) + ($in.run.verify_gaps | length))] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
      + section("Checks that could not run"; gap_lines($h; $in.run; $p); "\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")
