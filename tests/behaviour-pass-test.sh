@@ -38,7 +38,9 @@ cat > "$TMP/behaviour-556.json" <<'EOF'
    "head_expr":"concat(aws_security_group.this[*].id, var.vpc_security_group_ids)",
    "referenced_inputs":[{"name":"vpc_security_group_ids","type":"list(string)"}],"contextual_refs":["aws_security_group.this"],
    "pure":true,"levels":["L1"],"reason":null,
-   "cases":["empty","one-known","empty-string-element","null-element","unknown-element","wholly-unknown"]},
+   "cases":[{"id":"empty","inputs":{"vpc_security_group_ids":{"value":[]}}},{"id":"one-known","inputs":{"vpc_security_group_ids":{"value":["sg-1"]}}},
+            {"id":"empty-string-element","inputs":{"vpc_security_group_ids":{"value":[""]}}},{"id":"null-element","inputs":{"vpc_security_group_ids":{"value":[null]}}},
+            {"id":"unknown-element","inputs":{"vpc_security_group_ids":{"unknown_elements":[0]}}},{"id":"wholly-unknown","inputs":{"vpc_security_group_ids":{"unknown":true}}}]},
   {"id":"T-002","file":"main.tf","line":2,"category":"unknown-propagation-candidate","change_kind":"modified",
    "address":"aws_rds_cluster.this","attribute":"vpc_security_group_ids",
    "base_expr":"compact(concat(aws_security_group.this[*].id, var.vpc_security_group_ids))",
@@ -215,9 +217,10 @@ refuse_b "a path with a backtick" '.triggers[0].file = "a`b.tf"'
 refuse_b "a line of 0" '.triggers[0].line = 0'
 refuse_b "41 triggers" '.triggers = [range(41) as $i | .triggers[0] + {id: ("T-" + ("00\($i)" | .[-3:]))}]'
 refuse_b "no capped count" 'del(.capped)'
-refuse_b "a required case id outside the pattern" '.triggers[0].cases = ["a b"]'
-refuse_b "33 required cases" '.triggers[0].cases = [range(33) | "c\(.)"]'
-refuse_b "a required case twice" '.triggers[0].cases = ["empty", "empty"]'
+refuse_b "a required case id outside the pattern" '.triggers[0].cases = [{id: "a b", inputs: {}}]'
+refuse_b "a required case that is not an object" '.triggers[0].cases = ["empty"]'
+refuse_b "33 required cases" '.triggers[0].cases = [range(33) | {id: "c\(.)", inputs: {}}]'
+refuse_b "a required case twice" '.triggers[0].cases = [{id: "empty", inputs: {}}, {id: "empty", inputs: {}}]'
 refuse_b "an entry naming a trigger that does not exist" '.entries[0].trigger_ids += ["T-009"]'
 refuse_b "a changed file of the diff with no entry" '.entries = []'
 setup; printf 'not json' > "$TMP/behaviour.out"; classify; evalp

@@ -57,9 +57,11 @@ def valid_behaviour:
   type == "object" and .schema_version == 1 and (.inert | type == "boolean") and (.capped | nat)
   and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object" and (.id | tid)
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0)) and (.category | IN(cats[]))
-        # The required case set, when present: case ids, at most 32, each once.
+        # The required case set, when present: at most 32 cases, each with its own id once.
         and ((has("cases") | not) or (.cases | type == "array" and length <= 32
-              and all(.[]; type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$")) and length == (unique | length))))
+              and all(.[]; type == "object" and (.id | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$"))
+                           and (.inputs | type == "object"))
+              and (map(.id) | length == (unique | length)))))
         and (map(.id) | length == (unique | length)))
   and (.entries | type == "array" and all(.[]; type == "object" and (.path | plain_path)
         and (.trigger_ids | type == "array" and all(.[]; tid))))

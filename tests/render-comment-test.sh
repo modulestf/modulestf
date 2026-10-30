@@ -971,7 +971,7 @@ t_bgaps() { render "$LOWF" "" "" "$BUV"; [ "$(rule)" = 4 ]; }
 t_bvi() { render "$(one review.verification-incomplete MEDIUM . null "S." "no code change: none.")"; [ "$(rule)" = 4 ]; }
 t_bev() { render "$LOWF" "" "" "$BOK"; grep -q '^Behaviour evidence: 3 changes' "$O/comment.md"; }
 t_bstate() { render "$G" "" "" "$TMP/run-b-bs.json"; [ "$ST" = 2 ]; }
-mutate "behaviour gaps not counted" 's/ \+ \(\$b \| behaviour_gaps\)\)\} as \$l/)} as \$l/' t_bgaps
+mutate "behaviour gaps not counted" 's/ \+ \(\$b \| behaviour_gaps\)\),\n     unplanned:/),\n     unplanned:/' t_bgaps
 mutate "unverified triggers not counted" 's/select\(\.state == "unverifiable"\)\] \| length\)/select(false)] | length)/' t_bgaps
 mutate "review.verification-incomplete not an unknown" 's/, "review\.verification-incomplete"\)\)/))/' t_bvi
 mutate "the evidence line dropped" 's/\+ evidence_lines\(\$b\)//' t_bev
