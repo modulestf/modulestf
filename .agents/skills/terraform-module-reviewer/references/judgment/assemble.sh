@@ -112,7 +112,7 @@ CHECKS="a-compatibility b-coverage c-structure d-examples e-profile f-scope"
 copy "$J/workflow.md" "" "-" ""
 echo
 copy "$S/SKILL.md" "../../" "Skill" \
-  "h:When to Use This Skill|h:Responsibility Boundaries|h:Output|h:Reference Files|h:Check A: Backwards Compatibility|h:Check B: Coverage Gaps Against the Provider Schema|h:Check C: Module Structure|h:Check D: Examples|h:Check E: Profile Conventions|h:Check F: Scope|l:^8[.] If .mtf-facts. is installed|l:^Classify the changed paths, order the areas|l:^Each check.s full [*][*]Reads|l:^The .rule_id. values named in the checks above"
+  "h:When to Use This Skill|h:Responsibility Boundaries|h:Output|h:Reference Files|h:Check A: Backwards Compatibility|h:Check B: Coverage Gaps Against the Provider Schema|h:Check C: Module Structure|h:Check D: Examples|h:Check E: Profile Conventions|h:Check F: Scope|h:Check G: Behaviour Changes and Claims|l:^8[.] If .mtf-facts. is installed|l:^Classify the changed paths, order the areas|l:^Each check.s full [*][*]Reads|l:^The .rule_id. values named in the checks above"
 for c in $CHECKS; do
   echo
   # Pointer lines to the engine files and the rule id lists say nothing a judgment run needs.

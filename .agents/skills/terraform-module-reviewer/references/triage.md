@@ -33,7 +33,7 @@ Check C's `structure.feature-above-version-floor` runs: it reads Terraform's own
 
 ## What Triage Defers
 
-- **Check A**, **Check B** and **Check D**, whole. Each rests on provider pages, on another check's conclusion, or on the verification record.
+- **Check A**, **Check B**, **Check D** and **Check G**, whole. Each rests on provider pages, on another check's conclusion, or on the verification record.
 - The deferred cases of Checks C and E above.
 - Every schema fetch. No need list is built and nothing is fetched, so the [budget](large-changes.md#budget) is never reached.
 - The verification pass and the plan pass. The reviewer runs neither in any mode; a caller that runs them for a full review runs neither for triage, and a verification record handed over anyway is not read, since Check D does not run.

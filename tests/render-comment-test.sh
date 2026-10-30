@@ -65,6 +65,7 @@ checks() { # name, pass|fail|unknown [, jq update] -> checks directory
 runf() { # name [, jq update] -> run file
   jq -n '{format: 1, triage: false, plan_ran: false, verify_gaps: [],
     coverage: {class: "complete", inert: false, unplanned: []},
+    behaviour: {status: "ran", reason: null, triggers: [], claims: [], capped: 0},
     counts: {"instruction-like-text-from-others": 0, "conversation-claims-unread": 0,
              "review.quoted-claim-unverifiable": 0}} | '"${2-.}" > "$TMP/run-$1.json"
   echo "$TMP/run-$1.json"
@@ -906,6 +907,119 @@ t_rev_noitem() { render "$TMP/wt-rev6.json"; [ "$ST" = 0 ] && ! todo | grep -qF 
 mutate "review groups listed as items" 's/select\(\.rule \| startswith\("review\."\) \| not\)/select(true)/' t_rev_noitem
 t_r4_once() { render "$NONE" "$H2"; [ "$(rule)" = 4 ] && ! todo | grep -qF 'could not run; see'; }
 mutate "thread resolution counted as a gap too" 's/select\(\.kind != "thread-resolution-unknown"\)/select(true)/' t_r4_once
+
+# --- Behaviour evidence (behaviour-pass.md, The run object): verified, covered and inert pass;
+# an unverified trigger or claim, a trigger over the cap and a step that did not run are unknowns
+# at rule 4, listed in section 5; a refuted state blocks at rule 2.
+bt() { # id, category, state -> one trigger on main.tf
+  jq -nc --arg i "$1" --arg c "$2" --arg s "$3" '{id: $i, file: "main.tf", line: 2, category: $c, state: $s}'
+}
+brun() { # name, triggers json, claims json [, capped] -> run file
+  runf "b-$1" ".behaviour = {status: \"ran\", reason: null, triggers: $2, claims: $3, capped: ${4:-0}}"
+}
+LOWF="$(f structure.argument-order LOW main.tf 43 "S." "F." | list lowf)" # its own file: one() reuses a name
+BOK="$(brun ok "[$(bt T-001 wrapper-change verified), $(bt T-002 unknown-propagation-candidate covered), $(bt T-003 literal-argument-change inert)]" '[{claim_id: "C-1", state: "verified"}]')"
+ladder "behaviour verified, covered and inert with a LOW finding" "approve with nits COMMENT" 7 "$LOWF" "" "" "$BOK"
+grep -qxF 'Behaviour evidence: 3 changes classified: 1 verified, 1 covered by a plan, 1 inert, 0 refuted, 0 not verified; 1 claims: 1 verified, 0 refuted, 0 not verified.' "$O/comment.md"
+check "behaviour: the evidence line follows the rationale" $?
+awk 'p == "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7)." && /^$/ { getline; print; exit } { p = $0 }' "$O/comment.md" | grep -q '^Behaviour evidence: '
+check "behaviour: the evidence line is the paragraph after the rationale" $?
+ladder "an inert change" "approve APPROVE" 8 "$NONE" "" "" "$(brun inert '[]' '[]')"
+! grep -q 'Behaviour evidence' "$O/comment.md"; check "behaviour: nothing classified renders no evidence line" $?
+BUV="$(brun uv "[$(bt T-001 wrapper-change unverifiable), $(bt T-002 unknown-propagation-candidate unverifiable)]" '[{claim_id: "C-1", state: "unverifiable"}]')"
+ladder "an unverified trigger with a LOW finding" "inconclusive COMMENT" 4 "$LOWF" "" "" "$BUV"
+grep -qxF 'A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).' "$O/comment.md"
+check "behaviour: rule 4 names the listed checks" $?
+grep -qxF -- '- 3 checks could not run; see Checks that could not run.' "$O/comment.md"; check "behaviour: What to do counts each unverified trigger and claim" $?
+ladder "an unverified claim alone" "inconclusive COMMENT" 4 "$NONE" "" "" "$(brun uc "[$(bt T-001 wrapper-change verified)]" '[{claim_id: "C-2", state: "unverifiable"}]')"
+grep -qxF -- '- Claim C-2 from the description: not verified.' "$O/comment.md"; check "behaviour: the unverified claim is listed" $?
+ladder "triggers over the cap" "inconclusive COMMENT" 4 "$NONE" "" "" "$(brun cap '[]' '[]' 2)"
+grep -qxF -- '- 2 more behaviour changes over the classifier cap: not verified.' "$O/comment.md"; check "behaviour: the capped line" $?
+ladder "the behaviour step not run" "inconclusive COMMENT" 4 "$NONE" "" "" \
+  "$(runf bnr '.behaviour = {status: "not-run", reason: "mtf-facts not installed", triggers: [], claims: [], capped: 0}')"
+grep -qxF -- '- Behaviour check: mtf-facts not installed, so no change was classified or verified.' "$O/comment.md"; check "behaviour: the not-run line" $?
+ladder "a review.verification-incomplete finding" "inconclusive COMMENT" 4 "$(one review.verification-incomplete MEDIUM . null "S." "no code change: none.")"
+grep -qxF 'The behaviour evidence handed to the review was incomplete, so a behaviour change may be unchecked. Any unknown makes the review inconclusive (ladder rule 4).' "$O/comment.md"
+check "behaviour: the verification-incomplete rationale" $?
+ladder "a refuted claim" "block REQUEST_CHANGES" 2 "$(one claim.refuted HIGH main.tf 2 "S." "F.")" "" "" "$(brun ref "[$(bt T-001 wrapper-change refuted)]" '[{claim_id: "C-1", state: "refuted"}]')"
+ladder "a fix that does not take effect" "block REQUEST_CHANGES" 2 "$(one claim.fix-not-effective HIGH main.tf 2 "S." "F.")" "" "" "$(brun fne "[$(bt T-001 wrapper-change refuted), $(bt T-002 unknown-propagation-candidate unverifiable)]" '[{claim_id: "C-2", state: "refuted"}]')"
+ladder "a CRITICAL behaviour break alone" "hold for the next major COMMENT" 0 "$(one compat.expression-behaviour-changed CRITICAL main.tf 2 "S." "F.")"
+# Section 5 byte for byte, with a module root prefix on the trigger paths.
+t_bgold() {
+  render "$NONE" "$(host bpre '.prefix = "mod"')" "" "$BUV"
+  cat > "$TMP/want-b5" <<'EOF'
+### Checks that could not run
+
+- Behaviour change at `mod/main.tf:2` (wrapper-change): not verified.
+- Behaviour change at `mod/main.tf:2` (unknown-propagation-candidate): not verified.
+- Claim C-1 from the description: not verified.
+EOF
+  awk '/^### Checks that could not run$/ { on = 1 } on && /^### / && !/could not run/ { exit } on' "$O/comment.md" \
+    | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' | cmp -s "$TMP/want-b5" -
+}
+t_bgold; check "behaviour: section 5 byte for byte, paths repository-relative" $?
+refused "a behaviour trigger state outside the five" "$G" "" "" "$(brun bs "[$(bt T-001 wrapper-change maybe)]" '[]')"
+refused "a behaviour category outside the list" "$G" "" "" "$(brun bc "[$(bt T-001 cosmetic verified)]" '[]')"
+refused "a claim state inert" "$G" "" "" "$(brun bk '[]' '[{claim_id: "C-1", state: "inert"}]')"
+refused "41 behaviour triggers" "$G" "" "" "$(brun b41 "[$(for i in $(seq 1 41); do bt "$(printf 'T-%03d' "$i")" wrapper-change verified; done | paste -sd, -)]" '[]')"
+refused "a ran behaviour with a reason" "$G" "" "" "$(runf br '.behaviour = {status: "ran", reason: "mtf-facts failed", triggers: [], claims: [], capped: 0}')"
+refused "a not-run behaviour with triggers" "$G" "" "" "$(runf bt '.behaviour = {status: "not-run", reason: "mtf-facts failed", triggers: [{id: "T-001", file: "main.tf", line: 2, category: "wrapper-change", state: "unverifiable"}], claims: [], capped: 0}')"
+refused "a not-run reason outside the list" "$G" "" "" "$(runf bx '.behaviour = {status: "not-run", reason: "tired", triggers: [], claims: [], capped: 0}')"
+refused "a behaviour object with an extra key" "$G" "" "" "$(runf be '.behaviour = {status: "ran", reason: null, triggers: [], claims: [], capped: 0, levels: []}')"
+refused "a trigger path out of the module" "$G" "" "" "$(brun bp '[{id: "T-001", file: "../main.tf", line: 2, category: "wrapper-change", state: "verified"}]' '[]')"
+t_bgaps() { render "$LOWF" "" "" "$BUV"; [ "$(rule)" = 4 ]; }
+t_bvi() { render "$(one review.verification-incomplete MEDIUM . null "S." "no code change: none.")"; [ "$(rule)" = 4 ]; }
+t_bev() { render "$LOWF" "" "" "$BOK"; grep -q '^Behaviour evidence: 3 changes' "$O/comment.md"; }
+t_bstate() { render "$G" "" "" "$TMP/run-b-bs.json"; [ "$ST" = 2 ]; }
+mutate "behaviour gaps not counted" 's/ \+ \(\$b \| behaviour_gaps\)\),\n     unplanned:/),\n     unplanned:/' t_bgaps
+mutate "unverified triggers not counted" 's/select\(\.state == "unverifiable"\)\] \| length\)/select(false)] | length)/' t_bgaps
+mutate "review.verification-incomplete not an unknown" 's/, "review\.verification-incomplete"\)\)/))/' t_bvi
+mutate "the evidence line dropped" 's/\+ evidence_lines\(\$b\)//' t_bev
+mutate "any trigger state accepted" 's/\(\.state \| IN\("inert", "verified", "covered", "refuted", "unverifiable"\)\)/true/' t_bstate
+# A run file without the behaviour key: outside a triage run the host did not run the step, an
+# unknown with its line; in a triage run nothing more.
+ladder "a run file with no behaviour key" "inconclusive COMMENT" 4 "$LOWF" "" "" "$(runf nob 'del(.behaviour)')"
+grep -qxF -- '- Behaviour check: not run by the host, so no change was classified or verified.' "$O/comment.md"
+check "behaviour: an absent key is the host's step not run" $?
+ladder "a triage run file with no behaviour key" "inconclusive COMMENT" 4 "$NONE" "" "" "$(runf nobt 'del(.behaviour) | .triage = true')"
+! grep -q 'Behaviour check' "$O/comment.md"; check "behaviour: an absent key in triage adds no line" $?
+BREF="$(brun refu "[$(bt T-001 wrapper-change refuted)]" '[{claim_id: "C-1", state: "refuted"}]')"
+# A refuted state blocks by itself at rule 2, whatever the review reported; a claim.* finding
+# only words it, and one with no refuted state in the behaviour object is refused.
+ladder "a refuted state with no claim finding" "block REQUEST_CHANGES" 2 "$LOWF" "" "" "$BREF"
+grep -qxF 'The behaviour evidence refutes a change or a claim of the description. Refuted behaviour blocks merge (ladder rule 2).' "$O/comment.md"
+check "behaviour: the rationale names the refuted evidence" $?
+todo | grep -qxF -- '- [ ] Behaviour change at `main.tf:2` (wrapper-change): the evidence refutes it. Fix the change or correct the description.'
+check "behaviour: an unreported refuted trigger is a checklist item" $?
+ladder "a refuted state with only a LOW claim finding" "block REQUEST_CHANGES" 2 "$(one claim.refuted LOW main.tf 2 "S." "F.")" "" "" "$BREF"
+ladder "a refuted state with its claim finding" "block REQUEST_CHANGES" 2 "$(one claim.refuted HIGH main.tf 2 "S." "F.")" "" "" "$BREF"
+! todo | grep -qF 'the evidence refutes it'; check "behaviour: a reported refutation is worded by its finding alone" $?
+ladder "a refuted state beside a CRITICAL compat break" "block REQUEST_CHANGES" 1 "$(one compat.expression-behaviour-changed CRITICAL main.tf 2 "S." "F.")" "" "" "$BREF"
+# A CRITICAL finding keeps rule 1 and its rationale; the refuted state only adds its item.
+ladder "a refuted state beside a CRITICAL non-compat finding" "block REQUEST_CHANGES" 1 "$(f structure.insecure-default CRITICAL main.tf 9 "S." "F." | list crit-ref)" "" "" "$BREF"
+cat > "$TMP/want-crit-ref" <<'EOT'
+A CRITICAL finding is open. Any CRITICAL finding blocks merge (ladder rule 1).
+
+Behaviour evidence: 1 changes classified: 0 verified, 0 covered by a plan, 0 inert, 1 refuted, 0 not verified; 1 claims: 0 verified, 1 refuted, 0 not verified.
+
+### What to do
+
+To make this mergeable, resolve each checklist item below and push.
+
+- [ ] `structure.insecure-default`: apply the Fix at `main.tf:9`.
+- [ ] Behaviour change at `main.tf:2` (wrapper-change): the evidence refutes it. Fix the change or correct the description.
+EOT
+awk '/^A CRITICAL finding is open/ { on = 1 } on && /^### Findings$/ { exit } on' "$O/comment.md" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' | cmp -s "$TMP/want-crit-ref" -
+check "behaviour: CRITICAL plus refuted, rationale and What to do byte for byte" $?
+refused "a claim finding with no refuted state" "$(one claim.refuted HIGH main.tf 2 "S." "F.")" "" "" "$BUV"
+refused "a claim finding with no behaviour object" "$(one claim.fix-not-effective HIGH main.tf 2 "S." "F.")" "" "" "$TMP/run-nob.json"
+t_babsent() { render "$LOWF" "" "" "$TMP/run-nob.json"; [ "$(rule)" = 4 ]; }
+t_bref() { render "$LOWF" "" "" "$BREF"; [ "$(rule)" = 2 ]; }
+t_bclaim() { render "$(one claim.refuted HIGH main.tf 2 "S." "F.")" "" "" "$BUV"; [ "$ST" = 2 ] && empty_out; }
+mutate "an absent behaviour key passes" 's/else \{status: "not-run", reason: "not run by the host"/else null | {status: "not-run", reason: "not run by the host"/; s/elif \$run\.triage then null/elif true then null/' t_babsent
+mutate "refuted states do not block" 's/ or \.refuted > 0 then \{rule: 2/ then {rule: 2/' t_bref
+mutate "a claim finding with no refuted state accepted" 's/\|\| die "a claim\.\* finding with no refuted state in the behaviour object"/|| true/' t_bclaim
+mutate "a behaviour string changed in the script only" 's/so no change was classified or verified/so nothing was classified/' t_table
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

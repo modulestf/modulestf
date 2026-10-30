@@ -5,7 +5,7 @@
 # Loaded with: jq -L <references dir> 'include "render-comment"; ...'
 
 def sev_order: ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
-def rule_pat: "(compat|coverage|structure|examples|profile|scope|review)\\.[a-z0-9]+(-[a-z0-9]+)*";
+def rule_pat: "(compat|coverage|structure|examples|profile|scope|review|claim)\\.[a-z0-9]+(-[a-z0-9]+)*";
 def nat: type == "number" and . >= 0 and . == floor;
 def clean_text: type == "string" and length > 0 and (test("[\\x00-\\x1f\\x7f]") | not);
 def plain_path: type == "string" and length > 0 and length <= 1024
@@ -66,9 +66,51 @@ def unplanned_reasons: ["no example directory", "no AWS profile named", "not rea
   "plan pass ended: credentials", "plan gate G0", "plan gate G1", "plan gate G2", "plan gate G3",
   "exception: example assumes a role in another account", "exception: needs a Docker daemon"];
 
+# The behaviour object behaviour-pass.sh eval writes (behaviour-pass.md, The run object).
+def behaviour_reasons: ["mtf-facts not installed", "mtf-facts failed", "mtf-facts timed out", "output refused",
+  "claims refused", "ladder refused"];
+def behaviour_categories: ["wrapper-change", "default-change", "count-for_each-conditional-change",
+  "type-validation-change", "dynamic-block-change", "locals-outputs-change", "moved-or-renamed-address",
+  "provider-version-floor-change", "unknown-propagation-candidate", "literal-argument-change",
+  "resource-added-or-removed", "lifecycle-change", "unclassified-change", "non-hcl-dependency"];
+def valid_behaviour:
+  type == "object" and keys == ["capped", "claims", "reason", "status", "triggers"]
+  and (.capped | nat)
+  and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object"
+        and keys == ["category", "file", "id", "line", "state"] and (.id | type == "string" and test("^T-[0-9]{3}$"))
+        and (.file | plain_path) and (.line == null or (.line | nat and . > 0))
+        and (.category | IN(behaviour_categories[]))
+        and (.state | IN("inert", "verified", "covered", "refuted", "unverifiable")))
+        and (map(.id) | length == (unique | length)))
+  and (.claims | type == "array" and length <= 20 and all(.[]; type == "object"
+        and keys == ["claim_id", "state"] and (.claim_id | type == "string" and test("^C-[0-9]+$"))
+        and (.state | IN("verified", "refuted", "unverifiable")))
+        and (map(.claim_id) | length == (unique | length)))
+  and (if .status == "ran" then .reason == null
+       else .status == "not-run" and (.reason | IN(behaviour_reasons[])) and .triggers == [] and .claims == [] and .capped == 0 end);
+
+# The behaviour object the render reads: the run file's, or, outside a triage run, a step the
+# host did not run, so a host that leaves the key out never approves on reading alone.
+def behaviour_of($run):
+  if $run | has("behaviour") then $run.behaviour
+  elif $run.triage then null
+  else {status: "not-run", reason: "not run by the host", triggers: [], claims: [], capped: 0} end;
+
+# The behaviour gaps: each unverified trigger and claim, each trigger over the cap, and a
+# behaviour step that did not run. A refuted state is no gap: it blocks at rule 2.
+def behaviour_gaps: if . == null then 0 elif .status == "not-run" then 1
+  else ([.triggers[], .claims[] | select(.state == "unverifiable")] | length) + .capped end;
+def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select(.state == "refuted")] | length end;
+
+# A claim.* finding words a refuted state; one with no refuted state in the behaviour object is
+# refused.
+def claims_consistent($findings; $run):
+  (any($findings[]; .rule_id | startswith("claim.")) | not) or (behaviour_of($run) | behaviour_refuted > 0);
+
 def valid_run:
   type == "object"
-  and keys == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"]
+  and ((keys - ["behaviour"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((has("behaviour") | not) or (.behaviour | valid_behaviour))
   and .format == 1
   and (.triage | type == "boolean") and (.plan_ran | type == "boolean")
   and (.verify_gaps | type == "array" and all(.[]; type == "object"
@@ -97,23 +139,24 @@ def valid_assessment: type == "string" and length <= 4096
 # --- Paths: Step 8 puts the module root prefix back in front of a module-root-relative path.
 
 def repo_path($p): if $p == "" then . elif . == "." then $p else $p + "/" + . end;
+def trigger_at($p): {category, location: ((.file | repo_path($p)) + (if .line == null then "" else ":\(.line)" end))};
 def loc($p): "`" + (.file | repo_path($p)) + (if .line == null then "" else ":\(.line)" end) + "`";
 
 # --- The ladder (verdict.md). Input: {findings, signals: {checks, threads, review_decision,
-# mergeability}, unresolved, triage, gaps}. The disputed note is the one finding it does not read.
+# mergeability}, unresolved, triage, gaps, refuted}. The disputed note is the one finding it does not read.
 
 def ladder:
   (.findings | map(select(.rule_id != "review.tool-disputed"))) as $f
   | .signals as $g
   | def has_sev($s): any($f[]; .severity == $s);
-  if has_sev("CRITICAL")
+  if has_sev("CRITICAL") and .refuted == 0
      and all($f[] | select(.severity == "CRITICAL" or .severity == "HIGH"); .rule_id | startswith("compat."))
     then {rule: 0, verdict: "hold for the next major"}
   elif has_sev("CRITICAL") then {rule: 1, verdict: "block"}
-  elif has_sev("HIGH") then {rule: 2, verdict: "block"}
+  elif has_sev("HIGH") or .refuted > 0 then {rule: 2, verdict: "block"}
   elif any($g.checks, $g.review_decision, $g.mergeability; . == "fail") then {rule: 3, verdict: "block"}
   elif .triage or any($g[]; . == "unknown")
-       or any($f[]; .rule_id | IN("review.check-not-run", "review.no-change-identified"))
+       or any($f[]; .rule_id | IN("review.check-not-run", "review.no-change-identified", "review.verification-incomplete"))
        or .gaps > 0 or .unplanned > 0
     then {rule: 4, verdict: "inconclusive"}
   elif .unresolved > 0 then {rule: 5, verdict: "changes suggested"}
@@ -145,6 +188,7 @@ def texts: {
   "rationale-0": "The only CRITICAL and HIGH findings carry a `compat.*` rule_id. When only breaking-change findings block, the change waits for the next major release (ladder rule 0).",
   "rationale-open-one": "A {severity} finding is open. Any {severity} finding blocks merge (ladder rule {rule}).",
   "rationale-open-many": "{count} {severity} findings are open. Any {severity} finding blocks merge (ladder rule {rule}).",
+  "rationale-2-refuted": "The behaviour evidence refutes a change or a claim of the description. Refuted behaviour blocks merge (ladder rule 2).",
   "rationale-3-one": "Failing host signal: {signals}. A failing host signal blocks merge (ladder rule 3).",
   "rationale-3-many": "Failing host signals: {signals}. A failing host signal blocks merge (ladder rule 3).",
   "rationale-4-triage": "A triage run leaves its deferred checks unknown. Any unknown makes the review inconclusive (ladder rule 4).",
@@ -154,7 +198,8 @@ def texts: {
   "rationale-4-mergeability": "Mergeability could not be read, so a merge conflict may exist. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-no-change": "The workspace did not hold the change. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-check-not-run": "A check did not run, so a defect it covers may be open. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-listed": "A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-verification-incomplete": "The behaviour evidence handed to the review was incomplete, so a behaviour change may be unchecked. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-listed":"A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-5": "Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5).",
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
   "rationale-8": "No finding is open. With nothing open, the change is approved (ladder rule 8).",
@@ -184,6 +229,11 @@ def texts: {
   "unplanned-more": "- {count} more examples that were not planned are not listed.",
   "unplanned-no-examples": "- The module has no example directory, so no example could be planned.",
   "unplanned-inert": "- The change reaches no Terraform configuration, so the examples below that were not planned leave nothing unknown.",
+  "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
+  "behaviour-trigger": "- Behaviour change at `{location}` ({category}): not verified.",
+  "behaviour-capped": "- {count} more behaviour changes over the classifier cap: not verified.",
+  "behaviour-claim": "- Claim {claim_id} from the description: not verified.",
+  "behaviour-evidence": "Behaviour evidence: {count} changes classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claims} claims: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "thread-match": "- `{location}`: this review has a finding at the same path and line.",
   "thread-no-match": "- `{location}`: this review has no finding at the same path and line.",
   "todo-lead-block": "To make this mergeable, resolve each checklist item below and push.",
@@ -202,6 +252,7 @@ def texts: {
   "todo-optional-one": "Optional: `{rule_id}` at {locations}.",
   "todo-optional-many": "Optional: `{rule_id}` ({count}) at {locations}.",
   "todo-more": ", and {count} more",
+  "todo-refuted": "Behaviour change at `{location}` ({category}): the evidence refutes it. Fix the change or correct the description.",
   "todo-generated": "Documentation tables are generated. After the edits above, run `pre-commit run -a` and commit the result. Do not edit them by hand.",
   "todo-triage": "This was a triage run. The full review has not run.",
   "todo-checks-unknown": "Check results could not be read or are still running.",
@@ -226,7 +277,8 @@ def rationale($in):
         else tx("rationale-open-many"; {count: ($n | count_word), severity: $s, rule: $r}) end;
   $in.signals as $g
   | if $r == 0 then tx("rationale-0")
-    elif $r == 1 then open("CRITICAL") elif $r == 2 then open("HIGH") elif $r == 6 then open("MEDIUM")
+    elif $r == 1 then open("CRITICAL")
+    elif $r == 2 then (if any($f[]; .severity == "HIGH") then open("HIGH") else tx("rationale-2-refuted") end) elif $r == 6 then open("MEDIUM")
     elif $r == 3 then
       [("checks", "review-decision", "mergeability") as $s
        | select($g[$s | gsub("-"; "_")] == "fail") | tx("signal-name-" + $s)] as $n
@@ -239,6 +291,7 @@ def rationale($in):
          elif $g.mergeability == "unknown" then "rationale-4-mergeability"
          elif any($f[]; .rule_id == "review.no-change-identified") then "rationale-4-no-change"
          elif any($f[]; .rule_id == "review.check-not-run") then "rationale-4-check-not-run"
+         elif any($f[]; .rule_id == "review.verification-incomplete") then "rationale-4-verification-incomplete"
          else "rationale-4-listed" end)
     else tx("rationale-\($r)") end;
 
@@ -339,7 +392,8 @@ def todo_md($l; $rule; $p; $gaps):
         elif $l.unresolved > 1 then [{box: true, t: tx("todo-threads-many"; {count: $l.unresolved})}] else [] end)
      + [ $gs[] | select(.sev != "LOW")
          | if $rule == 0 and (.rule | startswith("compat.")) then {box: false, t: grp("todo-compat")}
-           else {box: true, t: grp("todo-fix")} end ]) as $abc
+           else {box: true, t: grp("todo-fix")} end ]
+     + [ $l.refuted_todo[] | {box: true, t: tx("todo-refuted"; trigger_at($p))} ]) as $abc
   | ($abc
      + [ $gs[] | select(.sev == "LOW") | {box: false, t: grp("todo-optional")} ]
      + (if any($l.findings[]; .suggested_fix | stale_live) then [{box: any($abc[]; .box), t: tx("todo-generated")}] else [] end)
@@ -366,7 +420,7 @@ def body_order($p):
 
 # --- Sections 5 to 8, from host.json (host-pass.md, Host Facts), the checks file and the run file.
 
-def gap_lines($h; $run; $p):
+def gap_lines($h; $run; $b; $p):
   [ $h.could_not_run[]
     | tx(.kind; {path: ((.path // "") | repo_path($p)), count: (.count // 0)}) ]
   + [ $run.verify_gaps[:100][]
@@ -375,7 +429,24 @@ def gap_lines($h; $run; $p):
   + (if $run.coverage.inert and $run.coverage.unplanned != [] then [tx("unplanned-inert")] else [] end)
   + [ $run.coverage.unplanned[:100][]
       | if .reason == "no example directory" then tx("unplanned-no-examples") else tx("unplanned"; {dir, reason}) end ]
-  + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end);
+  + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end)
+  + ($b | if . == null then []
+     elif .status == "not-run" then [tx("behaviour-not-run"; {reason})]
+     else [ (.triggers[] | select(.state == "unverifiable") | tx("behaviour-trigger"; trigger_at($p))),
+            (.capped | select(. > 0) | tx("behaviour-capped"; {count: .})),
+            (.claims[] | select(.state == "unverifiable") | tx("behaviour-claim"; {claim_id})) ] end);
+
+# The one evidence line under the rationale, when the behaviour step ran and classified anything.
+def evidence_lines($b):
+  if $b == null or $b.status != "ran" or ($b.triggers == [] and $b.claims == [] and $b.capped == 0) then []
+  else
+    def n($xs; $s): [$xs[] | select(.state == $s)] | length;
+    [tx("behaviour-evidence"; {count: (($b.triggers | length) + $b.capped),
+       verified: n($b.triggers; "verified"), covered: n($b.triggers; "covered"), inert: n($b.triggers; "inert"),
+       refuted: n($b.triggers; "refuted"), unverifiable: (n($b.triggers; "unverifiable") + $b.capped),
+       claims: ($b.claims | length), claims_verified: n($b.claims; "verified"),
+       claims_refuted: n($b.claims; "refuted"), claims_unverifiable: n($b.claims; "unverifiable")})]
+  end;
 
 def state_lines($h; $c):
   ($h.signals + {checks: $c.signal}) as $g
@@ -475,20 +546,25 @@ def leak_hit($parts; $lits; $res):
 
 def render($in):
   $in.host as $h | $in.host.prefix as $p
+  | behaviour_of($in.run) as $b
   | {findings: $in.findings, signals: ($h.signals + {checks: $in.checks.signal}),
-     unresolved: ($h.unresolved_threads | length), triage: $in.run.triage,
-     gaps: (($h.could_not_run | length) + ($in.run.verify_gaps | length)),
+     unresolved: ($h.unresolved_threads | length), triage: $in.run.triage, refuted: ($b | behaviour_refuted),
+     # A refuted trigger no blocking claim.* finding words is its own checklist item.
+     refuted_todo: (if any($in.findings[]; (.rule_id | startswith("claim.")) and (.severity | IN("CRITICAL", "HIGH"))) then []
+                    else [($b // {triggers: []}).triggers[] | select(.state == "refuted")] end),
+     gaps: (($h.could_not_run | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
      unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end)} as $l
   | ($l | ladder) as $v
   | ($v | rationale($l)) as $why
   | ([$in.assessment, "**\($v.verdict | verdict_line)**"]
      + (if $in.run.triage then ["Triage only: the full review of this change has not run yet."] else [] end)
      + [$why]
+     + evidence_lines($b)
      + (if $v.rule == 8 then [] else ["### What to do\n\n" + todo_md($l; $v.rule; $p;
           ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | length) + ($in.run.verify_gaps | length)
-          + $l.unplanned)] end)
+          + $l.unplanned + ($b | behaviour_gaps))] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
-     + section("Checks that could not run"; gap_lines($h; $in.run; $p); "\n")
+     + section("Checks that could not run"; gap_lines($h; $in.run; $b; $p); "\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")
      + section("Existing threads"; thread_lines($h; $in.findings; $p); "\n")
      + section("Conversation comments"; conversation_lines($h.conversation; $in.run.counts); "\n\n")

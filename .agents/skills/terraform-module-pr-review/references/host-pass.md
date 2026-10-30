@@ -64,7 +64,8 @@ bash <skill>/references/host-pass.sh check-plan <file> <records directory> --hea
 | 3 | Run, as [Workspace](#workspace) below. No module root search: the prefix is `host.json`'s `prefix` |
 | 4 | `task.md` carries the paths, the renames, the empty files, the patch-unavailable list and the diff, module-root-relative; `files.json` carries the list Step 5.5 reads |
 | 5 | `host.json` and the block in `task.md` |
-| 5.5 | Run, as [Verification](#verification) below |
+| 5.4 | Run, as [behaviour-pass.md](behaviour-pass.md) says, with `files.json` as the diff and `mtf-facts` from the host's pinned install; absent, the step is `not-run` with `mtf-facts not installed` |
+| 5.5 | Run, as [Verification](#verification) below, ending with the behaviour evaluation |
 | 6 | `task.md`, as [Handover](#handover) below |
 | 7 | The check runs file, as [Check Runs File](#check-runs-file) below |
 | 7.5 | `host.json`'s `related` |
@@ -105,7 +106,7 @@ bash <skill>/references/verify-pass.sh check "$RUN" --files <directory>/files.js
   --base <merge_base> --head <head_sha> --results <directory>/verify.json --prefix <prefix>
 ```
 
-with `merge_base` and `prefix` from `host.json`. The host's verify job runs `verify-pass.sh run` with `--budget 3600` and the same `mtf-facts` the review job resolves, or none in both, so the two select the same examples. A `merge_base` of null cannot be checked: every selected example directory is recorded as not run with `host results rejected: base_sha`. When the records directory holds `plan-hosted.json`, the plan pass's record is rendered from it, as [plan-pass.md](plan-pass.md#hosted-runner) says; without it, the task's own text gives the reason there is no plan, and no profile is asked for. Either way the plan coverage is `verify-pass.sh coverage` with `--hosted <directory>/plan-hosted.json`, or `--no-plan` without one ([verify-pass.md](verify-pass.md#plan-coverage)). Without `verify.json`, verification did not run on the host, and every selected example directory is recorded as `host verification did not run`. Each of those is a check that could not run, as [verify-pass.md](verify-pass.md#results-from-a-host) says. The record lines are rendered from the accepted `dirs` in the words [verify-pass.md](verify-pass.md#output) gives.
+with `merge_base` and `prefix` from `host.json`. The host's verify job runs `verify-pass.sh run` with `--budget 3600` and the same `mtf-facts` the review job resolves, or none in both, so the two select the same examples. A `merge_base` of null cannot be checked: every selected example directory is recorded as not run with `host results rejected: base_sha`. When the records directory holds `plan-hosted.json`, the plan pass's record is rendered from it, as [plan-pass.md](plan-pass.md#hosted-runner) says; without it, the task's own text gives the reason there is no plan, and no profile is asked for. Either way the plan coverage is `verify-pass.sh coverage` with `--hosted <directory>/plan-hosted.json`, or `--no-plan` without one ([verify-pass.md](verify-pass.md#plan-coverage)). Without `verify.json`, verification did not run on the host, and every selected example directory is recorded as `host verification did not run`. Each of those is a check that could not run, as [verify-pass.md](verify-pass.md#results-from-a-host) says. The record lines are rendered from the accepted `dirs` in the words [verify-pass.md](verify-pass.md#output) gives, followed by the lines `behaviour-pass.sh eval` prints ([behaviour-pass.md](behaviour-pass.md#the-record)).
 
 ## Handover
 

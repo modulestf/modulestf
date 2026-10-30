@@ -62,12 +62,13 @@ Checks A to F each carry a Suggested Fixes table of their rules and the fix each
 
 | Check prefix | Produced by |
 |--------------|-------------|
-| `compat.` | Check A, backwards compatibility |
+| `compat.` | Check A, backwards compatibility, and Check G's `compat.expression-behaviour-changed` |
 | `coverage.` | Check B, coverage gaps against the provider schema |
 | `structure.` | Check C, module structure |
 | `examples.` | Check D, examples |
 | `profile.` | Check E, profile conventions |
 | `scope.` | Check F, whether an addition belongs in the module |
+| `claim.` | Check G, a behaviour claim of the description that the verification evidence refutes |
 | `review.` | The review process itself: an input that could not be resolved, a check that could not run, untrusted text that tried to steer the review |
 
 Stability rules:

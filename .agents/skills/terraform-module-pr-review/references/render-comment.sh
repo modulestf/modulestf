@@ -30,6 +30,11 @@
 #                 counts them all. coverage comes from verify-pass.sh coverage; an unplanned
 #                 example is an unknown at ladder rule 4. The file's size cap bounds how many
 #                 there can be.
+#                 One optional key more, "behaviour": the object behaviour-pass.sh eval wrote
+#                 (behaviour-pass.md, The run object); each unverified trigger and claim in it is a
+#                 section 5 line and a gap, each refuted state blocks at rule 2, and it adds the
+#                 evidence line under the rationale. A claim.* finding with no refuted state is refused.
+#                 Without the key, outside a triage run, the step counts as not run by the host.
 #   --assessment  section 1, the one part the model writes: printable ASCII, at most two short
 #                 paragraphs, no line that starts like a heading, a bold line, HTML or a list item
 #   --run-dir     the run directory, which the leak scan looks for and --out must lie outside
@@ -95,6 +100,8 @@ one() { RJ -e --slurp --arg head "$head" "include \"$2\"; length == 1 and (.[0] 
 one "$findings" render-comment valid_findings || die "the findings do not fit the merged findings schema"
 one "$host" host-records 'valid_host($head)' || die "host.json is not valid for this head"
 one "$run" render-comment valid_run || die "the run file does not fit its grammar"
+RJ -e -n --slurpfile f "$findings" --slurpfile r "$run" 'include "render-comment"; claims_consistent($f[0]; $r[0])' \
+  > /dev/null 2>&1 || die "a claim.* finding with no refuted state in the behaviour object"
 RJ -e -R --slurp 'include "render-comment"; valid_assessment' "$assessment" > /dev/null 2>&1 \
   || die "the assessment is not printable ASCII text"
 
