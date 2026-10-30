@@ -1,19 +1,22 @@
 name: Ladder live
 
 # The ladder pass's Linux sandbox, live: bwrap must prove itself with the canary, and the
-# pull request 556 case of tests/ladder-pass-test.sh must run L1 with the real terraform
-# and mtf-facts. The only connections are the canary's, made inside the sandbox.
+# pull request 556 case of tests/ladder-pass-test.sh must run L1 and L3 with the real
+# terraform, mtf-facts and hashicorp/aws provider. The only connections are the canary's,
+# made inside the sandbox, and the provider download of acquisition, outside it.
 on:
   pull_request:
     paths:
       - .agents/skills/terraform-module-pr-review/references/ladder-*
       - .agents/skills/terraform-module-pr-review/references/ladder-templates/**
+      - .agents/skills/terraform-module-pr-review/references/ladder-fixtures/**
       - tests/ladder-pass-test.sh
       - .github/workflows/ladder-live.yml
   push:
     paths:
       - .agents/skills/terraform-module-pr-review/references/ladder-*
       - .agents/skills/terraform-module-pr-review/references/ladder-templates/**
+      - .agents/skills/terraform-module-pr-review/references/ladder-fixtures/**
       - tests/ladder-pass-test.sh
       - .github/workflows/ladder-live.yml
 
@@ -31,7 +34,7 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

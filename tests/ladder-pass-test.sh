@@ -25,7 +25,9 @@ mkdir -p "$ST" "$B"
 cat > "$B/$SBXNAME" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" | cut -c1-2000 >> "$ST/sbx.log"
-for a in "\$@"; do case "\$a" in *LADDER-CANARY*) cat "$ST/canary.txt"; exit 0 ;; esac; done
+for a in "\$@"; do case "\$a" in *LADDER-CANARY*)
+  case "\$*" in *.ladder-sentinel*) [ -f "$ST/canary.prov" ] && { cat "$ST/canary.prov"; exit 0; } ;; esac
+  cat "$ST/canary.txt"; exit 0 ;; esac; done
 if [ "\$1" = -f ]; then cp "\$2" "$ST/last.sb"; shift 2; exec "\$@"; fi
 dir=
 while [ \$# -gt 0 ]; do case "\$1" in --chdir) dir=\$2; shift 2 ;; --) shift; break ;; *) shift ;; esac; done
@@ -37,11 +39,16 @@ cat > "$B/terraform" <<EOF
 #!/bin/bash
 S="$ST"
 echo "terraform \$1 \${PWD##*/}" >> "\$S/log"
+[ "\$1" = plan ] && echo "\$*" >> "\$S/plan-args.log"
 env | grep -E '^(AWS_|GITHUB_TOKEN|GH_TOKEN|TF_CLI_ARGS)' >> "\$S/leak.log"
 case "\$1" in
 version) echo '{"terraform_version":"1.9.8"}' ;;
 validate) [ -f "\$S/validate.fail" ] && { printf 'Error: Reference to undeclared input variable\n' >&2; exit 1; } ;;
-init) mkdir -p .terraform/providers/x && echo bin > .terraform/providers/x/p ;;
+init)
+  case "\$(uname -m)" in arm64|aarch64) m=arm64 ;; *) m=amd64 ;; esac; os=linux; [ "\$(uname -s)" = Darwin ] && os=darwin
+  sed -n 's/.*source = "\([^"]*\)", version = "= \([^"]*\)".*/\1 \2/p' main.tf | while read -r src ver; do
+    d=".terraform/providers/\$src/\$ver/\${os}_\$m"; mkdir -p "\$d"; echo bin > "\$d/terraform-provider-\${src##*/}_v\${ver}_x5"; chmod 755 "\$d"/*
+  done ;;
 providers) cat "\$S/schema.json" ;;
 plan)
   [ -f "\$S/plan.fail" ] && { printf 'Error: Invalid function argument\n\n  on main.tf line 9\n' >&2; exit 1; }
@@ -51,6 +58,23 @@ plan)
 show)
   dir=\$(sed -n 1p "\$3"); vf=\$(sed -n 2p "\$3"); c=\${vf##*/}; c=\${c%.tfvars.json}; cat "\$dir"/*.tf > "\$S/m.tf"; m="\$S/m.tf"
   cu=true; [ -f "\$S/canary.known" ] && cu=false
+  if grep -q 'resource "aws_rds_cluster" "this"' "\$dir/subject.tf"; then
+    # L3: the control case "known" updates to a known value; compact() keeps the prior value;
+    # anything else plans the target unknown.
+    b="\$(cat "$REF/ladder-fixtures/aws_rds_cluster/aws-6.70.0/baseline.json")"
+    if [ "\$c" = known ]; then a='{"vpc_security_group_ids":["a"]}'; u='{}'; act='["update"]'
+    elif grep -q 'compact(' "\$dir/subject.tf"; then a='{"vpc_security_group_ids":["sg-0old0000000000000"]}'; u='{}'; act='["no-op"]'
+    else a='{"vpc_security_group_ids":null}'; u='{"vpc_security_group_ids":true}'; act='["update"]'; fi
+    bad=false; [ -f "\$S/control.bad" ] && bad=true
+    jq -n --argjson b "\$b" --argjson a "\$a" --argjson u "\$u" --argjson act "\$act" --argjson cu "\$cu" --argjson bad "\$bad" \
+      --arg names "\$(grep -Eo 'output "canary_ladder_ue?_[0-9]+"' "\$m" | cut -d'"' -f2)" '
+      {errored:false, output_changes:({canary_known:{after:"known", after_unknown:false}}
+        + ([\$names | split("\n")[] | select(. != "") | {(.): {after_unknown: \$cu}}] | add // {})),
+       resource_changes:[{address:"aws_rds_cluster.this", mode:"managed", change:{actions:\$act,
+         before:(\$b.after + {vpc_security_group_ids:["sg-0old0000000000000"]}),
+         after:(\$b.after + \$a + (if \$bad then {engine:"mysql"} else {} end)), after_unknown:\$u, after_sensitive:{}}}]}'
+    exit 0
+  fi
   sens=false; [ -f "\$S/sensitive" ] && sens=true
   if grep -q 'compact(' "\$m"; then subj='{"after_unknown":true}'
   elif grep -q 'count.index' "\$m"; then subj='{"after":0,"after_unknown":false}'
@@ -69,9 +93,14 @@ EOF
 cat > "$B/mtf-facts" <<EOF
 #!/bin/bash
 echo "facts \$*" >> "$ST/log"
-[ "\$1 \$3 \$4 \$5 \$7" = "fixture-check --level L1 --expect --json" ] || exit 2
-jq -e '.schema_version == 1 and (.files["main.tf"].blocks | length) > 0 and (.files["main.tf"] | has("single_expressions") | not) and (.files["subject.tf"].single_expressions | length) == 1' "\$6" > /dev/null || exit 2
-rm -f "$ST/last-expect.json"; cp "\$6" "$ST/last-expect.json"
+[ "\$1" = fixture-check ] || exit 2
+shift 2; lvl=; res=; pins=; exp=; js=
+while [ \$# -gt 0 ]; do case "\$1" in --level) lvl=\$2; shift 2 ;; --resource) res=\$2; shift 2 ;; --pins) pins=\$2; shift 2 ;;
+  --expect) exp=\$2; shift 2 ;; --json) js=1; shift ;; *) exit 2 ;; esac; done
+[ -n "\$js" ] && [ -f "\$exp" ] || exit 2
+case "\$lvl" in L1) [ -z "\$res\$pins" ] || exit 2 ;; L3) [ "\$res" = aws_rds_cluster ] && jq -e '.providers | length > 0' "\$pins" > /dev/null || exit 2 ;; *) exit 2 ;; esac
+jq -e '.schema_version == 1 and (.files["main.tf"].blocks | length) > 0 and (.files["main.tf"] | has("single_expressions") | not) and (.files["subject.tf"].single_expressions | length) == 1' "\$exp" > /dev/null || exit 2
+rm -f "$ST/last-expect.json" "$ST/last-expect-\$lvl.json"; cp "\$exp" "$ST/last-expect.json"; cp "\$exp" "$ST/last-expect-\$lvl.json"
 [ -f "$ST/fc.violation" ] && { echo '{"schema_version":1,"ok":false,"tree_sha256":"'\$(printf 'a%.0s' {1..64})'","violations":[{"file":"main.tf","line":3,"rule":"expr.reference-denied"}]}'; exit 1; }
 [ -f "$ST/fc.error" ] && exit 2
 echo '{"schema_version":1,"ok":true,"tree_sha256":"'\$(printf 'b%.0s' {1..64})'","violations":[]}'
@@ -90,11 +119,12 @@ good_canary() {
   {
     for c in ipv4 ipv6 link-local loopback dns read write exec; do echo "denied $c x EPERM"; done
     echo "ok scratch-read"
+    echo "denied unix link EPERM"; echo "ok unix-pt"
     [ "$OS" = linux ] && printf 'ok netns net:[2]\nok interfaces lo\n'
     echo "end canary"
   } > "$ST/canary.txt"
 }
-reset() { rm -f "$ST"/{log,leak.log,sbx.log,plan.fail,plan.subject,validate.fail,canary.known,sensitive,fc.violation,fc.error}; good_canary; }
+reset() { rm -f "$ST"/{log,leak.log,sbx.log,plan-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad}; good_canary; }
 BASE=d72cba285514b5e2e83bea7dd1272c1c206a4f64
 HEAD=3b19adcd09b08528221d3286b30338b1e0cf6f16
 RUND="$TMP/runs/pr-review.abcdef"; mkdir -p "$RUND/clone"
@@ -224,7 +254,7 @@ check "a category outside the word set is reported as other" "$([ "$(r0 reason)"
 trig 'x' 'y' '[]' resource-added-or-removed; run > /dev/null
 check "a category without an L1 template is unverifiable" "$(r0 reason | grep -q 'no L1 template for category resource-added-or-removed'; echo $?)"
 trig 'x' 'y' '[]' wrapper-change '["L3"]'; run > /dev/null
-check "a trigger that does not ask for L1 gets no run" "$(q "$TMP/l.json" '.runs == []')"
+check "a trigger that asks for L3 alone gets no L1 run, and no L3 run without a schema" "$(q "$TMP/l.json" '[.runs[] | [.level, .reason]] == [["L3", "no provider schema"]]')"
 trig '' 'count.index' '[{"text":"count.index","kind":"count","type":null,"multi":null}]' wrapper-change '["L1"]' '[{"id":"i0","inputs":{"vpc_security_group_ids":{"value":["a"],"unknown":false,"null":false,"omitted":false},"count.index":{"value":0,"unknown":false,"null":false,"omitted":false}}}]'; run > /dev/null
 check "count.index wraps the subject in a counted terraform_data" "$(grep -q "count = var.ladder_count_index + 1" "$RUND/ladder/fixtures/T-001/head/subject.tf" && q "$TMP/l.json" '.runs[0].state == "ran" and .runs[0].observations.base == [] and .runs[0].observations.head[0].value == 0' | grep -qx 0; echo $?)"
 echo '{"class":"partial","examples":[{"dir":"examples/a","head":"plan-ok","base":null,"addresses":[]}]}' > "$TMP/cov.json"
@@ -268,6 +298,19 @@ exec 7>&-
 check "the runner closes inherited descriptors" "$(! grep -q has7 "$TMP/r.out"; echo $?)"
 rfs() { perl "$TMP/run.pl" "$TMP" 10 100000 2097152 "$TMP/r.out" 2 sh -c "head -c $1 /dev/zero > '$TMP/big'" > /dev/null; echo $?; }
 check "the file size limit counts 1024-byte blocks" "$([ "$(rfs 2048)" = 0 ] && [ "$(rfs 2049)" != 0 ] && [ "$(wc -c < "$TMP/big" | tr -d ' ')" -le 2048 ]; echo $?)"
+rp 10 1000 perl -MPOSIX -e 'my $p = fork; if ($p) { open my $f, ">", shift; print $f $p; close $f; sleep 1; exit 0 } POSIX::setsid(); sleep 30' "$TMP/ss.pid" > /dev/null
+check "the runner kills a descendant that left the group with setsid" "$(sleep 0.3; ! ps -p "$(cat "$TMP/ss.pid")" > /dev/null 2>&1; echo $?)"
+# The provider sweep: a process whose executable lies under LADDER_SWEEP dies, however it
+# was started; here a double fork that leaves the tree before any poll can see it.
+mkdir -p "$TMP/sw"
+if [ "$OS" = linux ]; then cp /bin/sleep "$TMP/sw/sleep"
+elif command -v cc > /dev/null 2>&1; then printf '#include <unistd.h>\nint main(void) { sleep(30); return 0; }\n' > "$TMP/sw/s.c" && cc -o "$TMP/sw/sleep" "$TMP/sw/s.c" 2> /dev/null; fi
+if [ -x "$TMP/sw/sleep" ]; then
+  rc="$(LADDER_SWEEP="$TMP/sw" rp 10 1000 perl -MPOSIX -e 'fork and exit; POSIX::setsid(); fork and exit; exec $ARGV[0], 30' "$TMP/sw/sleep")"
+  check "the runner kills a process run from the provider tree that left its tree" "$(sleep 0.3; [ "$rc" = 0 ] && ! ps -A -o comm= | grep -qF "$TMP/sw/sleep"; echo $?)"
+else
+  echo "skip the provider sweep check: no C compiler to build a test binary"
+fi
 
 # --- acquisition with a stubbed curl
 case "$(uname -m)" in arm64|aarch64) M=arm64 ;; *) M=amd64 ;; esac
@@ -295,6 +338,91 @@ pins "$SUM"; chmod 755 "$TMP/cache"
 check "a cache that is not mode 0700 is refused" "$([ "$(acq)" = 1 ]; echo $?)"
 chmod 700 "$TMP/cache"; echo '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/other":{}}}' > "$ST/schema.json"
 check "a schema that does not name exactly the pinned providers fails" "$([ "$(acq)" = 1 ] && grep -q 'exactly the pinned' "$TMP/acq.out"; echo $?)"
+
+# --- L3 with a stubbed aws provider: the curated aws_rds_cluster fixture
+FX="$REF/ladder-fixtures/aws_rds_cluster/aws-6.70.0"
+jq -n --arg p "$PLAT" --arg s "$SUM" '{schema_version:1, artifact_hosts:["releases.hashicorp.com"],
+  providers:[{source:"registry.terraform.io/hashicorp/aws", version:"6.70.0",
+    platforms:{($p):{url:"https://releases.hashicorp.com/terraform-provider-aws/6.70.0/a.zip", sha256:$s}}}]}' > "$TMP/pins.json"
+schema_aws() { jq -n --slurpfile r "$FX/resource-schema.json" '{format_version:"1.0", provider_schemas:{"registry.terraform.io/hashicorp/aws":{resource_schemas:{aws_rds_cluster:$r[0]}}}}' > "$ST/schema.json"; }
+reset; schema_aws
+check "acquisition of the aws pin succeeds" "$([ "$(acq)" = 0 ]; echo $?)"
+PV="$RUND/ladder/providers"
+check "the provider tree leaves scratch read-only, with a manifest of every entry" "$([ -f "$PV/.ladder-sentinel" ] && [ ! -w "$PV/.ladder-sentinel" ] && [ ! -e "$RUND/ladder/scratch" ] && grep -Eq "^file\+x [0-9a-f]{64} registry.terraform.io/hashicorp/aws/6.70.0/${PLAT}/terraform-provider-aws_v6.70.0_x5\$" "$RUND/ladder/providers.manifest"; echo $?)"
+check "the provider configuration runs the pinned source from the tree, never direct" "$(grep -qF "\"registry.terraform.io/hashicorp/aws\" = \"$PV/registry.terraform.io/hashicorp/aws/6.70.0/$PLAT\"" "$RUND/ladder/etc/provider.tfrc" && grep -q filesystem_mirror "$RUND/ladder/etc/provider.tfrc" && ! grep -q direct "$RUND/ladder/etc/provider.tfrc"; echo $?)"
+cp "$TMP/schema.json" "$TMP/aws-schema.json"
+K='{"value":["a"],"unknown":false,"null":false,"omitted":false}'
+CASES3="[{\"id\":\"typical\",\"inputs\":{\"vpc_security_group_ids\":$K,\"aws_security_group.this[*].id\":{\"value\":[null],\"unknown\":false,\"null\":false,\"omitted\":false,\"unknown_elements\":[0]}}},
+  {\"id\":\"empty\",\"inputs\":{\"vpc_security_group_ids\":{\"value\":[],\"unknown\":false,\"null\":false,\"omitted\":false},\"aws_security_group.this[*].id\":{\"value\":[null],\"unknown\":false,\"null\":false,\"omitted\":false,\"unknown_elements\":[0]}}},
+  {\"id\":\"known\",\"inputs\":{\"vpc_security_group_ids\":$K,\"aws_security_group.this[*].id\":$K}}]"
+trig3() { # [cases-json] [base expression]: the pull request 556 unknown propagation trigger, L1 and L3
+  trig "${2-compact(concat(aws_security_group.this[*].id, var.vpc_security_group_ids))}" 'concat(aws_security_group.this[*].id, var.vpc_security_group_ids)' \
+    "${SG3:-$SG}" unknown-propagation-candidate '["L1","L3"]' "${1:-$CASES3}"
+  jq '.triggers[0].address = "aws_rds_cluster.this" | .triggers[0].attribute = "vpc_security_group_ids"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"
+}
+r3() { jq -r "[.runs[] | select(.level == \"L3\")][0].$1" "$TMP/l.json"; }
+q3() { q "$TMP/l.json" "[.runs[] | select(.level == \"L3\")][0] | $1"; }
+reset; trig3
+check "the L3 run exits 0 with an L1 and an L3 run" "$([ "$(run --schema "$TMP/aws-schema.json")" = 0 ] && q "$TMP/l.json" '[.runs[].level] == ["L1","L3"]' | grep -qx 0; echo $?)"
+check "L3 ran with a valid control and its fixture hash" "$(q3 '.state == "ran" and .reason == null and .control == "valid" and (.fixture_sha256 | test("^[0-9a-f]{64}$"))')"
+check "L3 observes the cases with an unknown input, the control case apart" "$(q3 '[.observations.base[].case] == ["typical","empty"] and [.observations.head[].case] == ["typical","empty"]')"
+check "base: no change planned, the prior value kept" "$(q3 '.observations.base[] | select(.case == "empty") | .action == "no-op" and .known and .unchanged_vs_prior == true and .value == ["sg-0old0000000000000"]')"
+check "head: the attribute is known after apply" "$(q3 '.observations.head[] | select(.case == "empty") | .action == "update" and .known == false and .wholly_unknown and .unchanged_vs_prior == null and (has("value") | not)')"
+check "the control case, its action and the library are recorded" "$(q3 '.observations.fixture | .control == {case:"known", action:"update", baseline:true} and .library == "aws_rds_cluster/aws-6.70.0" and (.prior_sha256 | test("^[0-9a-f]{64}$")) and (.base_tree_sha256 | test("^b{64}$"))')"
+check "the L3 sandbox is the proven provider profile" "$(q3 '.observations.sandbox | .profile == "provider" and .proven')"
+check "fixture-check runs at L3 for the curated type, with the pins" "$(grep -q 'facts fixture-check .*-L3/base --level L3 --resource aws_rds_cluster --pins .*/fc-pins.json --expect .*-L3/expect/base.json --json' "$ST/log" && q "$RUND/ladder/etc/fc-pins.json" '.providers == [{source:"registry.terraform.io/hashicorp/aws", version:"6.70.0"}]' | grep -qx 0; echo $?)"
+check "the L3 manifest names the provider blocks and the target attribute as the single expression" "$(q "$ST/last-expect-L3.json" '(.files["main.tf"].blocks[:2] == [{type:"terraform",labels:[]},{type:"provider",labels:["aws"]}]) and .files["subject.tf"].blocks == [{type:"resource",labels:["aws_rds_cluster","this"]}] and .files["subject.tf"].single_expressions == [{block:"resource",labels:["aws_rds_cluster","this"],attribute:"vpc_security_group_ids"}]')"
+check "the expression is the last argument of the resource under test" "$(tail -2 "$RUND/ladder/fixtures/T-001-L3/base/subject.tf" | head -1 | grep -qx '  vpc_security_group_ids = compact(concat(local.ladder_in_1, local.ladder_in_0))'; echo $?)"
+check "every L3 plan reads the prior state copy in scratch, without refresh" "$([ "$(grep -c -- '-state=.*/ladder/scratch/prior.tfstate ' "$ST/plan-args.log")" = 5 ] && [ "$(grep -- '-state=' "$ST/plan-args.log" | grep -vc -- '-refresh=false')" = 0 ]; echo $?)"
+if [ "$OS" = darwin ]; then
+  check "the provider profile adds read and exec of the tree and unix sockets in its own directory only" "$(grep -qF "(allow process-exec (subpath \"$PV\"))" "$ST/last.sb" && grep -q '(allow network\* (local unix-socket (subpath "/private/tmp/ladder\.' "$ST/last.sb" && grep -q '(deny network\*)' "$ST/last.sb" && grep -qF "(deny file-write* (subpath \"$PV\"))" "$ST/last.sb"; echo $?)"
+else
+  check "bwrap binds the provider tree read-only and puts TMPDIR on its tmpfs" "$(grep -q -- "--ro-bind $PV $PV" "$ST/sbx.log" && grep -q -- '--setenv TMPDIR /ladder-tmp' "$ST/sbx.log"; echo $?)"
+fi
+reset; trig3; run > /dev/null
+check "no schema: L3 is unverifiable and L1 still runs" "$([ "$(r3 reason)" = "no provider schema" ] && q "$TMP/l.json" '.runs[0].state == "ran"' | grep -qx 0; echo $?)"
+reset; trig3; : > "$ST/control.bad"; run --schema "$TMP/aws-schema.json" > /dev/null
+check "a control that does not match the baseline makes L3 unverifiable, control invalid" "$([ "$(r3 reason)" = "control does not match the baseline" ] && [ "$(r3 control)" = invalid ] && q3 '.observations.base == []' | grep -qx 0; echo $?)"
+jq '.provider_schemas[].resource_schemas.aws_rds_cluster.block.attributes.vpc_security_group_ids.type = ["list","string"]' "$TMP/aws-schema.json" > "$TMP/bad-schema.json"
+reset; trig3; run --schema "$TMP/bad-schema.json" > /dev/null
+check "a schema whose attribute type differs refuses the fixture" "$([ "$(r3 reason)" = "the fixture does not match the provider schema" ]; echo $?)"
+reset; trig3 "" ""; run --schema "$TMP/aws-schema.json" > /dev/null
+check "an added attribute has no control at L3" "$([ "$(r3 reason)" = "an added attribute has no control" ]; echo $?)"
+reset; trig3 "$(printf '%s' "$CASES3" | jq -c '.[:2]')"; run --schema "$TMP/aws-schema.json" > /dev/null
+check "no all-known case leaves L3 without a control" "$([ "$(r3 reason)" = "no all-known case for the control" ]; echo $?)"
+reset; trig3; jq '.triggers[0].attribute = "tags"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run --schema "$TMP/aws-schema.json" > /dev/null
+check "an attribute outside the fixture's targets is unverifiable" "$([ "$(r3 reason)" = "the attribute is not a target of the fixture" ]; echo $?)"
+reset; trig3; jq '.triggers[0].address = "aws_db_instance.this"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run --schema "$TMP/aws-schema.json" > /dev/null
+check "a resource type without a curated fixture is unverifiable" "$([ "$(r3 reason)" = "no curated fixture for aws_db_instance at the pinned provider" ]; echo $?)"
+reset; trig3 "$(printf '%s' "$CASES3" | jq -c '[range(28) as $i | {id:"k\($i)", inputs:.[2].inputs}] + .')"; run --schema "$TMP/aws-schema.json" > /dev/null
+check "L3 takes only the cases the sweep cap leaves after L1" "$(q3 '[.observations.base[].case] == ["typical"]')"
+reset; trig3; grep -v 'unix-pt' "$ST/canary.txt" > "$ST/canary.prov"; run --schema "$TMP/aws-schema.json" > /dev/null
+check "a provider canary without the plugin socket leaves L3 unverifiable, L1 runs" "$([ "$(r3 reason)" = "sandbox unproven" ] && q3 '.observations.sandbox.reason == "plugin-socket"' | grep -qx 0 && q "$TMP/l.json" '.runs[0].state == "ran"' | grep -qx 0; echo $?)"
+reset; trig3; sed 's/^denied unix .*/open unix link connected/' "$ST/canary.txt" > "$ST/canary.prov"; run --schema "$TMP/aws-schema.json" > /dev/null
+check "a provider canary that reaches a socket through a link leaves L3 unverifiable" "$([ "$(r3 reason)" = "sandbox unproven" ] && q3 '.observations.sandbox.reason == "canary-leak"' | grep -qx 0; echo $?)"
+B3="$PV/registry.terraform.io/hashicorp/aws/6.70.0/$PLAT/terraform-provider-aws_v6.70.0_x5"
+chmod u+w "$B3" && echo x >> "$B3" && chmod a-w "$B3"
+reset; trig3; run --schema "$TMP/aws-schema.json" > /dev/null
+check "a provider tree changed since acquisition leaves L3 unverifiable" "$([ "$(r3 reason)" = "provider tree changed" ] && ! grep -q -- '-state=' "$ST/plan-args.log"; echo $?)"
+reset; acq > /dev/null; chmod u+w "$PV"; ln -s /etc "$PV/link"; chmod a-w "$PV"
+trig3; run --schema "$TMP/aws-schema.json" > /dev/null
+check "a link in the provider tree refuses it" "$([ "$(r3 reason)" = "provider tree changed" ]; echo $?)"
+chmod u+w "$PV"; rm -f "$PV/link"; chmod a-w "$PV"; reset; acq > /dev/null
+
+# --- the curated library: every fixture against its schema extract, prior state and template
+eval "$(sed -n '/^fixture_schema_ok() {/,/^}/p' "$LP")"
+for lib in "$REF"/ladder-fixtures/*/*/; do
+  lib="${lib%/}"; name="${lib#"$REF"/ladder-fixtures/}"
+  L="$TMP/libchk"; mkdir -p "$L"
+  jq -c '.provider | {source, version}' "$lib/fixture.json" > "$L/pins.jsonl"
+  SCHEMA="$TMP/libchk/schema.json"
+  jq -n --slurpfile f "$lib/fixture.json" --slurpfile r "$lib/resource-schema.json" '{provider_schemas:{($f[0].provider.source):{resource_schemas:{($f[0].resource):$r[0]}}}}' > "$SCHEMA"
+  check "$name: the arguments match the provider schema extract" "$(fixture_schema_ok "$lib"; echo $?)"
+  check "$name: the prior state holds every attribute of the schema at its version" "$(jq -e --slurpfile f "$lib/fixture.json" --slurpfile r "$lib/resource-schema.json" '.version == 4 and (.resources | length) == 1 and .resources[0].type == $f[0].resource and .resources[0].name == "this" and (.resources[0].instances[0] | .schema_version == $r[0].version and (.attributes | keys) == ((($r[0].block.attributes // {}) + ($r[0].block.block_types // {})) | keys))' "$lib/prior.tfstate" > /dev/null; echo $?)"
+  check "$name: the baseline is the prior state without the targets" "$(jq -e --slurpfile f "$lib/fixture.json" --slurpfile p "$lib/prior.tfstate" '.after == ($p[0].resources[0].instances[0].attributes | delpaths([$f[0].targets[] | [.]])) and (.actions | length) > 0' "$lib/baseline.json" > /dev/null; echo $?)"
+  check "$name: the template sets the fixture's arguments, the target last" "$(got="$(awk '/^#-- subject/ { s = 1; next } /^#-- / { s = 0 } s && /^  [A-Za-z_]+ += / { print $1 }' "$lib/template.tf.tmpl" | tr '\n' ' ')"; want="$(jq -r '[.arguments | keys[] ] - .targets | join(" ")' "$lib/fixture.json") __ATTR__ "; [ "$got" = "$want" ]; echo $?)"
+done
+L=; SCHEMA=
 
 # --- probe
 reset
@@ -334,6 +462,22 @@ output "extra" {
   value = 2' '[]'
     lp run "$LR" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/live.json" > "$TMP/live.out" 2>&1
     check "live: an expression that closes its block fails the manifest, no plan" "$(q "$TMP/live.json" '.runs[0].state == "unverifiable" and (.runs[0].reason | test("^fixture-check head: .*manifest.block-set"))')"
+    # L3: the real hashicorp/aws 6.70.0 from the pin file. Acquisition downloads it once
+    # (outside the sandbox, to its pinned host, the hash checked) into LADDER_LIVE_CACHE.
+    if [ -z "${LADDER_LIVE_CACHE:-}" ] && [ "${LADDER_LIVE_REQUIRED:-0}" != 1 ]; then
+      echo "skip live L3: set LADDER_LIVE_CACHE to a provider cache directory to run it (it downloads hashicorp/aws 6.70.0)"
+    else
+      LC="${LADDER_LIVE_CACHE:-$TMP/live-cache}"; mkdir -m 700 -p "$LC"
+      lp acquire "$LR" --pins "$REF/ladder-pins.json" --cache "$LC" --schema-out "$TMP/live-schema.json" > "$TMP/live-acq.out" 2>&1
+      check "live: acquisition of hashicorp/aws 6.70.0 and its schema" "$(q "$TMP/live-schema.json" '.provider_schemas["registry.terraform.io/hashicorp/aws"].resource_schemas | has("aws_rds_cluster")')"
+      check "live: the provider profile is proven" "$(lp probe "$LR" > "$TMP/live-probe3.out" 2>&1; grep -q "^provider sandbox proven $SBXNAME\$" "$TMP/live-probe3.out"; echo $?)"
+      SG3='[{"text":"aws_security_group.this[*].id","kind":"resource","type":"string","multi":"count"}]' trig3
+      lp run "$LR" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" --schema "$TMP/live-schema.json" > "$TMP/live3.out" 2>&1
+      check "live: L3 ran with a valid control (pull request 556)" "$(q3 '.state == "ran" and .control == "valid" and .observations.fixture.control.baseline')"
+      check "live: at the base no change is planned, the prior value kept" "$(q3 '.observations.base[] | select(.case == "empty") | .action == "no-op" and .known and .unchanged_vs_prior == true')"
+      check "live: at the head the attribute is known after apply" "$(q3 '.observations.head[] | select(.case == "empty") | .action == "update" and .known == false')"
+      check "live: no provider process is left" "$(! ps -A -o comm= | grep -qF "$LR/ladder/providers/"; echo $?)"
+    fi
   fi
 fi
 

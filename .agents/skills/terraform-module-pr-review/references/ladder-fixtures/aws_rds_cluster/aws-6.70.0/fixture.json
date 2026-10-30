@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "resource": "aws_rds_cluster",
+  "provider": {"source": "registry.terraform.io/hashicorp/aws", "version": "6.70.0"},
+  "resource_schema_version": 1,
+  "arguments": {
+    "cluster_identifier": "string",
+    "engine": "string",
+    "master_username": "string",
+    "skip_final_snapshot": "bool",
+    "vpc_security_group_ids": ["set", "string"]
+  },
+  "targets": ["vpc_security_group_ids"]
+}

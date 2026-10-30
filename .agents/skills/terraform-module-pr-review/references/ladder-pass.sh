@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016 # the perl and jq programs below are single-quoted on purpose
-# The verification ladder's L1 pass of terraform-module-pr-review, as one file. Rules and
+# The verification ladder's L1 and L3 pass of terraform-module-pr-review, as one file. Rules and
 # reasons: ladder-pass.md. Run it with bash by an absolute path in the skill as installed,
 # never from the head, the workspace or a copy the head could have written:
 #
@@ -14,9 +14,12 @@
 #       providers schema -json in the sandbox with the network denied. Exit 0 with the
 #       schema written, 1 with "acquisition failed: <reason>", 2 a usage error.
 #   bash /abs/path/ladder-pass.sh run <run-dir> --behaviour <behaviour.json> --base <sha> \
-#       --head <sha> --out <ladder.json> [--coverage <coverage.json>]
+#       --head <sha> --out <ladder.json> [--coverage <coverage.json>] [--schema <schema.json>]
 #       L1: one fixture pair per trigger that asks for L1, checked by mtf-facts
 #       fixture-check, planned and shown in the sandbox, projected into the ladder record.
+#       L3: per trigger that asks for L3, the curated fixture of its resource from
+#       ladder-fixtures/, the real provider from this run's acquisition, a prior state and
+#       a control run; needs --schema, the schema acquisition wrote.
 #       Writes the record and exits 0; exit 2 is a usage error or a refused input.
 #
 # <run-dir> is the absolute run directory "<root>/pr-review.XXXXXX". Everything this script
@@ -37,11 +40,11 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 SELF="$HERE/${0##*/}"
 TPL="$HERE/ladder-templates"
 
-PINS=; CACHE=; SCHEMA_OUT=; BEH=; BASESHA=; HEADSHA=; OUT=; COVER=; OWNER=0
+PINS=; CACHE=; SCHEMA_OUT=; SCHEMA=; BEH=; BASESHA=; HEADSHA=; OUT=; COVER=; OWNER=0
 while [ $# -gt 0 ]; do
   [ $# -ge 2 ] || die "$1 needs a value"
   case "$1" in
-    --pins) PINS=$2 ;; --cache) CACHE=$2 ;; --schema-out) SCHEMA_OUT=$2 ;;
+    --pins) PINS=$2 ;; --cache) CACHE=$2 ;; --schema-out) SCHEMA_OUT=$2 ;; --schema) SCHEMA=$2 ;;
     --behaviour) BEH=$2 ;; --base) BASESHA=$2 ;; --head) HEADSHA=$2 ;;
     --out) OUT=$2 ;; --coverage) COVER=$2 ;; --owner-pid) OWNER=$2 ;;
     *) die "unknown argument: $1" ;;
@@ -96,29 +99,62 @@ if (!$pid) {
   exec "/bin/bash", "-c", q{ulimit -f "$1" || exit 70; shift; exec "$@"}, "bash", $blocks, @cmd;
   POSIX::_exit(70);
 }
-sub tree_kb { # resident KiB of the process tree under $pid
-  my (%kids, %rss);
-  open my $ps, "-|", "ps", "-A", "-o", "pid=,ppid=,rss=" or return 0;
-  while (<$ps>) { my ($p, $pp, $r) = split; next unless defined $r; push @{$kids{$pp}}, $p; $rss{$p} = $r }
+# Every poll records each descendant with its start time, so one that left the group
+# with setsid is still killed at the end, and a reused pid is not. LADDER_SWEEP names a
+# directory, the provider tree of the run: any process of this user whose executable lies under
+# it is killed too, however it was started. A process left alive after that exits 71.
+my %seen;   # descendant pid => start time
+sub table { # pid => [ppid, rss, start, zombie]
+  my %t;
+  open my $ps, "-|", "ps", "-A", "-o", "pid=,ppid=,rss=,stat=,lstart=" or return \%t;
+  while (<$ps>) { my ($p, $pp, $r, $st, @s) = split; next unless @s; $t{$p} = [$pp, $r, "@s", $st =~ /\AZ/ ? 1 : 0] }
   close $ps;
+  return \%t;
+}
+sub tree_kb { # resident KiB of the process tree under $pid; records the descendants
+  my $t = table();
+  my %kids; push @{$kids{$t->{$_}[0]}}, $_ for keys %$t;
   my ($sum, @q) = (0, $pid);
-  while (defined(my $p = shift @q)) { $sum += $rss{$p} // 0; push @q, @{$kids{$p} // []} }
+  while (defined(my $p = shift @q)) {
+    next unless $t->{$p};
+    $sum += $t->{$p}[1]; $seen{$p} //= $t->{$p}[2] if $p != $pid;
+    push @q, @{$kids{$p} // []};
+  }
   return $sum;
 }
-my ($end, $rc, $n) = (time + $t, undef, 0);
+sub swept { # pids of this user whose executable lies under $ENV{LADDER_SWEEP}
+  my $dir = $ENV{LADDER_SWEEP} // ""; return () if $dir eq "";
+  my @p;
+  if (-d "/proc/self") {
+    opendir my $d, "/proc" or return ();
+    for (grep { /\A[0-9]+\z/ } readdir $d) { my $x = readlink "/proc/$_/exe"; push @p, $_ if defined $x && index($x, "$dir/") == 0 && (stat "/proc/$_")[4] == $< }
+  } else {
+    open my $ps, "-|", "ps", "-A", "-o", "pid=,uid=,stat=,comm=" or return ();
+    while (<$ps>) { my ($x, $u, $st, $c) = /\A\s*([0-9]+)\s+([0-9]+)\s+(\S+)\s+(.*?)\s*\z/ or next; push @p, $x if $u == $< && $st !~ /\AZ/ && index($c, "$dir/") == 0 }
+  }
+  return @p;
+}
+sub left_alive { # recorded descendants still running with the same start time, and swept pids
+  my $t = table();
+  return ((grep { $t->{$_} && !$t->{$_}[3] && $t->{$_}[2] eq $seen{$_} } keys %seen), swept());
+}
+my ($end, $rc) = (time + $t, undef);
 while (1) {
   my $w = waitpid($pid, WNOHANG);
   if ($w == $pid) { $rc = $? & 127 ? 128 + ($? & 127) : $? >> 8; last }
   if (time > $end) { $rc = 124; last }
   if ((-s $out // 0) > $cap || (-s "$out.err" // 0) > $cap) { $rc = 125; last }
-  if (++$n % 5 == 0 && tree_kb() > $mem) { $rc = 126; last }
+  if (tree_kb() > $mem) { $rc = 126; last }
   select undef, undef, undef, 0.1;
 }
-if ($rc >= 124 && $rc <= 126) { kill "TERM", -$anchor; select undef, undef, undef, 0.5; }
+if ($rc >= 124 && $rc <= 126) { tree_kb(); kill "TERM", -$anchor; select undef, undef, undef, 0.5; }
 kill "KILL", -$anchor;
 waitpid($pid, 0) if $rc >= 124 && $rc <= 126;
 waitpid($anchor, 0);
+my @live = left_alive();
+for my $try (1 .. 10) { last unless @live; kill "KILL", @live; select undef, undef, undef, 0.1; @live = left_alive() }
 for my $f ($out, "$out.err") { truncate $f, $cap if (-s $f // 0) > $cap }
+if (@live) { print STDERR "ladder-pass runner: left alive: @live\n"; exit 71 }
 exit $rc;
 '
 run_cmd() { # dir timeout cap out cmd...: the command under the runner
@@ -132,7 +168,7 @@ run_cmd() { # dir timeout cap out cmd...: the command under the runner
 CANARY_PL='# LADDER-CANARY
 use strict; use warnings; no warnings "exec"; use Errno (); use POSIX ();
 use Socket qw(AF_INET AF_INET6 AF_UNIX SOCK_STREAM SOCK_DGRAM inet_pton pack_sockaddr_in pack_sockaddr_in6 pack_sockaddr_un);
-my ($os, $okf, $denyf, $home, $hostns, @ns) = @ARGV;
+my ($os, $okf, $denyf, $home, $hostns, $pt, $psent, @ns) = @ARGV;
 my @net_ok = $os eq "darwin" ? qw(EPERM) : qw(ENETUNREACH EPERM EACCES);
 my @fs_ok = $os eq "darwin" ? qw(EPERM EACCES) : qw(EPERM EACCES ENOENT EROFS);
 sub en { my $e = 0 + shift; for my $k (qw(EPERM EACCES ENETUNREACH ECONNREFUSED ENOENT EROFS EHOSTUNREACH)) { my $c = eval "Errno::$k()"; return $k if defined $c && $c == $e } "errno$e" }
@@ -170,10 +206,38 @@ if (open my $f, "<", $okf) { my $c = <$f> // ""; line($c eq "ok\n" ? "ok" : "fai
 fs("read", "run-sentinel", sub { open my $x, "<", $denyf });
 fs("read", "home", sub { -d $home ? opendir(my $x, $home) : open(my $x, "<", $home) });
 fs("write", "run-dir", sub { open my $x, ">", "$denyf.w" });
-my $pid = fork;
-if (defined $pid && $pid == 0) { exec { $denyf } $denyf; my $e = 0 + $!; POSIX::_exit($e > 0 && $e < 256 ? $e : 255) }
-if (!defined $pid) { line("fail", "exec", "fork") }
-else { waitpid($pid, 0); my $c = $? >> 8; if ($? == 0) { line("open", "exec", "run-sentinel", "ran") } else { judge("exec", "run-sentinel", en($c), \@fs_ok) } }
+sub xc { my ($what, $f) = @_; my $pid = fork;
+  if (defined $pid && $pid == 0) { exec { $f } $f; my $e = 0 + $!; POSIX::_exit($e > 0 && $e < 256 ? $e : 255) }
+  return line("fail", "exec", "fork") if !defined $pid;
+  waitpid($pid, 0); my $c = $? >> 8; if ($? == 0) { line("open", "exec", $what, "ran") } else { judge("exec", $what, en($c), \@fs_ok) } }
+xc("run-sentinel", $denyf);
+# The provider profile: the plugin socket directory must work, and nothing it adds may
+# reach past it: no socket or write through a link in it, no exec of a file written there
+# or in scratch, no change to the provider tree.
+if ($pt ne "-") {
+  my $sp = "$pt/c.sock"; unlink $sp;
+  my ($l, $c); my $ok = socket($l, AF_UNIX, SOCK_STREAM, 0) && bind($l, pack_sockaddr_un($sp)) && listen($l, 1)
+    && socket($c, AF_UNIX, SOCK_STREAM, 0) && connect($c, pack_sockaddr_un($sp));
+  line($ok ? "ok" : "fail", "unix-pt", $ok ? "" : en($!)); close $c if $c; close $l if $l; unlink $sp;
+  my $target = $os eq "darwin" ? "/var/run/mDNSResponder" : "/run/dbus/system_bus_socket";
+  unlink "$pt/l.sock"; symlink $target, "$pt/l.sock";
+  my $s; socket($s, AF_UNIX, SOCK_STREAM, 0) or line("fail", "unix", "link", "socket");
+  if ($s) { if (connect($s, pack_sockaddr_un("$pt/l.sock"))) { line("open", "unix", "link", "connected") } else { judge("unix", "link", en($!), [@net_ok, "ENOENT", "ECONNREFUSED"]) } }
+  unlink "$pt/l.sock";
+  if ($os eq "darwin") {
+    my $b; socket($b, AF_UNIX, SOCK_STREAM, 0);
+    if ($b && bind($b, pack_sockaddr_un("$okf.sock"))) { line("open", "unix", "scratch-bind", "bound"); unlink "$okf.sock" } else { judge("unix", "scratch-bind", en($!), \@net_ok) }
+  }
+  unlink "$pt/w.lnk"; symlink "$denyf.w", "$pt/w.lnk";
+  fs("write", "pt-link", sub { open my $x, ">", "$pt/w.lnk" }); unlink "$pt/w.lnk";
+  fs("write", "providers-create", sub { open my $x, ">", "$psent.new" });
+  fs("write", "providers-chmod", sub { chmod 0444, $psent });
+  if ($os eq "darwin") {
+    for my $f ("$pt/x.sh", "$okf.x.sh") { if (open my $w, ">", $f) { print $w "#!/bin/sh\nexit 0\n"; close $w; chmod 0755, $f } else { line("fail", "exec", "write", en($!)) } }
+    xc("pt-file", "$pt/x.sh"); xc("scratch-file", "$okf.x.sh"); xc("bin-sh", "/bin/sh");
+    unlink "$pt/x.sh", "$okf.x.sh";
+  }
+}
 if ($os eq "linux") {
   my $me = readlink("/proc/self/ns/net") // "";
   line(($me ne "" && $me ne $hostns) ? "ok" : "fail", "netns", $me);
@@ -183,9 +247,10 @@ if ($os eq "linux") {
 line("end", "canary");
 '
 # Accepts a canary output: the end line, nothing but denied/ok lines, every class denied
-# at least once, the scratch read, and on Linux the namespace and interface checks.
-canary_ok() { # file, os
-  awk -v os="$2" '
+# at least once, the scratch read, and on Linux the namespace and interface checks; in the
+# provider profile also the plugin socket and the unix class.
+canary_ok() { # file, os, [provider]
+  awk -v os="$2" -v prov="${3:-}" '
     { last = $0 }
     $1 == "end" && $2 == "canary" { next }
     $1 == "denied" { d[$2] = 1; next }
@@ -198,6 +263,8 @@ canary_ok() { # file, os
       for (i = 1; i <= n; i++) if (!(c[i] in d)) { print "no denied " c[i] " check"; exit 1 }
       if (!("scratch-read" in k)) { print "scratch not readable"; exit 1 }
       if (os == "linux" && !("netns" in k && "interfaces" in k)) { print "no network namespace"; exit 1 }
+      if (prov != "" && !("unix" in d)) { print "no denied unix check"; exit 1 }
+      if (prov != "" && !("unix-pt" in k)) { print "plugin socket directory not usable"; exit 1 }
     }' "$1"
 }
 
@@ -231,7 +298,7 @@ setup() {
   if [ -e "$S" ]; then chmod -R u+w "$S" 2> /dev/null; rm -rf -- "$S"; fi
   mkdir -m 700 -p "$S/home" "$S/tmp" "$S/plans" "$L/etc" "$L/out" "$L/plans" "$L/mirror" "$L/fixtures" || die "cannot create $L"
   chmod 700 "$S" "$L/plans"
-  trap 'chmod -R u+w "$S" 2> /dev/null; rm -rf -- "$S"' EXIT
+  trap cleanup EXIT
   printf 'ok\n' > "$S/sentinel"
   rm -f -- "$L/sentinel.w"; printf '#!/bin/sh\nexit 0\n' > "$L/sentinel"; chmod 700 "$L/sentinel"
   printf 'provider_installation {\n  filesystem_mirror {\n    path = "%s"\n  }\n}\n' "$L/mirror" > "$L/etc/cli.tfrc"
@@ -249,9 +316,28 @@ tools() {
   if [ "$OS" = darwin ]; then SBX="$(command -v sandbox-exec 2> /dev/null)" && SBX_KIND=sandbox-exec
   elif [ "$OS" = linux ]; then SBX="$(command -v bwrap 2> /dev/null)" && SBX_KIND=bwrap; fi
 }
-envset() { # tmpdir: the whole environment a sandboxed command gets
-  ENVKV=(PATH=/usr/bin:/bin "HOME=$S/home" "TMPDIR=$1" "TF_CLI_CONFIG_FILE=$L/etc/cli.tfrc"
+envset() { # tmpdir [gomemlimit] [cli config]: the whole environment a sandboxed command gets
+  ENVKV=(PATH=/usr/bin:/bin "HOME=$S/home" "TMPDIR=$1" "TF_CLI_CONFIG_FILE=${3:-$L/etc/cli.tfrc}"
     CHECKPOINT_DISABLE=1 TF_IN_AUTOMATION=1 TF_INPUT=0 "GOMEMLIMIT=${2:-1GiB}")
+}
+# The provider profile's plugin socket directory: fresh per invocation, outside the run
+# directory because a unix socket path is short, resolved so the profile names the real path.
+PT=
+mkpt() {
+  [ -n "$PT" ] && return 0
+  PT="$(cd "$(mktemp -d /tmp/ladder.XXXXXX)" && pwd -P)" && pathok "$PT" || { PT=; return 1; }
+  chmod 700 "$PT"
+}
+cleanup() { chmod -R u+w "$S" 2> /dev/null; rm -rf -- "$S"; [ -n "$PT" ] && rm -rf -- "$PT"; return 0; }
+P="$L/providers"   # the verified provider tree, outside scratch, written by acquisition only
+# The two modes: KIND names the profile, ENVKV and BW the environment and bwrap arguments.
+# The provider mode adds read and exec of the provider tree and unix sockets in PT, and
+# sets the runner's sweep to the tree, so a provider process never outlives its command.
+mode_exec() { KIND="exec"; unset LADDER_SWEEP; envset "$S/tmp"; if [ "$SBX_KIND" = sandbox-exec ]; then profile exec; else bw_args; fi; }
+mode_provider() {
+  KIND=provider; export LADDER_SWEEP="$P"
+  if [ "$SBX_KIND" = sandbox-exec ]; then envset "$PT" 2GiB "$L/etc/provider.tfrc"; profile provider "$P" "$PT"
+  else envset /ladder-tmp 2GiB "$L/etc/provider.tfrc"; bw_args "$P"; fi
 }
 profile() { # kind [provider dir] [plugin tmp]: writes $L/etc/<kind>.sb, later rules win
   local f="$L/etc/$1.sb" bin
@@ -267,9 +353,9 @@ profile() { # kind [provider dir] [plugin tmp]: writes $L/etc/<kind>.sb, later r
     printf ')\n(deny file-read* (subpath "/System/Volumes/Data"))\n(deny process-exec*)\n(allow process-exec'
     for bin in "$TF" "$PERL" ${FACTS:+"$FACTS"}; do printf ' (literal "%s")' "$bin"; done
     printf ')\n'
-    if [ -n "${2:-}" ]; then # acquisition's schema step: the providers it unpacked, read-only, and go-plugin sockets
-      printf '(deny file-write* (subpath "%s"))\n(allow process-exec (subpath "%s"))\n' "$2" "$2"
-      printf '(allow file-read* file-write* (subpath "%s"))\n' "$3"
+    if [ -n "${2:-}" ]; then # the provider tree, read and exec only, and go-plugin sockets in PT
+      printf '(allow file-read* (subpath "%s"))\n(allow process-exec (subpath "%s"))\n' "$2" "$2"
+      printf '(allow file-read* file-write* (subpath "%s"))\n(deny file-write* (subpath "%s"))\n' "$3" "$2"
       printf '(allow network* (local unix-socket (subpath "%s")) (remote unix-socket (subpath "%s")))\n' "$3" "$3"
     fi
   } > "$f"
@@ -297,8 +383,8 @@ sbx() { # kind dir timeout cap out cmd...: the command in the sandbox, under the
     run_cmd "$dir" "$t" "$cap" "$out" "$SBX" "${BW[@]}" --chdir "$dir" -- "$@"
   fi
 }
-prove() { # sets SBX_OK, SBX_WHY, PROFILE_SHA; the canary lines land in $L/out/canary.txt
-  local b ns hostns homet
+prove() { # [provider]: sets SBX_OK, SBX_WHY, PROFILE_SHA and the mode; the canary lines land in $L/out/canary[-provider].txt
+  local b ns hostns homet pt=- ps=- co="$L/out/canary${1:+-$1}.txt"
   SBX_OK=0
   [ "$SBX_KIND" != none ] || { SBX_WHY="no sandbox tool for $OS (sandbox-exec on macOS, bwrap on Linux)"; return 1; }
   [ -n "$TF" ] || { SBX_WHY="terraform is not installed"; return 1; }
@@ -306,9 +392,17 @@ prove() { # sets SBX_OK, SBX_WHY, PROFILE_SHA; the canary lines land in $L/out/c
   for b in "$TF" "$PERL" ${FACTS:+"$FACTS"} "$S" "${HOME:-/nonexistent}"; do
     pathok "$b" || { SBX_WHY="a path a profile would hold has other characters: $b"; return 1; }
   done
-  envset "$S/tmp"
-  if [ "$SBX_KIND" = sandbox-exec ]; then profile exec; PROFILE_SHA="$(sha256 "$L/etc/exec.sb")"
-  else bw_args; PROFILE_SHA="$(printf '%s\n' "${BW[@]}" | perl -MDigest::SHA=sha256_hex -0777 -ne 'print sha256_hex($_)')"; fi
+  if [ -n "${1:-}" ]; then
+    [ -f "$P/.ladder-sentinel" ] || { SBX_WHY="no provider tree"; return 1; }
+    # The sentinel's mode can be set outside the sandbox, so a denial inside is the sandbox's.
+    chmod 0444 "$P/.ladder-sentinel" || { SBX_WHY="no provider tree"; return 1; }
+    if [ "$SBX_KIND" = sandbox-exec ]; then mkpt || { SBX_WHY="no plugin directory"; return 1; }; pt=$PT; else pt=/ladder-tmp; fi
+    ps="$P/.ladder-sentinel"; mode_provider
+  else
+    mode_exec
+  fi
+  if [ "$SBX_KIND" = sandbox-exec ]; then PROFILE_SHA="$(sha256 "$L/etc/$KIND.sb")"
+  else PROFILE_SHA="$(printf '%s\n' "${BW[@]}" | perl -MDigest::SHA=sha256_hex -0777 -ne 'print sha256_hex($_)')"; fi
   ns="$(sed -n 's/^nameserver[[:space:]]\{1,\}\([0-9A-Fa-f.:]\{1,\}\)[[:space:]]*$/\1/p' /etc/resolv.conf 2> /dev/null | head -8)"
   hostns="$(readlink /proc/self/ns/net 2> /dev/null || echo none)"
   # The home check: on macOS the home directory itself; on Linux a file in it, since the
@@ -318,10 +412,10 @@ prove() { # sets SBX_OK, SBX_WHY, PROFILE_SHA; the canary lines land in $L/out/c
     for b in "$homet"/.* "$homet"/*; do [ -f "$b" ] && [ ! -L "$b" ] && pathok "$b" && { homet=$b; break; }; done
   fi
   # shellcheck disable=SC2086 # one word per name server address
-  sbx exec "$S" 60 "$MIB" "$L/out/canary.txt" "$PERL" -e "$CANARY_PL" "$OS" "$S/sentinel" "$L/sentinel" "$homet" "$hostns" $ns
+  sbx "$KIND" "$S" 60 "$MIB" "$co" "$PERL" -e "$CANARY_PL" "$OS" "$S/sentinel" "$L/sentinel" "$homet" "$hostns" "$pt" "$ps" $ns
   local rc=$?
   [ "$rc" -eq 0 ] || { SBX_WHY="the canary exited $rc"; return 1; }
-  SBX_WHY="$(canary_ok "$L/out/canary.txt" "$OS")" || return 1
+  SBX_WHY="$(canary_ok "$co" "$OS" "${1:-}")" || return 1
   SBX_OK=1; SBX_WHY=
 }
 why_code() { # SBX_WHY: the fixed code the record carries; the text itself stays on the host
@@ -329,8 +423,49 @@ why_code() { # SBX_WHY: the fixed code the record carries; the text itself stays
     '') echo null ;; 'no sandbox tool'*) echo '"no-sandbox-tool"' ;; 'terraform is not'*) echo '"no-terraform"' ;;
     *'is missing') echo '"no-perl"' ;; 'a path a profile'*) echo '"path-characters"' ;; 'the canary exited'*) echo '"canary-failed"' ;;
     'leak or fault'*) echo '"canary-leak"' ;; 'canary did not'*) echo '"canary-incomplete"' ;; 'no denied'*) echo '"canary-class-missing"' ;;
-    'scratch not'*) echo '"scratch-unreadable"' ;; 'no network namespace'*) echo '"no-network-namespace"' ;; *) echo '"other"' ;;
+    'scratch not'*) echo '"scratch-unreadable"' ;; 'no network namespace'*) echo '"no-network-namespace"' ;;
+    'plugin socket'*|'no plugin'*) echo '"plugin-socket"' ;; 'no provider tree'*) echo '"no-provider-tree"' ;; *) echo '"other"' ;;
   esac
+}
+
+# --- the provider tree ------------------------------------------------------------------------
+# The manifest of $P, one line per entry: type, sha256 (files) and path; a link, a second
+# name of a file or any other kind of entry refuses the tree. Exit 1 when refused.
+MANIFEST_PL='
+use strict; use warnings; use Digest::SHA; use File::Find;
+my $root = shift; my @l; my $bad = 0;
+find({no_chdir => 1, wanted => sub {
+  my $r = $File::Find::name eq $root ? "." : substr($File::Find::name, length($root) + 1);
+  my @st = lstat $File::Find::name or do { $bad = 1; return };
+  if (-l _) { $bad = 1 } elsif (-d _) { push @l, "dir - $r" }
+  elsif (-f _) { $bad = 1 if $st[3] > 1; push @l, (($st[2] & 0111) ? "file+x" : "file") . " " . Digest::SHA->new(256)->addfile($File::Find::name)->hexdigest . " $r" }
+  else { $bad = 1 } }}, $root);
+exit 1 if $bad; print "$_\n" for sort @l;
+'
+prov_stat() { # the inode, size and modification time of each executable in the tree, and the entry list
+  perl -MFile::Find -e 'my $r = shift; my @l; find({no_chdir => 1, wanted => sub { my @s = lstat; push @l, join(" ", ($s[2] & 0111) && -f _ ? @s[1, 7, 9] : "-", $File::Find::name) }}, $r); print "$_\n" for sort @l' "$P"
+}
+prov_ok() { # the tree as acquisition left it; with full, every hash too
+  [ -d "$P" ] && [ ! -L "$P" ] && [ -f "$L/providers.manifest" ] || return 1
+  if [ "${1:-}" = full ]; then
+    perl -e "$MANIFEST_PL" "$P" > "$L/out/providers.now" && cmp -s "$L/out/providers.now" "$L/providers.manifest" || return 1
+    prov_stat > "$L/etc/providers.stat"
+  else
+    [ "$(prov_stat)" = "$(cat "$L/etc/providers.stat" 2> /dev/null)" ]
+  fi
+}
+prov_config() { # pins jsonl, platform: the CLI configuration that runs each pinned provider from the tree
+  local src ver typ d b n
+  {
+    printf 'provider_installation {\n  dev_overrides {\n'
+    while IFS="$(printf '\t')" read -r src ver; do
+      typ="${src##*/}"; d="$P/$src/$ver/$2"; n=0
+      for b in "$d"/terraform-provider-"$typ"_*; do [ -f "$b" ] && [ -x "$b" ] && [ ! -L "$b" ] && n=$((n + 1)); done
+      [ "$n" = 1 ] && pathok "$d" || return 1
+      printf '    "%s" = "%s"\n' "$src" "$d"
+    done < <(jq -r '[.source, .version] | @tsv' "$1")
+    printf '  }\n  filesystem_mirror {\n    path = "%s"\n  }\n}\n' "$L/mirror"
+  } > "$L/etc/provider.tfrc"
 }
 
 # --- probe -----------------------------------------------------------------------------------
@@ -341,7 +476,12 @@ if [ "$CMD" = probe ]; then
   if [ "$ok" = 1 ]; then
     sbx exec "$S" 60 "$MIB" "$L/out/version.txt" "$TF" version -json \
       && printf 'terraform %s\n' "$(jq -r '.terraform_version // "unknown"' "$L/out/version.txt" 2> /dev/null)"
-    echo "sandbox proven $SBX_KIND"; exit 0
+    echo "sandbox proven $SBX_KIND"
+    # After an acquisition, the provider profile L3 runs in.
+    if [ -f "$P/.ladder-sentinel" ]; then
+      if prove provider; then echo "provider sandbox proven $SBX_KIND"; else cat "$L/out/canary-provider.txt" 2> /dev/null; echo "provider sandbox unproven: $SBX_WHY"; fi
+    fi
+    exit 0
   fi
   echo "sandbox unproven: $SBX_WHY"; exit 1
 fi
@@ -417,17 +557,20 @@ if [ "$CMD" = acquire ]; then
   # Provider binaries are large: a 2 GiB file size limit for init, 6 GiB resident for schema.
   FSZ=$((2048 * MIB)) sbx exec "$A" 300 "$MIB" "$L/out/init.txt" "$TF" init -backend=false -input=false -no-color \
     || fail "terraform init: $(firstline "$L/out/init.txt.err")"
-  P="$A/.terraform/providers"; [ -d "$P" ] || fail "no providers installed"
+  [ -d "$A/.terraform/providers" ] || fail "no providers installed"
+  # The tree leaves scratch for the run directory, where no profile may write, with a
+  # sentinel the provider canary uses and a manifest of every entry outside the tree.
+  if [ -e "$P" ]; then chmod -R u+w "$P"; rm -rf -- "$P"; fi
+  rm -f -- "$L/providers.manifest"
+  printf 'sentinel\n' > "$A/.terraform/providers/.ladder-sentinel"
+  mv -- "$A/.terraform/providers" "$P" || fail "cannot move the provider tree"
   chmod -R a-w "$P"
-  if [ "$SBX_KIND" = sandbox-exec ]; then
-    PT="$(cd "$(mktemp -d /tmp/ladder.XXXXXX)" && pwd -P)" || fail "no plugin directory"
-    pathok "$PT" || fail "plugin directory path"
-    trap 'chmod -R u+w "$S" 2> /dev/null; rm -rf -- "$S" "$PT"' EXIT
-    profile schema "$P" "$PT"; envset "$PT" 4GiB
-  else
-    envset /ladder-tmp 4GiB; bw_args "$P"
-  fi
-  MEM_KB=6291456 sbx schema "$A" 300 $((64 * MIB)) "$L/out/schema.json" "$TF" providers schema -json \
+  perl -e "$MANIFEST_PL" "$P" > "$L/providers.manifest.tmp" && mv -- "$L/providers.manifest.tmp" "$L/providers.manifest" \
+    || fail "the provider tree holds a link or a special file"
+  prov_config "$L/pins.jsonl" "$PLAT" || fail "no single provider binary per pin"
+  prov_ok full || fail "provider tree"
+  prove provider || fail "provider sandbox: $SBX_WHY"
+  MEM_KB=6291456 sbx provider "$A" 300 $((64 * MIB)) "$L/out/schema.json" "$TF" providers schema -json \
     || fail "providers schema: $(firstline "$L/out/schema.json.err")"
   jq -e --slurpfile p "$L/pins.jsonl" '.format_version != null and (.provider_schemas | keys) == ([$p[].source] | sort)' \
     "$L/out/schema.json" > /dev/null 2>&1 || fail "the schema does not name exactly the pinned providers"
@@ -450,6 +593,10 @@ if [ -n "$COVER" ]; then
   jq -e '(.class | IN("complete","partial","none")) and (.examples | type == "array")' "$COVER" > /dev/null 2>&1 \
     || die "--coverage is not a coverage object"
 fi
+if [ -n "$SCHEMA" ]; then
+  [ -f "$SCHEMA" ] && [ "$(wc -c < "$SCHEMA")" -le $((64 * MIB)) ] || die "--schema must name a readable file of at most 64 MiB"
+  jq -e '.provider_schemas | type == "object"' "$SCHEMA" > /dev/null 2>&1 || die "--schema is not a providers schema"
+fi
 setup; tools
 chmod -R u+w "$L/fixtures"; rm -rf -- "${L:?}/fixtures" && mkdir -m 700 "$L/fixtures"
 START="$(date +%s)"
@@ -461,6 +608,23 @@ fi
 # The record names the sandbox by fixed words only; canary lines and paths stay in $L/out.
 SBXJ="$(jq -cn --arg kind "$SBX_KIND" --argjson ok "$SBX_OK" --arg sha "$PROFILE_SHA" --argjson why "$(why_code)" \
   '{kind:$kind, proven:($ok == 1), profile_sha256:(if $sha == "" then null else $sha end), reason:$why}')"
+L1_OK=$SBX_OK
+
+# L3 needs the acquisition of this run (the mirror, the pins, the provider tree with its
+# manifest), the schema it wrote, the tree unchanged, and the provider profile proven.
+L3_OK=0; L3_WHY=; L3SBXJ=null
+if jq -e 'any(.triggers[]; .levels | index("L3"))' "$BEH" > /dev/null 2>&1; then
+  if [ -z "$SCHEMA" ]; then L3_WHY="no provider schema"
+  elif [ ! -s "$L/pins.jsonl" ] || [ ! -f "$L/providers.manifest" ]; then L3_WHY="no acquisition in this run"
+  elif ! prov_ok full; then L3_WHY="provider tree changed"
+  elif ! PLAT="$(platform)" || ! prov_config "$L/pins.jsonl" "$PLAT"; then L3_WHY="provider tree changed"
+  elif [ "$L1_OK" != 1 ] || ! prove provider; then L3_WHY="sandbox unproven"
+  else L3_OK=1; fi
+  if [ "$L3_WHY" = "sandbox unproven" ] || [ "$L3_OK" = 1 ]; then
+    L3SBXJ="$(jq -cn --arg kind "$SBX_KIND" --argjson ok "$SBX_OK" --arg sha "$PROFILE_SHA" --argjson why "$(why_code)" \
+      '{kind:$kind, profile:"provider", proven:($ok == 1), profile_sha256:(if $sha == "" then null else $sha end), reason:$why}')"
+  fi
+fi
 
 # Builds the fixture pair of one trigger from the template and the classifier's cases: a
 # local per input whose state a case var file picks, terraform_data stand-ins whose output is a
@@ -468,12 +632,13 @@ SBXJ="$(jq -cn --arg kind "$SBX_KIND" --argjson ok "$SBX_OK" --arg sha "$PROFILE
 # case. Prints one JSON object: {"ok":true, ...} or {"ok":false,"reason":...}.
 FIX_PL='
 use strict; use warnings; use JSON::PP;
-my ($tfile, $tmpl, $root) = @ARGV;
+my ($tfile, $tmpl, $root, $l3tmpl, $attr, $rtype) = @ARGV;
+my $L3 = defined $l3tmpl;
 my $J = JSON::PP->new->canonical;
 sub done { print $J->encode(shift), "\n"; exit 0 }
 sub nope { done({ok => JSON::PP::false, reason => substr(shift, 0, 200)}) }
 my $t = do { local $/; open my $fh, "<", $tfile or die; $J->decode(<$fh>) };
-my %sec; { open my $fh, "<", $tmpl or die; my $cur; while (<$fh>) { if (/\A#-- (\S+)\n\z/) { $cur = $1; $sec{$cur} = ""; next } $sec{$cur} .= $_ if defined $cur } }
+my %sec; for my $tf ($tmpl, $L3 ? $l3tmpl : ()) { open my $fh, "<", $tf or die; my $cur; while (<$fh>) { if (/\A#-- (\S+)\n\z/) { $cur = $1; $sec{$cur} = ""; next } $sec{$cur} .= $_ if defined $cur } }
 sub fill { my ($s, %v) = @_; my $x = $sec{$s} // die "no section $s"; $x =~ s/__([A-Z]+)__/exists $v{$1} ? $v{$1} : die "no value $1"/ge; $x }
 sub toks { my $s = shift; my @t; while ($s =~ /\G\s*(?:([A-Za-z_][A-Za-z0-9_-]*)|([()\[\]{},=]))/gc) { push @t, defined $1 ? $1 : $2 } return undef unless $s =~ /\G\s*\z/gc && @t <= 400; \@t }
 sub want { my ($t, $x) = @_; my $g = shift @$t; die "type\n" unless defined $g && $g eq $x }
@@ -614,13 +779,14 @@ for my $i (0 .. $#in) {
 $vars{ladder_omit} = {k => "bool"} if defined $omit;
 $vars{ladder_count_index} = {k => "number"} if $wrap eq "count";
 $vars{ladder_each_key} = {k => "string"} if $wrap eq "for_each";
-my $main = "";
+my $main = $L3 ? fill("providers") : "";
 $main .= fill("variable", NAME => $_, TYPE => emit($vars{$_})) for sort keys %vars;
 $main .= $_ for @standins;
 $main .= fill("locals", BODY => join("", @locals)) if @locals;
 $main .= fill("canary", NAME => $_->[0], REF => $_->[1]) for @canaries;
 $main .= fill("known");
-@blocks = ((map { {type => "variable", labels => [$_]} } sort keys %vars),
+@blocks = (($L3 ? ({type => "terraform", labels => []}, {type => "provider", labels => [(split /_/, $rtype)[0]]}) : ()),
+  (map { {type => "variable", labels => [$_]} } sort keys %vars),
   (map { {type => "resource", labels => ["terraform_data", $_]} } map { ("ladder_u_$_", $in[$_]{y}{e} ? "ladder_ue_$_" : ()) } 0 .. $#in),
   (@locals ? {type => "locals", labels => []} : ()),
   (map { {type => "output", labels => [$_->[0]]} } @canaries), {type => "output", labels => ["canary_known"]});
@@ -631,6 +797,10 @@ my @rw = sort { length($b->[0]) <=> length($a->[0]) || $a->[0] cmp $b->[0] } map
 my $subj = $wrap eq "none" ? {type => "output", labels => ["subject"]} : {type => "resource", labels => ["terraform_data", "subject"]};
 my $sec = defined $omit ? "subject-default" : $wrap eq "none" ? "subject-output" : $wrap eq "count" ? "subject-count" : "subject-for-each";
 nope("a default change in a counted or for_each context") if defined $omit && $wrap ne "none";
+# L3 splices the expression into the target attribute of the resource under test, last in
+# its block; a counted, for_each or default context has no single instance to plan.
+nope("count, each and default contexts are unverifiable at L3") if $L3 && (defined $omit || $wrap ne "none");
+if ($L3) { $subj = {type => "resource", labels => [$rtype, "this"]}; $sec = "subject" }
 my ($oi) = grep { defined $omit && $in[$_]{name} eq $omit } 0 .. $#in;
 mkdir "$root/expect" or die;
 for my $s (@sides) {
@@ -644,21 +814,32 @@ for my $s (@sides) {
   print $fh $main;
   close $fh;
   open $fh, ">", "$root/$s/subject.tf" or die;
-  print $fh fill($sec, EXPR => $e, LOCAL => defined $oi ? "local.ladder_in_$oi" : "");
+  print $fh fill($sec, EXPR => $e, LOCAL => defined $oi ? "local.ladder_in_$oi" : "", $L3 ? (ATTR => $attr) : ());
   close $fh;
   open $fh, ">", "$root/expect/$s.json" or die;
   print $fh $J->encode({schema_version => 1, files => {"main.tf" => {blocks => \@blocks},
     "subject.tf" => {blocks => [$subj],
-      single_expressions => [{block => $subj->{type}, labels => $subj->{labels}, attribute => $wrap eq "none" ? "value" : "input"}]}}});
+      single_expressions => [{block => $subj->{type}, labels => $subj->{labels}, attribute => $L3 ? $attr : $wrap eq "none" ? "value" : "input"}]}}});
 }
 done({ok => JSON::PP::true, wrap => $wrap, sides => \@sides, canaries => [map { $_->[0] } @canaries],
   cases => [map { {id => $_->{id}, inputs => $_->{inputs}, unknown_inputs => $_->{unknown}, addr => $_->{addr}} } @cases]});
 '
 
-# Projects one plan shown as JSON into an observation, and checks the canaries.
+# Projects one plan shown as JSON into an observation, and checks the canaries. At L3
+# ($wrap "l3") the subject is the target attribute of the resource under test, with its
+# planned action and whether it equals the prior state, and "control" says whether the rest
+# of the resource matches the fixture's baseline: no other attribute changed or unknown.
 PROJ_JQ='
 def anytrue: [.. | select(. == true)] | length > 0;
-def subj: if $wrap == "none" then (.output_changes.subject // null)
+def act: if . == ["no-op"] then "no-op" elif . == ["create"] then "create" elif . == ["update"] then "update"
+  elif . == ["delete"] then "delete" elif (sort == ["create", "delete"]) then "replace" else null end;
+def norm: if type == "array" then sort else . end;
+def subj: if $wrap == "l3" then (first(.resource_changes[]? | select(.address == $cs.addr and .mode == "managed") | .change) // null
+    | if . == null then null else {after: .after[$attr], after_unknown: (.after_unknown[$attr] // false),
+        after_sensitive: (.after_sensitive[$attr] // false), before: .before[$attr], action: (.actions | act),
+        control: (((.after // {}) | del(.[$attr])) == $baseline.after and ((.after_unknown // {}) | del(.[$attr]) | anytrue | not)
+          and ((.actions | act) as $a | $baseline.actions | index([$a]) != null))} end)
+  elif $wrap == "none" then (.output_changes.subject // null)
   else (first(.resource_changes[]? | select(.address == $cs.addr) | .change) // null
     | if . == null then null else {after: .after.input, after_unknown: (.after_unknown.input // false),
         after_sensitive: (.after_sensitive.input // false)} end) end;
@@ -674,18 +855,20 @@ def subj: if $wrap == "none" then (.output_changes.subject // null)
                   elif ($s.after | type) == "object" and $known then ($s.after | length) else null end),
          sensitive: $sens, redacted: (($whole | not) and ($sens | not) and $big),
          unknown_mask: (if $known then false elif ($u | tojson | length) > 4096 then null else $u end),
-         action: null, unchanged_vs_prior: null}
+         action: (if $wrap == "l3" then $s.action else null end),
+         unchanged_vs_prior: (if $wrap == "l3" and $known and ($sens | not) then (($s.after | norm) == ($s.before | norm)) else null end)}
       # A value whenever one is known, with null at the unknown parts of a partly unknown one.
-      + (if ($whole | not) and ($sens | not) and ($big | not) then {value: $s.after} else {} end) end) }'
+      + (if ($whole | not) and ($sens | not) and ($big | not) then {value: $s.after} else {} end) end),
+    control: ($s != null and $s.control == true) }'
 
 subject_error() { # plan error output: 0 when every error it holds is located in subject.tf
   perl -e 'my ($n, $s, $cur) = (0, 0, 0); while (<>) { if (/\A\s*Error:/) { $n++; $cur = 1; next }
     if ($cur && /\A\s*on (\S+) line [0-9]+/) { $s++ if $1 eq "subject.tf"; $cur = 0 } }
     exit($n > 0 && $s == $n ? 0 : 1)' "$1" 2> /dev/null
 }
-record() { # trigger state reason fixture_sha control observations
-  jq -cn --arg id "$1" --arg st "$2" --arg why "$3" --arg fx "$4" --arg ctl "$5" --argjson obs "$6" \
-    '{trigger_id:$id, level:"L1", state:$st, reason:(if $why == "" then null else $why end),
+record() { # trigger state reason fixture_sha control observations; the level is $LV
+  jq -cn --arg id "$1" --arg st "$2" --arg why "$3" --arg fx "$4" --arg ctl "$5" --argjson obs "$6" --arg lv "${LV:-L1}" \
+    '{trigger_id:$id, level:$lv, state:$st, reason:(if $why == "" then null else $why end),
       fixture_sha256:(if $fx == "" then null else $fx end), control:(if $ctl == "" then null else $ctl end),
       observations:$obs}' >> "$L/runs.jsonl"
 }
@@ -700,7 +883,9 @@ left() { # timeout: the timeout clipped to what the review's L1 budget has left;
 l1() { # trigger file, id: one run record
   local tf=$1 id=$2 F="$L/fixtures/$2" meta wrap addr side c out rc why t fx="" base="" head="" obsb="[]" obsh="[]" o
   local fixj nob='{"base":[],"head":[]}'
-  if [ "$SBX_OK" != 1 ]; then record "$id" unverifiable "sandbox unproven" "" "" "{\"base\":[],\"head\":[],\"sandbox\":$SBXJ}"; return; fi
+  LV=L1
+  if [ "$L1_OK" != 1 ]; then record "$id" unverifiable "sandbox unproven" "" "" "{\"base\":[],\"head\":[],\"sandbox\":$SBXJ}"; return; fi
+  mode_exec
   left 1 > /dev/null || { record "$id" unverifiable "budget" "" "" "$nob"; return; }
   mkdir -m 700 "$F" || { record "$id" unverifiable "fixture directory" "" "" "$nob"; return; }
   meta="$(perl -e "$FIX_PL" "$tf" "$TPL/l1.tf.tmpl" "$F" 2> /dev/null)" || meta='{"ok":false,"reason":"fixture builder failed"}'
@@ -753,7 +938,7 @@ l1() { # trigger file, id: one run record
         sbx exec "$F/$side" "$t" $((8 * MIB)) "$L/out/show.json" "$TF" show -json "$out"; rc=$?
         mv -- "$out" "$L/plans/$id-$side-$ci.tfplan" 2> /dev/null
         [ "$rc" -eq 0 ] || { record "$id" unverifiable "show $side $c exited $rc" "$fx" "" "$fob"; return; }
-        o="$(jq -c --arg wrap "$wrap" --argjson canaries "$(printf '%s' "$meta" | jq -c .canaries)" \
+        o="$(jq -c --arg wrap "$wrap" --arg attr "" --argjson baseline null --argjson canaries "$(printf '%s' "$meta" | jq -c .canaries)" \
           --argjson cs "$(printf '%s' "$meta" | jq -c --argjson i "$ci" '.cases[$i]')" "$PROJ_JQ" "$L/out/show.json" 2> /dev/null)"
         if [ -z "$o" ] || [ "$(printf '%s' "$o" | jq -r '.canaries and .known')" != true ]; then
           record "$id" unverifiable "canary $side $c" "$fx" invalid "$fob"; return
@@ -774,21 +959,165 @@ l1() { # trigger file, id: one run record
     '{base:$b, head:$h, fixture:$f, sandbox:($s | {kind, proven, profile_sha256})}')"
 }
 
+# --- L3 ------------------------------------------------------------------------------------------
+L3_MAX_CASES=4     # cases of one trigger at L3
+SWEEP_CASES=32     # claims-eval's cap on the cases of one trigger over all its levels
+FIXLIB="$HERE/ladder-fixtures"
+L3_MEM_KB=6291456  # 6 GiB resident for terraform and the provider
+# The fixture's arguments against the acquired schema: each one an attribute of the
+# resource with the same type, settable and not write-only, each target not sensitive,
+# the resource schema version the prior state was written for, and a pinned provider.
+fixture_schema_ok() { # library dir
+  jq -e --slurpfile f "$1/fixture.json" --slurpfile p <(jq -cs . "$L/pins.jsonl") '
+    $f[0] as $f | (.provider_schemas[$f.provider.source].resource_schemas[$f.resource] // null) as $r
+    | ($p[0] | any(.[]; .source == $f.provider.source and .version == $f.provider.version))
+    and $r != null and $r.version == $f.resource_schema_version
+    and all($f.arguments | to_entries[]; ($r.block.attributes[.key] // null) as $a
+      | $a != null and $a.type == .value and (($a.optional // false) or ($a.required // false)) and (($a.write_only // false) | not))
+    and all($f.targets[]; . as $t | $f.arguments[$t] != null and (($r.block.attributes[$t].sensitive // false) | not))' "$SCHEMA" > /dev/null 2>&1
+}
+l3sbx() { # dir timeout cap out cmd...: an L3 command, only on the provider tree acquisition left
+  prov_ok || { L3_OK=0; L3_WHY="provider tree changed"; return 98; }
+  MEM_KB=$L3_MEM_KB sbx provider "$@"
+  local rc=$?
+  [ "$rc" -eq 71 ] && { L3_OK=0; L3_WHY="cleanup"; }
+  return "$rc"
+}
+# One L3 run: the trigger's expression in the target attribute of the curated resource, the
+# prior state in scratch, plan -refresh=false at both revisions for each case with an
+# unknown input, and a control at the base whose rest of the resource must match the
+# baseline. Reasons are fixed words, as at L1.
+l3() { # trigger file, id
+  local tf=$1 id=$2 F="$L/fixtures/$2-L3" nob='{"base":[],"head":[]}' typ attr lib d src ver meta side t rc o why
+  local base="" head="" obsb="[]" obsh="[]" fx="" fixj fob n ci c out ctl
+  LV=L3
+  r3() { record "$id" unverifiable "$([ "$L3_OK" = 1 ] && echo "$1" || echo "$L3_WHY")" "${2:-}" "${3:-}" "${4:-$nob}"; }
+  if [ "$L3_OK" != 1 ]; then record "$id" unverifiable "$L3_WHY" "" "" "{\"base\":[],\"head\":[],\"sandbox\":$L3SBXJ}"; return; fi
+  left 1 > /dev/null || { r3 budget; return; }
+  typ="$(jq -r '.address // "" | split(".") | if length == 2 then .[0] else "" end' "$tf")"
+  attr="$(jq -r '.attribute // ""' "$tf")"
+  [[ "$typ" =~ ^[a-z][a-z0-9_]{0,63}$ ]] || { r3 "the trigger has no resource address"; return; }
+  [[ "$attr" =~ ^[a-z][a-z0-9_]{0,63}$ ]] || { r3 "the trigger has no attribute L3 can plan"; return; }
+  lib=
+  while IFS="$(printf '\t')" read -r src ver; do d="$FIXLIB/$typ/${src##*/}-$ver"; [ -f "$d/fixture.json" ] && lib=$d; done \
+    < <(jq -r '[.source, .version] | @tsv' "$L/pins.jsonl")
+  [ -n "$lib" ] || { r3 "no curated fixture for $typ at the pinned provider"; return; }
+  jq -e --arg a "$attr" '.targets | index([$a]) != null' "$lib/fixture.json" > /dev/null || { r3 "the attribute is not a target of the fixture"; return; }
+  fixture_schema_ok "$lib" || { r3 "the fixture does not match the provider schema"; return; }
+  [ -n "$(jq -r '.base_expr // ""' "$tf")" ] || { r3 "an added attribute has no control"; return; }
+  # The cases: those with an unknown input, in the classifier's order, as many as the sweep
+  # cap leaves after L1; the control: the first case whose inputs are all known, no null.
+  jq -c --argjson max "$L3_MAX_CASES" --argjson sweep "$SWEEP_CASES" '
+    def unk: .unknown == true or ((.unknown_elements // []) | length > 0);
+    def plain: .unknown != true and .null != true and .omitted != true and ((.unknown_elements // []) | length == 0)
+      and ([.value | .. | select(. == null)] | length == 0);
+    (if (.levels | index("L1")) then (.cases // [] | length) else 0 end) as $n1
+    | ([$max, $sweep - $n1] | min) as $k
+    | {k: $k, cases: [(.cases // [])[] | select(.inputs | type == "object" and any(.[]; unk))][:([$k, 0] | max)],
+       control: (first((.cases // [])[] | select(.inputs | type == "object" and length > 0 and all(.[]; plain))) // null)}' \
+    "$tf" > "$L/etc/l3sel.json" 2> /dev/null || { r3 "no cases"; return; }
+  [ "$(jq '.k > 0' "$L/etc/l3sel.json")" = true ] || { r3 "no case budget left for L3"; return; }
+  [ "$(jq '.cases | length > 0' "$L/etc/l3sel.json")" = true ] || { r3 "no case with an unknown input"; return; }
+  [ "$(jq '.control != null' "$L/etc/l3sel.json")" = true ] || { r3 "no all-known case for the control"; return; }
+  jq -c --slurpfile s "$L/etc/l3sel.json" '.cases = ($s[0].cases + [$s[0].control])' "$tf" > "$L/etc/trigger-l3.json"
+  mkdir -m 700 "$F" || { r3 "fixture directory"; return; }
+  meta="$(perl -e "$FIX_PL" "$L/etc/trigger-l3.json" "$TPL/l1.tf.tmpl" "$F" "$lib/template.tf.tmpl" "$attr" "$typ" 2> /dev/null)" \
+    || meta='{"ok":false,"reason":"fixture builder failed"}'
+  if [ "$(printf '%s' "$meta" | jq -r '.ok')" != true ]; then r3 "$(printf '%s' "$meta" | jq -r '.reason // "fixture builder failed"')"; return; fi
+  [ "$(printf '%s' "$meta" | jq -r '.sides | join(",")')" = base,head ] || { r3 "an added attribute has no control"; return; }
+  find "$F" -type f -exec chmod 444 {} + ; find "$F" -type d -exec chmod 555 {} +
+  [ -n "$FACTS" ] || { r3 "mtf-facts is not installed"; return; }
+  jq -cs '{providers: [.[] | {source, version}]}' "$L/pins.jsonl" > "$L/etc/fc-pins.json"
+  fixj="$(jq -cn --arg lib "${lib#"$FIXLIB"/}" --arg prior "$(sha256 "$lib/prior.tfstate")" '{library:$lib, prior_sha256:$prior}')"
+  for side in base head; do
+    t="$(left 60)" || { r3 budget; return; }
+    sbx exec "$F/$side" "$t" "$MIB" "$L/out/fc.json" "$FACTS" fixture-check "$F/$side" --level L3 --resource "$typ" \
+      --pins "$L/etc/fc-pins.json" --expect "$F/expect/$side.json" --json; rc=$?
+    if [ "$rc" -eq 1 ]; then
+      why="$(jq -r '[.violations[]? | .rule | select(type == "string" and test("^[a-z0-9._-]{1,64}$"))] | unique | .[:5] | join(", ")' "$L/out/fc.json" 2> /dev/null)"
+      r3 "fixture-check $side: ${why:-violations}"; return
+    fi
+    o="$(jq -r 'select(.schema_version == 1 and .ok == true) | .tree_sha256 | select(type == "string" and test("^[0-9a-f]{64}$"))' "$L/out/fc.json" 2> /dev/null)"
+    [ "$rc" -eq 0 ] && [ -n "$o" ] || { r3 "fixture-check $side exited $rc"; return; }
+    fixj="$(printf '%s' "$fixj" | jq -c --arg s "$side" --arg h "$o" '. + {("\($s)_tree_sha256"): $h}')"
+    if [ "$side" = base ]; then base=$o; else head=$o; fi
+  done
+  fixj="$(printf '%s' "$fixj" | jq -c --argjson v "$(for f in "$F"/vars/*.tfvars.json; do c="${f##*/}"; jq -cn --arg c "${c%.tfvars.json}" --arg h "$(sha256 "$f")" '{($c): $h}'; done | jq -cs 'add // {}')" \
+    '. + {vars_sha256: $v}')"
+  fx="$(printf 'base:%s\nhead:%s\n' "$base" "$head" | perl -MDigest::SHA=sha256_hex -0777 -ne 'print sha256_hex($_)')"
+  fob="{\"base\":[],\"head\":[],\"fixture\":$fixj}"
+  cp -- "$lib/prior.tfstate" "$S/prior.tfstate" && chmod 444 "$S/prior.tfstate" || { r3 "prior state" "$fx" "" "$fob"; return; }
+  mode_provider
+  for side in base head; do
+    t="$(left 60)" || { r3 budget "$fx" "" "$fob"; return; }
+    l3sbx "$F/$side" "$t" "$MIB" "$L/out/validate.txt" "$TF" validate -no-color; rc=$?
+    [ "$rc" -eq 0 ] || { r3 "validate $side exited $rc" "$fx" "" "$fob"; return; }
+  done
+  # plan_show side case-index: the projection of one plan into $o, or a fixed reason in $why
+  plan_show() {
+    local side=$1 ci=$2 c out
+    c="$(printf '%s' "$meta" | jq -r --argjson i "$ci" '.cases[$i].id')"; out="$S/plans/L3-$side-$ci.tfplan"; why=
+    t="$(left 120)" || { why=budget; return 1; }
+    l3sbx "$F/$side" "$t" $((8 * MIB)) "$L/out/plan.txt" "$TF" plan -input=false -no-color -refresh=false -lock=false \
+      "-state=$S/prior.tfstate" "-var-file=$F/vars/$c.tfvars.json" "-out=$out"; rc=$?
+    if [ "$rc" -eq 1 ] && subject_error "$L/out/plan.txt.err"; then
+      o="$(printf '%s' "$meta" | jq -c --argjson i "$ci" '.cases[$i] | {obs: {case: .id, error: true, known: false, wholly_unknown: false,
+        length: null, sensitive: false, redacted: false, unknown_mask: null, unknown_inputs, inputs, action: null, unchanged_vs_prior: null}, error: true}')"
+      return 0
+    fi
+    [ "$rc" -eq 0 ] || { why="plan $side $c exited $rc"; return 1; }
+    t="$(left 120)" || { why=budget; return 1; }
+    l3sbx "$F/$side" "$t" $((8 * MIB)) "$L/out/show.json" "$TF" show -json "$out"; rc=$?
+    mv -- "$out" "$L/plans/$id-L3-$side-$ci.tfplan" 2> /dev/null
+    [ "$rc" -eq 0 ] || { why="show $side $c exited $rc"; return 1; }
+    o="$(jq -c --arg wrap l3 --arg attr "$attr" --argjson baseline "$(jq -c . "$lib/baseline.json")" --argjson canaries "$(printf '%s' "$meta" | jq -c .canaries)" \
+      --argjson cs "$(printf '%s' "$meta" | jq -c --argjson i "$ci" --arg a "$typ.this" '.cases[$i] + {addr: $a}')" \
+      "$PROJ_JQ" "$L/out/show.json" 2> /dev/null)"
+    if [ -z "$o" ] || [ "$(printf '%s' "$o" | jq -r '.canaries and .known')" != true ]; then why="canary $side $c"; ctl=invalid; return 1; fi
+    [ "$(printf '%s' "$o" | jq -r '.obs == null')" = true ] && { why="no subject $side $c"; ctl=invalid; return 1; }
+    [ "$(printf '%s' "$o" | jq -r '.obs.sensitive')" = true ] && { why="sensitive subject $side $c"; return 1; }
+    return 0
+  }
+  # The control first: the base expression for all-known inputs must plan the resource as
+  # the baseline records it, and the target known; otherwise nothing below is evidence.
+  n="$(printf '%s' "$meta" | jq '.cases | length')"
+  ctl=
+  plan_show base $((n - 1)) || { r3 "$why" "$fx" "$ctl" "$fob"; return; }
+  if [ "$(printf '%s' "$o" | jq -r '(.error // false) == false and .control and .obs.known')" != true ]; then
+    r3 "control does not match the baseline" "$fx" invalid "$fob"; return
+  fi
+  fixj="$(printf '%s' "$fixj" | jq -c --arg c "$(printf '%s' "$meta" | jq -r '.cases[-1].id')" --arg a "$(printf '%s' "$o" | jq -r .obs.action)" \
+    '. + {control: {case: $c, action: $a, baseline: true}}')"
+  fob="{\"base\":[],\"head\":[],\"fixture\":$fixj}"
+  for ((ci = 0; ci < n - 1; ci++)); do
+    for side in base head; do
+      ctl=
+      plan_show "$side" "$ci" || { r3 "$why" "$fx" "$ctl" "$fob"; return; }
+      if [ "$side" = base ]; then obsb="$(printf '%s' "$obsb" | jq -c --argjson o "$o" '. + [$o.obs]')"
+      else obsh="$(printf '%s' "$obsh" | jq -c --argjson o "$o" '. + [$o.obs]')"; fi
+    done
+    [ "$(du -sk "$S" | cut -f1)" -le "$SCRATCH_CAP_KB" ] || { r3 "scratch over its cap" "$fx" "" "$fob"; return; }
+  done
+  record "$id" ran "" "$fx" valid "$(jq -cn --argjson b "$obsb" --argjson h "$obsh" --argjson f "$fixj" --argjson s "$L3SBXJ" \
+    '{base:$b, head:$h, fixture:$f, sandbox:($s | {kind, profile, proven, profile_sha256})}')"
+}
+
 : > "$L/runs.jsonl"
 jq -r '.l1[]' "$TPL/l1-categories.json" > "$L/etc/l1-categories.txt"
-jq -c '.triggers[] | select(.levels | index("L1"))' "$BEH" | head -n "$MAX_TRIGGERS" > "$L/etc/l1-triggers.jsonl"
-n=0
+jq -c '.triggers[] | select((.levels | index("L1")) or (.levels | index("L3")))' "$BEH" | head -n "$MAX_TRIGGERS" > "$L/etc/l1-triggers.jsonl"
 while IFS= read -r t; do
-  n=$((n + 1))
   printf '%s\n' "$t" > "$L/etc/trigger.json"
   id="$(jq -r .id "$L/etc/trigger.json")"
-  cat="$(jq -r '.category // ""' "$L/etc/trigger.json")"
-  if ! grep -qxF -- "$cat" "$L/etc/l1-categories.txt"; then
-    [[ "$cat" =~ ^[a-z0-9_-]{1,64}$ ]] || cat=other
-    record "$id" unverifiable "no L1 template for category $cat" "" "" '{"base":[],"head":[]}'
-    continue
+  if jq -e '.levels | index("L1")' "$L/etc/trigger.json" > /dev/null; then
+    cat="$(jq -r '.category // ""' "$L/etc/trigger.json")"
+    if ! grep -qxF -- "$cat" "$L/etc/l1-categories.txt"; then
+      [[ "$cat" =~ ^[a-z0-9_-]{1,64}$ ]] || cat=other
+      LV=L1; record "$id" unverifiable "no L1 template for category $cat" "" "" '{"base":[],"head":[]}'
+    else
+      l1 "$L/etc/trigger.json" "$id"
+    fi
   fi
-  l1 "$L/etc/trigger.json" "$id"
+  if jq -e '.levels | index("L3")' "$L/etc/trigger.json" > /dev/null; then l3 "$L/etc/trigger.json" "$id"; fi
 done < "$L/etc/l1-triggers.jsonl"
 
 PINSJ='[]'; [ -s "$L/pins.jsonl" ] && PINSJ="$(jq -cs . "$L/pins.jsonl")"
