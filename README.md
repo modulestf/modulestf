@@ -39,7 +39,7 @@ The pull request review calls the reviewer, and both call `change-scope`. The ru
 3. Log in to GitHub with `gh auth login` as yourself, and install `terraform`, `git`, `jq`, `perl` and [`mtf-facts`](#mtf-facts). A pull request review needs `mtf-facts` for a conclusive verdict.
 
    ```bash
-   go install github.com/modulestf/facts/cmd/mtf-facts@v0.4.0-rc.1
+   go install github.com/modulestf/facts/cmd/mtf-facts@v0.4.0-rc.2
    ```
 
 4. Ask your agent:
