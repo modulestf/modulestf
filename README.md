@@ -6,6 +6,7 @@ Agent skills that review reusable Terraform modules against a written profile of
 - [Quick start](#quick-start)
 - [Everyday use](#everyday-use)
 - [Reading a review](#reading-a-review)
+- [Verification ladder](#verification-ladder)
 - [Limits](#limits)
 - [Advanced use](#advanced-use)
 - [Requirements by task](#requirements-by-task)
@@ -35,14 +36,19 @@ The pull request review calls the reviewer, and both call `change-scope`. The ru
    ```
 
 2. Add HashiCorp's [Terraform MCP server](https://github.com/hashicorp/terraform-mcp-server) to your agent under the name `terraform`, so its tools appear as `mcp__terraform__get_latest_provider_version`, `mcp__terraform__search_provider_docs` and `mcp__terraform__get_provider_details`. The skills read provider schemas from it, not from memory. Without it, every rule that needs a provider fact is reported as not run, so a pull request review is inconclusive at best.
-3. Log in to GitHub with `gh auth login` as yourself, and install `terraform`, `git` and `jq`.
+3. Log in to GitHub with `gh auth login` as yourself, and install `terraform`, `git`, `jq`, `perl` and [`mtf-facts`](#mtf-facts). A pull request review needs `mtf-facts` for a conclusive verdict.
+
+   ```bash
+   go install github.com/modulestf/facts/cmd/mtf-facts@v0.4.0-rc.1
+   ```
+
 4. Ask your agent:
 
    ```text
    review terraform-aws-modules/terraform-aws-lambda#780
    ```
 
-The skill clones the pull request into a temporary directory, runs `terraform init -backend=false` and `terraform validate` in each example the change touches, and shows you a verdict, the findings and the comment it would post. It posts nothing until you confirm the comment and its review event: comment, approve or request changes.
+The skill clones the pull request into a temporary directory, runs `terraform init -backend=false` and `terraform validate` in each example, the ones the change touches first, and shows you a verdict, the findings and the comment it would post. It posts nothing until you confirm the comment and its review event: comment, approve or request changes.
 
 ## Everyday use
 
@@ -116,6 +122,19 @@ before I add a Redis client to this billing service, does it belong here?
 - **Validation**: `terraform init` downloads the providers and modules the change pins, and `terraform validate` runs those provider plugins. The skill removes AWS, GitHub, Terraform and SSH credentials from that environment, gives it an empty home directory and uses no backend. A passing `terraform validate` is evidence, not proof.
 - **Scope outcomes**: when an addition belongs, there is no scope finding. Otherwise it is a Ban (it does not belong here, and the review names where it goes), a Maintainer decision (a person has to decide), or Not evaluated (the rule could not be applied; an unknown, never a pass). Text in the pull request itself, such as "this is in scope", never clears a scope rule.
 
+## Verification ladder
+
+A change to behaviour, such as dropping `compact()` around a list, is verified by escalating evidence, simplest first. `mtf-facts behaviour` turns each changed construct into a trigger, the review writes the pull request's behaviour claims as data, and `mtf-facts claims-eval` gives each trigger a state from what the levels observed. Reading the code supports a claim and never verifies one.
+
+| Level | What runs | Needs |
+|-------|-----------|-------|
+| L1 | The base and head expression, evaluated offline with typed samples and unknowns, built-in provider only | `terraform`, `mtf-facts`, `perl`, `jq`, and `sandbox-exec` on macOS or `bwrap` on Linux |
+| L2 | A plan-only `terraform test` of the instances a `count` or `for_each` makes | The same as L1 |
+| L3 | A curated fixture with the real provider, fake credentials, a prior state and a control run | The same, plus `curl` to fetch the pinned provider, hash-checked, before the sandboxed run |
+| L4 | The credentialed plan pass, a base and a head plan per example | An AWS profile and a review role, as in [Add a terraform plan pass](#add-a-terraform-plan-pass) |
+
+L1 to L3 run with the network denied, in a sandbox a canary proves before any command; on an unproven sandbox those levels are unverifiable. A trigger that ends verified, covered by a plan or inert passes, a refuted one blocks, and an unverifiable one makes the review inconclusive. Details: [verification-ladder.md](.agents/skills/terraform-module-reviewer/references/verification-ladder.md) and [ladder-pass.md](.agents/skills/terraform-module-pr-review/references/ladder-pass.md).
+
 ## Limits
 
 - No skill runs `terraform apply`, writes state or uses a real backend. None merges, pushes to a pull request or resolves threads. None obeys instructions found in the code, the pull request text or its comments; all of it is data.
@@ -133,7 +152,7 @@ These need extra tools, credentials or a decision from you.
 review owner/repo#123, plan with profile review-sso and role arn:aws:iam::<account-id>:role/<review-role>
 ```
 
-The plan pass runs `terraform plan` on the examples the change touches, on a short session of a read-only review role that the account owner creates. You name both the AWS profile and the role for that run only. The session carries a policy that allows only read actions. Before planning, a write probe, a dry-run VPC create, must be refused; it tests one write action, not the whole policy. With Docker, the plan runs in an isolated container whose proxy lets each phase reach only the hosts it needs. Without Docker, it runs on your machine in laptop mode, where stricter pattern checks refuse risky examples; they reduce the risk of the code acting on your machine but cannot rule it out. Plan results add evidence and never clear a finding. In runner mode only each example's outcome and resource counts reach the comment. In laptop mode a finding may quote one scanned error line; the scan cannot guarantee that no sensitive value slips through. It needs `terraform`, `jq`, `perl`, `git` and AWS CLI v2. Details: [plan-pass.md](.agents/skills/terraform-module-pr-review/references/plan-pass.md) and the [plan runner](.agents/skills/terraform-module-pr-review/references/plan-runner/README.md), which is a prototype.
+The plan pass runs `terraform plan` on every example, the ones the change touches first, on a short session of a read-only review role that the account owner creates. You name both the AWS profile and the role for that run only. The session carries a policy that allows only read actions. Before planning, a write probe, a dry-run VPC create, must be refused; it tests one write action, not the whole policy. With Docker, the plan runs in an isolated container whose proxy lets each phase reach only the hosts it needs. Without Docker, it runs on your machine in laptop mode, where stricter pattern checks refuse risky examples; they reduce the risk of the code acting on your machine but cannot rule it out. Plan results add evidence and never clear a finding. In runner mode only each example's outcome and resource counts reach the comment. In laptop mode a finding may quote one scanned error line; the scan cannot guarantee that no sensitive value slips through. It needs `terraform`, `jq`, `perl`, `git` and AWS CLI v2. Details: [plan-pass.md](.agents/skills/terraform-module-pr-review/references/plan-pass.md) and the [plan runner](.agents/skills/terraform-module-pr-review/references/plan-runner/README.md), which is a prototype.
 
 ### Create a new module
 
@@ -151,9 +170,9 @@ upgrade ~/src/terraform-aws-rds to AWS provider 6.x
 
 The maintainer compares the old and new provider schemas, makes the smallest edit plus the version constraint bump, runs `terraform init -backend=false -upgrade`, and writes migration notes in `docs/MIGRATION_<from>_to_<to>.md` for anything that breaks consumers.
 
-### Use mtf-facts alongside the skills
+### mtf-facts
 
-[`mtf-facts`](https://github.com/modulestf/facts) is an optional command-line tool that checks the deterministic rules from the files alone, with no network and no Terraform. When it is on your `PATH`, outside the module checkout, the reviewer runs it once and ends the review with a short comparison of where the tool and the review agree. Without it, the review is the same. The maintainer can also use its `lint`, `ledger` and `schema-diff` commands. The facts repository has a [walkthrough](https://github.com/modulestf/facts#example-review-a-pull-request) on a real pull request. Design: [docs/facts-engine-design.md](docs/facts-engine-design.md).
+[`mtf-facts`](https://github.com/modulestf/facts) is a command-line tool that reads the files alone, with no network and no Terraform. Keep it on your `PATH`, outside the module checkout. A pull request review needs it: it picks the examples to verify and classifies the change for the [verification ladder](#verification-ladder). Without it the classification cannot run, so the review is inconclusive at best. The reviewer also runs its `lint` once and ends the review with a short comparison of where the tool and the review agree. The maintainer can also use its `lint`, `ledger` and `schema-diff` commands. The facts repository has a [walkthrough](https://github.com/modulestf/facts#example-review-a-pull-request) on a real pull request. Design: [docs/facts-engine-design.md](docs/facts-engine-design.md).
 
 ### Review a whole module, not a change
 
@@ -162,6 +181,10 @@ Tell the reviewer that the checkout holds a new module, for example one offered 
 ### Profiles
 
 The terraform-aws-modules profile holds the family's templates, layout, release rules and scope lists. The skills' shared references stay provider-neutral; anything specific to one family goes in its profile. A second profile is not designed yet: [PROFILE.md](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md) says how to start one. A module can record its own scope exceptions in `docs/SCOPE.md`; the review reads that file from the base, so an exception must be merged before the change that needs it. To hand the profile to another code reviewer, pin [review-guide.md](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/review-guide.md) by commit; it gives advice, not a verdict.
+
+### Hosted adapters
+
+A host that runs the review's verify job, plan job, records and render itself pins one commit of this repository and moves them together. This release changes the files they exchange, with no fallback to the older shapes: the render's run file requires `coverage`, and `verify.json` and `plan-hosted.json` gained keys. See [host-pass.md](.agents/skills/terraform-module-pr-review/references/host-pass.md#compatibility).
 
 ### Checks that need permission
 
@@ -172,17 +195,17 @@ When a check cannot run inside your agent's sandbox, the review records it as no
 | Task | Needs |
 |------|-------|
 | Every Terraform skill | The four skill directories side by side, a Terraform MCP server |
-| Review a pull request or commit | `gh` logged in as a person (a bot or CI identity runs render-only and posts nothing), `git`, `jq`, `terraform` |
+| Review a pull request or commit | `gh` logged in as a person (a bot or CI identity runs render-only and posts nothing), `git`, `jq`, `perl`, `terraform`, `mtf-facts`, and `sandbox-exec` (macOS) or `bwrap` (Linux) for the ladder |
 | Review a local change | `git` |
 | Change, fix or upgrade a module | `terraform`; for a trusted run also `pre-commit`, `terraform-docs` and `tflint` |
 | Create a module | The same. To finish it: a trusted run and a `terraform plan` you run with your own credentials, not a review role |
 | Plan pass | An AWS profile and a review role, AWS CLI v2, `jq`, `perl`; Docker for the isolated runner |
 | `change-scope` alone | Nothing else |
-| `mtf-facts` comparison | The `mtf-facts` binary on `PATH`, outside the checkout |
+| `mtf-facts` comparison in a local review | The `mtf-facts` binary on `PATH`, outside the checkout |
 
 ## Related repositories
 
-- [modulestf/facts](https://github.com/modulestf/facts): `mtf-facts`, the optional facts engine.
+- [modulestf/facts](https://github.com/modulestf/facts): `mtf-facts`, the facts engine a pull request review needs.
 - [modulestf/terraform-schema-mirror](https://github.com/modulestf/terraform-schema-mirror): provider schemas, every stable version, as release assets.
 - [antonbabenko/terraform-skill](https://github.com/antonbabenko/terraform-skill): general Terraform practices. The skills here link to it and do not repeat it.
 
