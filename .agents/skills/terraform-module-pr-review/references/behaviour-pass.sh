@@ -4,7 +4,7 @@
 # in this skill's own checkout, never from the clone under review.
 #
 #   behaviour-pass.sh classify --facts <mtf-facts> --dir <module root>
-#       (--diff <files.json> [--prefix <module root prefix>] | --base <dir>) --out <dir>
+#       (--diff <files.json> [--prefix <module root prefix>] | --base <dir>) [--schema <schema.json>] --out <dir>
 #   behaviour-pass.sh eval --facts <mtf-facts> --out <dir> --head <sha> --base-sha <sha>
 #       [--claims <claims.json>] [--ladder <ladder.json>]
 #
@@ -26,10 +26,10 @@ deadline="${BEHAVIOUR_PASS_TIMEOUT:-120}"
 die() { echo "behaviour-pass.sh: $1" >&2; exit 2; }
 
 cmd="${1-}"; shift 2> /dev/null
-facts="" dir="" diff="" prefix="" base="" out="" head="" bsha="" claims="" ladder=""
+facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --facts) facts="${2-}" ;; --dir) dir="${2-}" ;; --diff) diff="${2-}" ;; --prefix) prefix="${2-}" ;; --base) base="${2-}" ;;
+    --facts) facts="${2-}" ;; --dir) dir="${2-}" ;; --diff) diff="${2-}" ;; --prefix) prefix="${2-}" ;; --base) base="${2-}" ;; --schema) schema="${2-}" ;;
     --out) out="${2-}" ;; --head) head="${2-}" ;; --base-sha) bsha="${2-}" ;;
     --claims) claims="${2-}" ;; --ladder) ladder="${2-}" ;;
     *) die "unexpected argument" ;;
@@ -91,7 +91,7 @@ def covers($files):
   | ([$files[] | select(.status != "unchanged") | .filename, (.previous_filename // empty)
       | select(test("(^|/)\\.(git|terraform)(/|$)") | not)]
      - [$o.entries[] | .path, (.previous_path // empty)]) == [];
-def valid_claims: type == "object" and (.claims | type == "array" and length <= 20
+def valid_claims: type == "object" and (.claims | type == "array" and length <= 48
   and all(.[]; type == "object" and (.claim_id | cid)) and (map(.claim_id) | length == (unique | length)));
 '
 
@@ -123,6 +123,11 @@ classify() {
     cover="$out/files-module.json"
   elif [ -n "$base" ] && [ -z "$diff" ] && [ -z "$prefix" ]; then abs "$base" --base; set -- --base "$base"
   else die "classify needs one of --diff and --base, and --prefix only with --diff"; fi
+  # The provider schema acquisition wrote, when there is one: a regular file, not a link.
+  if [ -n "$schema" ]; then
+    abs "$schema" --schema; [ -f "$schema" ] && [ ! -L "$schema" ] || die "--schema is not a regular file"
+    set -- "$@" --schema "$schema"
+  fi
   if [ ! -f "$facts" ] || [ ! -x "$facts" ]; then
     echo "mtf-facts not installed" > "$out/status"
   else

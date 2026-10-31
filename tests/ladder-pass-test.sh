@@ -502,7 +502,7 @@ check "a resource type without a curated fixture is unverifiable" "$([ "$(r3 rea
 reset; trig3; jq '.triggers[0].address = "aws_db_instance.this"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run --schema "$TMP/aws-schema.json" > /dev/null
 check "aws_db_instance plans from its own curated fixture, with its control" "$([ "$(q3 '.state == "ran" and .control == "valid" and .observations.fixture.library == "aws_db_instance/aws-6.70.0" and (.observations.base[] | select(.case == "empty") | .action == "no-op" and .unchanged_vs_prior) and (.observations.head[] | select(.case == "empty") | .action == "update" and (.known | not))')" = 0 ] && grep -q 'level L3 --resource aws_db_instance ' "$ST/log"; echo $?)"
 reset; trig3 "$(printf '%s' "$CASES3" | jq -c '[range(28) as $i | {id:"k\($i)", inputs:.[2].inputs}] + .')"; run --schema "$TMP/aws-schema.json" > /dev/null
-check "L3 takes only the cases the sweep cap leaves after L1" "$(q3 '[.observations.base[].case] == ["typical"]')"
+check "L3 takes its own cases, whatever the number of L1 cases" "$(q3 '[.observations.base[].case] == ["typical","empty"]')"
 reset; trig3; grep -v 'unix-pt' "$ST/canary.txt" > "$ST/canary.prov"; run --schema "$TMP/aws-schema.json" > /dev/null
 check "a provider canary without the plugin socket leaves L3 unverifiable, L1 runs" "$([ "$(r3 reason)" = "sandbox unproven" ] && q3 '.observations.sandbox.reason == "plugin-socket"' | grep -qx 0 && q "$TMP/l.json" '.runs[0].state == "ran"' | grep -qx 0; echo $?)"
 reset; trig3; sed 's/^denied unix .*/open unix link connected/' "$ST/canary.txt" > "$ST/canary.prov"; run --schema "$TMP/aws-schema.json" > /dev/null
