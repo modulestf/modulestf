@@ -621,6 +621,31 @@ check "caps: the body is cut to 8000 bytes" "$([ "$(cq '.[1] | [(.text | length)
 check "caps: a thread comment gets what is left of the 16000" "$([ "$(cq '.[2] | [(.text | length), .omitted]')" = '[4000,1000]' ]; echo $?)"
 check "caps: an item with nothing left travels empty, all omitted" "$([ "$(cq '.[3] | [.text, .omitted]')" = '["",4]' ]; echo $?)"
 check "caps: a conversation comment is not cut" "$([ "$(cq '.[4] | [(.text | length), .omitted]')" = '[9000,0]' ]; echo $?)"
+# host.json's prose-truncated entries: one per cut item class, body, thread, title, with the
+# bytes cut in that class; none when nothing was cut.
+check "caps: truncations name each cut class with its bytes" \
+  "$([ "$(cq 'truncations')" = '[{"kind":"prose-truncated","item":"body","omitted":200},{"kind":"prose-truncated","item":"thread","omitted":1004},{"kind":"prose-truncated","item":"title","omitted":100}]' ]; echo $?)"
+check "caps: no truncation, no entry" "$([ "$(jq -n -c -L "${PP%/*}" 'include "host-records"; [{kind: "body", text: "short"}] | capped | truncations')" = '[]' ]; echo $?)"
+HV="{\"format\":1,\"repo\":\"o/r\",\"number\":1,\"head_sha\":\"$HH\",\"base_sha\":\"$HH\",\"merge_base\":null,\"prefix\":\"\",
+  \"state\":{\"state\":\"open\",\"merged\":false,\"draft\":false,\"base_is_default\":true,\"self_authored\":false},
+  \"signals\":{\"threads\":\"pass\",\"review_decision\":\"none\",\"mergeability\":\"pass\"},\"own_review\":null,
+  \"could_not_run\":[],\"unresolved_threads\":[],
+  \"conversation\":{\"path\":\"graphql\",\"omitted\":null,\"considered\":0,\"bot_considered\":0,\"counts\":{},\"notes\":[]},
+  \"related\":{\"status\":\"ok\",\"open_unlinked\":[],\"sidebar_not_read\":false}}"
+hv() { printf '%s' "$HV" | jq -c "$1" | jq -r -L "${PP%/*}" --arg h "$HH" 'include "host-records"; valid_host($h)'; }
+check "host.json: the base object is valid" "$([ "$(hv .)" = true ]; echo $?)"
+check "host.json: prose-truncated with its item and bytes is valid" \
+  "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 200}, {kind: "prose-truncated", item: "thread", omitted: 1}]')" = true ]; echo $?)"
+check "host.json: a prose-truncated of an older record, kind alone, is valid" "$([ "$(hv '.could_not_run = [{kind: "prose-truncated"}]')" = true ]; echo $?)"
+check "host.json: prose-truncated omitting 0 bytes is refused" "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 0}]')" = false ]; echo $?)"
+check "host.json: prose-truncated omitting negative bytes is refused" "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: -5}]')" = false ]; echo $?)"
+check "host.json: prose-truncated of an unknown item is refused" "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "conversation", omitted: 5}]')" = false ]; echo $?)"
+check "host.json: prose-truncated with an item and no bytes is refused" "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "body"}]')" = false ]; echo $?)"
+check "host.json: two prose-truncated entries for one item are refused" \
+  "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 2}, {kind: "prose-truncated", item: "body", omitted: 3}]')" = false ]; echo $?)"
+# host-pass.sh writes the entries from the capped block, not a bare kind.
+check "host-pass: could_not_run takes the truncations of the block" \
+  "$(grep -F '+ ($b[0].items | truncations)),' "${PP%/*}/host-pass.sh" > /dev/null; echo $?)"
 
 [ "$fails" -eq 0 ] && echo "all passed" || echo "$fails failed"
 [ "$fails" -eq 0 ]

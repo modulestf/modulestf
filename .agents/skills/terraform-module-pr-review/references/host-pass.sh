@@ -507,7 +507,7 @@ cmd_run() {
        could_not_run: ([$files[0][] | select(.class == "unavailable") | {kind: "patch-unavailable", path}]
          + (if $t[0].signal == "unknown" then [{kind: "thread-resolution-unknown"}] else [] end)
          + (if $nthreads > 20 then [{kind: "threads-over-count", count: ($nthreads - 20)}] else [] end)
-         + (if any($b[0].items[]; .omitted > 0) then [{kind: "prose-truncated"}] else [] end)),
+         + ($b[0].items | truncations)),
        unresolved_threads: $t[0].unresolved,
        conversation: (if ($c[0] | type) == "array"
          then ($c[0] | conversation($t[0].path; $author; $login)
