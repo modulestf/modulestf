@@ -34,7 +34,7 @@ The example selection and plan coverage change the files a host exchanges with t
 - The verify job's results, `verify.json`, carry `selection` and a per-directory `affected` ([verify-pass.md](verify-pass.md#output)); `verify-pass.sh check` refuses results without them. The verify job also selects every example, not only the touched ones, and runs with `--budget 3600`.
 - `plan-hosted.json` examples carry `addresses` and `attributes` ([plan-pass.md](plan-pass.md#hosted-runner)); `check-plan` refuses an example without them, and it no longer requires every example to be one the change touches.
 - The render's run file carries `coverage` ([render-comment.sh](render-comment.sh)); a run file without it is refused.
-
+- The run file may carry `examples`, `{"count": M, "validated": K}`: the selected examples of `verify.json` and how many of them passed `validate` at the head. A host that wants the COMPACT tier of [comment-format.md](comment-format.md) sends it; one that omits it is safe and always gets STANDARD.
 ## Plan Record
 
 `plan-hosted.json` is the hosted plan job's record, described in [plan-pass.md](plan-pass.md#hosted-runner). It is accepted only when all of these hold, and otherwise refused with the reason in brackets:
