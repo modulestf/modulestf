@@ -246,7 +246,7 @@ refuse_claims() { # name, claims file content
   check "claims refused: $1: claims-eval not run" "$([ ! -f "$TMP/ladder-seen.json" ]; echo $?)"
 }
 refuse_claims "not JSON" 'nope'
-refuse_claims "21 claims" "$(jq -c '.claims = [range(21) as $i | .claims[0] + {claim_id: "C-\($i)"}]' "$TMP/claims-556.json")"
+refuse_claims "49 claims" "$(jq -c '.claims = [range(49) as $i | .claims[0] + {claim_id: "C-\($i)"}]' "$TMP/claims-556.json")"
 refuse_claims "a duplicate claim id" "$(jq -c '.claims[1].claim_id = "C-1"' "$TMP/claims-556.json")"
 refuse_claims "a bad claim id" "$(jq -c '.claims[0].claim_id = "X-1"' "$TMP/claims-556.json")"
 
@@ -324,6 +324,14 @@ setup; classify; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/
 check "classify into a used out directory is a usage error" "$([ $? = 2 ]; echo $?)"
 setup; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --out "$O" > /dev/null 2>&1
 check "classify with neither --diff nor --base is a usage error" "$([ $? = 2 ]; echo $?)"
+setup; echo '{"provider_schemas":{}}' > "$TMP/schema.json"; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --schema "$TMP/schema.json" --out "$O" > /dev/null 2>&1
+check "classify passes --schema to mtf-facts behaviour" "$([ -f "$O/behaviour.json" ] && grep -q -- "behaviour .* --schema $TMP/schema.json" "$TMP/facts.log"; echo $?)"
+setup; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --schema schema.json --out "$O" > /dev/null 2>&1
+check "a relative --schema is a usage error" "$([ $? = 2 ]; echo $?)"
+setup; ln -sf "$TMP/schema.json" "$TMP/schema-link.json"; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --schema "$TMP/schema-link.json" --out "$O" > /dev/null 2>&1
+check "a --schema that is a link is a usage error" "$([ $? = 2 ]; echo $?)"
+setup; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --schema "$TMP/missing.json" --out "$O" > /dev/null 2>&1
+check "a missing --schema is a usage error" "$([ $? = 2 ]; echo $?)"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "behaviour pass: all checks hold"; else echo "behaviour pass: $fails failed"; exit 1; fi

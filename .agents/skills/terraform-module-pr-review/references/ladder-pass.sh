@@ -1100,7 +1100,6 @@ l2() { # trigger file, id
 
 # --- L3 ------------------------------------------------------------------------------------------
 L3_MAX_CASES=4     # cases of one trigger at L3
-SWEEP_CASES=32     # claims-eval's cap on the cases of one trigger over all its levels
 FIXLIB="$HERE/ladder-fixtures"
 L3_MEM_KB=6291456  # 6 GiB resident for terraform and the provider
 # The fixture's arguments against the acquired schema: each one an attribute of the
@@ -1144,18 +1143,16 @@ l3() { # trigger file, id
   jq -e --arg a "$attr" '.targets | index([$a]) != null' "$lib/fixture.json" > /dev/null || { r3 "the attribute is not a target of the fixture"; return; }
   fixture_schema_ok "$lib" || { r3 "the fixture does not match the provider schema"; return; }
   [ -n "$(jq -r '.base_expr // ""' "$tf")" ] || { r3 "an added attribute has no control"; return; }
-  # The cases: those with an unknown input, in the classifier's order, as many as the sweep
-  # cap leaves after L1; the control: the first case whose inputs are all known, no null.
-  jq -c --argjson max "$L3_MAX_CASES" --argjson sweep "$SWEEP_CASES" '
+  # The cases: those with an unknown input, in the classifier's order, at most L3_MAX_CASES
+  # (claims-eval caps each level on its own); the control: the first case whose inputs are all
+  # known, no null. Plan claims take no scope, so a case a claim does not describe is not planned.
+  jq -c --argjson max "$L3_MAX_CASES" '
     def unk: .unknown == true or ((.unknown_elements // []) | length > 0);
     def plain: .unknown != true and .null != true and .omitted != true and ((.unknown_elements // []) | length == 0)
       and ([.value | .. | select(. == null)] | length == 0);
-    ((.cases // [] | length) * ([.levels[] | select(. == "L1" or . == "L2")] | length)) as $n1
-    | ([$max, $sweep - $n1] | min) as $k
-    | {k: $k, cases: [(.cases // [])[] | select(.inputs | type == "object" and any(.[]; unk))][:([$k, 0] | max)],
+    {cases: [(.cases // [])[] | select(.inputs | type == "object" and any(.[]; unk))][:$max],
        control: (first((.cases // [])[] | select(.inputs | type == "object" and length > 0 and all(.[]; plain))) // null)}' \
     "$tf" > "$L/etc/l3sel.json" 2> /dev/null || { r3 "no cases"; return; }
-  [ "$(jq '.k > 0' "$L/etc/l3sel.json")" = true ] || { r3 "no case budget left for L3"; return; }
   [ "$(jq '.cases | length > 0' "$L/etc/l3sel.json")" = true ] || { r3 "no case with an unknown input"; return; }
   [ "$(jq '.control != null' "$L/etc/l3sel.json")" = true ] || { r3 "no all-known case for the control"; return; }
   jq -c --slurpfile s "$L/etc/l3sel.json" '.cases = ($s[0].cases + [$s[0].control])' "$tf" > "$L/etc/trigger-l3.json"

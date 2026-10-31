@@ -82,7 +82,7 @@ def valid_behaviour:
         and (.category | IN(behaviour_categories[]))
         and (.state | IN("inert", "verified", "covered", "refuted", "unverifiable")))
         and (map(.id) | length == (unique | length)))
-  and (.claims | type == "array" and length <= 20 and all(.[]; type == "object"
+  and (.claims | type == "array" and length <= 48 and all(.[]; type == "object"
         and keys == ["claim_id", "state"] and (.claim_id | type == "string" and test("^C-[0-9]+$"))
         and (.state | IN("verified", "refuted", "unverifiable")))
         and (map(.claim_id) | length == (unique | length)))
