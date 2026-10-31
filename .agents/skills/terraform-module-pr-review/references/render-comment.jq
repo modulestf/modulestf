@@ -31,7 +31,7 @@ def valid_finding:
   and (.rule_id != "review.tool-disputed" or .severity == "LOW")
   and (.file | plain_path)
   and (.line == null or (.line | nat and . > 0))
-  and (.summary | clean_text) and (.suggested_fix | clean_text)
+  and (.summary | clean_text and length <= 500) and (.suggested_fix | clean_text and length <= 600)
   and (.source | IN("tool", "llm", "host"))
   and (has("candidate_id") == has("confirmed_by"))
   and ((has("candidate_id") | not) or (.candidate_id | type == "string" and test("^C-[0-9]{3,}$")))
@@ -126,14 +126,15 @@ def valid_run:
         and all(.[]; nat)));
 
 # Model text, so it must not pass for another part of the body: printable ASCII and newlines,
-# at most two paragraphs of at most 1000 characters each, and no line that starts like a
+# at most two paragraphs and 700 characters in all, and no line that starts like a
 # heading (ATX or a setext underline), a bold verdict line, HTML, a list item, a quote or a
 # table row.
 def valid_assessment: type == "string" and length <= 4096
   and test("^[\\x20-\\x7e\\n]*$") and test("[\\x21-\\x7e]")
   and (sub("\n+$"; "") | split("\n\n") as $ps
        | ($ps | length) <= 2
-       and all($ps[]; length > 0 and length <= 1000 and (test("^\\s|\\s$|\n\\s*\n") | not))
+       and ($ps | map(length) | add) <= 700
+       and all($ps[]; length > 0 and (test("^\\s|\\s$|\n\\s*\n") | not))
        and all(split("\n")[]; test("^\\s*(#|\\*\\*|<|[-*+] |[0-9]+[.)] |>|\\||=+\\s*$|-+\\s*$)") | not));
 
 # --- Paths: Step 8 puts the module root prefix back in front of a module-root-relative path.
