@@ -42,8 +42,10 @@
 #   --standard    render the STANDARD tier even when every COMPACT condition holds
 #                 (comment-format.md, Tiers); nothing forces COMPACT
 #
-#   The run file may carry one key more, "examples": {"count": n, "validated": n}, the selected
-#   examples and how many passed `validate`; COMPACT needs it. A host.json prose-truncated entry
+#   The run file may carry two keys more: "examples": {"count": n, "validated": n}, the selected
+#   examples verified and how many passed `validate`, which COMPACT needs, and "plan_mode",
+#   "laptop" or "runner", the plan pass mode of the plan record; a gate hit is a cause COMPACT
+#   admits only after a laptop-mode pass. A host.json prose-truncated entry
 #   may carry "item" (body, title or thread) and "omitted" (bytes); only a cut of the body, the
 #   description, is a cause COMPACT admits. The behaviour object's triggers may carry claims-eval's
 #   "complete", "outstanding" and "evidence_digest" (behaviour-pass.md, The Run Object); a trigger
@@ -112,8 +114,6 @@ one() { RJ -e --slurp --arg head "$head" "include \"$2\"; length == 1 and (.[0] 
 RJ -e --slurp 'include "render-comment"; length == 1 and (.[0] | below_floor)' "$findings" > /dev/null 2>&1 \
   && die "a finding that explains differences is rated below LOW, the floor; send it back to the reviewer"
 one "$findings" render-comment valid_findings || die "the findings do not fit the merged findings schema (a summary is at most 500 characters and a suggested_fix at most 600, the STANDARD limits)"
-RJ -e --slurp 'include "render-comment"; length == 1 and (.[0] | prose_fields)' "$host" > /dev/null 2>&1 \
-  || die "host.json is not valid for this head"
 RJ -e --slurp --arg head "$head" 'include "host-records"; length == 1 and (.[0] | valid_host($head))' \
   "$host" > /dev/null 2>&1 || die "host.json is not valid for this head"
 one "$run" render-comment valid_run || die "the run file does not fit its grammar"

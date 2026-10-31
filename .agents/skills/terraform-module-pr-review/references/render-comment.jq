@@ -34,6 +34,7 @@ def valid_finding:
                "predates_change", "rule_id", "severity", "source", "subject", "suggested_fix", "summary"]) == []
   and (((has("explains") or has("evidence_digest")) | not) or (.rule_id | explaining_rule))
   and ((has("explains") | not) or (.explains | type == "array" and length > 0 and length <= 256 and all(.[]; diff_id)))
+  and (has("explains") == has("evidence_digest"))
   and ((has("evidence_digest") | not) or (.evidence_digest | digest))
   and ((has("predates_change") | not) or (.predates_change == true and .source == "tool"))
   and (["file", "id", "line", "rule_id", "severity", "source", "suggested_fix", "summary"] - keys) == []
@@ -90,10 +91,15 @@ def valid_behaviour:
   type == "object" and keys == ["capped", "claims", "reason", "status", "triggers"]
   and (.capped | nat)
   and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object"
-        and (keys - ["complete", "evidence_digest", "outstanding"]) == ["category", "file", "id", "line", "state"]
+        and (keys - ["also_categories", "complete", "evidence_digest", "outstanding"]) == ["category", "file", "id", "line", "state"]
         and (.id | type == "string" and test("^T-[0-9]{3}$"))
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0))
         and (.category | IN(behaviour_categories[]))
+        # The categories of triggers merged into this one (contract 2), each a category once.
+        and ((has("also_categories") | not) or (.also_categories | type == "array" and length > 0
+              and all(.[]; IN(behaviour_categories[])) and length == (unique | length)))
+        # Outstanding differences and a digest belong to an unverifiable trigger only.
+        and ((.state | IN("verified", "covered", "inert")) as $pass | ($pass and ((.outstanding // []) != [] or has("evidence_digest"))) | not)
         and (.state | IN("inert", "verified", "covered", "refuted", "unverifiable"))
         # Contract 5: claims-eval's complete flag, the sorted unexplained difference ids of this
         # trigger, and their digest, present only with a difference.
@@ -127,12 +133,9 @@ def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select
 def claims_consistent($findings; $run):
   (any($findings[]; .rule_id | startswith("claim.")) | not) or (behaviour_of($run) | behaviour_refuted > 0);
 
-# A prose-truncated entry of host.json may name the item that was cut and the bytes it lost
-# (host-pass.md, Host Facts): both or neither. The render checks these two fields itself and hands
-# host-records.jq the entry without them, so it accepts the old entry and the new one alike.
-def prose_fields: (.could_not_run | type == "array") and all(.could_not_run[]; type == "object"
-  and (((has("item") or has("omitted")) | not) or (.kind == "prose-truncated" and has("item") and has("omitted")
-       and (.item | IN("body", "title", "thread")) and (.omitted | nat and . >= 1))));
+# could_not_run entries counted as gaps: the prose-truncated entries, one per cut item class,
+# count once together, as they render one line.
+def cnr_count: ([.[] | select(.kind != "prose-truncated")] | length) + (if any(.[]; .kind == "prose-truncated") then 1 else 0 end);
 
 # --- Reported (verdict.md, Behaviour evidence). A trigger claims-eval calls complete, whose only
 # gap is its outstanding differences, is reported when findings explain every one of them. A
@@ -154,9 +157,10 @@ def with_reported($findings):
 
 def valid_run:
   type == "object"
-  and ((keys - ["behaviour", "examples"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((keys - ["behaviour", "examples", "plan_mode"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
   and ((has("behaviour") | not) or (.behaviour | valid_behaviour))
-  # The example counts the COMPACT verdict line states.
+  # The plan pass mode of the plan record, and the example counts the COMPACT verdict line states.
+  and ((has("plan_mode") | not) or (.plan_mode | IN("laptop", "runner")))
   and ((has("examples") | not) or (.examples | type == "object" and keys == ["count", "validated"]
         and (.count | nat) and (.validated | nat)) and .examples.validated <= .examples.count - (.verify_gaps | length)
         and ([.coverage.unplanned[] | select(.reason != "no example directory")] | length) <= .examples.count)
@@ -324,8 +328,10 @@ def texts: {
   "cause-file-gate": "{count} of {total} examples not planned (file gate)",
   "cause-no-plan": "no plan was run (no AWS profile named)",
   "action-description": "shorten the description under 8000 bytes",
-  "action-safety-gate": "plan the {count} gated examples in runner mode",
-  "action-file-gate": "remove what plan gate G0 refuses from the {count} examples",
+  "action-safety-gate-one": "plan the 1 gated example in runner mode",
+  "action-safety-gate-many": "plan the {count} gated examples in runner mode",
+  "action-file-gate-one": "remove what plan gate G0 refuses from the 1 example",
+  "action-file-gate-many": "remove what plan gate G0 refuses from the {count} examples",
   "action-no-plan": "name an AWS profile",
   "compact-finding": "- {severity} `{rule_id}` {location} - {summary}",
   "compact-fix": "  - Fix: {fix}",
@@ -649,6 +655,8 @@ def causes($l; $h; $run; $b):
        or any($l.findings[]; .rule_id | startswith("review.") and . != "review.tool-disputed")
        or any($h.could_not_run[]; .kind != "prose-truncated" or .item != "body")
        or $run.verify_gaps != [] or any($u[]; (.reason | plan_class) == null)
+       # A gate hit is advice only after a laptop-mode plan pass: runner mode refuses what is left.
+       or ($run.plan_mode != "laptop" and any($u[]; .reason | plan_class | IN("safety-gate", "file-gate")))
        or ($b | behaviour_gaps) > 0)};
 
 def compact_ok($l; $v; $c; $run; $b):
@@ -658,7 +666,7 @@ def compact_ok($l; $v; $c; $run; $b):
   and ($counted | length) <= 3
   and (any($l.findings[]; .rule_id == "review.tool-disputed") | not)
   and $b != null and $b.status == "ran"
-  and all($b.triggers[]; (.state | IN("verified", "covered", "inert", "reported")) and .category != "provider-version-floor-change")
+  and all($b.triggers[]; (.state | IN("verified", "covered", "inert", "reported")) and (any(.category, (.also_categories // [])[]; . == "provider-version-floor-change") | not))
   and all($counted | groups[]; (.items | length) < 3)
   and ($c.other | not) and ($v.rule != 4 or $c.admitted != [])
   and ($run | has("examples"));
@@ -688,7 +696,7 @@ def compact_body($in; $l; $v; $c; $b; $p):
      + (if $run.plan_ran then " " + tx(if $x.validated == $x.count then "compact-validate-all" else "compact-validate-some" end;
           {validated: $x.validated, count: $x.count, planned: ($x.count - ($names | length))}) else "" end)
      + (if $v.rule == 4 then " " + tx("compact-not-checked"; {causes: ([$c.admitted[] | tx("cause-" + .key; .)] | join(", "))}) else "" end)) as $verdict
-  | (if $v.rule == 4 then [tx("compact-action"; {actions: ([$c.admitted[] | tx("action-" + .key; .)]
+  | (if $v.rule == 4 then [tx("compact-action"; {actions: ([$c.admitted[] | tx("action-" + .key + (if .key | IN("safety-gate", "file-gate") then (if .count == 1 then "-one" else "-many" end) else "" end); .)]
        | if length == 1 then .[0] else (.[:-1] | join(", ")) + ", and " + .[-1] end)})] else [] end) as $action
   | [$o[] | select(routed | not) | tx("compact-finding"; {severity, rule_id, location: loc($p), summary})
        + "\n" + tx("compact-fix"; {fix: .suggested_fix})] as $bullets
@@ -697,7 +705,7 @@ def compact_body($in; $l; $v; $c; $b; $p):
           | tx("evidence-reported"; {location: safe_loc($p), findings: (.judged_by | and_join), count: (.outstanding | length)})),
          ($b.claims | length | select(. > 0) | if . == 1 then tx("evidence-claims-one") else tx("evidence-claims-many"; {count: .}) end)]
         | if . == [] then [] else ["- " + join(" ")] end)
-     + [$o[] | select(routed) | tx("evidence-predates"; {rule_id, location: loc($p), summary})]
+     + [$o[] | select(routed) | tx("evidence-predates"; {rule_id, location: safe_loc($p), summary})]
      + [(state_lines($h; $in.checks)[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
   | {body: ([$in.assessment, $verdict] + $action + (if $bullets == [] then [] else [$bullets | join("\n")] end)
             + (if $notes == [] then [] else ["<details><summary>\(tx("evidence-summary"))</summary>\n\n" + ($notes | join("\n")) + "\n</details>"] end)
@@ -714,7 +722,7 @@ def render($in):
      # A refuted trigger no blocking claim.* finding words is its own checklist item.
      refuted_todo: (if any($in.findings[]; (.rule_id | startswith("claim.")) and (.severity | IN("CRITICAL", "HIGH"))) then []
                     else [($b // {triggers: []}).triggers[] | select(.state == "refuted")] end),
-     gaps: (($h.could_not_run | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
+     gaps: (($h.could_not_run | cnr_count) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
      unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end)} as $l
   | ($l | ladder) as $v
   | ($v | rationale($l)) as $why
@@ -723,7 +731,7 @@ def render($in):
      + [$why]
      + evidence_lines($b)
      + (if $v.rule == 8 then [] else ["### What to do\n\n" + todo_md($l; $v.rule; $p;
-          ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | length) + ($in.run.verify_gaps | length)
+          ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | cnr_count) + ($in.run.verify_gaps | length)
           + $l.unplanned + ($b | behaviour_gaps))] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
      + section("Checks that could not run"; gap_lines($h; $in.run; $b; $p); "\n")

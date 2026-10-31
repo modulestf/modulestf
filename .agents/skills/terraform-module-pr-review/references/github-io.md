@@ -452,7 +452,7 @@ Three limits are known and accepted. A second account the author controls writes
 
 ### Caps
 
-The title, the body and the thread comments are capped per item, the body at 8000 bytes and the title and each thread comment at 4000, and at 16000 bytes in total, in UTF-8 bytes of item text after the CRLF conversion. Marker lines, the truncation marker included, are outside the cap. Items are taken in block order: one over its item cap is cut to that cap, one larger than what is left of the 16000 is cut to what is left, and one that arrives with nothing left travels as its item line and a truncation marker for its whole size.
+The title, the body and the thread comments are capped per item, the body at 8000 bytes and the title and each thread comment at 4000, and at 16000 bytes in total, in UTF-8 bytes of item text after the CRLF conversion. Marker lines, the truncation marker included, are outside the cap. Items are taken in block order: one over its item cap is cut to that cap, one larger than what is left of the 16000 is cut to what is left, and one that arrives with nothing left travels as its item line and a truncation marker for its whole size. With the body at its 8000 bytes and the title at its 4000, the thread comments share the 4000 that is left of the 16000.
 
 A cut keeps the longest run of whole lines that fits. When no line boundary falls within the cap, because the first line alone is longer, it keeps the longest prefix that ends on a character boundary, so a multi-byte character is never split. The truncation marker follows on its own line. Truncation is recorded and makes the verdict inconclusive, because an instruction could have been hiding in the part that was dropped.
 

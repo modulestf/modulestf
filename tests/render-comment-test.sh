@@ -1056,7 +1056,7 @@ T556() { # jq update of the trigger -> trigger json
 }
 CL20="$(jq -nc '[range(1; 21) | {claim_id: "C-\(.)", state: "verified"}]')"
 R556() { # name, jq update -> run file
-  runf "r556-$1" '.plan_ran = true | .examples = {count: 9, validated: 9}
+  runf "r556-$1" '.plan_ran = true | .plan_mode = "laptop" | .examples = {count: 9, validated: 9}
     | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/serverless", reason: "plan gate G1"},
         {dir: "examples/mysql", reason: "plan gate G3"}, {dir: "examples/s3-import", reason: "plan gate G1"}]}
     | .behaviour = {status: "ran", reason: null, triggers: ['"$(T556)"'], claims: '"$CL20"', capped: 0} | '"${2:-.}"
@@ -1108,11 +1108,11 @@ grep -qxF -- '- Quoted prose was truncated, so part of the discussion was not re
 rc "$(F556)" "$(R556 cuto)" "$(host cuto '.could_not_run = [{kind: "prose-truncated"}]')"
 check "tiers: a prose-truncated entry that names no item forces STANDARD" "$(std0; echo $?)"
 t_prose_once() {
-  rc "$NONE" "$(runf prose1)" "$(host prose3 '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 9}, {kind: "prose-truncated", item: "thread", omitted: 4}, {kind: "prose-truncated", item: "title", omitted: 2}]')"
+  rc "$NONE" "$(runf prose1)" "$(host prose3 '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 9}, {kind: "prose-truncated", item: "thread", omitted: 4}, {kind: "prose-truncated", item: "title", omitted: 2}, {kind: "patch-unavailable", path: "a.tf"}]')"
   std0 && [ "$(grep -c -xF -- '- Quoted prose was truncated, so part of the discussion was not read.' "$O/comment.md")" = 1 ] &&
-    grep -qxF -- '- 3 checks could not run; see Checks that could not run.' "$O/comment.md"
+    grep -qxF -- '- 2 checks could not run; see Checks that could not run.' "$O/comment.md"
 }
-t_prose_once; check "tiers: STANDARD renders one truncated prose line for three cut item classes and counts each" $?
+t_prose_once; check "tiers: STANDARD renders one truncated prose line for three cut item classes and counts it once" $?
 
 # The reported computation. std_uv: the render is STANDARD at rule 4 with the trigger listed.
 std_uv() { [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && [ "$(rule)" = 4 ] && grep -qxF -- '- Behaviour change at `main.tf:156` (wrapper-change): not verified.' "$O/comment.md"; }
@@ -1209,7 +1209,7 @@ rc "$(printf '%s\n' "$(f review.tool-disputed LOW main.tf 43 'D.' 'no code chang
 t_g0() {
   rc "$(F556)" "$(R556 g0 '.coverage.unplanned = [{dir: "examples/a", reason: "plan gate G0"}, {dir: "examples/b", reason: "plan gate G2"}]')"
   [ "$(tier)" = COMPACT ] && grep -qF 'Not checked: the description past 8000 bytes (200 cut), 1 of 9 examples not planned (safety gate), 1 of 9 examples not planned (file gate).' "$O/comment.md" &&
-    grep -qxF 'To get a conclusive review: shorten the description under 8000 bytes, plan the 1 gated examples in runner mode, and remove what plan gate G0 refuses from the 1 examples.' "$O/comment.md"
+    grep -qxF 'To get a conclusive review: shorten the description under 8000 bytes, plan the 1 gated example in runner mode, and remove what plan gate G0 refuses from the 1 example.' "$O/comment.md"
 }
 t_g0; check "tiers: a G0 example gets its own clause, never the runner clause" $?
 t_noplan() {
@@ -1262,6 +1262,64 @@ refused "example counts with more validated than verified" "$G" "" "" "$(runf ex
 refused "example counts below the unplanned examples" "$G" "" "" "$(runf exbad2 '.examples = {count: 1, validated: 1} | .coverage = {class: "none", inert: false, unplanned: [{dir: "a", reason: "budget"}, {dir: "b", reason: "budget"}]}')"
 refused "an unknown argument after --standard" "$G" "" "" "" "" --standard --compact
 
+# The plan pass mode (plan-pass.md, Runner or laptop): runner mode still refuses what a gate hit
+# there names, so the runner clause is advice only after a laptop-mode pass. A gate hit after a
+# runner-mode pass, or with no mode, is a cause outside the table.
+t_runner() {
+  rc "$(F556)" "$(R556 runner '.plan_mode = "runner"')"
+  std0 && [ "$(rule)" = 4 ] && ! grep -qF 'runner mode' "$O/comment.md" &&
+    grep -qxF -- '- 2 examples were not planned: plan gate G1.' "$O/comment.md"
+}
+t_runner; check "tiers: a gate hit after a runner-mode pass forces STANDARD with no runner advice" $?
+rc "$(F556)" "$(R556 nomode 'del(.plan_mode)')"
+check "tiers: a gate hit with no plan mode forces STANDARD with no runner advice" "$(std0 && ! grep -qF 'runner mode' "$O/comment.md"; echo $?)"
+rc "$(F556)" "$(R556 g0run '.plan_mode = "runner" | .coverage.unplanned = [{dir: "examples/a", reason: "plan gate G0"}]')"
+check "tiers: a G0 hit after a runner-mode pass forces STANDARD" "$(std0; echo $?)"
+refused "a plan mode outside the two" "$G" "" "" "$(runf badmode '.plan_mode = "cloud"')"
+t_one() {
+  rc "$(F556)" "$(R556 one1 '.coverage.unplanned = [{dir: "examples/a", reason: "plan gate G3"}]')"
+  [ "$(tier)" = COMPACT ] && grep -qxF 'To get a conclusive review: shorten the description under 8000 bytes, and plan the 1 gated example in runner mode.' "$O/comment.md"
+}
+t_one; check "tiers: one gated example takes the one form" $?
+# also_categories: the version floor condition reads every category of a merged trigger.
+t_alsofloor() {
+  rc "$(F556)" "$(R556 also '.behaviour.triggers += [{id: "T-002", file: "versions.tf", line: 5, category: "literal-argument-change", also_categories: ["provider-version-floor-change"], state: "verified"}]')"
+  std0
+}
+t_alsofloor; check "tiers: a version floor change among also_categories forces STANDARD" $?
+rc "$(F556)" "$(R556 also2 '.behaviour.triggers += [{id: "T-002", file: "x.tf", line: 5, category: "literal-argument-change", also_categories: ["default-change"], state: "verified"}]')"
+check "tiers: another category among also_categories keeps COMPACT" "$([ "$(tier)" = COMPACT ]; echo $?)"
+refused "an also_categories entry outside the list" "$(F556)" "$H556" "" "$(R556 alsobad '.behaviour.triggers[0].also_categories = ["cosmetic"]')"
+refused "an also_categories entry twice" "$(F556)" "$H556" "" "$(R556 alsodup '.behaviour.triggers[0].also_categories = ["default-change", "default-change"]')"
+refused "an empty also_categories" "$(F556)" "$H556" "" "$(R556 alsoempty '.behaviour.triggers[0].also_categories = []')"
+# The grammar: differences and a digest belong to an unverifiable trigger, and explains to a digest.
+t_passdiff() { rc "$(F556)" "$(R556 passd '.behaviour.triggers[0].state = "verified"')"; [ "$ST" = 2 ] && empty_out; }
+t_passdiff; check "refused: a verified trigger with outstanding differences and a digest" $?
+refused "a covered trigger with a digest" "$(F556)" "$H556" "" "$(R556 covd '.behaviour.triggers[0].state = "covered"')"
+refused "an inert trigger with outstanding differences" "$(F556)" "$H556" "" "$(R556 inertd '.behaviour.triggers[0] |= (.state = "inert" | del(.evidence_digest))')"
+t_nodig() { rc "$(printf '%s\n' "$(f compat.expression-behaviour-changed LOW main.tf 156 S. F. "$(jq -nc --argjson i "$IDS" '{explains: $i}')")" | list nodig)" "$(R556 nodig)"; [ "$ST" = 2 ] && empty_out; }
+t_nodig; check "refused: a finding with explains and no evidence_digest" $?
+refused "a finding with an evidence_digest and no explains" "$(printf '%s\n' "$(f compat.expression-behaviour-changed LOW main.tf 156 S. F. "{\"evidence_digest\": \"$DIG\"}")" | list digonly)" "$H556" "" "$(R556 digonly)"
+# The predates line is in the details block, so its location is allowlisted too.
+t_predloc() {
+  rc "$(printf '%s\n' "$(f structure.argument-order LOW 'my mod/x.tf' 4 'T.' 'M.' "$PRE")" | list predloc)" \
+    "$(R556 predloc '.behaviour.triggers[0] |= (.state = "verified" | .outstanding = [] | del(.evidence_digest))')"
+  [ "$(tier)" = COMPACT ] && grep -qxF -- '- Predates this change: `structure.argument-order` at name withheld - T.' "$O/comment.md"
+}
+t_predloc; check "tiers: a predates location outside the charset is withheld" $?
+# The examples jq of SKILL.md, Step 10, on verify-pass.sh output of the shape verify-pass.md gives:
+# only verified directories count, and validated counts those whose head validate exited 0.
+t_examples_jq() {
+  local q; q="$(sed -n 's/.*`examples`, `{"count": M, "validated": K}`, from .*: `jq '"'"'\(.*\)'"'"'`\..*/\1/p' "$SRC/.agents/skills/terraform-module-pr-review/SKILL.md")"
+  [ -n "$q" ] && jq -n '{head_sha: "h", base_sha: "b", terraform_version: null, selection: {}, dirs: [
+      {dir: "examples/a", reason: "verified", affected: "touched", head: {init: 0, validate: 0, record: "code-result", line: null}, base: null, outside: false},
+      {dir: "examples/b", reason: "verified", affected: "all", head: {init: 0, validate: 1, record: "code-result", line: "x"}, base: null, outside: false},
+      {dir: "examples/c", reason: "skipped-version-bump", affected: "all", head: null, base: null, outside: false},
+      {dir: "examples/d", reason: "skipped-symlink", affected: "all", head: null, base: null, outside: false}]}' |
+    jq -c "$q" | grep -qxF '{"count":2,"validated":1}'
+}
+t_examples_jq; check "SKILL.md: the examples jq counts verified directories only, on the verify-pass output shape" $?
+
 # Case functions for the self-check below.
 t_floorcat() { rc "$(F556)" "$(R556 floorcat2 '.behaviour.triggers += [{id: "T-002", file: "versions.tf", line: 5, category: "provider-version-floor-change", state: "verified"}]')"; [ "$(tier)" = STANDARD ]; }
 t_four() { rc "$(four b)" "$(R556 fourb)"; [ "$(tier)" = STANDARD ]; }
@@ -1277,7 +1335,14 @@ mutate "the one-trigger rule dropped" 's/\(\[\.explains\[\] \| split\("\|"\)\[0\
 mutate "the file and line match dropped" 's/and \.file == \$t\.file and \.line == \$t\.line/and true/' t_where
 mutate "complete not required" 's/and \.complete == true and/and/' t_incomplete
 mutate "the floor not named" 's/&& die "a finding that explains differences is rated below LOW/\&\& true "/' t_floor
-mutate "the version floor condition dropped" 's/ and \.category != "provider-version-floor-change"\)/)/' t_floorcat
+mutate "the version floor condition dropped" 's/and \(any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "provider-version-floor-change"\) \| not\)/and true/' t_floorcat
+mutate "also_categories not read for the version floor" 's/any\(\.category, \(\.also_categories \/\/ \[\]\)\[\];/any(.category;/' t_alsofloor
+mutate "prose-truncated entries each counted" 's/def cnr_count: .*/def cnr_count: length;/' t_prose_once
+mutate "gate advice after a runner-mode pass" 's/or \(\$run\.plan_mode != "laptop" and/or (false and/' t_runner
+mutate "the one form of an action clause dropped" 's/\(if \.count == 1 then "-one" else "-many" end\)/"-many"/' t_g0
+mutate "a passing trigger with differences accepted" 's/\(\$pass and \(\(\.outstanding \/\/ \[\]\) != \[\] or has\("evidence_digest"\)\)\) \| not\)/true)/' t_passdiff
+mutate "explains without a digest accepted" 's/and \(has\("explains"\) == has\("evidence_digest"\)\)//' t_nodig
+mutate "the predates location not allowlisted" 's/tx\("evidence-predates"; \{rule_id, location: safe_loc\(\$p\)/tx("evidence-predates"; {rule_id, location: loc(\$p)/' t_predloc
 mutate "the finding cap dropped" 's/and \(\$counted \| length\) <= 3/and true/' t_four
 mutate "the group condition dropped" 's/and all\(\$counted \| groups\[\]; \(\.items \| length\) < 3\)/and true/' t_g3
 mutate "routing ignores predates_change" 's/and \.predates_change == true;/and false;/' t_routed

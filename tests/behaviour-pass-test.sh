@@ -341,6 +341,14 @@ refuse_e "an outstanding id twice" '.triggers[0].outstanding = ["T-001|L1|a|valu
 refuse_e "257 outstanding ids" '.triggers[0].outstanding = ([range(257) | "T-001|L1|c\(1000 + .)|value"] | sort)'
 refuse_e "a digest that is not 64 hex" '.triggers[0].outstanding = ["T-001|L1|a|value"] | .triggers[0].evidence_digest = "ABC"'
 refuse_e "a digest with no outstanding difference" ".triggers[0].evidence_digest = \"$DG\""
+refuse_e "a verified trigger with outstanding differences" '.triggers[0].state = "verified" | .triggers[0].outstanding = ["T-001|L1|a|value"]'
+setup
+jq '.triggers[0].also_categories = ["default-change", "provider-version-floor-change"]' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
+classify; evalp --claims "$TMP/claims-556.json"
+check "also_categories: copied from the classifier to the run trigger" "$(q '.triggers[0].also_categories == ["default-change", "provider-version-floor-change"] and (.triggers[1] | has("also_categories") | not)')"
+refuse_b "an also_categories entry outside the list" '.triggers[0].also_categories = ["cosmetic"]'
+refuse_b "an also_categories entry twice" '.triggers[0].also_categories = ["default-change", "default-change"]'
+refuse_b "an empty also_categories" '.triggers[0].also_categories = []'
 
 # --- Usage: eval before classify, a relative path, an out directory holding outputs.
 setup; evalp; check "eval before classify is a usage error" "$([ $? = 2 ]; echo $?)"

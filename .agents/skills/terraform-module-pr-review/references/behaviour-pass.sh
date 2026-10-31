@@ -57,6 +57,9 @@ def valid_behaviour:
   type == "object" and .schema_version == 1 and (.inert | type == "boolean") and (.capped | nat)
   and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object" and (.id | tid)
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0)) and (.category | IN(cats[]))
+        # Contract 2: the categories of the triggers merged into this one, each a category once.
+        and ((has("also_categories") | not) or (.also_categories | type == "array" and length > 0
+              and all(.[]; IN(cats[])) and length == (unique | length)))
         # The required case set, when present: at most 32 cases, each with its own id once.
         and ((has("cases") | not) or (.cases | type == "array" and length <= 32
               and all(.[]; type == "object" and (.id | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$"))
@@ -80,6 +83,7 @@ def valid_eval($b; $c):
                            and startswith($id + "|")) and . == unique))
         and ((has("evidence_digest") | not) or ((.evidence_digest | type == "string" and test("^[0-9a-f]{64}$"))
               and (.outstanding // []) != []))
+        and ((.state | IN("verified", "covered", "inert")) as $pass | ($pass and ((.outstanding // []) != [] or has("evidence_digest"))) | not)
         and ((has("changes") | not) or (.changes | type == "array" and length <= 256 and all(.[]; type == "object"
               and (.level | IN("L1", "L2", "L3", "L4")) and (.case | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$"))
               and (.attribute | IN(attrs[])) and (.explained | type == "boolean")
@@ -200,6 +204,7 @@ evaluate() {
     {run: {status: "ran", reason: null,
        triggers: [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
                   | {id: $t.id, file: $t.file, line: $t.line, category: $t.category, state: $et.state}
+                    + ($t | with_entries(select(.key == "also_categories")))
                     + ($et | with_entries(select(.key | IN("complete", "outstanding", "evidence_digest"))))],
        claims: [$c.claims[] | {claim_id, state: (kstate(.claim_id) | if . == "discarded" then "unverifiable" else . end)}],
        capped: $b.capped},
