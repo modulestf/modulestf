@@ -33,6 +33,16 @@ A host that merges findings from the deterministic facts engine and a model, as 
 
 Neither field moves a severity, and neither is an input to a verdict: a consumer that reads only the seven required fields reads the same defect.
 
+Three more optional fields tie a finding to the verification evidence. They too add no required field and change no type, so the version stays 3.
+
+| Field | Type | Rule |
+|-------|------|------|
+| `explains` | array of strings | Set by a review run, only on a finding of `compat.expression-behaviour-changed` or a `claim.*` rule: the difference ids of one trigger's outstanding set that the finding judges, each `<trigger id>\|<level>\|<case>\|<attribute>`, such as `T-001\|L1\|null_element\|value`, built from that trigger's unexplained `change` lines in the record, at most 256. [Check G](check-g-behaviour.md#explaining-the-differences) says when to write it. |
+| `evidence_digest` | string | Set with `explains` and never without it: the 64 lowercase hex characters of the `digest` on that trigger's `trigger` line, copied as written. |
+| `predates_change` | boolean, `true` only | Set by the facts engine, never by a review run, only on a `source` `tool` finding whose rule also fires at the base on the same subject. A host may list such a LOW finding apart. |
+
+A host reads `explains` only together with an equal digest: a finding whose digest differs from the trigger's, or whose ids span two triggers, explains nothing and stays a finding as written. None of the three moves a severity.
+
 Tool findings are final: the host drops a model finding with the same rule and subject. A model that thinks a tool finding is wrong reports `review.tool-disputed` instead, severity LOW, `file` and `line` of the disputed finding, a `summary` that names the disputed `rule_id` and says why it is wrong, and a `suggested_fix` that opens with `no code change:` and asks a person to decide. The disputed finding stays in the list. A person decides the dispute; an upheld dispute is a false positive of the tool or of the class that confirmed it.
 
 ## Suggested Fix Contract

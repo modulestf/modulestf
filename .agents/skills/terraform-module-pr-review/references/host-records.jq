@@ -174,12 +174,12 @@ def cut($n):
   if utf8bytelength <= $n then . elif $n <= 0 then "" else (linecut($n) // bytecut($n)) end;
 
 # Items [{kind, origin, text}] in block order -> items with text cut and omitted bytes, under
-# the per-item 4000 and the total 16000 for title, body and thread items.
+# the per-item 8000 for the body and 4000 for the title and a thread item, and the total 16000.
 def capped:
   reduce .[] as $i ({out: [], left: 16000};
     ($i.text | crlf) as $t
     | if $i.kind | IN("title", "body", "thread") then
-        ([4000, .left] | min) as $lim
+        ([(if $i.kind == "body" then 8000 else 4000 end), .left] | min) as $lim
         | ($t | cut($lim)) as $k
         | .out += [$i + {text: $k, omitted: (($t | utf8bytelength) - ($k | utf8bytelength))}]
         | .left -= ($k | utf8bytelength)

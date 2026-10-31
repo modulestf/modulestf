@@ -195,12 +195,12 @@ Every run ends by deleting its run directory, after the render-output files are 
 ```
 case "$ROOT" in /?*) ;; *) RUN= ;; esac
 case "$RUN" in
-  "$ROOT"/pr-review.??????) rm -rf -- "$RUN" ;;
+  "$ROOT"/pr-review.??????) find "$RUN" -type d -exec chmod u+w {} + ; rm -rf -- "$RUN" ;;
   *) echo "refusing to delete: $RUN" >&2 ;;
 esac
 ```
 
-The records and check runs directories belong to the host and are never written or deleted.
+The `chmod` is the one in [github-io.md](github-io.md#cleanup): the ladder leaves read-only directories that `rm -rf` cannot empty. The records and check runs directories belong to the host and are never written or deleted.
 
 ## Allowed Commands
 

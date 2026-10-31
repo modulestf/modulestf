@@ -7,7 +7,7 @@ A logic change is verified by escalating evidence, simplest first, until a test 
 
 ## Triggers
 
-`mtf-facts behaviour` reads the base and head trees and turns every changed tree entry into AST-level changes. Each one is a trigger with an id (`T-001` on), a file, a line and exactly one category. At most 40 triggers; the rest are counted in `capped` and are unverifiable. A change only to an enumerated documentation or metadata path that no HCL read site reaches is inert, with no trigger.
+`mtf-facts behaviour` reads the base and head trees and turns every changed tree entry into AST-level changes. Each one is a trigger with an id (`T-001` on), a file, a line and exactly one category. At most 40 triggers; the rest are counted in `capped` and are unverifiable. Triggers with the same file and line and identical base and head expressions, neither null, are one trigger: the first by id keeps its category and the others' go in `also_categories`, its levels and cases are the union of theirs under the same caps, and ids are numbered again in order. A change only to an enumerated documentation or metadata path that no HCL read site reaches is inert, with no trigger.
 
 | Category | What changed |
 |----------|--------------|
@@ -116,11 +116,18 @@ At L1, a `value` or `length` difference where one revision drops an input's mark
 
 For the change that drops `compact()` around a list, the cases with an unknown element or a wholly unknown input differ in unknown-ness: wholly unknown at the base, a known length at the head. Scoped claims explain them, `expression-output-unknown` at the base and `expression-output-length-known` at the head per scope; a simulated L1 run needs 8 such claims, one of them an `expression-output-length-known` scoped to `multiple` with length 3. The cases with an empty-string or null element still differ in `value` and `length`, since `concat()` keeps those elements: `input-filtered` claims explain them, filtered at the base and `filtered` false at the head, for the empty strings and nulls of `var.vpc_security_group_ids` and the nulls of the security group ids, 6 claims. The 14 claims verify the trigger only when the description also states what happens to the nulls. The description of pull request 556 states the empty strings and says nothing about nulls, so an honest claims file has no null claim: the 6 cases with a null element, 12 differences, stay unexplained, the trigger stays `unverifiable`, and the review weighs those cases as a compatibility change. All differences are still listed. L3 plans only the cases with an unknown input, so a null element is seen there only together with an unknown id.
 
+### Outstanding Differences
+
+`claims-eval` also gives each trigger that took a level `complete`, true when every level it takes ran, its required cases are complete, every control is valid and the observations compare, and `outstanding`, the sorted ids of its unexplained differences, each `<trigger id>|<level>|<case id>|<attribute>`. When `outstanding` is not empty it adds `evidence_digest`, a sha256 over the head and base SHAs, those ids, both revisions' observations of their cases and the fixture hashes, so it changes when any of them does. A trigger that is `complete` with nothing outstanding is `verified`.
+
+The host makes one more state, `reported`, from an `unverifiable` trigger that is `complete` with differences outstanding: when the review's findings explain every outstanding id with the trigger's digest ([Check G](check-g-behaviour.md#explaining-the-differences)), the trigger is reported, judged in those findings, and is no rule 4 unknown. A finding counts only when its rule is `compat.expression-behaviour-changed` or `claim.*`, its file and line are the trigger's, its ids are of that trigger alone and its digest is equal; any other is ignored for this, never an error. Missing, partial or stale coverage leaves the trigger `unverifiable`. The verdict then rests on the findings, LOW at the least.
+
 ## Evidence to Verdict
 
 | State | Finding | Verdict rung |
 |-------|---------|--------------|
 | `inert`, `verified`, `covered` | None | Pass |
+| `reported` | The findings that explain its differences | The findings' own rung |
 | `refuted`, a trigger or a claim | Blocks by itself; Check G words it: `claim.fix-not-effective` for a refuted claim at `head` on a trigger, `claim.refuted` for any other | Block, rule 2 |
 | `unverifiable`, over the cap, or the step not run | None: the host lists it | Inconclusive, rule 4 |
 

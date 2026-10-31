@@ -610,5 +610,17 @@ d="$TMP/hr-many"; mkdir -p "$d"
 : > "$d/plan-refused-hosts.txt"
 hrefused "an output over the size cap" "$d" "the output is over the size cap"
 
+# host-records.jq's caps on the untrusted block, as github-io.md's Caps states them: the body
+# item 8000 bytes, the title and a thread comment 4000, 16000 in total, in block order.
+cq() { jq -n -c -L "${PP%/*}" "include \"host-records\";
+  [{kind: \"title\", text: (\"t\" * 4100)}, {kind: \"body\", text: (\"b\" * 8200)},
+   {kind: \"thread\", text: (\"c\" * 5000)}, {kind: \"thread\", text: \"late\"}, {kind: \"conversation\", text: (\"v\" * 9000)}]
+  | capped | $1"; }
+check "caps: the title is cut to 4000 bytes" "$([ "$(cq '.[0] | [(.text | length), .omitted]')" = '[4000,100]' ]; echo $?)"
+check "caps: the body is cut to 8000 bytes" "$([ "$(cq '.[1] | [(.text | length), .omitted]')" = '[8000,200]' ]; echo $?)"
+check "caps: a thread comment gets what is left of the 16000" "$([ "$(cq '.[2] | [(.text | length), .omitted]')" = '[4000,1000]' ]; echo $?)"
+check "caps: an item with nothing left travels empty, all omitted" "$([ "$(cq '.[3] | [.text, .omitted]')" = '["",4]' ]; echo $?)"
+check "caps: a conversation comment is not cut" "$([ "$(cq '.[4] | [(.text | length), .omitted]')" = '[9000,0]' ]; echo $?)"
+
 [ "$fails" -eq 0 ] && echo "all passed" || echo "$fails failed"
 [ "$fails" -eq 0 ]
