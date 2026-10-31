@@ -37,12 +37,12 @@ A not-run behaviour step is an unknown at [verdict.md](verdict.md#behaviour-evid
 
 ```text
 behaviour: ran, <n> triggers, <c> over the cap[, inert]
-trigger <id> `<file>` line <line> <category>: <state>
+trigger <id> `<file>` line <line> <category>: <state>[, complete][, outstanding <n>, digest <64 hex>]
 claim <claim_id> on <trigger id> at <base|head>, <predicate_type>: <state|discarded>
 change <trigger id> <level> case <case> <attribute>: <explained[ by <claim ids>]|unexplained>
 ```
 
-or the one line `behaviour: not run: <reason>`. File paths are relative to the module root, as the reviewer's diff is, in a code span; a trigger with no line has no `line` part. One `change` line per difference between base and head that `claims-eval` reports, never with the case's inputs; an explained one names the claims `claims-eval` gives in `explained_by`, at most 20 ids of the claims file, so a pass can be traced to the claims behind it. A claim's node, revision and predicate are printed only when each matches its closed pattern, since the model wrote the claims file; otherwise the line is `claim <claim_id>: <state>`. No reason text from the tool and no expression crosses: the reviewer reads the trigger's file and line itself.
+or the one line `behaviour: not run: <reason>`. File paths are relative to the module root, as the reviewer's diff is, in a code span; a trigger with no line has no `line` part. A trigger line says `complete` when `claims-eval` gives `complete` true, and the number of its outstanding differences with their `evidence_digest` when it gives both; the outstanding ids are `<trigger id>|<level>|<case>|<attribute>` of that trigger's `unexplained` `change` lines, which the reviewer names in a finding's `explains` with the digest ([verdict.md](verdict.md#behaviour-evidence)). One `change` line per difference between base and head that `claims-eval` reports, never with the case's inputs; an explained one names the claims `claims-eval` gives in `explained_by`, at most 20 ids of the claims file, so a pass can be traced to the claims behind it. A claim's node, revision and predicate are printed only when each matches its closed pattern, since the model wrote the claims file; otherwise the line is `claim <claim_id>: <state>`. No reason text from the tool and no expression crosses: the reviewer reads the trigger's file and line itself.
 
 ## The Run Object
 
@@ -54,7 +54,7 @@ or the one line `behaviour: not run: <reason>`. File paths are relative to the m
  "claims": [{"claim_id": "C-1", "state": "unverifiable"}]}
 ```
 
-A trigger's `state` is `inert`, `verified`, `covered`, `refuted` or `unverifiable`; a claim's is `verified`, `refuted` or `unverifiable`, and a claim the tool discarded is `unverifiable`. A not-run object has its `reason`, no trigger, no claim and `capped` 0. A refuted trigger or claim blocks at ladder rule 2 by itself. The render lists every unverifiable trigger and claim, the capped count and a not-run step in section 5 of [comment-format.md](comment-format.md#section-order), counts each as a gap, and writes the evidence line under the rationale.
+A trigger carries `complete`, `outstanding` and `evidence_digest` when `claims-eval` gives them, copied as they are and held to their grammar: `complete` a boolean, `outstanding` at most 256 ids of this trigger matching `^T-[0-9]{3}\|L[1-4]\|[A-Za-z0-9_.:-]{1,64}\|[a-z_]{1,32}$`, sorted and each once, and `evidence_digest` 64 lowercase hex characters, only with an outstanding id. Output outside that grammar is `output refused`. A trigger's `state` is `inert`, `verified`, `covered`, `refuted` or `unverifiable`; a claim's is `verified`, `refuted` or `unverifiable`, and a claim the tool discarded is `unverifiable`. A not-run object has its `reason`, no trigger, no claim and `capped` 0. A refuted trigger or claim blocks at ladder rule 2 by itself. The render lists every unverifiable trigger and claim, the capped count and a not-run step in section 5 of [comment-format.md](comment-format.md#section-order), counts each as a gap, and writes the evidence line under the rationale.
 
 ## Limits
 

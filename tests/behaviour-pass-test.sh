@@ -154,7 +154,7 @@ jq -n --slurpfile b "$O/run-behaviour.json" '{format: 1, triage: false, plan_ran
 printf 'Dropping compact() keeps the list length known.\n' > "$TMP/assess.txt"
 msg="$(bash "$RCU" --head "$HEAD" --findings "$TMP/findings.json" --host "$TMP/host.json" --checks "$TMP/checks" \
   --run "$TMP/run.json" --assessment "$TMP/assess.txt" --run-dir "$TMP/rundir" --out "$TMP/render" 2>&1)"
-check "acceptance: the replay renders inconclusive at rule 4" "$([ "$msg" = "rendered inconclusive (ladder rule 4), proposed event COMMENT" ]; echo $?)"
+check "acceptance: the replay renders inconclusive at rule 4" "$([ "$msg" = "rendered inconclusive (ladder rule 4), proposed event COMMENT, tier STANDARD" ]; echo $?)"
 [ -f "$TMP/render/comment.md" ] && ! grep -qF 'with nits' "$TMP/render/comment.md"; check "acceptance: never approve with nits" $?
 cat > "$TMP/want-gaps" <<'EOF'
 ### Checks that could not run
@@ -315,6 +315,32 @@ refuse_e "a capped count that is not a number" '.capped = "0"'
 # --- A path the record cannot carry unambiguously is refused.
 refuse_b "a path with a space" '.triggers[0].file = "a b.tf"'
 refuse_b "a path with a colon" '.triggers[0].file = "a:b.tf"'
+
+# --- Contract 5: claims-eval's complete, outstanding and evidence_digest cross to the run object
+# as they are, and to the record line of the trigger; each is held to its grammar.
+DG="$(printf 'digest' | shasum -a 256 | cut -c1-64)"
+OUT='["T-001|L1|empty|value", "T-001|L1|null-element|value"]'
+setup
+jq --argjson o "$OUT" --arg d "$DG" '.triggers[0] += {complete: true, outstanding: $o, evidence_digest: $d}
+  | .triggers[1] += {complete: false, outstanding: []}' "$TMP/eval-556.json" > "$TMP/eval.out"
+classify; evalp --claims "$TMP/claims-556.json"
+check "outstanding: the run object carries the three fields as claims-eval gave them" "$(jq -e --argjson o "$OUT" --arg d "$DG" '
+  .triggers[0] == {id: "T-001", file: "main.tf", line: 2, category: "wrapper-change", state: "unverifiable", complete: true, outstanding: $o, evidence_digest: $d}
+  and .triggers[1] == {id: "T-002", file: "main.tf", line: 2, category: "unknown-propagation-candidate", state: "unverifiable", complete: false, outstanding: []}' \
+  "$O/run-behaviour.json" > /dev/null; echo $?)"
+grep -qxF "trigger T-001 \`main.tf\` line 2 wrapper-change: unverifiable, complete, outstanding 2, digest $DG" "$O/record.txt" &&
+  grep -qxF 'trigger T-002 `main.tf` line 2 unknown-propagation-candidate: unverifiable' "$O/record.txt"
+check "outstanding: the record line says complete, the count and the digest" $?
+setup; classify; evalp --claims "$TMP/claims-556.json"
+check "outstanding: absent fields stay absent" "$(q 'all(.triggers[]; keys == ["category", "file", "id", "line", "state"])')"
+refuse_e "complete that is not a boolean" '.triggers[0].complete = "yes"'
+refuse_e "an outstanding id outside the grammar" '.triggers[0].outstanding = ["T-001|L5|empty|value"]'
+refuse_e "an outstanding id of another trigger" '.triggers[0].outstanding = ["T-002|L1|empty|value"]'
+refuse_e "outstanding ids out of order" '.triggers[0].outstanding = ["T-001|L1|z|value", "T-001|L1|a|value"]'
+refuse_e "an outstanding id twice" '.triggers[0].outstanding = ["T-001|L1|a|value", "T-001|L1|a|value"]'
+refuse_e "257 outstanding ids" '.triggers[0].outstanding = ([range(257) | "T-001|L1|c\(1000 + .)|value"] | sort)'
+refuse_e "a digest that is not 64 hex" '.triggers[0].outstanding = ["T-001|L1|a|value"] | .triggers[0].evidence_digest = "ABC"'
+refuse_e "a digest with no outstanding difference" ".triggers[0].evidence_digest = \"$DG\""
 
 # --- Usage: eval before classify, a relative path, an out directory holding outputs.
 setup; evalp; check "eval before classify is a usage error" "$([ $? = 2 ]; echo $?)"
