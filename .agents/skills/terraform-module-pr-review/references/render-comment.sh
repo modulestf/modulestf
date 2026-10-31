@@ -36,7 +36,7 @@
 #                 evidence line under the rationale. A claim.* finding with no refuted state is refused.
 #                 Without the key, outside a triage run, the step counts as not run by the host.
 #   --assessment  section 1, the one part the model writes: printable ASCII, at most two short
-#                 paragraphs, no line that starts like a heading, a bold line, HTML or a list item
+#                 paragraphs and 700 characters, no line that starts like a heading, a bold line, HTML or a list item
 #   --run-dir     the run directory, which the leak scan looks for and --out must lie outside
 #   --out         an existing directory holding none of the files written
 #
@@ -97,13 +97,13 @@ done
 
 RJ() { jq -L "$HERE" "$@"; }
 one() { RJ -e --slurp --arg head "$head" "include \"$2\"; length == 1 and (.[0] | $3)" "$1" > /dev/null 2>&1; }
-one "$findings" render-comment valid_findings || die "the findings do not fit the merged findings schema"
+one "$findings" render-comment valid_findings || die "the findings do not fit the merged findings schema (a summary is at most 500 characters and a suggested_fix at most 600)"
 one "$host" host-records 'valid_host($head)' || die "host.json is not valid for this head"
 one "$run" render-comment valid_run || die "the run file does not fit its grammar"
 RJ -e -n --slurpfile f "$findings" --slurpfile r "$run" 'include "render-comment"; claims_consistent($f[0]; $r[0])' \
   > /dev/null 2>&1 || die "a claim.* finding with no refuted state in the behaviour object"
 RJ -e -R --slurp 'include "render-comment"; valid_assessment' "$assessment" > /dev/null 2>&1 \
-  || die "the assessment is not printable ASCII text"
+  || die "the assessment is not printable ASCII text of at most two paragraphs and 700 characters"
 
 # The Checks signal: the checks file when host-pass.sh accepts it, else unknown (host-pass.md).
 if [ "$(bash "$HERE/host-pass.sh" check "$checks" --head "$head" 2> /dev/null)" = "checks accepted" ]; then
