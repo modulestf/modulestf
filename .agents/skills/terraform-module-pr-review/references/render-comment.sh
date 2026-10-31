@@ -114,7 +114,7 @@ RJ -e --slurp 'include "render-comment"; length == 1 and (.[0] | below_floor)' "
 one "$findings" render-comment valid_findings || die "the findings do not fit the merged findings schema (a summary is at most 500 characters and a suggested_fix at most 600, the STANDARD limits)"
 RJ -e --slurp 'include "render-comment"; length == 1 and (.[0] | prose_fields)' "$host" > /dev/null 2>&1 \
   || die "host.json is not valid for this head"
-RJ -e --slurp --arg head "$head" 'include "host-records"; length == 1 and (.[0] | .could_not_run |= map(del(.item, .omitted)) | valid_host($head))' \
+RJ -e --slurp --arg head "$head" 'include "host-records"; length == 1 and (.[0] | valid_host($head))' \
   "$host" > /dev/null 2>&1 || die "host.json is not valid for this head"
 one "$run" render-comment valid_run || die "the run file does not fit its grammar"
 RJ -e -n --slurpfile f "$findings" --slurpfile r "$run" 'include "render-comment"; claims_consistent($f[0]; $r[0])' \
