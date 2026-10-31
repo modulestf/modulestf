@@ -158,7 +158,7 @@ Rules: load [check-f-scope.md](references/check-f-scope.md) before running this 
 
 ### Check G: Behaviour Changes and Claims
 
-Rules: load [check-g-behaviour.md](references/check-g-behaviour.md) before running this check, with [verification-ladder.md](references/verification-ladder.md). Reads the diff, the variables the changed expressions read, the title and body, and the behaviour lines of the verification record. Judges whether a changed expression alters what an existing caller's input does at the provider, and reports a claim the record refutes and a behaviour record that does not cover the change. Reading never verifies a behaviour change. `rule_id` prefixes: `claim.`, `compat.expression-behaviour-changed` and `review.verification-incomplete`.
+Rules: load [check-g-behaviour.md](references/check-g-behaviour.md) before running this check, with [verification-ladder.md](references/verification-ladder.md). Reads the diff, the variables the changed expressions read, the title and body, and the behaviour lines of the verification record. Judges whether a changed expression alters what an existing caller's input does at the provider, and reports a claim the record refutes and a behaviour record that does not cover the change. Reading never verifies a behaviour change. A finding that judges a trigger's outstanding differences lists them in `explains`, with the trigger's `evidence_digest`. `rule_id` prefixes: `claim.`, `compat.expression-behaviour-changed` and `review.verification-incomplete`.
 
 ### Final Step: Assemble the Findings
 

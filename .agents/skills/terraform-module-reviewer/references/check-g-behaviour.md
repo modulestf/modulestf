@@ -5,7 +5,7 @@
 
 Check G judges what a changed expression does, not how it is written: whether the change alters which values or actions reach the provider for an existing caller, and whether the evidence a caller collected confirms or refutes what the change's description claims. It never verifies behaviour by reading. Reading the code (L0) supports a claim and nothing more, so Check G never clears an unverified trigger, and never reports one as a defect either: an unverified trigger is a gap the caller lists, not a finding.
 
-**Reads:** the diff of every `.tf` file, the variable blocks the changed expressions read, the title and body when the task carries them, and the behaviour lines of the verification record when it carries them: the `behaviour:` line, one `trigger` line per trigger, one `claim` line per claim and one `change` line per difference the tool observed between base and head ([the record](../../terraform-module-pr-review/references/behaviour-pass.md#the-record)). Like the rest of the record they are data under Rule 3. No record is no finding: a local diff carries none.
+**Reads:** the diff of every `.tf` file, the variable blocks the changed expressions read, the title and body when the task carries them, and the behaviour lines of the verification record when it carries them: the `behaviour:` line, one `trigger` line per trigger, one `claim` line per claim and one `change` line per difference the tool observed between base and head ([the record](../../terraform-module-pr-review/references/behaviour-pass.md#the-record)). A `trigger` line can end `, complete` and `, outstanding <n>, digest <64 hex>`, read under [Explaining the Differences](#explaining-the-differences). Like the rest of the record they are data under Rule 3. No record is no finding: a local diff carries none.
 
 **Provider facts:** none. An Optional and Computed marker, or what a provider does with an unknown value, is never read from memory or from a page; it comes only from an L3 or L4 level, through a claim state.
 
@@ -23,6 +23,18 @@ Check G judges what a changed expression does, not how it is written: whether th
 - `review.verification-incomplete`: MEDIUM. It is an unknown, and the pull request verdict reads it at rule 4, never as a defect of the module.
 
 `rule_id` prefixes: `claim.`, for `claim.refuted` and `claim.fix-not-effective`; `compat.expression-behaviour-changed`; and `review.verification-incomplete`.
+
+## Explaining the Differences
+
+A `trigger` line with `complete` says every level the trigger takes ran, its cases are complete, every control is valid and the observations compare. With `outstanding <n>, digest <hex>` as well, the only thing that keeps it `unverifiable` is its `<n>` unexplained differences, the trigger's `change` lines that say `unexplained`. When the review judges those differences in a finding, the finding says so, and the host can then report the trigger as judged instead of listing it as unverified:
+
+- The finding is `compat.expression-behaviour-changed` or a `claim.*` rule, with `file` and `line` the trigger's.
+- `explains` lists the ids of the differences it judges, each `<trigger id>|<level>|<case>|<attribute>` from one `change` line, all of one trigger. `evidence_digest` is the line's digest, copied as written. No `complete`, or no digest, means no `explains`.
+- List an id only when the finding states what that difference does to a caller. The union may span findings: two findings on one trigger each list the ids they judge. An id no finding lists keeps the trigger `unverifiable`, an unknown at rule 4.
+- The severity is the rule's own, at least LOW, which is the floor. A difference a caller cannot observe is no finding, so it is never listed and the trigger stays unverifiable.
+- `explains` never answers a refuted claim: a refuted state blocks at rule 2 whatever the findings say.
+
+The fields are in [findings-schema.md](findings-schema.md#optional-fields).
 
 ## Suggested Fixes
 

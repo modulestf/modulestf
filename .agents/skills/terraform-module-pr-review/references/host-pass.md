@@ -34,7 +34,8 @@ The example selection and plan coverage change the files a host exchanges with t
 - The verify job's results, `verify.json`, carry `selection` and a per-directory `affected` ([verify-pass.md](verify-pass.md#output)); `verify-pass.sh check` refuses results without them. The verify job also selects every example, not only the touched ones, and runs with `--budget 3600`.
 - `plan-hosted.json` examples carry `addresses` and `attributes` ([plan-pass.md](plan-pass.md#hosted-runner)); `check-plan` refuses an example without them, and it no longer requires every example to be one the change touches.
 - The render's run file carries `coverage` ([render-comment.sh](render-comment.sh)); a run file without it is refused.
-
+- The run file may carry `examples`, `{"count": M, "validated": K}`: the examples of `verify.json` whose `reason` is `verified`, not `skipped-version-bump` or `skipped-symlink`, and how many of them passed `validate` at the head (`[.dirs[] | select(.reason == "verified")] | {count: length, validated: (map(select(.head.validate == 0)) | length)}`). A host that wants the COMPACT tier of [comment-format.md](comment-format.md) sends it; one that omits it is safe and always gets STANDARD.
+- The run file may carry `plan_mode`, `laptop` or `runner`: the plan pass mode of the plan record, `runner` for a hosted plan job. A gate hit is a cause the COMPACT tier admits only with `laptop`; with `runner` or no `plan_mode` it forces STANDARD.
 ## Plan Record
 
 `plan-hosted.json` is the hosted plan job's record, described in [plan-pass.md](plan-pass.md#hosted-runner). It is accepted only when all of these hold, and otherwise refused with the reason in brackets:
@@ -148,7 +149,7 @@ Each field of `host.json` is an input to [verdict.md](verdict.md#the-ladder) or 
 | `signals.threads`, `signals.review_decision`, `signals.mergeability` | The Threads, Review decision and Mergeability signals, values as [verdict.md](verdict.md#host-signals) names them |
 | `state` | The draft, closed or merged and self-authored clamps |
 | `own_review` | Not rendered: a render-only run leaves no earlier review out |
-| `could_not_run` | Section 5, one line each: `patch-unavailable` with its path, made repository-relative with the prefix; `thread-resolution-unknown`; `prose-truncated`; `threads-over-count` with how many thread comments did not travel. Each is an unknown at ladder rule 4 |
+| `could_not_run` | Section 5, one line each: `patch-unavailable` with its path, made repository-relative with the prefix; `thread-resolution-unknown`; `prose-truncated`, one entry per item class that was cut, `item` `body`, `thread` or `title` in that order with `omitted` the bytes cut across that class (an older record carries `kind` alone); `threads-over-count` with how many thread comments did not travel. Each is an unknown at ladder rule 4 |
 | `unresolved_threads` | Section 7, one line per thread, its path already repository-relative as the host read it, and ladder rule 5 when the list is not empty |
 | `conversation` | Section 8: `considered` and `bot_considered`, each `counts` entry as `<category>:<n>`, and `notes`; an `omitted` category is the one line `Conversation and bot comments not considered: <category>.` |
 | `related` | Section 6: with `status` `ok`, one line per `open_unlinked` reference, ``Open issue <ref> is not set to close on merge. Add `Closes <ref>` to the description.``, then `Sidebar links not read.` when `sidebar_not_read` is true and a line was rendered; `too-many` renders `Related issues exceed 10, so closing keywords were not checked.`; `failed` renders `Related issues could not be read, so closing keywords were not checked.`; `not-applicable` renders nothing |
@@ -195,12 +196,12 @@ Every run ends by deleting its run directory, after the render-output files are 
 ```
 case "$ROOT" in /?*) ;; *) RUN= ;; esac
 case "$RUN" in
-  "$ROOT"/pr-review.??????) rm -rf -- "$RUN" ;;
+  "$ROOT"/pr-review.??????) find "$RUN" -type d -exec chmod u+w {} + ; rm -rf -- "$RUN" ;;
   *) echo "refusing to delete: $RUN" >&2 ;;
 esac
 ```
 
-The records and check runs directories belong to the host and are never written or deleted.
+The `chmod` is the one in [github-io.md](github-io.md#cleanup): the ladder leaves read-only directories that `rm -rf` cannot empty. The records and check runs directories belong to the host and are never written or deleted.
 
 ## Allowed Commands
 

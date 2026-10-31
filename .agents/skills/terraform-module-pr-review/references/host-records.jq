@@ -174,17 +174,25 @@ def cut($n):
   if utf8bytelength <= $n then . elif $n <= 0 then "" else (linecut($n) // bytecut($n)) end;
 
 # Items [{kind, origin, text}] in block order -> items with text cut and omitted bytes, under
-# the per-item 4000 and the total 16000 for title, body and thread items.
+# the per-item 8000 for the body and 4000 for the title and a thread item, and the total 16000.
 def capped:
   reduce .[] as $i ({out: [], left: 16000};
     ($i.text | crlf) as $t
     | if $i.kind | IN("title", "body", "thread") then
-        ([4000, .left] | min) as $lim
+        ([(if $i.kind == "body" then 8000 else 4000 end), .left] | min) as $lim
         | ($t | cut($lim)) as $k
         | .out += [$i + {text: $k, omitted: (($t | utf8bytelength) - ($k | utf8bytelength))}]
         | .left -= ($k | utf8bytelength)
       else .out += [$i + {text: $t, omitted: 0}] end)
   | .out;
+
+# Capped items -> host.json's prose-truncated entries: one per item class that lost bytes, in
+# the order body, thread, title, each with the bytes cut across that class.
+def truncations:
+  . as $it
+  | [("body", "thread", "title") as $k
+     | ([$it[] | select(.kind == $k) | .omitted] | add // 0) as $n
+     | select($n > 0) | {kind: "prose-truncated", item: $k, omitted: $n}];
 
 def block($s; $record):
   "UNTRUSTED-\($s) BEGIN\n"
@@ -227,7 +235,10 @@ def valid_host($head):
   and (.could_not_run | type == "array" and all(.[]; type == "object" and (
         (keys == ["kind", "path"] and .kind == "patch-unavailable" and (.path | plain_path))
         or (keys == ["kind"] and (.kind | IN("thread-resolution-unknown", "prose-truncated")))
-        or (keys == ["count", "kind"] and .kind == "threads-over-count" and (.count | nat and . > 0)))))
+        or (keys == ["item", "kind", "omitted"] and .kind == "prose-truncated"
+            and (.item | IN("body", "thread", "title")) and (.omitted | nat and . > 0))
+        or (keys == ["count", "kind"] and .kind == "threads-over-count" and (.count | nat and . > 0))))
+       and ([.[] | select(.kind == "prose-truncated") | .item // ""] | length == (unique | length)))
   and (.unresolved_threads | type == "array" and all(.[]; type == "object" and keys == ["line", "path"]
         and (.path | plain_path) and (.line == null or (.line | nat and . > 0))))
   and (.conversation | type == "object" and keys == ["bot_considered", "considered", "counts", "notes", "omitted", "path"]

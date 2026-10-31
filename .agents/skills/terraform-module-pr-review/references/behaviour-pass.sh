@@ -57,6 +57,9 @@ def valid_behaviour:
   type == "object" and .schema_version == 1 and (.inert | type == "boolean") and (.capped | nat)
   and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object" and (.id | tid)
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0)) and (.category | IN(cats[]))
+        # Contract 2: the categories of the triggers merged into this one, each a category once.
+        and ((has("also_categories") | not) or (.also_categories | type == "array" and length > 0
+              and all(.[]; IN(cats[])) and length == (unique | length)))
         # The required case set, when present: at most 32 cases, each with its own id once.
         and ((has("cases") | not) or (.cases | type == "array" and length <= 32
               and all(.[]; type == "object" and (.id | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$"))
@@ -72,6 +75,15 @@ def valid_eval($b; $c):
   type == "object" and .schema_version == 1 and .capped == $b.capped
   and (.triggers | type == "array" and all(.[]; type == "object"
         and (.state | IN("inert", "verified", "covered", "refuted", "unverifiable"))
+        # Contract 1: complete, the sorted unexplained difference ids of this trigger, at most 256,
+        # and their digest, present only with a difference.
+        and ((has("complete") | not) or (.complete | type == "boolean"))
+        and (.id as $id | (has("outstanding") | not) or (.outstanding | type == "array" and length <= 256
+              and all(.[]; type == "string" and test("^T-[0-9]{3}\\|L[1-4]\\|[A-Za-z0-9_.:-]{1,64}\\|[a-z_]{1,32}$")
+                           and startswith($id + "|")) and . == unique))
+        and ((has("evidence_digest") | not) or ((.evidence_digest | type == "string" and test("^[0-9a-f]{64}$"))
+              and (.outstanding // []) != []))
+        and ((.state | IN("verified", "covered", "inert")) as $pass | ($pass and ((.outstanding // []) != [] or has("evidence_digest"))) | not)
         and ((has("changes") | not) or (.changes | type == "array" and length <= 256 and all(.[]; type == "object"
               and (.level | IN("L1", "L2", "L3", "L4")) and (.case | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$"))
               and (.attribute | IN(attrs[])) and (.explained | type == "boolean")
@@ -190,12 +202,18 @@ evaluate() {
     $b[0] as $b | $e[0] as $e
     | def kstate($id): first($e.claims[] | select(.claim_id == $id) | .state) // "discarded";
     {run: {status: "ran", reason: null,
-       triggers: [$b.triggers[] as $t | {id: $t.id, file: $t.file, line: $t.line, category: $t.category,
-                  state: first($e.triggers[] | select(.id == $t.id) | .state)}],
+       triggers: [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
+                  | {id: $t.id, file: $t.file, line: $t.line, category: $t.category, state: $et.state}
+                    + ($t | with_entries(select(.key == "also_categories")))
+                    + ($et | with_entries(select(.key | IN("complete", "outstanding", "evidence_digest"))))],
        claims: [$c.claims[] | {claim_id, state: (kstate(.claim_id) | if . == "discarded" then "unverifiable" else . end)}],
        capped: $b.capped},
      record: (["behaviour: ran, \($b.triggers | length) triggers, \($b.capped) over the cap\(if $b.inert then ", inert" else "" end)"]
-       + [$b.triggers[] as $t | "trigger \($t.id) `\($t.file)`\(if $t.line == null then "" else " line \($t.line)" end) \($t.category): \(first($e.triggers[] | select(.id == $t.id) | .state))"]
+       + [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
+          | "trigger \($t.id) `\($t.file)`\(if $t.line == null then "" else " line \($t.line)" end) \($t.category): \($et.state)"
+            + (if $et.complete == true then ", complete" else "" end)
+            + (if ($et.outstanding // []) != [] and $et.evidence_digest != null
+               then ", outstanding \($et.outstanding | length), digest \($et.evidence_digest)" else "" end)]
        # Each base and head difference claims-eval found, for the compatibility judgement; no input crosses.
        + [$e.triggers[] as $t | ($t.changes // [])[]
           | "change \($t.id) \(.level) case \(.case) \(.attribute): \(if .explained then "explained" + (if (.explained_by // []) == [] then "" else " by " + (.explained_by | join(", ")) end) else "unexplained" end)"]

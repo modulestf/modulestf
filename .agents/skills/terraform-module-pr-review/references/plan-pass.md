@@ -11,7 +11,7 @@ The pass runs inside the harness sandbox, or outside it only when an authorizati
 
 The pass ships as one script file, [plan-pass.sh](plan-pass.sh), and this file is its rules. Nothing below is assembled by hand: the script is the single source of every command, and two runs run the same file. It runs the same under bash and zsh, and it is invoked by its literal absolute path, from the skill as installed, never through a variable, never from a copy, and never from the workspace, which is the head's:
 
-- `<bash|zsh> /abs/path/plan-pass.sh g0 <run-dir>` runs G0 over the clone right after Step 3, and `... g0 <run-dir> base` over the base worktree right after it is added. Each saves its result in the run directory.
+- `<bash|zsh> /abs/path/plan-pass.sh g0 <run-dir>` runs G0 over the clone right after Step 3, and `... g0 <run-dir> base` over the base worktree right after it is added. Each writes its hits to `<run-dir>/g0.txt` or `<run-dir>/g0-base.txt` itself and prints one count line; never redirect that output into either file.
 - `<bash|zsh> /abs/path/plan-pass.sh plan <run-dir> <profile> [--mode laptop|runner] [--base <sha>] <example-dir>...` runs the pass over the example directories [Runner or laptop](#runner-or-laptop) names for the mode, repository-relative, in path order. In runner mode the skill never calls it directly: the runner does, in its containers. It prints `plan pass mode: <mode>` once and then, per example, the record lines `example:`, `plan:`, `scope:`, `modules:` and, for a `code-error`, `base:`, plus one `gate-hit` line per gate hit for the run's own log.
 
 `<run-dir>` is the absolute run directory [Workspace](github-io.md#workspace) printed, and the script refuses any other shape. The pass runs in one shell from start to end because its cleanup trap belongs to that shell, and it prints the record itself because its variables end with that shell.
@@ -126,7 +126,7 @@ G0 runs on the checkout as fetched, before any terraform command of either pass:
 
 **G0, clone-wide.** Any of these anywhere under the root is a hit: `.terraform/`, `terraform.d/`, `*.tfstate*`, `terraform.rc`, `.terraformrc`, `crash.log`, `*.tf.json`, `*_override.tf`, `override.tf`, `*.auto.tfvars`, `*.auto.tfvars.json`, `terraform.tfvars`, `terraform.tfvars.json`, and a symbolic link whose real path leaves the root.
 
-G0 runs once, as the script's `g0` command right after Step 3, before the default pass writes `.terraform/` into any example, and saves what it prints in `$RUN/g0.txt`.
+G0 runs once, as the script's `g0` command right after Step 3, before the default pass writes `.terraform/` into any example. The command writes the hits to `$RUN/g0.txt` itself; what it prints is a count line for the run's log, never redirected into that file.
 
 A non-empty `$RUN/g0.txt` is a clone-wide hit, and a missing one is `plan gate G0 not evaluated` for every example: the gate fails closed when it did not run. The plan pass, which runs after the default pass, reads that file and never runs `g0` over the clone again: by then the default pass has written `.terraform/` and a plugin cache link that would read as hits. At the merge base, `g0` runs over the base worktree the same way, right after `git worktree add` and before any command runs there, into `$RUN/g0-base.txt`.
 
