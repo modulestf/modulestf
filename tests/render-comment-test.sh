@@ -230,14 +230,14 @@ ladder "coverage none for want of a profile" "inconclusive COMMENT" 4 "$NONE" ""
   "$(runf cov-none '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}, {dir: "examples/b", reason: "no AWS profile named"}]}')"
 t_cov_lines() {
   awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" > "$TMP/cov-s5.txt"
-  printf '%s\n' '' '- `examples/a` was not planned: no AWS profile named.' '- `examples/b` was not planned: no AWS profile named.' | cmp -s - "$TMP/cov-s5.txt" &&
+  printf '%s\n' '' '- 2 examples were not planned: no AWS profile named.' '  - `examples/a`' '  - `examples/b`' | cmp -s - "$TMP/cov-s5.txt" &&
     grep -qxF -- '- 2 checks could not run; see Checks that could not run.' "$O/comment.md" &&
     grep -qxF -- "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-listed"]')" "$O/comment.md"
 }
-t_cov_lines; check "coverage: the unplanned examples are section 5, golden, counted in What to do" $?
+t_cov_lines; check "coverage: the unplanned examples are section 5, one clause per reason with the names under it, golden, counted in What to do" $?
 ladder "partial coverage under a LOW finding" "inconclusive COMMENT" 4 "$(one structure.grouping LOW a.tf 1 "S." "F.")" "" "" \
   "$(runf cov-part '.verify_gaps = [{dir: "examples/c", reason: "init failed"}] | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/d", reason: "plan gate G1"}]}')"
-grep -A3 -xF '### Checks that could not run' "$O/comment.md" | tail -n 2 | cmp -s - <(printf '%s\n' '- Verification of `examples/c`: `init` failed.' '- `examples/d` was not planned: plan gate G1.')
+grep -A4 -xF '### Checks that could not run' "$O/comment.md" | tail -n 3 | cmp -s - <(printf '%s\n' '- Verification of `examples/c`: `init` failed.' '- 1 example was not planned: plan gate G1.' '  - `examples/d`')
 check "coverage: the verification gaps come first, then the unplanned examples" $?
 ladder "a module with no example directory" "inconclusive COMMENT" 4 "$NONE" "" "" \
   "$(runf cov-noex '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples", reason: "no example directory"}]}')"
@@ -247,7 +247,7 @@ check "coverage: no example directory renders its own fixed line" $?
 ladder "an inert change: unplanned examples are information, not unknowns" "approve APPROVE" 8 "$NONE" "" "" \
   "$(runf cov-inert '.coverage = {class: "none", inert: true, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}')"
 awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" |
-  cmp -s - <(printf '%s\n' '' "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["unplanned-inert"]')" '- `examples/a` was not planned: no AWS profile named.')
+  cmp -s - <(printf '%s\n' '' "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["unplanned-inert"]')" '- 1 example was not planned: no AWS profile named.' '  - `examples/a`')
 check "coverage: an inert change lists its unplanned examples under the inert line" $?
 ! grep -qF 'checks could not run' "$O/comment.md" && ! grep -qF 'check could not run' "$O/comment.md"
 check "coverage: an inert change counts no unplanned example as a gap" $?
@@ -559,7 +559,7 @@ MSG="$(bash "$RCU" --head abc --findings "$G" 2>&1)"; check "refused: a head tha
 
 RUN150C="$(runf manycov '.coverage = {class: "none", inert: false, unplanned: [range(150) | {dir: "examples/e\(.)", reason: "budget"}]}')"
 render "$G" "" "" "$RUN150C"
-[ "$ST" = 0 ] && [ "$(grep -c -e '^- `examples/e[0-9]*` was not planned: budget\.$' "$O/comment.md")" = 100 ] &&
+[ "$ST" = 0 ] && grep -qxF -- '- 150 examples were not planned: budget.' "$O/comment.md" && [ "$(grep -c -e '^  - `examples/e[0-9]*`$' "$O/comment.md")" = 100 ] &&
   grep -qxF -- '- 50 more examples that were not planned are not listed.' "$O/comment.md"
 check "coverage: more than 100 unplanned examples render the first 100 and a count of the rest" $?
 
@@ -853,9 +853,9 @@ mutate() { # name, perl substitution, case function
   check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
 t_rule2() { render "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")"; [ "$(rule)" = 2 ]; }
-t_cov_rule() { render "$NONE" "" "" "$TMP/run-cov-none.json"; [ "$(rule)" = 4 ] && grep -qF -- '- `examples/a` was not planned: no AWS profile named.' "$O/comment.md"; }
+t_cov_rule() { render "$NONE" "" "" "$TMP/run-cov-none.json"; [ "$(rule)" = 4 ] && grep -qxF -- '  - `examples/a`' "$O/comment.md"; }
 mutate "unplanned examples left out of the ladder" 's/ or \.unplanned > 0//' t_cov_rule
-mutate "unplanned examples left out of section 5" 's/else tx\("unplanned"; \{dir, reason\}\) end/else empty end/' t_cov_rule
+mutate "unplanned example names left out of section 5" 's/\| tx\("unplanned-name"; \{dir\}\)\]/| empty]/' t_cov_rule
 t_rule0() { render "$(pair compat.output-removed CRITICAL structure.docs-contradict-code HIGH)"; [ "$(rule)" = 1 ]; }
 t_rule4() { render "$NONE" "$(host tu2 '.signals.threads = "unknown"')"; [ "$(rule)" = 4 ]; }
 t_draft() { render "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "$TMP/host-draft.json"; [ "$(verdict)" = "block COMMENT" ]; }
@@ -1025,6 +1025,272 @@ mutate "an absent behaviour key passes" 's/else \{status: "not-run", reason: "no
 mutate "refuted states do not block" 's/ or \.refuted > 0 then \{rule: 2/ then {rule: 2/' t_bref
 mutate "a claim finding with no refuted state accepted" 's/\|\| die "a claim\.\* finding with no refuted state in the behaviour object"/|| true/' t_bclaim
 mutate "a behaviour string changed in the script only" 's/so no change was classified or verified/so nothing was classified/' t_table
+
+# --- Tiers (comment-format.md, Tiers): COMPACT when every condition holds, else STANDARD, and
+# the reported state of a trigger (verdict.md, Behaviour evidence).
+#
+# The pull request 556 fixture: one merged trigger at main.tf:156, complete, with 12 outstanding
+# differences that F-001 explains, 20 claims verified, 3 of 9 examples stopped at a safety gate,
+# and the description cut. The cap is the body item cap, 8000 bytes, a constant of the strings
+# table, so this fixture is a description of 8200 bytes: host.json's prose-truncated entry says
+# item body, 200 bytes omitted. The golden is the design's literal with "8000 bytes (200 cut)" and
+# "under 8000 bytes" in place of its 4000 and 180; every other byte is the literal.
+DIG="$(printf 'pr556' | shasum -a 256 | cut -c1-64)"
+DIG2="$(printf 'stale' | shasum -a 256 | cut -c1-64)"
+IDS="$(jq -nc '[("empty", "one-known", "empty-string-element", "null-element", "unknown-element", "wholly-unknown") as $c
+  | ("length", "value") as $a | "T-001|L1|\($c)|\($a)"] | sort')"
+PRE='{"source": "tool", "subject": ".:aws_rds_cluster.this", "predates_change": true}'
+F556() { # extra jq object for F-001 -> findings file
+  n=0
+  { f compat.expression-behaviour-changed LOW main.tf 156 'null and empty-string elements of `var.vpc_security_group_ids` now reach the provider, and a null fails the plan.' \
+      'reject them with a `validation` block in `variables.tf`, or say in the description that they now fail.' \
+      "$(jq -nc --argjson i "$IDS" --arg d "$DIG" '{explains: $i, evidence_digest: $d} + '"${1:-{\}}")"
+    f structure.argument-order LOW main.tf 43 '`tags` is not the last argument.' 'Move `tags` last.' "$PRE"
+  } | list "f556-$oc"
+}
+CUT='{kind: "prose-truncated", item: "body", omitted: 200}'
+H556="$(host h556 '.repo = "example/terraform-aws-rds-aurora" | .number = 556 | .could_not_run = ['"$CUT"']')"
+T556() { # jq update of the trigger -> trigger json
+  jq -nc --argjson i "$IDS" --arg d "$DIG" '{id: "T-001", file: "main.tf", line: 156, category: "wrapper-change",
+    state: "unverifiable", complete: true, outstanding: $i, evidence_digest: $d} | '"${1:-.}"
+}
+CL20="$(jq -nc '[range(1; 21) | {claim_id: "C-\(.)", state: "verified"}]')"
+R556() { # name, jq update -> run file
+  runf "r556-$1" '.plan_ran = true | .examples = {count: 9, validated: 9}
+    | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/serverless", reason: "plan gate G1"},
+        {dir: "examples/mysql", reason: "plan gate G3"}, {dir: "examples/s3-import", reason: "plan gate G1"}]}
+    | .behaviour = {status: "ran", reason: null, triggers: ['"$(T556)"'], claims: '"$CL20"', capped: 0} | '"${2:-.}"
+}
+cat > "$TMP/assess-556.txt" <<'EOF'
+Dropping `compact()` fixes the plan: with an unknown group id the base kept the old value and the head shows an update. It also keeps null and empty-string elements of `vpc_security_group_ids`, and a null element now fails the plan; the description mentions only empty strings.
+EOF
+cat > "$TMP/want-556.md" <<'EOF'
+Dropping `compact()` fixes the plan: with an unknown group id the base kept the old value and the head shows an update. It also keeps null and empty-string elements of `vpc_security_group_ids`, and a null element now fails the plan; the description mentions only empty strings.
+
+**Inconclusive.** `validate` passed in all 9 examples; 6 were planned. Not checked: the description past 8000 bytes (200 cut), 3 of 9 examples not planned (safety gate).
+
+To get a conclusive review: shorten the description under 8000 bytes, and plan the 3 gated examples in runner mode.
+
+- LOW `compat.expression-behaviour-changed` `main.tf:156` - null and empty-string elements of `var.vpc_security_group_ids` now reach the provider, and a null fails the plan.
+  - Fix: reject them with a `validation` block in `variables.tf`, or say in the description that they now fail.
+
+<details><summary>Evidence and notes</summary>
+
+- Not planned: `examples/mysql`, `examples/s3-import`, `examples/serverless`.
+- Behaviour change at `main.tf:156` reported: judged in F-001 (12 differences). 20 claims verified.
+- Predates this change: `structure.argument-order` at `main.tf:43` - `tags` is not the last argument.
+</details>
+EOF
+tier() { printf '%s' "$MSG" | sed -n 's/^rendered .*, tier \([A-Z]*\)$/\1/p'; }
+# rc name, findings, run [, host] [, extra args]: one render with the 556 host and assessment.
+rc() { local fi="$1" ru="$2" ho="${3:-$H556}"; shift 3 2> /dev/null || shift $#; render "$fi" "$ho" "" "$ru" "$TMP/assess-556.txt" "$@"; }
+reported_in() { grep -qF 'reported: judged in' "$O/comment.md"; }
+
+t_556() { rc "$(F556)" "$(R556 gold)"; [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 4 ] && cmp -s "$O/comment.md" "$TMP/want-556.md"; }
+t_556; check "tiers: pull request 556 renders COMPACT, the literal byte for byte" $?
+check "tiers: pull request 556 is inconclusive at rule 4, proposes COMMENT" "$([ "$(verdict)" = "inconclusive COMMENT" ]; echo $?)"
+check "tiers: COMPACT findings.json lists the routed finding last" "$(jq -e 'map(.id) == ["F-001", "F-002"] and all(.[]; keys == ["file","id","line","rule_id","severity","suggested_fix","summary"])' "$O/findings.json" > /dev/null; echo $?)"
+check "tiers: the COMPACT body of pull request 556 is at most 1240 bytes" "$([ "$(wc -c < "$O/comment.md")" -le 1240 ]; echo $?)"
+rc "$(F556)" "$(R556 gold-std)" "" --standard
+check "tiers: --standard forces STANDARD on the same inputs" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && grep -qxF '### What to do' "$O/comment.md"; echo $?)"
+grep -qxF 'Behaviour evidence: 1 changes classified: 0 verified, 0 covered by a plan, 0 inert, 1 reported in a finding, 0 refuted, 0 not verified; 20 claims: 20 verified, 0 refuted, 0 not verified.' "$O/comment.md"
+check "tiers: the STANDARD evidence line counts the reported trigger" $?
+awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" | cmp -s - <(printf '%s\n' '' \
+  '- Quoted prose was truncated, so part of the discussion was not read.' '- 2 examples were not planned: plan gate G1.' \
+  '  - `examples/serverless`' '  - `examples/s3-import`' '- 1 example was not planned: plan gate G3.' '  - `examples/mysql`')
+check "tiers: STANDARD section 5 groups the not-planned examples by reason, golden, and lists no reported trigger" $?
+t_cut() { rc "$(F556)" "$(R556 cut)" "$(host cut1 '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 31}]')"; [ "$(tier)" = COMPACT ] &&
+  grep -qF 'Not checked: the description past 8000 bytes (31 cut), 3 of 9 examples not planned (safety gate).' "$O/comment.md"; }
+t_cut; check "tiers: the description cause takes the bytes omitted from host.json" $?
+rc "$(F556)" "$(R556 cutt)" "$(host cutt '.could_not_run = [{kind: "prose-truncated", item: "thread", omitted: 40}]')"; std0() { [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ]; }
+check "tiers: a thread item cut forces STANDARD" "$(std0; echo $?)"
+grep -qxF -- '- Quoted prose was truncated, so part of the discussion was not read.' "$O/comment.md"; check "tiers: STANDARD keeps its truncated prose line" $?
+rc "$(F556)" "$(R556 cuto)" "$(host cuto '.could_not_run = [{kind: "prose-truncated"}]')"
+check "tiers: a prose-truncated entry that names no item forces STANDARD" "$(std0; echo $?)"
+t_prose_once() {
+  rc "$NONE" "$(runf prose1)" "$(host prose3 '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 9}, {kind: "prose-truncated", item: "thread", omitted: 4}, {kind: "prose-truncated", item: "title", omitted: 2}]')"
+  std0 && [ "$(grep -c -xF -- '- Quoted prose was truncated, so part of the discussion was not read.' "$O/comment.md")" = 1 ] &&
+    grep -qxF -- '- 3 checks could not run; see Checks that could not run.' "$O/comment.md"
+}
+t_prose_once; check "tiers: STANDARD renders one truncated prose line for three cut item classes and counts each" $?
+
+# The reported computation. std_uv: the render is STANDARD at rule 4 with the trigger listed.
+std_uv() { [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && [ "$(rule)" = 4 ] && grep -qxF -- '- Behaviour change at `main.tf:156` (wrapper-change): not verified.' "$O/comment.md"; }
+t_stale() { rc "$(F556 "{evidence_digest: \"$DIG2\"}")" "$(R556 stale)"; std_uv; }
+t_stale; check "reported: a stale digest leaves the trigger unverifiable, STANDARD" $?
+t_partial() { rc "$(F556 "{explains: $(jq -c '.[1:]' <<< "$IDS")}")" "$(R556 part)"; std_uv; }
+t_partial; check "reported: a partial union leaves the trigger unverifiable" $?
+t_joint() {
+  n=0
+  { f compat.expression-behaviour-changed LOW main.tf 156 'First half.' 'Fix one.' "$(jq -nc --argjson i "$IDS" --arg d "$DIG" '{explains: $i[:6], evidence_digest: $d}')"
+    f claim.refuted LOW main.tf 156 'Second half.' 'Fix two.' "$(jq -nc --argjson i "$IDS" --arg d "$DIG" '{explains: $i[6:], evidence_digest: $d}')"
+  } | list joint > /dev/null
+  rc "$TMP/joint.json" "$(R556 joint '.behaviour.claims[0].state = "refuted"')"
+  [ "$(rule)" = 2 ] && [ "$(tier)" = STANDARD ] && grep -qF ' 1 reported in a finding, ' "$O/comment.md"
+}
+t_joint; check "reported: two findings jointly cover the set, and a refuted claim still fires rule 2" $?
+t_joint2() {
+  n=0
+  { f compat.expression-behaviour-changed LOW main.tf 156 'First half.' 'Fix one.' "$(jq -nc --argjson i "$IDS" --arg d "$DIG" '{explains: $i[:6], evidence_digest: $d}')"
+    f compat.expression-behaviour-changed LOW main.tf 156 'Second half.' 'Fix two.' "$(jq -nc --argjson i "$IDS" --arg d "$DIG" '{explains: $i[6:], evidence_digest: $d}')"
+  } | list joint2 > /dev/null
+  rc "$TMP/joint2.json" "$(R556 joint2)"
+  [ "$(tier)" = COMPACT ] && grep -qxF -- '- Behaviour change at `main.tf:156` reported: judged in F-001 and F-002 (12 differences). 20 claims verified.' "$O/comment.md"
+}
+t_joint2; check "reported: two findings jointly, both named" $?
+t_super() { rc "$(F556 "{explains: ($(jq -c '. + ["T-001|L2|extra|value"]' <<< "$IDS"))}")" "$(R556 super)"; [ "$(tier)" = COMPACT ] && reported_in; }
+t_super; check "reported: a superset of ids covers, the extra id ignored" $?
+t_outset() {
+  n=0
+  { f compat.expression-behaviour-changed LOW main.tf 156 'All.' 'Fix.' "$(jq -nc --argjson i "$IDS" --arg d "$DIG" '{explains: $i, evidence_digest: $d}')"
+    f compat.expression-behaviour-changed LOW main.tf 156 'Other.' 'Fix.' "$(jq -nc --arg d "$DIG" '{explains: ["T-001|L3|other|action"], evidence_digest: $d}')"
+  } | list outset > /dev/null
+  rc "$TMP/outset.json" "$(R556 outset)"
+  [ "$(tier)" = COMPACT ] && grep -qF 'reported: judged in F-001 (12 differences).' "$O/comment.md"
+}
+t_outset; check "reported: a finding with only out-of-set ids is ignored" $?
+t_mixed() { rc "$(F556 "{explains: ($(jq -c '. + ["T-002|L1|empty|value"]' <<< "$IDS"))}")" "$(R556 mixed)"; std_uv; }
+t_mixed; check "reported: a finding mixing two triggers is ignored" $?
+t_where() { rc "$(F556)" "$(R556 where ".behaviour.triggers[0].line = 157")"; [ "$(tier)" = STANDARD ] && ! reported_in && ! grep -qF ' reported in a finding' "$O/comment.md"; }
+t_where; check "reported: a finding at another line is ignored" $?
+t_rule() { rc "$(printf '%s\n' "$(f structure.argument-order LOW main.tf 156 'S.' 'F.')" | jq -c --argjson i "$IDS" --arg d "$DIG" '. + {explains: $i, evidence_digest: $d}' | list rulebad)" "$(R556 rulebad)"; [ "$ST" = 2 ] && empty_out; }
+t_rule; check "refused: explains on a rule that cannot explain" $?
+t_incomplete() { rc "$(F556)" "$(R556 inc '.behaviour.triggers[0].complete = false')"; std_uv; }
+t_incomplete; check "reported: complete false with a covered set stays unverifiable" $?
+t_verified() { rc "$(F556)" "$(R556 ver '.behaviour.triggers[0] |= (.state = "verified" | .outstanding = [] | del(.evidence_digest))')"; [ "$(tier)" = COMPACT ] && ! reported_in; }
+t_verified; check "reported: complete with an empty outstanding set is verified" $?
+t_floor() { rc "$(F556 '{severity: "INFO"}')" "$(R556 floor)"; [ "$ST" = 2 ] && empty_out && printf '%s' "$MSG" | grep -qF 'below LOW, the floor'; }
+t_floor; check "refused: a covering finding rated below LOW" $?
+refused "a digest with no outstanding difference" "$(F556)" "$H556" "" "$(R556 nodiff '.behaviour.triggers[0].outstanding = []')"
+refused "an outstanding id of another trigger" "$(F556)" "$H556" "" "$(R556 othid '.behaviour.triggers[0].outstanding += ["T-002|L1|a|value"]')"
+refused "outstanding ids out of order" "$(F556)" "$H556" "" "$(R556 order '.behaviour.triggers[0].outstanding |= reverse')"
+refused "an outstanding id outside the grammar" "$(F556)" "$H556" "" "$(R556 badid '.behaviour.triggers[0].outstanding = ["T-001|L5|a|value"]')"
+refused "a digest that is not 64 hex" "$(F556 '{evidence_digest: "abc"}')" "$H556" "" "$(R556 baddig)"
+refused "predates_change on a model finding" "$(F556 '{predates_change: true}')" "$H556" "" "$(R556 llmpre)"
+refused "a host.json item with no omitted count" "$(F556)" "$(host noom '.could_not_run = [{kind: "prose-truncated", item: "body"}]')" "" "$(R556 noom)"
+refused "a host.json omitted count of 0" "$(F556)" "$(host om0 '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 0}]')" "" "$(R556 om0)"
+refused "a host.json item outside the three" "$(F556)" "$(host omx '.could_not_run = [{kind: "prose-truncated", item: "readme", omitted: 3}]')" "" "$(R556 omx)"
+refused "a host.json item on another kind" "$(F556)" "$(host omk '.could_not_run = [{kind: "patch-unavailable", path: "a.tf", item: "body", omitted: 3}]')" "" "$(R556 omk)"
+
+# Every condition of the selector, one case each; the 556 fixture with one thing changed.
+std() { check "tiers: $1 forces STANDARD" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && grep -qF '### ' "$O/comment.md"; echo $?)"; }
+rc "$(F556 '{severity: "MEDIUM"}')" "$(R556 med)"; std "a MEDIUM finding with rule 4 outstanding"
+check "tiers: the MEDIUM case stays at rule 4" "$([ "$(rule)" = 4 ]; echo $?)"
+rc "$(F556)" "$(R556 uv '.behaviour.triggers += [{id: "T-002", file: "main.tf", line: 9, category: "default-change", state: "unverifiable"}]')"; std "an unverifiable trigger"
+rc "$(F556)" "$(R556 nocls '.behaviour = {status: "not-run", reason: "mtf-facts failed", triggers: [], claims: [], capped: 0}')"; std "a classifier that did not run"
+rc "$(F556)" "$(R556 floorcat '.behaviour.triggers += [{id: "T-002", file: "versions.tf", line: 5, category: "provider-version-floor-change", state: "verified"}]')"; std "a provider version floor change"
+four() { n=0; { f compat.expression-behaviour-changed LOW main.tf 156 'S.' 'F.' "$(jq -nc --argjson i "$IDS" --arg d "$DIG" '{explains: $i, evidence_digest: $d}')"
+  for i in 1 2 3; do f "structure.r$i" LOW "x$i.tf" "$i" "S$i." "F$i."; done; } | list "four-$1"; }
+rc "$(four a)" "$(R556 four)"; std "four counted findings"
+rc "$({ n=0; f compat.expression-behaviour-changed LOW main.tf 156 'S.' 'F.' "$(jq -nc --argjson i "$IDS" --arg d "$DIG" '{explains: $i, evidence_digest: $d}')"
+  for i in 1 2; do f structure.r1 LOW "x$i.tf" "$i" "S$i." "F$i."; done; f structure.r1 LOW x3.tf 3 S1. F1.; } | list g3a)" "$(R556 g3)"
+check "tiers: four findings with a group of three force STANDARD" "$([ "$(tier)" = STANDARD ]; echo $?)"
+rc "$({ n=0; for i in 1 2 3; do f structure.r1 LOW "x$i.tf" "$i" "Same." "Same."; done; } | list g3b)" "$(R556 g3b '.behaviour.triggers[0] |= (.state = "verified" | .outstanding = [] | del(.evidence_digest))')"; std "a group of three"
+t_routed() {
+  n=0
+  { for i in 1 2 3; do f "structure.r$i" LOW "x$i.tf" "$i" "S$i." "F$i."; done
+    f structure.argument-order LOW main.tf 43 '`tags` is not the last argument.' 'Move `tags` last.' "$PRE"; } | list routed > /dev/null
+  rc "$TMP/routed.json" "$(R556 routed '.behaviour.triggers[0] |= (.state = "verified" | .outstanding = [] | del(.evidence_digest))')"
+  [ "$(tier)" = COMPACT ] && [ "$(grep -c '^- LOW ' "$O/comment.md")" = 3 ] &&
+    grep -qxF -- '- Predates this change: `structure.argument-order` at `main.tf:43` - `tags` is not the last argument.' "$O/comment.md"
+}
+t_routed; check "tiers: a routed pre-existing LOW is uncounted and goes to the details block" $?
+t_unrouted_med() {
+  rc "$(printf '%s\n' "$(f structure.argument-order MEDIUM main.tf 43 'T.' 'M.' "$PRE")" | list premed)" "$(R556 premed)"
+  [ "$(tier)" = STANDARD ] && grep -qF -- '- `structure.argument-order` - `main.tf:43` - T.' "$O/comment.md"
+}
+t_unrouted_med; check "tiers: a pre-existing finding above LOW renders as a finding" $?
+rc "$(F556)" "$(R556 budget '.coverage.unplanned[0].reason = "budget"')"; std "an unlisted reason class"
+rc "$(F556)" "$(R556 vgap '.verify_gaps = [{dir: "examples/a", reason: "init failed"}] | .examples.validated = 8')"; std "a cause outside the table (a verification gap)"
+rc "$(F556)" "$(R556 patch)" "$(host patch '.could_not_run = ['"$CUT"', {kind: "patch-unavailable", path: "main.tf"}]')"; std "a cause outside the table (a patch unavailable)"
+rc "$(F556)" "$(R556 thr)" "$(host thr '.could_not_run = ['"$CUT"'] | .unresolved_threads = [{path: "a.tf", line: 1}]')"; std "an unresolved thread"
+rc "$(F556)" "$(R556 noex 'del(.examples)')"; std "a run file without example counts"
+rc "$(printf '%s\n' "$(f review.tool-disputed LOW main.tf 43 'D.' 'no code change: decide.')" | list disp)" "$(R556 disp2 '.behaviour.triggers[0] |= (.state = "verified" | .outstanding = [] | del(.evidence_digest))')"; std "a disputed note"
+t_g0() {
+  rc "$(F556)" "$(R556 g0 '.coverage.unplanned = [{dir: "examples/a", reason: "plan gate G0"}, {dir: "examples/b", reason: "plan gate G2"}]')"
+  [ "$(tier)" = COMPACT ] && grep -qF 'Not checked: the description past 8000 bytes (200 cut), 1 of 9 examples not planned (safety gate), 1 of 9 examples not planned (file gate).' "$O/comment.md" &&
+    grep -qxF 'To get a conclusive review: shorten the description under 8000 bytes, plan the 1 gated examples in runner mode, and remove what plan gate G0 refuses from the 1 examples.' "$O/comment.md"
+}
+t_g0; check "tiers: a G0 example gets its own clause, never the runner clause" $?
+t_noplan() {
+  rc "$NONE" "$(runf noplan '.examples = {count: 2, validated: 2}
+    | .coverage = {class: "none", inert: false, unplanned: [{dir: "examples/b", reason: "no AWS profile named"}, {dir: "examples/a", reason: "no AWS profile named"}]}')" "$HOST"
+  [ "$(tier)" = COMPACT ] && cmp -s "$O/comment.md" <(printf '%s\n' "$(cat "$TMP/assess-556.txt")" '' \
+    '**Inconclusive.** Not checked: no plan was run (no AWS profile named).' '' 'To get a conclusive review: name an AWS profile.' '' \
+    '<details><summary>Evidence and notes</summary>' '' '- Not planned: `examples/a`, `examples/b`.' '</details>')
+}
+t_noplan; check "tiers: coverage none for want of a profile, byte for byte" $?
+t_names() {
+  rc "$(F556)" "$(R556 names '.coverage.unplanned = [{dir: "examples/z", reason: "plan gate G1"}, {dir: "examples/b c", reason: "plan gate G1"},
+      {dir: "examples/a", reason: "plan gate G1"}, {dir: "examples/m", reason: "plan gate G1"}, {dir: "examples/k", reason: "plan gate G1"}]')"
+  [ "$(tier)" = COMPACT ] && grep -qxF -- '- Not planned: `examples/a`, name withheld, `examples/k`, +2.' "$O/comment.md" &&
+    ! grep -qF 'examples/z' "$O/comment.md" && ! grep -qF 'my mod' "$O/comment.md"
+}
+t_names; check "tiers: names allowlisted and sorted, at most three and the count, a name outside the charset withheld" $?
+t_withheld_loc() {
+  rc "$(F556 '{file: "my mod/main.tf"}')" "$(R556 wloc '.behaviour.triggers[0].file = "my mod/main.tf"')"
+  [ "$(tier)" = COMPACT ] && grep -qF -- '- Behaviour change at name withheld reported: judged in F-001 (12 differences).' "$O/comment.md"
+}
+t_withheld_loc; check "tiers: a trigger location outside the charset is withheld in the details block" $?
+over() { # name, findings, assessment file, want message
+  render "$1" "$H556" "" "$(R556 "over-$oc")" "$2"
+  check "refused: COMPACT $4" "$([ "$ST" = 2 ] && empty_out && printf '%s' "$MSG" | grep -qF "$3" && printf '%s' "$MSG" | grep -qF 'COMPACT limit'; echo $?)"
+}
+{ head -c 351 /dev/zero | tr '\0' a; echo; } > "$TMP/a-351.txt"
+over "$(F556)" "$TMP/a-351.txt" 'over 350 characters' "an assessment over 350 characters"
+printf 'One.\n\nTwo.\n' > "$TMP/a-2p.txt"
+over "$(F556)" "$TMP/a-2p.txt" 'more than one paragraph' "an assessment of two paragraphs"
+over "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'summary is over 200 characters' "a summary over 200 characters"
+over "$(F556 "{suggested_fix: \"$(head -c 251 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'suggested_fix is over 250 characters' "a fix over 250 characters"
+render "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-std)" "$TMP/a-351.txt" --standard
+check "tiers: the same text passes in STANDARD with --standard" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ]; echo $?)"
+render "$(F556 "{summary: \"$(head -c 501 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-501)" "" --standard
+check "refused: STANDARD a summary over 500 characters, the message names the limit and the tier" "$([ "$ST" = 2 ] && printf '%s' "$MSG" | grep -qF 'at most 500 characters' && printf '%s' "$MSG" | grep -qF 'STANDARD limits'; echo $?)"
+t_approve() {
+  rc "$NONE" "$(runf appr '.plan_ran = true | .examples = {count: 9, validated: 9}')" "$HOST"
+  [ "$(tier)" = COMPACT ] && [ "$(verdict)" = "approve APPROVE" ] &&
+    cmp -s "$O/comment.md" <(printf '%s\n' "$(cat "$TMP/assess-556.txt")" '' '**Good to merge.** `validate` passed in all 9 examples; 9 were planned.')
+}
+t_approve; check "tiers: approve, K equals M, byte for byte" $?
+t_nits() {
+  rc "$(printf '%s\n' "$(f structure.grouping LOW a.tf 1 'S.' 'F.')" | list nits)" "$(runf nits '.plan_ran = true | .examples = {count: 9, validated: 8}')" "$HOST"
+  [ "$(tier)" = COMPACT ] && [ "$(rule)" = 7 ] && cmp -s "$O/comment.md" <(printf '%s\n' "$(cat "$TMP/assess-556.txt")" '' \
+    '**Good to merge, with nits.** `validate` passed in 8 of 9 examples; 9 were planned.' '' '- LOW `structure.grouping` `a.tf:1` - S.' '  - Fix: F.')
+}
+t_nits; check "tiers: approve with nits, K below M, byte for byte" $?
+refused "example counts with more validated than verified" "$G" "" "" "$(runf exbad '.examples = {count: 2, validated: 2} | .verify_gaps = [{dir: "examples/a", reason: "init failed"}]')"
+refused "example counts below the unplanned examples" "$G" "" "" "$(runf exbad2 '.examples = {count: 1, validated: 1} | .coverage = {class: "none", inert: false, unplanned: [{dir: "a", reason: "budget"}, {dir: "b", reason: "budget"}]}')"
+refused "an unknown argument after --standard" "$G" "" "" "" "" --standard --compact
+
+# Case functions for the self-check below.
+t_floorcat() { rc "$(F556)" "$(R556 floorcat2 '.behaviour.triggers += [{id: "T-002", file: "versions.tf", line: 5, category: "provider-version-floor-change", state: "verified"}]')"; [ "$(tier)" = STANDARD ]; }
+t_four() { rc "$(four b)" "$(R556 fourb)"; [ "$(tier)" = STANDARD ]; }
+t_g3() { rc "$TMP/g3b.json" "$TMP/run-r556-g3b.json"; [ "$(tier)" = STANDARD ]; }
+t_vgap() { rc "$(F556)" "$TMP/run-r556-vgap.json"; [ "$(tier)" = STANDARD ]; }
+t_over() { render "$(F556)" "$H556" "" "$(R556 overm)" "$TMP/a-351.txt"; [ "$ST" = 2 ] && empty_out; }
+t_force() { rc "$(F556)" "$(R556 force)" "" --standard; [ "$(tier)" = STANDARD ]; }
+
+# Negative self-check for the tier rules.
+mutate "the subset-of-union test dropped" 's/if \(\$t\.outstanding - \[\$e\[\]\.explains\[\]\]\) == \[\] then/if true then/' t_partial
+mutate "the digest compare dropped" 's/\n  and \.evidence_digest == \$t\.evidence_digest;/;/' t_stale
+mutate "the one-trigger rule dropped" 's/\(\[\.explains\[\] \| split\("\|"\)\[0\]\] \| unique\) == \[\$t\.id\]/true/' t_mixed
+mutate "the file and line match dropped" 's/and \.file == \$t\.file and \.line == \$t\.line/and true/' t_where
+mutate "complete not required" 's/and \.complete == true and/and/' t_incomplete
+mutate "the floor not named" 's/&& die "a finding that explains differences is rated below LOW/\&\& true "/' t_floor
+mutate "the version floor condition dropped" 's/ and \.category != "provider-version-floor-change"\)/)/' t_floorcat
+mutate "the finding cap dropped" 's/and \(\$counted \| length\) <= 3/and true/' t_four
+mutate "the group condition dropped" 's/and all\(\$counted \| groups\[\]; \(\.items \| length\) < 3\)/and true/' t_g3
+mutate "routing ignores predates_change" 's/and \.predates_change == true;/and false;/' t_routed
+mutate "causes outside the table admitted" 's/and \(\$c\.other \| not\)/and true/' t_vgap
+mutate "G0 sent to the runner clause" 's/\{"plan gate G0": "file-gate"/{"plan gate G0": "safety-gate"/' t_g0
+mutate "the name allowlist dropped" 's/def allowed: test\("\^\[A-Za-z0-9\._\/-\]\+\$"\);/def allowed: true;/' t_names
+mutate "names not sorted" 's/def name_list: sort \|/def name_list:/' t_names
+mutate "the COMPACT caps dropped" 's/refuse: \(if \$tier == "COMPACT" then compact_refusal\(\$in\) else null end\)/refuse: null/' t_over
+mutate "--standard ignored" 's/--standard\) standard=true; shift ;;/--standard) shift ;;/' t_force
+mutate "a COMPACT string changed in the script only" 's/plan the \{count\} gated examples in runner mode/plan the {count} examples in runner mode/' t_table
+mutate "the verdict line drops the validate sentence" 's/\(if \$run\.plan_ran then " " \+ tx/(if false then " " + tx/' t_556
+mutate "every prose-truncated entry its own line" 's/select\(\.value\.kind != "prose-truncated" or \.key == \$first\)/select(true)/' t_prose_once
+mutate "reported triggers counted as gaps" 's/\. \+ \{state: "reported", judged_by: \[\$e\[\]\.id\]\}/./' t_556
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

@@ -6,7 +6,7 @@
 # head or the workspace.
 #
 #   render-comment.sh --head <sha> --findings <file> --host <host.json> --checks <dir>
-#       --run <file> --assessment <file> --run-dir <dir> --out <dir>
+#       --run <file> --assessment <file> --run-dir <dir> --out <dir> [--standard]
 #
 #   --findings    the merged findings, modulestf/facts schema/merged-findings.schema.json, with
 #                 paths relative to the module root
@@ -39,9 +39,20 @@
 #                 paragraphs and 700 characters, no line that starts like a heading, a bold line, HTML or a list item
 #   --run-dir     the run directory, which the leak scan looks for and --out must lie outside
 #   --out         an existing directory holding none of the files written
+#   --standard    render the STANDARD tier even when every COMPACT condition holds
+#                 (comment-format.md, Tiers); nothing forces COMPACT
+#
+#   The run file may carry one key more, "examples": {"count": n, "validated": n}, the selected
+#   examples and how many passed `validate`; COMPACT needs it. A host.json prose-truncated entry
+#   may carry "item" (body, title or thread) and "omitted" (bytes); only a cut of the body, the
+#   description, is a cause COMPACT admits. The behaviour object's triggers may carry claims-eval's
+#   "complete", "outstanding" and "evidence_digest" (behaviour-pass.md, The Run Object); a trigger
+#   whose outstanding differences findings explain is reported (verdict.md, Behaviour evidence).
+#   The caps are per tier: STANDARD 700, 500 and 600 characters for the assessment, a summary and
+#   a fix, COMPACT 350 in one paragraph, 200 and 250. Over a cap the input is refused, never cut.
 #
 # Writes comment.md, findings.json and result.json, in that order, result.json last by a rename,
-# and prints "rendered <verdict> (ladder rule <n>), proposed event <EVENT>". Exit 2 is a usage
+# and prints "rendered <verdict> (ladder rule <n>), proposed event <EVENT>, tier <TIER>". Exit 2 is a usage
 # error or a refused input, and nothing is written. Exit 1 is a leak scan match or a bare
 # at-mention left after the wrap, and nothing is written, or a failed write, which leaves what
 # was written and no result.json.
@@ -58,9 +69,10 @@ sha_re='^[0-9a-f]{40}$'
 die() { echo "render-comment.sh: $1" >&2; exit 2; }
 stop() { echo "render-comment.sh: $1" >&2; exit 1; }
 
-head="" findings="" host="" checks="" run="" assessment="" rundir="" out=""
+head="" findings="" host="" checks="" run="" assessment="" rundir="" out="" standard=false
 while [ $# -gt 0 ]; do
   case "$1" in
+    --standard) standard=true; shift ;;
     --head) head="${2-}"; shift 2 || die "--head needs a value" ;;
     --findings) findings="${2-}"; shift 2 || die "--findings needs a value" ;;
     --host) host="${2-}"; shift 2 || die "--host needs a value" ;;
@@ -97,13 +109,18 @@ done
 
 RJ() { jq -L "$HERE" "$@"; }
 one() { RJ -e --slurp --arg head "$head" "include \"$2\"; length == 1 and (.[0] | $3)" "$1" > /dev/null 2>&1; }
-one "$findings" render-comment valid_findings || die "the findings do not fit the merged findings schema (a summary is at most 500 characters and a suggested_fix at most 600)"
-one "$host" host-records 'valid_host($head)' || die "host.json is not valid for this head"
+RJ -e --slurp 'include "render-comment"; length == 1 and (.[0] | below_floor)' "$findings" > /dev/null 2>&1 \
+  && die "a finding that explains differences is rated below LOW, the floor; send it back to the reviewer"
+one "$findings" render-comment valid_findings || die "the findings do not fit the merged findings schema (a summary is at most 500 characters and a suggested_fix at most 600, the STANDARD limits)"
+RJ -e --slurp 'include "render-comment"; length == 1 and (.[0] | prose_fields)' "$host" > /dev/null 2>&1 \
+  || die "host.json is not valid for this head"
+RJ -e --slurp --arg head "$head" 'include "host-records"; length == 1 and (.[0] | .could_not_run |= map(del(.item, .omitted)) | valid_host($head))' \
+  "$host" > /dev/null 2>&1 || die "host.json is not valid for this head"
 one "$run" render-comment valid_run || die "the run file does not fit its grammar"
 RJ -e -n --slurpfile f "$findings" --slurpfile r "$run" 'include "render-comment"; claims_consistent($f[0]; $r[0])' \
   > /dev/null 2>&1 || die "a claim.* finding with no refuted state in the behaviour object"
 RJ -e -R --slurp 'include "render-comment"; valid_assessment' "$assessment" > /dev/null 2>&1 \
-  || die "the assessment is not printable ASCII text of at most two paragraphs and 700 characters"
+  || die "the assessment is not printable ASCII text of at most two paragraphs and 700 characters, the STANDARD limit"
 
 # The Checks signal: the checks file when host-pass.sh accepts it, else unknown (host-pass.md).
 if [ "$(bash "$HERE/host-pass.sh" check "$checks" --head "$head" 2> /dev/null)" = "checks accepted" ]; then
@@ -127,10 +144,10 @@ lits="$(jq -n --arg run "$RUN" --arg home "${HOME-}" --arg pwd "${PWD-}" --arg t
       | {name: "the value of \(.key)", v: .value} ]')" || die "the leak scan set cannot be built"
 
 RJ -n --slurpfile f "$findings" --slurpfile h "$host" --slurpfile r "$run" --rawfile a "$assessment" \
-  --argjson c "$cj" --argjson lits "$lits" '
+  --argjson c "$cj" --argjson lits "$lits" --argjson std "$standard" '
   include "render-comment";
   ($a | sub("\n+$"; "")) as $text
-  | render({findings: $f[0], host: $h[0], checks: $c, run: $r[0], assessment: $text}) as $o
+  | render({findings: $f[0], host: $h[0], checks: $c, run: $r[0], assessment: $text, standard: $std}) as $o
   | (if $r[0].plan_ran then
        [ "(AKIA|ASIA)[A-Z0-9]{16}", "eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+", "-----BEGIN", "X-Amz-Signature",
          "Authorization:" ] | map({name: ., v: .})
@@ -140,6 +157,8 @@ RJ -n --slurpfile f "$findings" --slurpfile h "$host" --slurpfile r "$run" --raw
   | .mention_left = (.body | bare_mention)
   | del(.parts)' > "$TMP/render.json" || die "the render failed"
 
+refuse="$(jq -r '.refuse // ""' "$TMP/render.json")"
+[ -z "$refuse" ] || die "$refuse; send it back to the reviewer, or render with --standard"
 leak="$(jq -r 'if .leak then "\(.leak.pattern) in \(.leak.src)" else "" end' "$TMP/render.json")"
 [ -z "$leak" ] || stop "leak scan: $leak; nothing written"
 [ "$(jq -r '.mention_left' "$TMP/render.json")" = false ] || stop "an at-mention is left outside a code span; nothing written"
@@ -156,4 +175,4 @@ jq --slurpfile h "$host" '{target: "\($h[0].repo)#\($h[0].number)", number: $h[0
     "$OUT/result.json.tmp" > /dev/null \
   && mv -- "$OUT/result.json.tmp" "$OUT/result.json" || stop "writing result.json failed"
 
-jq -r '"rendered \(.verdict) (ladder rule \(.rule)), proposed event \(.event)"' "$TMP/render.json"
+jq -r '"rendered \(.verdict) (ladder rule \(.rule)), proposed event \(.event), tier \(.tier)"' "$TMP/render.json"

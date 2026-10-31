@@ -19,10 +19,23 @@ def pos(f): [to_entries[] | select(.value | f) | .key][0];
 
 def plain_subject: type == "string" and length > 0 and (test("^" + rule_pat + "@") | not);
 
+# A difference id of claims-eval, "<trigger id>|<level>|<case id>|<attribute>", and its digest.
+def diff_id: type == "string" and test("^T-[0-9]{3}\\|L[1-4]\\|[A-Za-z0-9_.:-]{1,64}\\|[a-z_]{1,32}$");
+def digest: type == "string" and test("^[0-9a-f]{64}$");
+def explaining_rule: . == "compat.expression-behaviour-changed" or startswith("claim.");
+
+# A finding that explains differences and is rated below LOW is refused: the flat floor of a
+# reported trigger. The schema has no lower severity, so this names the refusal before it does.
+def below_floor: type == "array" and any(.[]; type == "object" and has("explains") and ((.severity | IN(sev_order[])) | not));
+
 def valid_finding:
   type == "object"
-  and (keys - ["candidate_id", "confirmed_by", "file", "id", "line", "rule_id", "severity",
-               "source", "subject", "suggested_fix", "summary"]) == []
+  and (keys - ["candidate_id", "confirmed_by", "evidence_digest", "explains", "file", "id", "line",
+               "predates_change", "rule_id", "severity", "source", "subject", "suggested_fix", "summary"]) == []
+  and (((has("explains") or has("evidence_digest")) | not) or (.rule_id | explaining_rule))
+  and ((has("explains") | not) or (.explains | type == "array" and length > 0 and length <= 256 and all(.[]; diff_id)))
+  and ((has("evidence_digest") | not) or (.evidence_digest | digest))
+  and ((has("predates_change") | not) or (.predates_change == true and .source == "tool"))
   and (["file", "id", "line", "rule_id", "severity", "source", "suggested_fix", "summary"] - keys) == []
   and (.id | type == "string" and test("^F-[0-9]{3,}$"))
   and (.rule_id | type == "string" and test("^" + rule_pat + "$"))
@@ -77,10 +90,17 @@ def valid_behaviour:
   type == "object" and keys == ["capped", "claims", "reason", "status", "triggers"]
   and (.capped | nat)
   and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object"
-        and keys == ["category", "file", "id", "line", "state"] and (.id | type == "string" and test("^T-[0-9]{3}$"))
+        and (keys - ["complete", "evidence_digest", "outstanding"]) == ["category", "file", "id", "line", "state"]
+        and (.id | type == "string" and test("^T-[0-9]{3}$"))
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0))
         and (.category | IN(behaviour_categories[]))
-        and (.state | IN("inert", "verified", "covered", "refuted", "unverifiable")))
+        and (.state | IN("inert", "verified", "covered", "refuted", "unverifiable"))
+        # Contract 5: claims-eval's complete flag, the sorted unexplained difference ids of this
+        # trigger, and their digest, present only with a difference.
+        and ((has("complete") | not) or (.complete | type == "boolean"))
+        and (.id as $id | (has("outstanding") | not) or (.outstanding | type == "array" and length <= 256
+              and all(.[]; diff_id and startswith($id + "|")) and . == unique))
+        and ((has("evidence_digest") | not) or ((.evidence_digest | digest) and (.outstanding // []) != [])))
         and (map(.id) | length == (unique | length)))
   and (.claims | type == "array" and length <= 48 and all(.[]; type == "object"
         and keys == ["claim_id", "state"] and (.claim_id | type == "string" and test("^C-[0-9]+$"))
@@ -107,10 +127,39 @@ def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select
 def claims_consistent($findings; $run):
   (any($findings[]; .rule_id | startswith("claim.")) | not) or (behaviour_of($run) | behaviour_refuted > 0);
 
+# A prose-truncated entry of host.json may name the item that was cut and the bytes it lost
+# (host-pass.md, Host Facts): both or neither. The render checks these two fields itself and hands
+# host-records.jq the entry without them, so it accepts the old entry and the new one alike.
+def prose_fields: (.could_not_run | type == "array") and all(.could_not_run[]; type == "object"
+  and (((has("item") or has("omitted")) | not) or (.kind == "prose-truncated" and has("item") and has("omitted")
+       and (.item | IN("body", "title", "thread")) and (.omitted | nat and . >= 1))));
+
+# --- Reported (verdict.md, Behaviour evidence). A trigger claims-eval calls complete, whose only
+# gap is its outstanding differences, is reported when findings explain every one of them. A
+# finding is eligible when its rule may explain, it sits at the trigger's file and line, every id
+# it explains is of this one trigger, and its digest is the trigger's. Out-of-set ids and
+# ineligible findings are ignored; partial or stale coverage leaves the trigger unverifiable.
+def eligible($t): (.rule_id | explaining_rule) and .file == $t.file and .line == $t.line
+  and (.explains // []) != [] and ([.explains[] | split("|")[0]] | unique) == [$t.id]
+  and .evidence_digest == $t.evidence_digest;
+
+def with_reported($findings):
+  if . == null or .status != "ran" then . else
+    .triggers |= map(. as $t
+      | if .state == "unverifiable" and .complete == true and (.outstanding // []) != [] and has("evidence_digest") then
+          [$findings[] | select(eligible($t)) | select(any(.explains[]; IN($t.outstanding[])))] as $e
+          | if ($t.outstanding - [$e[].explains[]]) == [] then . + {state: "reported", judged_by: [$e[].id]} else . end
+        else . end)
+  end;
+
 def valid_run:
   type == "object"
-  and ((keys - ["behaviour"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((keys - ["behaviour", "examples"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
   and ((has("behaviour") | not) or (.behaviour | valid_behaviour))
+  # The example counts the COMPACT verdict line states.
+  and ((has("examples") | not) or (.examples | type == "object" and keys == ["count", "validated"]
+        and (.count | nat) and (.validated | nat)) and .examples.validated <= .examples.count - (.verify_gaps | length)
+        and ([.coverage.unplanned[] | select(.reason != "no example directory")] | length) <= .examples.count)
   and .format == 1
   and (.triage | type == "boolean") and (.plan_ran | type == "boolean")
   and (.verify_gaps | type == "array" and all(.[]; type == "object"
@@ -226,7 +275,9 @@ def texts: {
   "threads-over-count": "- {count} review thread comments over the count did not reach the review.",
   "verification": "- Verification of `{dir}`: {reason}.",
   "verification-more": "- {count} more example directories with a check that could not run are not listed.",
-  "unplanned": "- `{dir}` was not planned: {reason}.",
+  "unplanned-group-one": "- 1 example was not planned: {reason}.",
+  "unplanned-group-many": "- {count} examples were not planned: {reason}.",
+  "unplanned-name": "  - `{dir}`",
   "unplanned-more": "- {count} more examples that were not planned are not listed.",
   "unplanned-no-examples": "- The module has no example directory, so no example could be planned.",
   "unplanned-inert": "- The change reaches no Terraform configuration, so the examples below that were not planned leave nothing unknown.",
@@ -262,7 +313,30 @@ def texts: {
   "todo-mergeability-unknown": "Mergeability could not be read.",
   "todo-gaps-one": "1 check could not run; see Checks that could not run.",
   "todo-gaps-many": "{count} checks could not run; see Checks that could not run.",
-  "fix-fold": "Fix for each location ({count})"
+  "fix-fold": "Fix for each location ({count})",
+  "behaviour-evidence-reported": "Behaviour evidence: {count} changes classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claims} claims: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
+  "compact-validate-all": "`validate` passed in all {count} examples; {planned} were planned.",
+  "compact-validate-some": "`validate` passed in {validated} of {count} examples; {planned} were planned.",
+  "compact-not-checked": "Not checked: {causes}.",
+  "compact-action": "To get a conclusive review: {actions}.",
+  "cause-description": "the description past 8000 bytes ({cut} cut)",
+  "cause-safety-gate": "{count} of {total} examples not planned (safety gate)",
+  "cause-file-gate": "{count} of {total} examples not planned (file gate)",
+  "cause-no-plan": "no plan was run (no AWS profile named)",
+  "action-description": "shorten the description under 8000 bytes",
+  "action-safety-gate": "plan the {count} gated examples in runner mode",
+  "action-file-gate": "remove what plan gate G0 refuses from the {count} examples",
+  "action-no-plan": "name an AWS profile",
+  "compact-finding": "- {severity} `{rule_id}` {location} - {summary}",
+  "compact-fix": "  - Fix: {fix}",
+  "evidence-summary": "Evidence and notes",
+  "evidence-not-planned": "- Not planned: {names}.",
+  "evidence-reported": "Behaviour change at {location} reported: judged in {findings} ({count} differences).",
+  "evidence-claims-one": "1 claim verified.",
+  "evidence-claims-many": "{count} claims verified.",
+  "evidence-predates": "- Predates this change: `{rule_id}` at {location} - {summary}",
+  "evidence-more": "+{count}",
+  "name-withheld": "name withheld"
 };
 
 def tx($k; $v): texts[$k] | gsub("\\{(?<n>[a-z_]+)\\}"; $v[.n] | tostring);
@@ -413,23 +487,31 @@ def todo_md($l; $rule; $p; $gaps):
     + (if $items == [] then "" else "\n\n" + ($items | map((if .box then "- [ ] " else "- " end) + .t) | join("\n")) end);
 
 # findings.json: the order the body shows them, the seven fields, the path repository-relative.
-def body_order($p):
+def ordered:
   (map(select(.rule_id != "review.tool-disputed")) as $f
    | [sev_order[] as $s | $f | map(select(.severity == $s)) | groups[] | .entries[][]])
-  + [map(select(.rule_id == "review.tool-disputed")) | groups[] | .entries[][]]
-  | map({id, rule_id, severity, file: (.file | repo_path($p)), line, summary, suggested_fix});
+  + [map(select(.rule_id == "review.tool-disputed")) | groups[] | .entries[][]];
+def seven($p): map({id, rule_id, severity, file: (.file | repo_path($p)), line, summary, suggested_fix});
+def body_order($p): ordered | seven($p);
 
 # --- Sections 5 to 8, from host.json (host-pass.md, Host Facts), the checks file and the run file.
 
 def gap_lines($h; $run; $b; $p):
-  [ $h.could_not_run[]
+  # Several prose-truncated entries, one per cut item class, render one line; each still counts.
+  [ ($h.could_not_run | pos(.kind == "prose-truncated")) as $first
+    | $h.could_not_run | to_entries[] | select(.value.kind != "prose-truncated" or .key == $first) | .value
     | tx(.kind; {path: ((.path // "") | repo_path($p)), count: (.count // 0)}) ]
   + [ $run.verify_gaps[:100][]
       | tx("verification"; {dir, reason: (if .reason == "init failed" then "`init` failed" else .reason end)}) ]
   + ($run.verify_gaps | length - 100 | if . > 0 then [tx("verification-more"; {count: .})] else [] end)
   + (if $run.coverage.inert and $run.coverage.unplanned != [] then [tx("unplanned-inert")] else [] end)
-  + [ $run.coverage.unplanned[:100][]
-      | if .reason == "no example directory" then tx("unplanned-no-examples") else tx("unplanned"; {dir, reason}) end ]
+  # One clause per reason, in the reason list's order, with its full count; under it the names of
+  # the first 100 examples overall.
+  + ($run.coverage.unplanned[:100] as $shown
+     | [ unplanned_reasons[] as $r | [$run.coverage.unplanned[] | select(.reason == $r)] as $all | select($all != [])
+         | if $r == "no example directory" then tx("unplanned-no-examples")
+           else ([tx(if ($all | length) == 1 then "unplanned-group-one" else "unplanned-group-many" end; {count: ($all | length), reason: $r})]
+                 + [$shown[] | select(.reason == $r) | tx("unplanned-name"; {dir})] | join("\n")) end ])
   + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end)
   + ($b | if . == null then []
      elif .status == "not-run" then [tx("behaviour-not-run"; {reason})]
@@ -442,7 +524,8 @@ def evidence_lines($b):
   if $b == null or $b.status != "ran" or ($b.triggers == [] and $b.claims == [] and $b.capped == 0) then []
   else
     def n($xs; $s): [$xs[] | select(.state == $s)] | length;
-    [tx("behaviour-evidence"; {count: (($b.triggers | length) + $b.capped),
+    [tx(if n($b.triggers; "reported") > 0 then "behaviour-evidence-reported" else "behaviour-evidence" end;
+       {count: (($b.triggers | length) + $b.capped), reported: n($b.triggers; "reported"),
        verified: n($b.triggers; "verified"), covered: n($b.triggers; "covered"), inert: n($b.triggers; "inert"),
        refuted: n($b.triggers; "refuted"), unverifiable: (n($b.triggers; "unverifiable") + $b.capped),
        claims: ($b.claims | length), claims_verified: n($b.claims; "verified"),
@@ -543,11 +626,89 @@ def leak_hit($parts; $lits; $res):
             ($res[] | select(.v as $v | $p.text | test($v))))
          | {pattern: .name, src: $p.src}), null);
 
-# --- The whole render. $in: {findings, host, checks, run, assessment, plan_ran}.
+# --- Tiers (comment-format.md, Tiers). COMPACT only when every condition holds; else STANDARD.
+
+# The reason classes a COMPACT body admits for an example not planned. Runner mode relaxes the
+# code-execution gates G1 to G3 (plan-pass.md), never G0.
+def plan_class: {"plan gate G0": "file-gate", "plan gate G1": "safety-gate", "plan gate G2": "safety-gate",
+  "plan gate G3": "safety-gate", "no AWS profile named": "no-plan"}[.];
+
+# A tool-source LOW finding whose rule fired on the base with the same subject: COMPACT moves it
+# to the details block, uncounted.
+def routed: .source == "tool" and .severity == "LOW" and .predates_change == true;
+
+# The rule 4 causes, in the cause table's order: {admitted: [{key, ...}], other: true when any
+# cause outside the table is present}.
+def causes($l; $h; $run; $b):
+  (if $run.coverage.inert then [] else $run.coverage.unplanned end) as $u
+  | ([$h.could_not_run[] | select(.kind == "prose-truncated" and .item == "body")][0]) as $cut
+  | {admitted: ((if $cut != null then [{key: "description", cut: $cut.omitted}] else [] end)
+       + [("safety-gate", "file-gate", "no-plan") as $k | [$u[] | select(.reason | plan_class == $k)] as $m
+          | select($m != []) | {key: $k, count: ($m | length), total: ($run.examples.count // 0)}]),
+     other: ($l.triage or any($l.signals[]; . == "unknown") or $l.unresolved > 0
+       or any($l.findings[]; .rule_id | startswith("review.") and . != "review.tool-disputed")
+       or any($h.could_not_run[]; .kind != "prose-truncated" or .item != "body")
+       or $run.verify_gaps != [] or any($u[]; (.reason | plan_class) == null)
+       or ($b | behaviour_gaps) > 0)};
+
+def compact_ok($l; $v; $c; $run; $b):
+  ($l.findings | map(select(routed | not))) as $counted
+  | ($v.rule | IN(4, 7, 8))
+  and (any($l.findings[]; .severity | IN("CRITICAL", "HIGH", "MEDIUM")) | not)
+  and ($counted | length) <= 3
+  and (any($l.findings[]; .rule_id == "review.tool-disputed") | not)
+  and $b != null and $b.status == "ran"
+  and all($b.triggers[]; (.state | IN("verified", "covered", "inert", "reported")) and .category != "provider-version-floor-change")
+  and all($counted | groups[]; (.items | length) < 3)
+  and ($c.other | not) and ($v.rule != 4 or $c.admitted != [])
+  and ($run | has("examples"));
+
+# Over a COMPACT cap the model text goes back to the reviewer; nothing is cut.
+def compact_refusal($in):
+  if ($in.assessment | length) > 350 or ($in.assessment | test("\n\n")) then
+    "the assessment is over 350 characters or more than one paragraph, the COMPACT limit"
+  else first($in.findings[]
+    | if (.summary | length) > 200 then "finding \(.id): the summary is over 200 characters, the COMPACT limit"
+      elif (.suggested_fix | length) > 250 then "finding \(.id): the suggested_fix is over 250 characters, the COMPACT limit"
+      else empty end) // null end;
+
+# Names the pull request controls render only in the details block: allowlisted, sorted, at most
+# three and the count of the rest; a name outside the charset is withheld and still counts.
+def allowed: test("^[A-Za-z0-9._/-]+$");
+def name_list: sort | (.[:3] | map(if allowed then "`\(.)`" else tx("name-withheld") end))
+  + (if length > 3 then [tx("evidence-more"; {count: (length - 3)})] else [] end) | join(", ");
+def safe_loc($p): (.file | repo_path($p)) as $f
+  | if $f | allowed then "`" + $f + (if .line == null then "" else ":\(.line)" end) + "`" else tx("name-withheld") end;
+
+def compact_body($in; $l; $v; $c; $b; $p):
+  $in.run as $run | $in.host as $h | $run.examples as $x
+  | ([$run.coverage.unplanned[] | select(.reason != "no example directory") | .dir]) as $names
+  | ($in.findings | ordered) as $o
+  | ("**\($v.verdict | verdict_line)**"
+     + (if $run.plan_ran then " " + tx(if $x.validated == $x.count then "compact-validate-all" else "compact-validate-some" end;
+          {validated: $x.validated, count: $x.count, planned: ($x.count - ($names | length))}) else "" end)
+     + (if $v.rule == 4 then " " + tx("compact-not-checked"; {causes: ([$c.admitted[] | tx("cause-" + .key; .)] | join(", "))}) else "" end)) as $verdict
+  | (if $v.rule == 4 then [tx("compact-action"; {actions: ([$c.admitted[] | tx("action-" + .key; .)]
+       | if length == 1 then .[0] else (.[:-1] | join(", ")) + ", and " + .[-1] end)})] else [] end) as $action
+  | [$o[] | select(routed | not) | tx("compact-finding"; {severity, rule_id, location: loc($p), summary})
+       + "\n" + tx("compact-fix"; {fix: .suggested_fix})] as $bullets
+  | ((if $names == [] then [] else [tx("evidence-not-planned"; {names: ($names | name_list)})] end)
+     + ([($b.triggers[] | select(.state == "reported")
+          | tx("evidence-reported"; {location: safe_loc($p), findings: (.judged_by | and_join), count: (.outstanding | length)})),
+         ($b.claims | length | select(. > 0) | if . == 1 then tx("evidence-claims-one") else tx("evidence-claims-many"; {count: .}) end)]
+        | if . == [] then [] else ["- " + join(" ")] end)
+     + [$o[] | select(routed) | tx("evidence-predates"; {rule_id, location: loc($p), summary})]
+     + [(state_lines($h; $in.checks)[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
+  | {body: ([$in.assessment, $verdict] + $action + (if $bullets == [] then [] else [$bullets | join("\n")] end)
+            + (if $notes == [] then [] else ["<details><summary>\(tx("evidence-summary"))</summary>\n\n" + ($notes | join("\n")) + "\n</details>"] end)
+            | join("\n\n") + "\n"),
+     findings: ([$o[] | select(routed | not)] + [$o[] | select(routed)] | seven($p))};
+
+# --- The whole render. $in: {findings, host, checks, run, assessment, standard}.
 
 def render($in):
   $in.host as $h | $in.host.prefix as $p
-  | behaviour_of($in.run) as $b
+  | (behaviour_of($in.run) | with_reported($in.findings)) as $b
   | {findings: $in.findings, signals: ($h.signals + {checks: $in.checks.signal}),
      unresolved: ($h.unresolved_threads | length), triage: $in.run.triage, refuted: ($b | behaviour_refuted),
      # A refuted trigger no blocking claim.* finding words is its own checklist item.
@@ -569,9 +730,14 @@ def render($in):
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")
      + section("Existing threads"; thread_lines($h; $in.findings; $p); "\n")
      + section("Conversation comments"; conversation_lines($h.conversation; $in.run.counts); "\n\n")
-     | join("\n\n") + "\n") as $body
-  | {rule: $v.rule, verdict: $v.verdict, event: ($v.verdict | proposed_event($h.state)),
-     body: $body, findings: ($in.findings | body_order($p)),
+     | join("\n\n") + "\n") as $standard
+  | causes($l; $h; $in.run; $b) as $c
+  | (if ($in.standard | not) and compact_ok($l; $v; $c; $in.run; $b) then "COMPACT" else "STANDARD" end) as $tier
+  | (if $tier == "COMPACT" then compact_body($in; $l; $v; $c; $b; $p)
+     else {body: $standard, findings: ($in.findings | body_order($p))} end) as $out
+  | {rule: $v.rule, verdict: $v.verdict, event: ($v.verdict | proposed_event($h.state)), tier: $tier,
+     refuse: (if $tier == "COMPACT" then compact_refusal($in) else null end),
+     body: $out.body, findings: $out.findings,
      parts: ([{src: "the assessment", text: $in.assessment}]
              + [$in.findings[] | {src: "finding \(.id)", text: "\(.file) \(.summary) \(.suggested_fix)"}]
-             + [{src: "the host records", text: $body}])};
+             + [{src: "the host records", text: $out.body}])};
