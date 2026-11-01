@@ -193,7 +193,7 @@ invariant() {
     1|2|3|5|6) todo | grep -q '^- \[ \] ' ;;
     7) jq -e 'all(.[]; .severity == "LOW")' "$O/findings.json" > /dev/null && ! todo | grep -q '^- \[ \] ' ;;
     8) jq -e 'all(.[]; .rule_id == "review.tool-disputed")' "$O/findings.json" > /dev/null && [ -z "$(todo)" ] ;;
-    0) todo | grep -q '^- `[^`]*`.* restores compatibility\.$' ;;
+    0) todo | grep -q '^- `[^`]*`.* one way to restore compatibility; see Findings\.$' ;;
     # Rule 4 renders What to do only with an item other than Optional and the gaps line; a list
     # of those alone gives way to the action line, and section 4 or 5 holds the unknowns.
     4) if [ -n "$(todo)" ]; then todo | grep -v -e '^- Optional: ' -e ' could not run; see Checks that could not run\.$' | grep -q '^- '
@@ -743,17 +743,17 @@ R0="$({ f compat.output-removed CRITICAL a.tf 1 "S." "F. Generated content made 
   f structure.grouping LOW d.tf 4 "V." "I."; } | list wt-r0)"
 render "$R0"
 todo_is "rule 0, the groups as plain bullets and item e a bullet" '### What to do' '' "$LEAD_0" '' \
-  '- `compat.output-removed` (2): the Fix at `a.tf:1`, `b.tf:2` restores compatibility.' \
-  '- `compat.variable-removed`: the Fix at `c.tf` restores compatibility.' '- Optional: `structure.grouping` at `d.tf:4`.' "- $GEN"
+  '- `compat.output-removed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.' \
+  '- `compat.variable-removed`: the Fix at `c.tf` is one way to restore compatibility; see Findings.' '- Optional: `structure.grouping` at `d.tf:4`.' "- $GEN"
 render "$R0" "" "$(checks wt-r0 fail)"
 todo_is "rule 0 with a failing check, which makes item e a checkbox" '### What to do' '' "$LEAD_0" '' '- [ ] Fix the failing checks.' \
-  '- `compat.output-removed` (2): the Fix at `a.tf:1`, `b.tf:2` restores compatibility.' \
-  '- `compat.variable-removed`: the Fix at `c.tf` restores compatibility.' '- Optional: `structure.grouping` at `d.tf:4`.' "- [ ] $GEN"
+  '- `compat.output-removed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.' \
+  '- `compat.variable-removed`: the Fix at `c.tf` is one way to restore compatibility; see Findings.' '- Optional: `structure.grouping` at `d.tf:4`.' "- [ ] $GEN"
 R0M="$(jq '. + [{id: "F-900", rule_id: "structure.flag-polarity", severity: "MEDIUM", file: "e.tf", line: 5, summary: "W.", suggested_fix: "J.", source: "llm"}]' "$TMP/wt-r0.json" > "$TMP/wt-r0m.json"; echo "$TMP/wt-r0m.json")"
 render "$R0M"
 todo_is "rule 0, a MEDIUM non-compat group is a checkbox and makes item e one" '### What to do' '' "$LEAD_0" '' \
-  '- `compat.output-removed` (2): the Fix at `a.tf:1`, `b.tf:2` restores compatibility.' \
-  '- `compat.variable-removed`: the Fix at `c.tf` restores compatibility.' '- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.' \
+  '- `compat.output-removed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.' \
+  '- `compat.variable-removed`: the Fix at `c.tf` is one way to restore compatibility; see Findings.' '- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.' \
   '- Optional: `structure.grouping` at `d.tf:4`.' "- [ ] $GEN"
 render "$NONE"
 check "what to do: rule 8 renders no section" "$([ "$(rule)" = 8 ] && ! grep -q 'What to do' "$O/comment.md"; echo $?)"
@@ -783,7 +783,7 @@ t_root_rule0() {
 }
 t_root_rule0
 todo_is "rule 0, a description finding at the module root takes the fixed item" '### What to do' '' "$LEAD_0" '' \
-  '- `compat.output-removed`: the Fix at `a.tf:1` restores compatibility.' '- [ ] Resolve `compat.claim-contradicts-analysis`: see its Fix under Findings.'
+  '- `compat.output-removed`: the Fix at `a.tf:1` is one way to restore compatibility; see Findings.' '- [ ] Resolve `compat.claim-contradicts-analysis`: see its Fix under Findings.'
 render "$({ f scope.description-only MEDIUM . null "S." "F."; f scope.description-only MEDIUM a.tf 1 "T." "G."; } | list wt-root4)"
 todo_is "a group with a real location keeps its locations" '### What to do' '' "$LEAD_BLOCK" '' \
   '- [ ] `scope.description-only` (2): apply the Fix at `.`, `a.tf:1`.'
@@ -960,7 +960,7 @@ mutate "any counts accepted" 's/\(\.counts == null or \(/(true or (/' t_partial_
 t_none_fires() { render "$(f structure.grouping LOW a.tf 1 "S." "Do it. Generated content made stale: None." | list wt-nf)"; todo | grep -qxF -- "- $GEN"; }
 t_rule8_none() { render "$NONE"; [ "$ST" = 0 ] && ! grep -q 'What to do' "$O/comment.md"; }
 t_loc9() { locs_case 9; todo | grep -qxF -- "- Optional: \`structure.argument-order\` (9) at $L8, and 1 more."; }
-t_rule0_plain() { render "$R0"; todo | grep -qxF -- '- `compat.output-removed` (2): the Fix at `a.tf:1`, `b.tf:2` restores compatibility.'; }
+t_rule0_plain() { render "$R0"; todo | grep -qxF -- '- `compat.output-removed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.'; }
 t_unf_fix() {
   render "$({ f structure.grouping LOW a.tf 1 "A." "Fix A."; f structure.grouping LOW b.tf 2 "B." "Fix B."
     f structure.grouping LOW c.tf 3 "C." 'Close the </details> tag.'; } | list wt-unf2)"
@@ -981,6 +981,9 @@ t_rule7_todo() { render "$G"; [ "$(rule)" = 7 ] && todo | grep -qxF "$LEAD_7"; }
 mutate "What to do quiet at a rule other than 4" 's/\(\$v\.rule == 4 and all\(\$items\[\]; \.quiet\)\)/all(\$items[]; .quiet)/' t_rule7_todo
 mutate "nine locations listed" 's/\$l\[:8\]/\$l[:9]/' t_loc9
 mutate "rule 0 groups as checkboxes" 's/if \$rule == 0 and/if false and/' t_rule0_plain
+mutate "the compat item says its Fix restores compatibility" 's/the Fixes at \{locations\} are one way to restore compatibility; see Findings\./the Fix at {locations} restores compatibility./' t_rule0_plain
+t_compat_one() { render "$TMP/wt-root0.json"; todo | grep -qxF -- '- `compat.output-removed`: the Fix at `a.tf:1` is one way to restore compatibility; see Findings.'; }
+mutate "the single compat item says its Fix restores compatibility" 's/(compat-one": "`\{rule_id\}`: the Fix at \{locations\}) is one way to restore compatibility; see Findings\./$1 restores compatibility./' t_compat_one
 t_rule0_mixed() { render "$R0M"; todo | grep -qxF -- '- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.'; }
 mutate "every rule 0 group a compat bullet" 's/\$rule == 0 and compat_item/$rule == 0/' t_rule0_mixed
 t_rev_noitem() { render "$TMP/wt-rev6.json"; [ "$ST" = 0 ] && ! todo | grep -qF 'review.path-missing'; }

@@ -41,6 +41,8 @@ A claim names a path and a line. Resolve it in the workspace, read the code, dec
 
 A claim your own reading does not confirm produces no finding. That covers both ways a claim fails: a path that does not resolve, and a path that resolves to code that does not support the claim. Keep it out of the findings list, so no consumer renders it as a finding and no verdict rule sees it. Count every such claim instead, and report the count in the summary line beside the findings as `review.quoted-claim-unverifiable:<n>` whenever it is at least 1, `<n>` written as decimal digits alone. That count is all a consumer receives: never the claim, its path or its author. A consumer may show the number; it cannot turn it into a finding.
 
+A claim that an argument is Optional and Computed, or about what the provider does with an unknown value, is confirmed only by a `claim` line of the verification record in state `verified` with a `plan-*` predicate, the L3 and L4 predicates ([Check G](check-g-behaviour.md)), never by your reading, memory or a documentation page. A claim such a line covers is confirmed and is not counted as unverifiable; with no such line it is counted.
+
 The rendered comment is posted under the repository owner's name, and anyone who can comment on a public pull request can write a claim. Were an unconfirmed claim rendered, a stranger would land a MEDIUM finding, and through ladder rule 6 a verdict of changes suggested, on someone else's pull request by writing one sentence and naming a file that exists.
 
 `review.path-missing` is unchanged: it fires only for a path named by the change itself. The split is by provenance, the change's paths against a commenter's, never by outcome.
