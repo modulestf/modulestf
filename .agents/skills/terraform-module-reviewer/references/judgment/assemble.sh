@@ -128,4 +128,4 @@ for c in $CHECKS; do
 done
 echo
 copy "$R/findings-schema.md" "../" "Findings Schema" \
-  "h:Suggested Fix Contract|h:\`rule_id\` Format|h:Recorded Exceptions|h:Ordering|h:Incremental Task Lines|h:Shape|h:Optional Fields"
+  "h:Length Targets|h:Suggested Fix Contract|h:\`rule_id\` Format|h:Recorded Exceptions|h:Ordering|h:Incremental Task Lines|h:Shape|h:Optional Fields"

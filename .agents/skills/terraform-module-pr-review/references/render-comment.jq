@@ -303,6 +303,8 @@ def texts: {
   "todo-threads-many": "Resolve the {count} open review threads.",
   "todo-fix-one": "`{rule_id}`: apply the Fix at {locations}.",
   "todo-fix-many": "`{rule_id}` ({count}): apply the Fix at {locations}.",
+  "todo-fix-root-one": "Resolve `{rule_id}`: see its Fix under Findings.",
+  "todo-fix-root-many": "Resolve `{rule_id}` ({count}): see its Fixes under Findings.",
   "todo-compat-one": "`{rule_id}`: the Fix at {locations} restores compatibility.",
   "todo-compat-many": "`{rule_id}` ({count}): the Fix at {locations} restores compatibility.",
   "todo-optional-one": "Optional: `{rule_id}` at {locations}.",
@@ -473,6 +475,7 @@ def todo_md($l; $rule; $p; $gaps):
         elif $l.unresolved > 1 then [{box: true, t: tx("todo-threads-many"; {count: $l.unresolved})}] else [] end)
      + [ $gs[] | select(.sev != "LOW")
          | if $rule == 0 and (.rule | startswith("compat.")) then {box: false, t: grp("todo-compat")}
+           elif all(.items[]; .file == ".") then {box: true, t: grp("todo-fix-root")} # no place to apply it at
            else {box: true, t: grp("todo-fix")} end ]
      + [ $l.refuted_todo[] | {box: true, t: tx("todo-refuted"; trigger_at($p))} ]) as $abc
   | ($abc
@@ -672,13 +675,14 @@ def compact_ok($l; $v; $c; $run; $b):
   and ($run | has("examples"));
 
 # Over a COMPACT cap the model text goes back to the reviewer; nothing is cut.
+# Every offender, in input order, with its length and its limit, in one message.
 def compact_refusal($in):
-  if ($in.assessment | length) > 350 or ($in.assessment | test("\n\n")) then
-    "the assessment is over 350 characters or more than one paragraph, the COMPACT limit"
-  else first($in.findings[]
-    | if (.summary | length) > 200 then "finding \(.id): the summary is over 200 characters, the COMPACT limit"
-      elif (.suggested_fix | length) > 250 then "finding \(.id): the suggested_fix is over 250 characters, the COMPACT limit"
-      else empty end) // null end;
+  [ ($in.assessment | length | select(. > 350) | "the assessment is \(.) characters, limit 350"),
+    ($in.assessment | select(test("\n\n")) | "the assessment is more than one paragraph, limit one"),
+    ($in.findings[] | .id as $id
+      | (.summary | length | select(. > 200) | "finding \($id) summary is \(.) characters, limit 200"),
+        (.suggested_fix | length | select(. > 250) | "finding \($id) suggested_fix is \(.) characters, limit 250")) ] as $o
+  | if $o == [] then null else "over the COMPACT limits: " + ($o | join("; ")) end;
 
 # Names the pull request controls render only in the details block: allowlisted, sorted, at most
 # three and the count of the rest; a name outside the charset is withheld and still counts.

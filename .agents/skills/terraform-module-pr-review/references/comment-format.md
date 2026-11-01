@@ -37,7 +37,7 @@ The host render chooses one of two layouts. Verification depth is the same in bo
 7. Every rule 4 cause is in the cause table below. Any other unknown forces STANDARD: a triage run, a host signal that is unknown, a `review.*` finding, a `could_not_run` entry other than a cut of the description, a verification gap, an unverified trigger or claim, a behaviour step that did not run, an unresolved thread, or an example not planned for a reason outside the table.
 8. No `review.tool-disputed` note is present, and the run file carries `examples`, the counts the verdict line states.
 
-STANDARD is the structure of [Section Order](#section-order) with its caps: the assessment 700 characters, a summary 500 and a fix 600. COMPACT has its own: the assessment 350 characters in one paragraph, a summary 200 and a fix 250. Text over a cap is refused, exit 2, and goes back to the reviewer; the message names the limit and the tier. Nothing is cut.
+STANDARD is the structure of [Section Order](#section-order) with its caps: the assessment 700 characters, a summary 500 and a fix 600. COMPACT has its own: the assessment 350 characters in one paragraph, a summary 200 and a fix 250. Text over a cap is refused, exit 2, and nothing is cut. The one message names the tier and every offender, the assessment or a finding's id and field, each with its length and its limit. The reviewer writes to the COMPACT caps by default, the [Length Targets](../../terraform-module-reviewer/references/findings-schema.md#length-targets) the handover states; a finding over them is valid, so the host renders it again with `--standard`. An assessment over its cap goes back to its writer.
 
 ### COMPACT sections
 
@@ -84,7 +84,7 @@ The section opens with one lead sentence chosen by the ladder rule, then one lis
 
 1. The host signals: `todo-checks` when the Checks signal fails, `todo-mergeability` when Mergeability fails, and `todo-review-decision` when the Review decision fails.
 2. The open threads, when at least one is unresolved: `todo-threads-one` for one, `todo-threads-many` for more.
-3. The blocking groups, in the order of the findings: `todo-fix-one` for a group of one finding, `todo-fix-many` for more. Under rule 0 a group whose `rule_id` starts with `compat.` takes `todo-compat-one` or `todo-compat-many` instead. Then, when no `claim.*` finding at HIGH or above words it, one `todo-refuted` item per trigger the behaviour evidence refutes, with `{location}` and `{category}` as in section 5.
+3. The blocking groups, in the order of the findings: `todo-fix-one` for a group of one finding, `todo-fix-many` for more. A group whose every finding has the `file` `.`, a finding on the module or the description with no file to apply a Fix in, takes `todo-fix-root-one` or `todo-fix-root-many` instead, whatever the module root prefix. Under rule 0 a group whose `rule_id` starts with `compat.` takes `todo-compat-one` or `todo-compat-many` instead. Then, when no `claim.*` finding at HIGH or above words it, one `todo-refuted` item per trigger the behaviour evidence refutes, with `{location}` and `{category}` as in section 5.
 4. The LOW groups, in the order of the findings, in every verdict with a LOW finding: `todo-optional-one` and `todo-optional-many`.
 5. Generated documentation: `todo-generated`, once, when a fix names generated content, as below.
 6. Rule 4 only: `todo-triage` in a triage run. Then `todo-checks-unknown`, `todo-threads-unknown`, `todo-review-decision-unknown` and `todo-mergeability-unknown`, each when its signal is unknown. Then `todo-gaps-one` or `todo-gaps-many` when its `{count}` is above 0. It counts every `review.*` finding but the disputed note, every `could_not_run` entry but `thread-resolution-unknown`, which `todo-threads-unknown` covers, every example directory that did not verify and, for a change that is not inert, every example not planned, those past the first 100 included, and each unverified trigger and claim, each trigger over the cap, and a behaviour step that did not run, once.
@@ -499,6 +499,8 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `todo-threads-many` | Resolve the {count} open review threads. |
 | `todo-fix-one` | `{rule_id}`: apply the Fix at {locations}. |
 | `todo-fix-many` | `{rule_id}` ({count}): apply the Fix at {locations}. |
+| `todo-fix-root-one` | Resolve `{rule_id}`: see its Fix under Findings. |
+| `todo-fix-root-many` | Resolve `{rule_id}` ({count}): see its Fixes under Findings. |
 | `todo-compat-one` | `{rule_id}`: the Fix at {locations} restores compatibility. |
 | `todo-compat-many` | `{rule_id}` ({count}): the Fix at {locations} restores compatibility. |
 | `todo-optional-one` | Optional: `{rule_id}` at {locations}. |

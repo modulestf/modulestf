@@ -17,10 +17,18 @@ Every finding carries all seven fields. Only `line` may be null; the rest are al
 | `severity` | enum | no | Exactly one of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`. No other value, no sub-levels, no numeric score. Assignment rules are in [SKILL.md](../SKILL.md#severity-levels) and the check reference files it links. |
 | `file` | string | no | Path relative to the module root, using forward slashes. For a defect with no single file, use the module root as `.`. |
 | `line` | integer or null | yes | 1-based line in `file` in the reviewed revision. Null for a file-level or module-level finding, for example a missing file. A finding on a block as a whole - a variable, an output, a resource - takes the block's first line, the `variable "<name>"` line for a variable, never a line inside it such as its `default`, unless the rule names another line. A finding about the text of one argument, such as a `description` that contradicts the code, is not on the block as a whole: it takes that argument's line, the `description =` line, which is the line after `variable "<name>"` in the usual layout. |
-| `summary` | string | no | One sentence, plain text, stating what is wrong and where it bites. Present tense. No remediation. Plain voice: no praise, no "not X but Y" contrast, no stock words such as crucial, robust, seamless or comprehensive. A consumer renders the summary verbatim, so it has to read well as written. At most 500 characters. |
-| `suggested_fix` | string | no | The change that would resolve the finding, in one of the three forms the [Suggested Fix Contract](#suggested-fix-contract) defines. Describes; never applies. Never a command to run. When no single fix follows from the evidence, it opens with `needs decision:` and states what has to be decided, in a clause per option. At most 600 characters; the host refuses a longer one. |
+| `summary` | string | no | One sentence, plain text, stating what is wrong and where it bites. Present tense. No remediation. Plain voice: no praise, no "not X but Y" contrast, no stock words such as crucial, robust, seamless or comprehensive. A consumer renders the summary verbatim, so it has to read well as written. Aim for 200 characters; 500 is the cap. |
+| `suggested_fix` | string | no | The change that would resolve the finding, in one of the three forms the [Suggested Fix Contract](#suggested-fix-contract) defines. Describes; never applies. Never a command to run. When no single fix follows from the evidence, it opens with `needs decision:` and states what has to be decided, in a clause per option. Aim for 250 characters, or 600 for `needs decision:`; 600 is the cap, and the host refuses more. |
 
 No other field is required. A consumer that needs more may add fields, but a finding is valid with these seven and every consumer must accept a finding that carries only these.
+
+## Length Targets
+
+The caps above are hard limits. The default is shorter, so that a short layout, such as the COMPACT tier of the pull request review's [comment](../../terraform-module-pr-review/references/comment-format.md#tiers), shows each finding as written:
+
+Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid, and it forces the STANDARD tier of the rendered comment.
+
+The targets change no rule, severity or field, and never cost a fact the fix needs: a fix that needs more room takes it. The schema version stays 3.
 
 ## Optional Fields
 

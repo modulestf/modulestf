@@ -444,6 +444,16 @@ t_table() {
 }
 t_table; check "strings: the Host Render Strings table equals the script's strings" $?
 
+# The reviewer writes short by default: the length targets, the COMPACT caps below, are stated
+# word for word in the findings schema and in the caller instruction of the handover.
+LT='Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid, and it forces the STANDARD tier of the rendered comment.'
+t_targets_stated() {
+  awk '/^## Length Targets$/ { on = 1; next } on && /^## / { exit } on' \
+    "$SRC/.agents/skills/terraform-module-reviewer/references/findings-schema.md" | grep -qF -- "$LT" &&
+    awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -qF -- "$LT"
+}
+t_targets_stated; check "strings: the length targets are stated in the findings schema and the handover" $?
+
 # --- Leak scan: a match blocks every file and says what matched and where.
 
 t_leak_path() {
@@ -718,6 +728,23 @@ render "$({ f structure.docs-contradict-code HIGH a.tf 1 "S." "F."; f structure.
 todo_is "mixed blocking and LOW groups under block" '### What to do' '' "$LEAD_BLOCK" '' \
   '- [ ] `structure.docs-contradict-code`: apply the Fix at `a.tf:1`.' '- [ ] `structure.grouping` (2): apply the Fix at `b.tf:2`, `c.tf:3`.' \
   '- Optional: `structure.argument-order` at `d.tf:4`.'
+# A group whose every finding is at the module root, `.`, has no place to apply a Fix at: it
+# takes the fixed todo-fix-root item. A group with a real location keeps its locations.
+t_root_one() {
+  render "$({ f scope.description-only MEDIUM . null "S." "F."; f structure.grouping MEDIUM b.tf 2 "T." "G."; } | list wt-root1)"
+}
+t_root_one
+todo_is "a blocking finding at the module root takes the fixed item" '### What to do' '' "$LEAD_BLOCK" '' \
+  '- [ ] Resolve `scope.description-only`: see its Fix under Findings.' '- [ ] `structure.grouping`: apply the Fix at `b.tf:2`.'
+render "$({ f scope.description-only HIGH . null "S." "F."; f scope.description-only HIGH . null "T." "G."; } | list wt-root2)"
+todo_is "two blocking findings at the module root take the fixed item with the count" '### What to do' '' "$LEAD_BLOCK" '' \
+  '- [ ] Resolve `scope.description-only` (2): see its Fixes under Findings.'
+render "$(f scope.description-only MEDIUM . null "S." "F." | list wt-root3)" "$(host wt-root3 '.prefix = "modules/x"')"
+todo_is "a module root finding under a module root prefix takes the fixed item" '### What to do' '' "$LEAD_BLOCK" '' \
+  '- [ ] Resolve `scope.description-only`: see its Fix under Findings.'
+render "$({ f scope.description-only MEDIUM . null "S." "F."; f scope.description-only MEDIUM a.tf 1 "T." "G."; } | list wt-root4)"
+todo_is "a group with a real location keeps its locations" '### What to do' '' "$LEAD_BLOCK" '' \
+  '- [ ] `scope.description-only` (2): apply the Fix at `.`, `a.tf:1`.'
 
 # Commit and repository targets: the host render takes a pull request only, so the rule that
 # they carry no What to do section is held in comment-format.md, under each target's heading.
@@ -1237,11 +1264,20 @@ over() { # name, findings, assessment file, want message
   check "refused: COMPACT $4" "$([ "$ST" = 2 ] && empty_out && printf '%s' "$MSG" | grep -qF "$3" && printf '%s' "$MSG" | grep -qF 'COMPACT limit'; echo $?)"
 }
 { head -c 351 /dev/zero | tr '\0' a; echo; } > "$TMP/a-351.txt"
-over "$(F556)" "$TMP/a-351.txt" 'over 350 characters' "an assessment over 350 characters"
+over "$(F556)" "$TMP/a-351.txt" 'the assessment is 351 characters, limit 350' "an assessment over 350 characters"
 printf 'One.\n\nTwo.\n' > "$TMP/a-2p.txt"
-over "$(F556)" "$TMP/a-2p.txt" 'more than one paragraph' "an assessment of two paragraphs"
-over "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'summary is over 200 characters' "a summary over 200 characters"
-over "$(F556 "{suggested_fix: \"$(head -c 251 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'suggested_fix is over 250 characters' "a fix over 250 characters"
+over "$(F556)" "$TMP/a-2p.txt" 'the assessment is more than one paragraph, limit one' "an assessment of two paragraphs"
+over "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'finding F-001 summary is 201 characters, limit 200' "a summary over 200 characters"
+over "$(F556 "{suggested_fix: \"$(head -c 251 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'finding F-001 suggested_fix is 251 characters, limit 250' "a fix over 250 characters"
+# Every offender in one message, in input order, each with its length and its limit.
+t_over_all() {
+  jq --arg s1 "$(head -c 201 /dev/zero | tr '\0' s)" --arg x1 "$(head -c 260 /dev/zero | tr '\0' x)" \
+    --arg s2 "$(head -c 230 /dev/zero | tr '\0' t)" '.[0].summary = $s1 | .[0].suggested_fix = $x1 | .[1].summary = $s2' \
+    "$(F556)" > "$TMP/over-all.json"
+  render "$TMP/over-all.json" "$H556" "" "$(R556 overall)" "$TMP/a-351.txt"
+  [ "$ST" = 2 ] && empty_out && [ "$MSG" = 'render-comment.sh: over the COMPACT limits: the assessment is 351 characters, limit 350; finding F-001 summary is 201 characters, limit 200; finding F-001 suggested_fix is 260 characters, limit 250; finding F-002 summary is 230 characters, limit 200; send it back to the reviewer, or render with --standard' ]
+}
+t_over_all; check "refused: COMPACT every offender named in one message with its length and limit" $?
 render "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-std)" "$TMP/a-351.txt" --standard
 check "tiers: the same text passes in STANDARD with --standard" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ]; echo $?)"
 render "$(F556 "{summary: \"$(head -c 501 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-501)" "" --standard
@@ -1327,6 +1363,7 @@ t_g3() { rc "$TMP/g3b.json" "$TMP/run-r556-g3b.json"; [ "$(tier)" = STANDARD ]; 
 t_vgap() { rc "$(F556)" "$TMP/run-r556-vgap.json"; [ "$(tier)" = STANDARD ]; }
 t_over() { render "$(F556)" "$H556" "" "$(R556 overm)" "$TMP/a-351.txt"; [ "$ST" = 2 ] && empty_out; }
 t_force() { rc "$(F556)" "$(R556 force)" "" --standard; [ "$(tier)" = STANDARD ]; }
+t_root_one_item() { t_root_one; [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] Resolve `scope.description-only`: see its Fix under Findings.'; }
 
 # Negative self-check for the tier rules.
 mutate "the subset-of-union test dropped" 's/if \(\$t\.outstanding - \[\$e\[\]\.explains\[\]\]\) == \[\] then/if true then/' t_partial
@@ -1351,6 +1388,8 @@ mutate "G0 sent to the runner clause" 's/\{"plan gate G0": "file-gate"/{"plan ga
 mutate "the name allowlist dropped" 's/def allowed: test\("\^\[A-Za-z0-9\._\/-\]\+\$"\);/def allowed: true;/' t_names
 mutate "names not sorted" 's/def name_list: sort \|/def name_list:/' t_names
 mutate "the COMPACT caps dropped" 's/refuse: \(if \$tier == "COMPACT" then compact_refusal\(\$in\) else null end\)/refuse: null/' t_over
+mutate "only the first COMPACT offender named" 's/\(\$o \| join\("; "\)\)/$o[0]/' t_over_all
+mutate "the module root item dropped" 's/all\(\.items\[\]; \.file == "\."\)/false/' t_root_one_item
 mutate "--standard ignored" 's/--standard\) standard=true; shift ;;/--standard) shift ;;/' t_force
 mutate "a COMPACT string changed in the script only" 's/plan the \{count\} gated examples in runner mode/plan the {count} examples in runner mode/' t_table
 mutate "the verdict line drops the validate sentence" 's/\(if \$run\.plan_ran then " " \+ tx/(if false then " " + tx/' t_556
