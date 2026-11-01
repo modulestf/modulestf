@@ -343,7 +343,9 @@ save_proxy_log "$proxy_plan" proxy-plan.log
 
 # The saved plan of each example that planned, read outside the container that ran the head's
 # code: no network, no credentials, both volumes read-only. Only an addresses-json line the
-# host's own checks accept reaches the record, reduced to the patterns below.
+# host's own checks accept reaches the record, reduced to the patterns below. A sensitive entry
+# outside its shape is dropped, never emptied: a missing one reads as unknown, an empty one as
+# none sensitive.
 # shellcheck disable=SC2016 # a jq program
 clean_addresses='. as $x
   | [($x.addresses? | if type == "array" then .[] else empty end)
@@ -355,7 +357,12 @@ clean_addresses='. as $x
            | .value |= ([(if type == "array" then .[] else empty end)
                          | select(type == "string" and test("^[a-z0-9_]{1,128}$"))] | unique | .[:500]))),
      module_calls: ($x.module_calls? | if type == "object" then with_entries(select((.key | test("^[A-Za-z0-9_-]{1,64}$"))
-                  and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$")))) else {} end)}'
+                  and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$")))) else {} end)}
+  + (if ($x.sensitive? | type) == "object" then {sensitive: ($x.sensitive
+       | with_entries(select((.key as $k | ($s | index($k)) != null)
+           and (.value | type == "array" and length <= 500
+                and all(.[]; type == "string" and test("^[a-z0-9_]{1,128}$"))))
+           | .value |= unique))} else {} end)'
 n=0
 for ex in "$@"; do
   n=$((n + 1))

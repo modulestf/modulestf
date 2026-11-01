@@ -23,8 +23,9 @@
 #       plan's addresses as one "addresses-json:" line for the host to check.
 #       Every plan is saved with -out under <run-dir>/plan/saved. In laptop mode the saved head
 #       plan of a planned example is read with terraform show -json after the plan has ended,
-#       and its addresses are written to <run-dir>/plan-addresses/addresses-<n>.json, <n> the
-#       example's place in the list (plan-pass.md, Saved plans and addresses).
+#       and its addresses, attribute and sensitive names, local module calls and the head
+#       commit are written to <run-dir>/plan-addresses/addresses-<n>.json, <n> the example's
+#       place in the list (plan-pass.md, Saved plans and addresses).
 #       Laptop mode needs --role-arn: the plan credentials are a session on that review role,
 #       downscoped by plan-session-policy.json and issued by plan-session.sh, never the
 #       profile's own (plan-pass.md, Credentials). Runner mode gets its session from the runner.
@@ -576,21 +577,30 @@ my ($first) = split /\n/, $b; print substr($first // "", 0, 160), "\n";
 kept() { PROFILE="$PROFILE" LEAKS="$LEAKS" perl -e "$EVID_PL"; }
 # The addresses of a saved plan's resource changes, each index key removed, and per address
 # the top-level attributes it plans a value for: names only, never a value or a key, which can
-# carry what the account returned.
+# carry what the account returned. Per address too, those attributes the plan marks sensitive
+# in any instance, and the head commit given as $h when it is a full SHA.
 # shellcheck disable=SC2016 # a jq program
 ADDR_JQ='
 . as $plan
 | [.resource_changes[]? | select(type == "object" and (.address | type == "string"))
  | {a: (.address | gsub("\\[[^\\]]*\\]"; "")), c: (.change // {})}
  | select(.a | test("^[A-Za-z0-9_.-]{1,300}$"))]
+| (group_by(.a) | map(.[0].a as $a | [.[].c] as $cs
+   | ([$cs[] | ((.after | if type == "object" then to_entries[] | select(.value != null) | .key else empty end),
+                (.after_unknown | if type == "object" then to_entries[] | select(.value == true) | .key else empty end))]
+      | map(select(test("^[a-z0-9_]{1,128}$"))) | unique | .[:500]) as $at
+   # An instance whose after_sensitive is not an object or false marks every attribute sensitive
+   | {a: $a, at: $at,
+      s: (if any($cs[]; .after_sensitive | type != "object" and . != false) then $at
+          else [$cs[] | .after_sensitive | objects | to_entries[] | select([.value | .. | select(. == true)] != []) | .key]
+            | unique | map(select(IN($at[]))) end)})) as $g
 | {addresses: (map(.a) | unique | .[:1000]),
-   attributes: (group_by(.a) | map({key: .[0].a, value: ([.[].c
-     | ((.after | if type == "object" then to_entries[] | select(.value != null) | .key else empty end),
-        (.after_unknown | if type == "object" then to_entries[] | select(.value == true) | .key else empty end))]
-     | map(select(test("^[a-z0-9_]{1,128}$"))) | unique | .[:500])}) | from_entries),
+   attributes: ($g | map({key: .a, value: .at}) | from_entries),
    module_calls: ($plan.configuration.root_module.module_calls | if type == "object" then
      with_entries(.value |= (.source? // null)) | with_entries(select((.key | test("^[A-Za-z0-9_-]{1,64}$"))
-                and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$")))) else {} end)}
+                and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$")))) else {} end),
+   sensitive: ($g | map({key: .a, value: .s}) | from_entries)}
+| if $h | test("^[0-9a-f]{40}$") then . + {head_sha: $h} else . end
 '
 SHOWTO=
 pe_show() { # key: the saved plan as JSON, reduced to its addresses on standard output
@@ -598,7 +608,7 @@ pe_show() { # key: the saved plan as JSON, reduced to its addresses on standard 
   AK=; SK=; ST=; set_env "$1"
   CAP_BYTES=16777216 CAP_QUIET_ERR=1 run_capped "$(left 120)" "$PLAN/out/$1-show.json" "${TFENV[@]}" \
     terraform show -json -no-color "$PLAN/saved/$1.tfplan" || return 0
-  jq -c "$ADDR_JQ" "$PLAN/out/$1-show.json" 2> /dev/null
+  jq -c --arg h "$PHEAD" "$ADDR_JQ" "$PLAN/out/$1-show.json" 2> /dev/null
 }
 pe_init() { # absolute example directory, key, root (the clone or the base worktree), saved g0 file
   # Everything before the credentials: gates, init, post_init. CLASS "ready" means plan next.
@@ -679,6 +689,7 @@ base_ready() { # the base worktree for a re-run, added once with its G0 saved fi
 }
 
 NPLAN=0; NEXC=0; EXN=0; HROOT=$CROOT # plan_example moves CROOT to the base worktree for a re-run
+PHEAD= # the head commit for the addresses files, laptop mode only
 if [ "$PHASE" = init ]; then
   # No credentials and no plan here. The merge base is prepared later, only for an example
   # whose plan is a code-error (phase base-init).
@@ -751,6 +762,7 @@ if [ "$PHASE" = base-plan ]; then
   exit 0
 fi
 rm -rf -- "$RUN/plan-addresses" && mkdir -m 700 "$RUN/plan-addresses"
+[ "$GMODE" = laptop ] && PHEAD="$(clone_git rev-parse --verify -q 'HEAD^{commit}' 2> /dev/null)"
 for rel_ex in "$@"; do
   EXN=$((EXN + 1))
   echo "example: $rel_ex"
