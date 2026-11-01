@@ -503,8 +503,8 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `todo-fix-many` | `{rule_id}` ({count}): apply the Fix at {locations}. |
 | `todo-fix-root-one` | Resolve `{rule_id}`: see its Fix under Findings. |
 | `todo-fix-root-many` | Resolve `{rule_id}` ({count}): see its Fixes under Findings. |
-| `todo-compat-one` | `{rule_id}`: the Fix at {locations} restores compatibility. |
-| `todo-compat-many` | `{rule_id}` ({count}): the Fix at {locations} restores compatibility. |
+| `todo-compat-one` | `{rule_id}`: the Fix at {locations} is one way to restore compatibility; see Findings. |
+| `todo-compat-many` | `{rule_id}` ({count}): the Fixes at {locations} are one way to restore compatibility; see Findings. |
 | `todo-optional-one` | Optional: `{rule_id}` at {locations}. |
 | `todo-optional-many` | Optional: `{rule_id}` ({count}) at {locations}. |
 | `todo-more` | , and {count} more |
