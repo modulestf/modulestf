@@ -9,18 +9,21 @@ def safe_address: type == "string" and test("^[A-Za-z0-9_.-]{1,300}$");
 def attr_name: type == "string" and test("^[a-z0-9_]{1,128}$");
 
 # --- The plan record: a laptop record only, read by its "example:" lines in order, as
-# verify-pass.sh coverage reads it. Blocks {n, dir, plan, hit}: plan is the class with the kept
-# line cut, hit the first recorded gate hit {gate, path} with its line removed, or null.
+# verify-pass.sh coverage reads it. Blocks {n, dir, plan, hit, hits}: plan is the class with the
+# kept line cut, hit the first recorded gate hit {gate, path, line} or null, and hits every
+# "gate-hit" line of the block the same way, a line that does not parse as {gate: null}.
 def record_blocks:
   split("\n") as $l
   | if any($l[]; . == "plan pass mode: laptop") and (any($l[]; startswith("host example ")) | not) then
       reduce $l[] as $x ({b: [], n: 0};
-        if ($x | startswith("example: ")) then .n += 1 | .b += [{n: .n, dir: $x[9:], plan: null, hit: null}]
+        if ($x | startswith("example: ")) then .n += 1 | .b += [{n: .n, dir: $x[9:], plan: null, hit: null, hits: []}]
         elif (.b | length) == 0 then .
+        elif ($x | startswith("gate-hit ")) and .b[-1].plan == null then
+          .b[-1].hits += [$x[9:] | capture("^(?<gate>G[0-3]) (?<path>[^ :]+)(?<line>:[^ ]*)?$") // {gate: null}]
         elif ($x | startswith("plan: ")) and .b[-1].plan == null then
           ($x[6:] | split(" | ")[0]) as $p
           | .b[-1].plan = $p
-          | .b[-1].hit = ($p | capture("^plan gate (?<gate>G[0-3]) (?<path>[^ :]+)(:[^ ]*)? \\([0-9]+ hits\\)$") // null)
+          | .b[-1].hit = ($p | capture("^plan gate (?<gate>G[0-3]) (?<path>[^ :]+)(?<line>:[^ ]*)? \\([0-9]+ hits\\)$") // null)
         else . end)
       | .b
     else null end;
@@ -63,6 +66,11 @@ def candidates($c; $blocks; $addr; $head):
    | {example: $b.dir, address: $full,
       ok: ($s | type == "array" and length <= 500 and all(.[]; attr_name) and (index($c.attribute) == null))}];
 
+# A gate hit the plan pass found in a downloaded registry module after init: G1 to G3, a path
+# under downloaded/ that does not climb, and a line number (skip-coverage.md, Downloaded hits).
+def downloaded_ok: .gate != null and .gate != "G0" and (.path | safe_path and startswith("downloaded/")
+  and (test("(^|/)[.][.](/|$)") | not)) and ((.line // "") | test("^:[0-9]+$"));
+
 # --- The decision. $cls: per changed file {file, dir, ok, attrs}; $addr: addresses-<n>.json by
 # n; $rec: the plan record text; $hg, $bg: the head and base gate records; $headok: the clone is
 # at $head.
@@ -83,23 +91,29 @@ def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $head
       | [$cov.unplanned[] | select(.dir == $d) | .reason] as $rs
       | ($rs[0] | if type == "string" then (capture("^plan gate (?<g>G[1-3])$") // null) else null end) as $g
       | (if $blocks == null then null else first($blocks[] | select(.dir == $d)) // null end) as $blk
+      | ($blk.hit.path? // "" | startswith("downloaded/")) as $dl
+      | (if $blk == null then [] elif ($blk.hits | length) == 0 then [$blk.hit] else $blk.hits end) as $hits
       | ($H[$d]? // null) as $h
       | ($B[$d]? // null) as $b
       | (if ($rs | length) > 1 then "not-sole-reason"
          elif $g == null then "wrong-gate-class"
          elif ($headok | not) then "head-mismatch"
-         elif $blk == null or $blk.hit == null or $blk.hit.gate != $g.g or ($blk.hit.path | safe_path | not) or ($d | safe_path | not)
+         elif $blk == null or $blk.hit == null or $blk.hit.gate != $g.g or ($d | safe_path | not)
            then "plan-record-unusable"
          elif ($allowed | not) then "change-not-allowed"
          elif any($paths[]; startswith($d + "/")) then "dir-changed"
          elif ($base | sha | not) then "merge-base-unresolved"
          elif $b == null or $b.done != true then "base-record-missing"
-         elif $h == null or $h.done != true or ($h.lines | sort) != ($b.lines | sort)
-           or ($h.lines | index("hit " + $blk.hit.gate + " " + $blk.hit.path)) == null then "hit-set-differs"
+         elif $h == null or $h.done != true or ($h.lines | sort) != ($b.lines | sort) then "hit-set-differs"
+         elif $dl and any($hits[]; .gate == "G0") then "wrong-gate-class"
+         elif $dl and (all($hits[]; downloaded_ok) and ($blk.hit | downloaded_ok) and (any($h.lines[]; startswith("hit ")) | not) | not)
+           then "hit-set-differs"
+         elif ($dl | not) and (($blk.hit.path | safe_path | not)
+           or ($h.lines | index("hit " + $blk.hit.gate + " " + $blk.hit.path)) == null) then "hit-set-differs"
          elif any($h.lines[]; startswith("hit G0 ")) then "wrong-gate-class"
          elif $nowit != null then $nowit
          else null end) as $why
-      | if $why == null then {covered: {dir: $d, gate: $g.g, path: $blk.hit.path, witnesses: $wits}}
+      | if $why == null then {covered: ({dir: $d, gate: $g.g, path: $blk.hit.path} + (if $dl then {downloaded: true} else {} end) + {witnesses: $wits})}
         else {uncovered: {dir: $d, why: $why}} end)
   | {format: 1, head_sha: $head, base_sha: (if $base | sha then $base else null end),
      covered: [.[] | .covered // empty], uncovered: [.[] | .uncovered // empty]};

@@ -97,6 +97,10 @@ for e in e1 e2 e3 e4 e5 e6; do
   printf 'module "lb" {\n  source = "../../"\n}\n' > "$C/examples/$e/main.tf"
 done
 printf 'module "sub" {\n  source = "../../modules/sub"\n}\n' >> "$C/examples/e5/main.tf"
+# examples/d1 is clean in the clone scope; the downloaded-hit cases record a hit in a downloaded module for it
+mkdir -p "$C/examples/d1"
+printf 'module "lb" {\n  source = "../../"\n}\n' > "$C/examples/d1/main.tf"
+printf '# Example\n' > "$C/examples/d1/README.md"
 for e in s1 s2 s3; do
   mkdir -p "$C/examples/$e"
   printf 'module "lb" {\n  source = "../../"\n}\n\ndata "aws_ssm_parameter" "p" {\n  name = "x"\n}\n' > "$C/examples/$e/main.tf"
@@ -127,7 +131,8 @@ filesjson() {
 # The plan record of a laptop pass, the coverage and the addresses files. Planned examples first,
 # then the three skipped ones with the first hit the real gates print for them.
 EX="examples/e1 examples/e2 examples/e3 examples/e4 examples/e5 examples/e6 examples/s1 examples/s2 examples/s3"
-hit_of() { printf '%s\n' "$C/$1/main.tf" | bash "$REF/plan-pass.sh" gates "$RUN" laptop clone | sed -n "s|^\(G[0-3]\) $C/\(.*\)|\1 \2|p" | head -n 1; }
+hits_of() { printf '%s\n' "$C/$1/main.tf" | bash "$REF/plan-pass.sh" gates "$RUN" laptop clone | sed -n "s|^\(G[0-3]\) $C/\(.*\)|\1 \2|p"; }
+DLHITS="G3 downloaded/vpc/main.tf:11"; DLPLAN="plan gate G3 downloaded/vpc/main.tf:11 (1 hits)"
 ADDRJQ=.
 records() {
   rm -rf "$TMP/addr"; mkdir -p "$TMP/addr"
@@ -135,7 +140,9 @@ records() {
     for e in $(printf '%s\n' $EX); do
       i=$((i + 1)); echo "example: $e"
       case "$e" in
-        examples/s*) echo "plan: plan gate $(hit_of "$e") (1 hits)" ;;
+        examples/s*) h="$(hits_of "$e")"; printf '%s\n' "$h" | sed 's/^/gate-hit /'
+           echo "plan: plan gate $(printf '%s\n' "$h" | head -n 1) ($(printf '%s\n' "$h" | grep -c .) hits)" ;;
+        examples/d*) printf '%s\n' "$DLHITS" | sed 's/^/gate-hit /'; echo "plan: $DLPLAN" ;;
         *) echo "plan: planned | Plan: 3 to add, 0 to change, 0 to destroy."
            jq -n --arg h "$HEAD" --arg e "$e" '
              {addresses: ["module.lb.aws_lb.this", "module.lb.aws_security_group.this", "module.lb.module.listener.aws_lb_listener.this"],
@@ -171,7 +178,7 @@ run_case() {
   "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
     --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" > "$TMP/out.json"
 }
-reset_knobs() { ADDRJQ=.; COVJQ=.; GATES=1; BGEDIT=; }
+reset_knobs() { ADDRJQ=.; COVJQ=.; GATES=1; BGEDIT=; DLHITS="G3 downloaded/vpc/main.tf:11"; DLPLAN="plan gate G3 downloaded/vpc/main.tf:11 (1 hits)"; }
 q() { jq -e "$1" "$TMP/out.json" > /dev/null 2>&1; echo $?; }
 why() { jq -r --arg d "$1" '(.uncovered[] | select(.dir == $d) | .why) // (if any(.covered[]; .dir == $d) then "covered" else "absent" end)' "$TMP/out.json"; }
 all_why() { [ "$(why examples/s1)" = "$1" ] && [ "$(why examples/s2)" = "$1" ] && [ "$(why examples/s3)" = "$1" ]; }
@@ -389,14 +396,46 @@ t_runner_record() {
 }
 t_runner_record; check "a runner record: plan-record-unusable" $?
 
-t_downloaded_hit() { # a hit the plan pass found in a downloaded module: no base gate run reaches it
+t_downloaded_hit() { # a downloaded first hit while the clone scope has hits: the record and the clone disagree
   fresh; reset_knobs; plain_change; run_case || return 1
-  perl -pi -e 's/^plan: plan gate G3 examples\/s1\/main\.tf:\d+/plan: plan gate G3 downloaded\/x\/main.tf:11/' "$TMP/record.txt"
+  # the s1 block reads as if every hit were downloaded, as a stale or forged record would
+  perl -0pi -e 's/(example: examples\/s1\n)(gate-hit [^\n]*\n)*plan: [^\n]*/${1}gate-hit G3 downloaded\/x\/main.tf:11\nplan: plan gate G3 downloaded\/x\/main.tf:11 (1 hits)/' "$TMP/record.txt"
   "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
     --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" > "$TMP/out.json" || return 1
   [ "$(why examples/s1)" = hit-set-differs ] && [ "$(why examples/s2)" = covered ]
 }
-t_downloaded_hit; check "a recorded hit in a downloaded module: hit-set-differs" $?
+t_downloaded_hit; check "a downloaded first hit while the clone scope has hits: hit-set-differs" $?
+
+EXD="$EX examples/d1"
+DLCOV='.unplanned += [{dir: "examples/d1", reason: "plan gate G3"}]'
+dl_case() { # extra shell commands under the clone, then the expected reason of examples/d1
+  fresh; plain_change; (cd "$C" && eval "$1"); local keep="$EX"; EX="$EXD"; COVJQ="$DLCOV"
+  run_case; local s=$?; EX="$keep"
+  [ "$s" = 0 ] && [ "$(why examples/d1)" = "$2" ] && [ "$(why examples/s1)" = covered ]
+}
+t_dl() { reset_knobs; dl_case : covered && jq -e '.covered[] | select(.dir == "examples/d1") | .downloaded == true and .path == "downloaded/vpc/main.tf" and .gate == "G3"
+    and (.witnesses | length) == 1' "$TMP/out.json" > /dev/null && jq -e 'all(.covered[] | select(.dir != "examples/d1"); has("downloaded") | not)' "$TMP/out.json" > /dev/null; }
+t_dl; check "an unchanged directory with a G3 hit in a downloaded module and a clean clone scope: covered, downloaded" $?
+t_dl_changed() { reset_knobs; dl_case 'printf "More.\n" >> examples/d1/README.md' dir-changed; }
+t_dl_changed; check "the same directory changed: dir-changed" $?
+t_dl_g0() { reset_knobs; DLHITS="G3 downloaded/vpc/main.tf:11
+G0 downloaded/vpc/link.tf:0"; dl_case : wrong-gate-class; }
+t_dl_g0; check "a G0 hit in a downloaded module: wrong-gate-class" $?
+t_dl_noline() {
+  reset_knobs; DLHITS="G3 downloaded/vpc/main.tf"; DLPLAN="plan gate G3 downloaded/vpc/main.tf (1 hits)"; dl_case : hit-set-differs
+}
+t_dl_noline; check "a downloaded hit with no line: hit-set-differs" $?
+t_dl_json() {
+  reset_knobs; DLHITS="G2 downloaded/modules.json:vpc"; DLPLAN="plan gate G2 downloaded/modules.json:vpc (1 hits)"
+  fresh; plain_change; local keep="$EX"; EX="$EXD"; COVJQ='.unplanned += [{dir: "examples/d1", reason: "plan gate G2"}]'
+  run_case; local s=$?; EX="$keep"; [ "$s" = 0 ] && [ "$(why examples/d1)" = hit-set-differs ]
+}
+t_dl_json; check "a downloaded hit that names no line, a modules.json entry: hit-set-differs" $?
+t_dl_climb() { reset_knobs; DLHITS="G3 downloaded/../main.tf:1"; DLPLAN="plan gate G3 downloaded/../main.tf:1 (1 hits)"; dl_case : hit-set-differs; }
+t_dl_climb; check "a downloaded hit path that climbs out: hit-set-differs" $?
+t_dl_missing() { reset_knobs; DLHITS="G3 downloaded/vpc/main.tf:11
+G3 bogus"; dl_case : hit-set-differs; }
+t_dl_missing; check "a downloaded block with a malformed gate-hit line: hit-set-differs" $?
 
 # --- Refused inputs: exit 2, nothing printed
 fresh; reset_knobs; plain_change; run_case > /dev/null 2>&1
@@ -451,6 +490,9 @@ mutate "the module call directory ignored" 's/\n            and \(\.value \| res
 mutate "an added file allowed" 's/if \.s != "modified" or \.prev != null then "other" else \.kind end/.kind/' t_md_added
 mutate "a stale base record accepted" 's/\.\[0\] == "skip-gates 1 " \+ \$sha and //' t_base_stale
 mutate "the merge base not required" 's/elif \(\$base \| sha \| not\) then "merge-base-unresolved"\n//' t_unresolved
+mutate "a downloaded hit with no line accepted" 's/\(\.line \/\/ ""\) \| test\("\^:\[0-9\]\+\$"\)/true/' t_dl_noline
+mutate "a downloaded hit taken while the clone scope has hits" 's/ and \(any\(\$h\.lines\[\]; startswith\("hit "\)\) \| not\)//' t_downloaded_hit
+mutate "downloaded hits never covered" 's/elif \$dl and \(all/elif \$dl or (all/' t_dl
 
 echo
 if [ "$fails" -eq 0 ]; then echo "skip coverage: all checks hold"; else echo "skip coverage: $fails failed"; exit 1; fi

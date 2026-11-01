@@ -52,8 +52,8 @@ A directory is covered only when every check below holds, in this order; the fir
 5. No changed file, by its name or its previous name, lies under the directory (else `dir-changed`).
 6. `--base` is a SHA (else `merge-base-unresolved`).
 7. The base gate record names `--base`, ends with its `end` line and holds the directory with its `done` line (else `base-record-missing`: missing, stale or partial).
-8. Exact base hit: the head gate record, which `check` computes over the clone with the same function, holds the same lines for the directory as the base record, its scope files and its hits as a multiset of gate and path, and the record's first hit is among them (else `hit-set-differs`). A hit the plan pass found in a downloaded module is never in either record, so it always lands here.
-9. No head hit is G0 (else `wrong-gate-class`).
+8. Exact base hit: the head gate record, which `check` computes over the clone with the same function, holds the same lines for the directory as the base record, its scope files and its hits as a multiset of gate and path, (else `hit-set-differs`). When the record's first hit is in the clone scope, it must be among the head record's hits (else `hit-set-differs`); when it is in a downloaded module, [Downloaded hits](#downloaded-hits) applies instead.
+9. No head hit is G0, and no recorded hit either when the first hit is downloaded (else `wrong-gate-class`).
 10. Every changed attribute has a witness, [Witnesses](#witnesses) (else `witness-sensitive` when every attribute without one had a candidate that failed only on its sensitive bit, otherwise `no-witness`).
 
 Checks 2, 4, 6 and 10 are about the whole change, so they give every directory the same reason.
@@ -71,7 +71,24 @@ done <dir>
 end
 ```
 
-Paths are relative to the tree. A hit keeps its gate and file and drops its line, since an allowed change elsewhere in a shared file moves lines; a directory absent from the tree records `file MISSING`. The pass's downloaded scope is not in the record: it exists only after `init`, which this script never runs.
+Paths are relative to the tree. A hit keeps its gate and file and drops its line, since an allowed change elsewhere in a shared file moves lines; a directory absent from the tree records `file MISSING`. The pass's downloaded scope is not in the record: it exists only after `init`, which this script never runs. Its hits come from the plan record instead, [Downloaded hits](#downloaded-hits).
+
+## Downloaded hits
+
+The plan pass gates the modules `init` downloaded only when the clone scope had no hit, and records such a hit with a path under `downloaded/`: `gate-hit <G> downloaded/<module key>/<file>:<line>` per hit, and the first as `plan: plan gate <G> downloaded/<module key>/<file>:<line> (<n> hits)` ([plan-pass.md](plan-pass.md#gates)). This script never runs `init`, so no gate record holds those files at either side. A downloaded hit is taken from the head plan record and counts as equal at the base by construction, because the pull request cannot have put it there:
+
+- G2, before and after `init`, admits only module sources that are local paths inside the clone or `terraform-aws-modules` registry sources, so a downloaded module's code comes from the registry and does not depend on the pull request.
+- What `init` downloads is set by the module calls of the example and of the local modules it reaches. The example directory is unchanged (condition 5), the allow-list refuses every change to a module call's source or arguments, and the scope files are compared at both sides (condition 8).
+- The resolved version of each registry module is recorded in the example's `modules:` line, and nothing here relies on it: a version constraint resolves the same way for the head and the base at the time of the run, and the base was never initialised.
+
+Rules, each failing closed:
+
+- The first hit is downloaded and every `gate-hit` line of the block is too, each with gate G1, G2 or G3, a path under `downloaded/` that does not climb out with `..`, and a numeric line. A block with no `gate-hit` lines is read by its `plan:` line alone.
+- Any recorded hit with gate G0 gives `wrong-gate-class`. A hit line that does not parse, has no numeric line, such as a `modules.json` entry named by module key, or climbs out gives `hit-set-differs`.
+- The head gate record of the directory has no hit: the pass gates the downloaded scope only when the clone scope is clean, so a clone hit beside a downloaded first hit means the record does not match the clone, `hit-set-differs`.
+- The clone-scope comparison of condition 8 still applies.
+
+The covered element then carries `"downloaded": true`.
 
 ## The allow-list
 
@@ -110,12 +127,12 @@ The v1 limit: the address's module path is exactly one `module.<call>` level, ca
 
 ```
 {"format": 1, "head_sha": "<40 hex>", "base_sha": "<40 hex>" or null,
- "covered": [{"dir": "...", "gate": "G3", "path": "...", "witnesses":
+ "covered": [{"dir": "...", "gate": "G3", "path": "...", "downloaded": true, "witnesses":
                [{"attribute": "...", "example": "...", "address": "..."}]}],
  "uncovered": [{"dir": "...", "why": "<reason>"}]}
 ```
 
-Every directory of `unplanned` appears once, in its order, in `covered` or in `uncovered`. `path` is the file of the record's first hit, without its line. `witnesses` holds one entry per changed attribute, the same for every covered directory. `base_sha` is null only for `--base unresolved`, and `covered` is then empty.
+Every directory of `unplanned` appears once, in its order, in `covered` or in `uncovered`. `path` is the file of the record's first hit, without its line. `downloaded` is present, and true, only when that hit is in a downloaded module ([Downloaded hits](#downloaded-hits)); a consumer that does not show it may ignore it. `witnesses` holds one entry per changed attribute, the same for every covered directory. `base_sha` is null only for `--base unresolved`, and `covered` is then empty.
 
 The reasons, a closed list: `not-sole-reason`, `wrong-gate-class`, `head-mismatch`, `plan-record-unusable`, `change-not-allowed`, `dir-changed`, `merge-base-unresolved`, `base-record-missing`, `hit-set-differs`, `witness-sensitive`, `no-witness`.
 
@@ -138,7 +155,7 @@ Each fails closed, the skips stay unknowns:
 
 ## Limits
 
-- The downloaded scope is never compared, so a skip whose hit is in a downloaded module always stays an unknown.
+- The downloaded scope is never gated at the base; a downloaded hit is taken from the head record on the argument in [Downloaded hits](#downloaded-hits), and only for an unchanged directory with a clean clone scope.
 - A hit keeps no line, so a second hit of the same gate in the same file that replaces one removed elsewhere in it would compare equal; the allow-list keeps such text out of an allowed change.
 - The parser reads the subset of HCL the allow-list needs and fails on the rest; it is no Terraform parser.
 - A change group spanning two attributes fails, though each half might be allowed alone.
