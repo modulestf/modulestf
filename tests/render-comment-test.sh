@@ -1629,6 +1629,10 @@ kref "with a short skip_head_sha" '.coverage.skip_head_sha |= .[:7]'
 t_cov_shaonly() { render "$(F556C)" "$H556N" "" "$(R556K kshaonly 'del(.coverage.covered_skips)')" "$TMP/assess-556.txt"; [ "$ST" = 2 ] && empty_out; }
 t_cov_shaonly; check "refused: the skip SHAs without covered_skips" $?
 t_cov_badshape() { render "$(F556C)" "$H556N" "" "$(R556K kshape '.coverage.covered_skips[0].extra = 1')" "$TMP/assess-556.txt"; [ "$ST" = 2 ] && empty_out; }
+t_cov_dl() { rc "$(F556C)" "$(R556K kdl '.coverage.covered_skips[0].downloaded = true')" "$H556N"; [ "$ST" = 0 ] && cmp -s "$O/comment.md" "$TMP/want-556k.md"; }
+t_cov_dl; check "covered: a downloaded true flag renders the same body" $?
+t_cov_dlfalse() { render "$(F556C)" "$H556N" "" "$(R556K kdlf '.coverage.covered_skips[0].downloaded = false')" "$TMP/assess-556.txt"; [ "$ST" = 2 ] && empty_out; }
+t_cov_dlfalse; check "covered: a downloaded false flag is refused" $?
 
 # Names the pull request controls: allowlisted, else withheld, and an at-sign never reaches the body.
 t_cov_names() {

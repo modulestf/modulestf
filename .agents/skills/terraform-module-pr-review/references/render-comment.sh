@@ -47,7 +47,8 @@
 #   "laptop" or "runner", the plan pass mode of the plan record; a gate hit is a cause COMPACT
 #   admits only after a laptop-mode pass. coverage may carry three keys more, all or none:
 #   "covered_skips", the "covered" list skip-coverage.sh prints, [{"dir", "gate": "G1|G2|G3",
-#   "path", "witnesses": [{"attribute", "example", "address"}]}], and "skip_head_sha" and
+#   "path", "witnesses": [{"attribute", "example", "address"}]}] with an optional "downloaded":
+#   true when the covering hit is in a downloaded module (skip-coverage.md), and "skip_head_sha" and
 #   "skip_base_sha", its head_sha and base_sha, 40 lowercase hex. dir, path and example are
 #   relative paths, attribute matches ^[a-z0-9_]{1,128}$, and address is 1 to 300 characters with
 #   no control character or backtick; any other shape is refused. The list takes the skipped

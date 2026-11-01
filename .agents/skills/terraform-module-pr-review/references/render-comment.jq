@@ -167,7 +167,8 @@ def with_reported($findings):
 # one witness per changed attribute. Names are checked as paths here and allowlisted when shown.
 def sha40: type == "string" and test("^[0-9a-f]{40}$");
 def valid_covered:
-  type == "array" and all(.[]; type == "object" and keys == ["dir", "gate", "path", "witnesses"]
+  type == "array" and all(.[]; type == "object" and (keys - ["downloaded"]) == ["dir", "gate", "path", "witnesses"]
+    and ((has("downloaded") | not) or .downloaded == true)
     and (.dir | plain_path) and (.path | plain_path) and (.gate | IN("G1", "G2", "G3"))
     and (.witnesses | type == "array" and length > 0 and all(.[]; type == "object"
           and keys == ["address", "attribute", "example"]
