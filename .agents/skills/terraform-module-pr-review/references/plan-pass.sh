@@ -23,8 +23,8 @@
 #       plan's addresses as one "addresses-json:" line for the host to check.
 #       Every plan is saved with -out under <run-dir>/plan/saved. In laptop mode the saved head
 #       plan of a planned example is read with terraform show -json after the plan has ended,
-#       and its addresses, attribute and sensitive names, local module calls and the head
-#       commit are written to <run-dir>/plan-addresses/addresses-<n>.json, <n> the example's
+#       and its addresses, attribute and sensitive names, local module calls, the head
+#       commit and the example directory are written to <run-dir>/plan-addresses/addresses-<n>.json, <n> the example's
 #       place in the list (plan-pass.md, Saved plans and addresses).
 #       Laptop mode needs --role-arn: the plan credentials are a session on that review role,
 #       downscoped by plan-session-policy.json and issued by plan-session.sh, never the
@@ -587,7 +587,8 @@ kept() { PROFILE="$PROFILE" LEAKS="$LEAKS" perl -e "$EVID_PL"; }
 # The addresses of a saved plan's resource changes, each index key removed, and per address
 # the top-level attributes it plans a value for: names only, never a value or a key, which can
 # carry what the account returned. Per address too, those attributes the plan marks sensitive
-# in any instance, and the head commit given as $h when it is a full SHA.
+# in any instance, the head commit given as $h when it is a full SHA, and the example directory
+# given as $e when it is a plain repository-relative path.
 # shellcheck disable=SC2016 # a jq program
 ADDR_JQ='
 . as $plan
@@ -610,6 +611,7 @@ ADDR_JQ='
                 and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$")))) else {} end),
    sensitive: ($g | map({key: .a, value: .s}) | from_entries)}
 | if $h | test("^[0-9a-f]{40}$") then . + {head_sha: $h} else . end
+| if ($e | test("^[A-Za-z0-9._/-]{1,300}$")) and (any($e | split("/")[]; . == "..") | not) then . + {example: $e} else . end
 '
 SHOWTO=
 pe_show() { # key: the saved plan as JSON, reduced to its addresses on standard output
@@ -617,7 +619,7 @@ pe_show() { # key: the saved plan as JSON, reduced to its addresses on standard 
   AK=; SK=; ST=; set_env "$1"
   CAP_BYTES=16777216 CAP_QUIET_ERR=1 run_capped "$(left 120)" "$PLAN/out/$1-show.json" "${TFENV[@]}" \
     terraform show -json -no-color "$PLAN/saved/$1.tfplan" || return 0
-  jq -c --arg h "$PHEAD" "$ADDR_JQ" "$PLAN/out/$1-show.json" 2> /dev/null
+  jq -c --arg h "$PHEAD" --arg e "$PEX" "$ADDR_JQ" "$PLAN/out/$1-show.json" 2> /dev/null
 }
 pe_init() { # absolute example directory, key, root (the clone or the base worktree), saved g0 file
   # Everything before the credentials: gates, init, post_init. CLASS "ready" means plan next.
@@ -698,7 +700,7 @@ base_ready() { # the base worktree for a re-run, added once with its G0 saved fi
 }
 
 NPLAN=0; NEXC=0; EXN=0; HROOT=$CROOT # plan_example moves CROOT to the base worktree for a re-run
-PHEAD= # the head commit for the addresses files, laptop mode only
+PHEAD=; PEX= # the head commit and the example directory for the addresses files, laptop mode only
 if [ "$PHASE" = init ]; then
   # No credentials and no plan here. The merge base is prepared later, only for an example
   # whose plan is a code-error (phase base-init).
@@ -777,9 +779,9 @@ for rel_ex in "$@"; do
   echo "example: $rel_ex"
   case "$rel_ex" in /*|*..*) echo "plan: plan gate G0 not an example directory"; continue ;; esac
   key="e$EXN" # unique per example: two directories may share a last name
-  SHOWTO=; [ "$GMODE" = laptop ] && SHOWTO="$RUN/plan-addresses/addresses-$EXN.json"
+  SHOWTO=; PEX=; [ "$GMODE" = laptop ] && SHOWTO="$RUN/plan-addresses/addresses-$EXN.json" && PEX=$rel_ex
   plan_example "$HROOT/$rel_ex" "$key" "$HROOT" "$RUN/g0.txt"
-  SHOWTO=
+  SHOWTO=; PEX=
   echo "plan: $CLASS${KEPT:+ | $KEPT}"
   case "$CLASS" in planned|planned-no-changes) NPLAN=$((NPLAN + 1)) ;; exception:*) NEXC=$((NEXC + 1)) ;; esac
   [ -n "$SCOPE" ] && echo "scope: ${SCOPE% }"
