@@ -206,7 +206,11 @@ ladder() { # name, expected "verdict EVENT", expected rule, render args...
 }
 ladder "a CRITICAL compat break alone" "hold for the next major COMMENT" 0 "$(pair compat.output-removed CRITICAL structure.grouping MEDIUM)"
 ladder "a CRITICAL compat break and a HIGH non-compat finding" "block REQUEST_CHANGES" 1 "$(pair compat.output-removed CRITICAL structure.docs-contradict-code HIGH)"
-ladder "a HIGH compat break alone" "block REQUEST_CHANGES" 2 "$(one compat.claim-contradicts-analysis HIGH a.tf 1 "S." "F.")"
+ladder "a HIGH compat break alone" "block REQUEST_CHANGES" 2 "$(one compat.variable-removed HIGH a.tf 1 "S." "F.")"
+# compat.claim-contradicts-analysis sits one band below the compat.* code finding that refutes its
+# claim: HIGH only beside a CRITICAL one, which arms rule 0 itself.
+ladder "a CRITICAL compat break and the HIGH description finding it refutes" "hold for the next major COMMENT" 0 "$(pair compat.output-removed CRITICAL compat.claim-contradicts-analysis HIGH)"
+ladder "a HIGH compat break and the MEDIUM description finding it refutes" "block REQUEST_CHANGES" 2 "$(pair compat.variable-removed HIGH compat.claim-contradicts-analysis MEDIUM)"
 ladder "a CRITICAL non-compat finding" "block REQUEST_CHANGES" 1 "$(one structure.docs-contradict-code CRITICAL a.tf 1 "S." "F.")"
 ladder "a HIGH finding and a failing check" "block REQUEST_CHANGES" 2 "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")" "" "$(checks fail fail)"
 ladder "a failing check" "block REQUEST_CHANGES" 3 "$NONE" "" "$(checks fail fail)"
@@ -1118,6 +1122,23 @@ t_556; check "tiers: pull request 556 renders COMPACT, the literal byte for byte
 check "tiers: pull request 556 is inconclusive at rule 4, proposes COMMENT" "$([ "$(verdict)" = "inconclusive COMMENT" ]; echo $?)"
 check "tiers: COMPACT findings.json lists the routed finding last" "$(jq -e 'map(.id) == ["F-001", "F-002"] and all(.[]; keys == ["file","id","line","rule_id","severity","suggested_fix","summary"])' "$O/findings.json" > /dev/null; echo $?)"
 check "tiers: the COMPACT body of pull request 556 is at most 1240 bytes" "$([ "$(wc -c < "$O/comment.md")" -le 1240 ]; echo $?)"
+# Pull request 556 with the description finding: the body states only the empty strings, the
+# LOW compat.expression-behaviour-changed refutes it, so compat.claim-contradicts-analysis is LOW
+# too (one band below, never above). No rule 2 block: the verdict stays at rule 4.
+F556C() {
+  jq --arg s 'The description says only empty strings now reach the provider; null elements of `var.vpc_security_group_ids` reach it too.' \
+    --arg x 'no code change: add to the description: "Dropping `compact()` also keeps null elements, and a null element now fails the plan."' \
+    '.[:1] + [{id: "F-002", rule_id: "compat.claim-contradicts-analysis", severity: "LOW", file: ".", line: null,
+      summary: $s, suggested_fix: $x, source: "llm"}] + (.[1:] | map(.id = "F-003"))' "$(F556)" > "$TMP/f556c.json"
+  echo "$TMP/f556c.json"
+}
+{ sed -n '1,8p' "$TMP/want-556.md"
+  printf '%s\n' '- LOW `compat.claim-contradicts-analysis` `.` - The description says only empty strings now reach the provider; null elements of `var.vpc_security_group_ids` reach it too.' \
+    '  - Fix: no code change: add to the description: "Dropping `compact()` also keeps null elements, and a null element now fails the plan."'
+  sed -n '9,$p' "$TMP/want-556.md"; } > "$TMP/want-556c.md"
+t_556c() { rc "$(F556C)" "$(R556 claimdesc)"; [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 4 ] && cmp -s "$O/comment.md" "$TMP/want-556c.md"; }
+t_556c; check "tiers: pull request 556 with its LOW description finding renders COMPACT, byte for byte" $?
+check "tiers: the LOW description finding blocks nothing, inconclusive at rule 4" "$([ "$(verdict)" = "inconclusive COMMENT" ]; echo $?)"
 rc "$(F556)" "$(R556 gold-std)" "" --standard
 check "tiers: --standard forces STANDARD on the same inputs" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && grep -qxF '### What to do' "$O/comment.md"; echo $?)"
 grep -qxF 'Behaviour evidence: 1 changes classified: 0 verified, 0 covered by a plan, 0 inert, 1 reported in a finding, 0 refuted, 0 not verified; 20 claims: 20 verified, 0 refuted, 0 not verified.' "$O/comment.md"

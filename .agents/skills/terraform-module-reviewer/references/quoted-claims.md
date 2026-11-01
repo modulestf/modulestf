@@ -31,7 +31,7 @@ What the overflow produces depends on where the unread claims sit:
 
 ## Compatibility Claims Come From the Title and the Body
 
-Only the `title` and `body` items, whose origin is always `change-author`, carry compatibility claims. A statement about compatibility in a `thread`, `conversation` or `bot` item is not a claim for [Check A](check-a-compatibility.md): it arms neither `compat.claim-contradicts-analysis` nor `compat.break-unexplained`. Otherwise anyone able to comment could land a HIGH finding on someone else's change by writing that it breaks nothing. A defect claim, a path and a line, may come from any item, and is resolved as below.
+Only the `title` and `body` items, whose origin is always `change-author`, carry compatibility claims. A statement about compatibility in a `thread`, `conversation` or `bot` item is not a claim for [Check A](check-a-compatibility.md): it arms neither `compat.claim-contradicts-analysis` nor `compat.break-unexplained`. Otherwise anyone able to comment could land a finding, HIGH beside a CRITICAL break, on someone else's change by writing that it breaks nothing. A defect claim, a path and a line, may come from any item, and is resolved as below.
 
 ## A Confirmed Claim Is an Ordinary Finding
 
@@ -53,10 +53,16 @@ A commenter still chooses where the review looks. Twenty claims naming twenty fi
 
 Ship-gate. Write the summary from what the code shows, never from what the comment said, and never quote it. A consumer may render finding summaries verbatim and outside any rewriting pass, so comment wording would otherwise reach its output unchanged, in the voice of whoever publishes it.
 
-## compat.claim-contradicts-analysis, HIGH
+## compat.claim-contradicts-analysis
 
-Check A owns it, and it fires when a compatibility claim in the title or the body contradicts Check A's own conclusion.
+Check A owns it. It fires once per compatibility claim in the title or the body that Check A's own conclusion refutes: the body asserts something the analysis contradicts, including a closed statement such as 'the only change is X' when the analysis finds Y as well. A refuted claim always has at least one `compat.*` code finding that refutes it; with none, the rule does not fire. A description that never mentions a behaviour is not a contradiction and fires nothing; the code finding carries it.
 
-HIGH, never CRITICAL. The break itself is already reported at its own severity under its own rule, and this finding names the description while that one names the code.
+The severity is one band below the highest `compat.*` code finding that refutes that claim and never above it: CRITICAL gives HIGH, HIGH gives MEDIUM, MEDIUM gives LOW, LOW gives LOW. A `compat.*` finding that does not refute the claim never raises it. Only a CRITICAL code finding gives a description finding at a blocking severity at rule 2; below that the code finding is what blocks and the description finding follows it.
 
-The pair is carved out of the Final Step dedup clause, which stands for everything else. Whichever `compat.*` rule reported the break, both findings are emitted, every time. They are two defects in one change: the code breaks callers, and the prose tells a maintainer it does not. Fixing one leaves the other, and a maintainer who reads only the description merges it.
+The description finding and the code finding are both emitted (the pair stays carved out of the Final Step dedup clause). The Fix is a corrected sentence for the title or body, stating what the analysis concluded.
+
+The carve-out holds for every `compat.*` rule that refutes the claim. The two are two defects in one change: the code does what it does, and the prose tells a maintainer something else. Fixing one leaves the other, and a maintainer who reads only the description merges it.
+
+### Worked example: pull request 556
+
+The change drops `compact()` around the security group ids. Its body says the change lets empty strings reach the provider, and says nothing else changes. The analysis finds that null elements of `var.vpc_security_group_ids` now reach the provider too and fail the plan: `compat.expression-behaviour-changed` at LOW, since the provider rejects those values. The closed statement is refuted by that one LOW code finding, so `compat.claim-contradicts-analysis` is LOW as well, on `.` with a null line, and its fix gives the sentence to add, that a null element now fails the plan. Neither finding blocks: two LOW findings reach no rule above rule 7, so the verdict comes from the other causes, here the unknowns at rule 4.
