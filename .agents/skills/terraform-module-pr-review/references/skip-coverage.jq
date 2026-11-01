@@ -54,7 +54,7 @@ def resolve($d): ($d + "/" + .) | split("/")
 def candidates($c; $blocks; $addr; $head):
   [$blocks | sort_by(.dir)[] | select(.plan == "planned" and (.dir | safe_path)) as $b
    | ($addr[$b.n | tostring] // null) as $r
-   | select($r | type == "object" and .head_sha == $head and (.addresses | type == "array"))
+   | select($r | type == "object" and .head_sha == $head and .example == $b.dir and (.addresses | type == "array"))
    | ($r.module_calls | if type == "object" then to_entries | sort_by(.key)[] else empty end)
    | select((.key | test("^[A-Za-z0-9_-]{1,64}$"))
             and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$"))
@@ -73,8 +73,8 @@ def downloaded_ok: .gate != null and .gate != "G0" and (.path | safe_path and st
 
 # --- The decision. $cls: per changed file {file, dir, ok, attrs}; $addr: addresses-<n>.json by
 # n; $rec: the plan record text; $hg, $bg: the head and base gate records; $headok: the clone is
-# at $head.
-def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $headok):
+# at $head; $nchanged: the pull request's changed file count.
+def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $headok; $nchanged):
   ($rec | record_blocks) as $blocks
   | (($cls | length) > 0 and all($cls[]; .ok) and any($cls[]; .attrs | length > 0)) as $allowed
   | ([$cls[] | .dir as $d | .attrs[] | . + {dir: $d}] | unique) as $changed
@@ -98,10 +98,12 @@ def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $head
       | (if ($rs | length) > 1 then "not-sole-reason"
          elif $g == null then "wrong-gate-class"
          elif ($headok | not) then "head-mismatch"
+         elif ($files | length) != $nchanged or ($cls | length) != ($files | length) then "files-incomplete"
          elif $blk == null or $blk.hit == null or $blk.hit.gate != $g.g or ($d | safe_path | not)
            then "plan-record-unusable"
          elif ($allowed | not) then "change-not-allowed"
-         elif any($paths[]; startswith($d + "/")) then "dir-changed"
+         elif any($paths[]; . as $p | any(([$d] + [($h.lines?, $b.lines?) | .[]? | select(startswith("real ")) | .[5:]])[]; . as $r | $p | startswith($r + "/")))
+           then "dir-changed"
          elif ($base | sha | not) then "merge-base-unresolved"
          elif $b == null or $b.done != true then "base-record-missing"
          elif $h == null or $h.done != true or ($h.lines | sort) != ($b.lines | sort) then "hit-set-differs"

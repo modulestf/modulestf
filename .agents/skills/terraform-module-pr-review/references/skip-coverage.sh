@@ -12,7 +12,7 @@
 #       plan-pass.sh runs over it. Writes <file> complete or not at all.
 #   <bash|zsh> /abs/path/skip-coverage.sh check <run-dir> --files <files.json> \
 #       --coverage <coverage.json> --plan <record> --head <sha> --base <sha|unresolved> \
-#       [--addresses <dir>] [--base-gates <file>] [--prefix <module-root>]
+#       --changed-files <n> [--addresses <dir>] [--base-gates <file>] [--prefix <module-root>]
 #       Prints one JSON object: the covered and the uncovered unplanned directories
 #       (skip-coverage.md, Output). Never runs terraform and never reads the network.
 #
@@ -32,10 +32,11 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 PP="$HERE/plan-pass.sh"
 [ -f "$PP" ] || die "no plan-pass.sh beside this script"
 
-FILES=; COV=; PLANREC=; ADDRS=; BGATES=; HEADSHA=; BASESHA=; PREFIX=; TREE=; OUT=
+FILES=; COV=; PLANREC=; ADDRS=; BGATES=; HEADSHA=; BASESHA=; PREFIX=; TREE=; OUT=; NCHANGED=
 while [ $# -gt 0 ]; do
   case "$1" in
     --files) FILES=${2:-} ;;
+    --changed-files) NCHANGED=${2:-} ;;
     --coverage) COV=${2:-} ;;
     --plan) PLANREC=${2:-} ;;
     --addresses) ADDRS=${2:-} ;;
@@ -83,6 +84,8 @@ record_gates() { # tree, sha: the record on standard output; non-zero when a ste
   while IFS= read -r d; do
     echo "dir $d"
     if [ -d "$t/$d" ]; then
+      r="$(cd "$t/$d" && pwd -P)" || return 1
+      case "$r" in "$t") echo "real ." ;; "$t"/*) echo "real ${r#"$t"/}" ;; *) echo "real $r" ;; esac
       s="$(bash "$PP" scope "$f" "$t/$d")" || return 1
       printf '%s\n' "$s" | awk -v r="$t/" 'NF { if (index($0, r) == 1) print "file " substr($0, length(r) + 1); else print "file " $0 }'
       printf '%s\n' "$s" | bash "$PP" gates "$f" laptop clone | awk -v r="$t/" '/^G[0-3] / {
@@ -98,6 +101,7 @@ record_gates() { # tree, sha: the record on standard output; non-zero when a ste
 
 if [ "$CMD" = gates ]; then
   sha_ok "$BASESHA" || die "--base must be a full commit SHA"
+  case "$TREE" in /?*) ;; *) die "--tree must be an absolute path" ;; esac
   [ -d "$TREE" ] || die "--tree must name a directory"
   case "$OUT" in /?*) ;; *) die "--out must be an absolute path" ;; esac
   [ -d "${OUT%/*}/" ] || die "the directory of --out must exist"
@@ -112,6 +116,7 @@ sha_ok "$HEADSHA" || die "--head must be a full commit SHA"
 [ "$BASESHA" = unresolved ] || sha_ok "$BASESHA" || die "--base must be a full commit SHA or unresolved"
 regular --files "$FILES"
 regular --plan "$PLANREC"
+printf '%s\n' "$NCHANGED" | grep -Eqx '[0-9]{1,6}' || die "--changed-files must be the pull request's changed file count"
 PREFIX="${PREFIX%/}"
 case "$PREFIX" in /*|*..*|.) die "--prefix must be repository-relative" ;; esac
 [ -n "$PREFIX" ] && PREFIX="$PREFIX/"
@@ -191,7 +196,7 @@ sub lex { # until the end, or with $interp until the "}" that closes the interpo
     if ($T =~ /\G(?=")/gc) { push @t, lex_string(); next }
     if ($T =~ /\G<<-?([A-Za-z_][A-Za-z0-9_-]*)[ \t]*\n/gc) {
       my ($id, $l) = ($1, $line); $line++;
-      while (1) { fail() unless $T =~ /\G([^\n]*)\n/gc; $line++; last if $1 =~ /\A\s*\Q$id\E\s*\z/ }
+      while (1) { fail() unless $T =~ /\G([^\n]*)\n/gc; $line++; last if $1 =~ /\A\s*\Q$id\E\s*\z/; fail() unless closed($1) }
       push @t, ["HD", $id, $l, $line - 1]; $line--; pos($T)--; next;
     }
     if ($T =~ /\G([A-Za-z_][A-Za-z0-9_-]*)/gc) { push @t, ["ID", $1, $line, $line]; next }
@@ -204,6 +209,20 @@ sub lex { # until the end, or with $interp until the "}" that closes the interpo
     }
     fail();
   }
+}
+# A heredoc body line whose template interpolation or directive does not close on the same
+# line fails the file: HCL reads on as an expression there, past a marker-only line.
+sub closed {
+  my @c = split //, $_[0]; my ($d, $q, $i) = (0, 0, 0);
+  while ($i < @c) {
+    my ($c, $n, $nn) = ($c[$i], $c[$i + 1] // "", $c[$i + 2] // "");
+    if ($q) { if ($c eq "\\") { $i += 2; next } $q = 0 if $c eq "\""; $i++; next }
+    if (($c eq "\$" || $c eq "%") && $n eq $c && $nn eq "{") { $i += 3; next }
+    if (($c eq "\$" || $c eq "%") && $n eq "{") { $d++; $i += 2; next }
+    if ($d) { if ($c eq "\"") { $q = 1 } elsif ($c eq "{") { $d++ } elsif ($c eq "}") { $d-- } }
+    $i++;
+  }
+  return $d == 0 && !$q;
 }
 # Parser: the body of a file, its blocks and attributes. Returns the skeleton, block headers and
 # attribute names without any expression, and the attributes with their line spans.
@@ -324,7 +343,9 @@ while IFS= read -r row; do
   kind="$(printf '%s\n' "$row" | jq -r 'if .s != "modified" or .prev != null then "other" else .kind end')"
   out=
   case "$kind" in
-    md) out=ok ;;
+    md)
+      # A document a .tf file names, by its file name, may be read by Terraform: not allowed
+      grep -rqF --include='*.tf' --exclude-dir=.git -- "${f##*/}" "$CLONE" 2> /dev/null; [ $? = 1 ] && out=ok ;;
     tf)
       if printf '%s\n' "$row" | jq -e '.patch | type == "string"' > /dev/null; then
         printf '%s\n' "$row" | jq -j .patch > "$W/patch-$n"
@@ -359,9 +380,9 @@ fi
 
 jq -n -L "$HERE" --slurpfile cov "$COV" --slurpfile cls "$W/classes.jsonl" --slurpfile a "$W/addr.jsonl" \
   --rawfile rec "$PLANREC" --arg hg "$HEADGATES" --arg bg "$BASEGATES" \
-  --arg head "$HEADSHA" --arg base "$BASESHA" --argjson headok "$HEADOK" \
+  --arg head "$HEADSHA" --arg base "$BASESHA" --argjson headok "$HEADOK" --argjson nchanged "$NCHANGED" \
   --slurpfile files "$FILES" '
   include "skip-coverage";
-  skip_coverage($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok)
+  skip_coverage($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged)
 ' || die "cannot evaluate"
 exit 0

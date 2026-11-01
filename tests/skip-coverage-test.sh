@@ -24,7 +24,7 @@ check() { # name, command status (0 = holds)
 RUN="$(mktemp -d "$TMP/pr-review.XXXXXX")"
 C="$RUN/clone"
 mkdir -p "$C/modules/sub" "$C/wrappers"
-G() { git -C "$C" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false "$@"; }
+G() { git -C "$C" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.autocrlf=false -c core.safecrlf=false "$@"; }
 cat > "$C/main.tf" <<'EOF'
 resource "aws_security_group" "this" {
   count = var.create ? 1 : 0
@@ -36,6 +36,7 @@ resource "aws_lb" "this" {
   security_groups = compact(concat(aws_security_group.this[*].id, var.security_groups))
   subnets         = var.subnets
   tags            = var.tags
+  drop_invalid_header_fields = var.drop != null ? var.drop : false
 
   access_logs {
     bucket  = var.log_bucket
@@ -89,9 +90,31 @@ resource "aws_lb_listener" "this" {
 }
 EOF
 printf 'module "wrapper" {\n  source = "../"\n}\n' > "$C/wrappers/main.tf"
+cat > "$C/bucket.tf" <<'EOF'
+resource "aws_s3_bucket_policy" "this" {
+  bucket = var.bucket
+  policy = <<EOT
+{"Resource": "${var.arn}"}
+EOT
+  acl    = var.acl
+}
+EOF
+# A heredoc whose interpolation stays open past a marker-only line: HCL reads on as an expression
+cat > "$C/odd.tf" <<'EOF'
+resource "aws_s3_bucket_policy" "odd" {
+  bucket = var.bucket
+  policy = <<EOT
+${join("", [
+EOT
+])}
+EOT
+  acl    = var.acl
+}
+EOF
 printf '# Module\n\nText.\n' > "$C/README.md"
 mkdir -p "$C/modules/other"
-printf 'resource "aws_sns_topic" "this" {\n  name = var.name\n}\n' > "$C/modules/other/main.tf"
+printf 'resource "aws_sns_topic" "this" {\n  name = var.name\n}\n\nresource "aws_iam_policy" "this" {\n  policy = file("${path.module}/policy.md")\n}\n' > "$C/modules/other/main.tf"
+printf '# Policy\n' > "$C/modules/other/policy.md"
 for e in e1 e2 e3 e4 e5 e6; do
   mkdir -p "$C/examples/$e"
   printf 'module "lb" {\n  source = "../../"\n}\n' > "$C/examples/$e/main.tf"
@@ -101,6 +124,12 @@ printf 'module "sub" {\n  source = "../../modules/sub"\n}\n' >> "$C/examples/e5/
 mkdir -p "$C/examples/d1"
 printf 'module "lb" {\n  source = "../../"\n}\n' > "$C/examples/d1/main.tf"
 printf '# Example\n' > "$C/examples/d1/README.md"
+# examples/d2 has a G0 hit beside its G3 hit; examples/l1 is a link to a directory elsewhere
+mkdir -p "$C/examples/d2" "$C/shared/l1"
+printf '/* note */\nmodule "lb" {\n  source = "../../"\n}\n\ndata "aws_ssm_parameter" "p" {\n  name = "x"\n}\n' > "$C/examples/d2/main.tf"
+printf 'module "lb" {\n  source = "../../"\n}\n\ndata "aws_ssm_parameter" "p" {\n  name = "x"\n}\n' > "$C/shared/l1/main.tf"
+printf '# Example\n' > "$C/shared/l1/README.md"
+ln -s ../shared/l1 "$C/examples/l1"
 for e in s1 s2 s3; do
   mkdir -p "$C/examples/$e"
   printf 'module "lb" {\n  source = "../../"\n}\n\ndata "aws_ssm_parameter" "p" {\n  name = "x"\n}\n' > "$C/examples/$e/main.tf"
@@ -131,7 +160,7 @@ filesjson() {
 # The plan record of a laptop pass, the coverage and the addresses files. Planned examples first,
 # then the three skipped ones with the first hit the real gates print for them.
 EX="examples/e1 examples/e2 examples/e3 examples/e4 examples/e5 examples/e6 examples/s1 examples/s2 examples/s3"
-hits_of() { printf '%s\n' "$C/$1/main.tf" | bash "$REF/plan-pass.sh" gates "$RUN" laptop clone | sed -n "s|^\(G[0-3]\) $C/\(.*\)|\1 \2|p"; }
+hits_of() { printf '%s\n' "$(cd "$C/$1" && pwd -P)/main.tf" | bash "$REF/plan-pass.sh" gates "$RUN" laptop clone | sed -n "s|^\(G[0-3]\) $C/\(.*\)|\1 \2|p"; }
 DLHITS="G3 downloaded/vpc/main.tf:11"; DLPLAN="plan gate G3 downloaded/vpc/main.tf:11 (1 hits)"
 ADDRJQ=.
 records() {
@@ -140,8 +169,10 @@ records() {
     for e in $(printf '%s\n' $EX); do
       i=$((i + 1)); echo "example: $e"
       case "$e" in
-        examples/s*) h="$(hits_of "$e")"; printf '%s\n' "$h" | sed 's/^/gate-hit /'
+        examples/s*|examples/l*) h="$(hits_of "$e")"; printf '%s\n' "$h" | sed 's/^/gate-hit /'
            echo "plan: plan gate $(printf '%s\n' "$h" | head -n 1) ($(printf '%s\n' "$h" | grep -c .) hits)" ;;
+        examples/d2) h="$(hits_of "$e")"; printf '%s\n' "$h" | sed 's/^/gate-hit /'
+           echo "plan: plan gate $(printf '%s\n' "$h" | grep '^G3' | head -n 1) ($(printf '%s\n' "$h" | grep -c .) hits)" ;;
         examples/d*) printf '%s\n' "$DLHITS" | sed 's/^/gate-hit /'; echo "plan: $DLPLAN" ;;
         *) echo "plan: planned | Plan: 3 to add, 0 to change, 0 to destroy."
            jq -n --arg h "$HEAD" --arg e "$e" '
@@ -152,7 +183,7 @@ records() {
               module_calls: {lb: "../../"},
               sensitive: {"module.lb.aws_lb.this": [], "module.lb.aws_security_group.this": [],
                           "module.lb.module.listener.aws_lb_listener.this": []},
-              head_sha: $h}
+              head_sha: $h, example: $e}
              | if $e == "examples/e5" then .addresses += ["module.sub.aws_lb_listener.this"]
                  | .attributes["module.sub.aws_lb_listener.this"] = ["port", "protocol"]
                  | .sensitive["module.sub.aws_lb_listener.this"] = []
@@ -176,9 +207,14 @@ run_case() {
   [ "$GATES" = 1 ] && "$SH" "$SC" gates "$RUN" --tree "$RUN/base" --base "$BASE" --coverage "$TMP/coverage.json" --out "$TMP/base-gates.txt"
   [ -n "${BGEDIT:-}" ] && perl -0pi -e "$BGEDIT" "$TMP/base-gates.txt"
   "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
-    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" > "$TMP/out.json"
+    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" --changed-files "${NCH:-$(jq length "$TMP/files.json")}" > "$TMP/out.json"
 }
-reset_knobs() { ADDRJQ=.; COVJQ=.; GATES=1; BGEDIT=; DLHITS="G3 downloaded/vpc/main.tf:11"; DLPLAN="plan gate G3 downloaded/vpc/main.tf:11 (1 hits)"; }
+# check again over the inputs of the last case, after a test edited one of them
+recheck() {
+  "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
+    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" --changed-files "$(jq length "$TMP/files.json")" "$@" > "$TMP/out.json"
+}
+reset_knobs() { NCH=; ADDRJQ=.; COVJQ=.; GATES=1; BGEDIT=; DLHITS="G3 downloaded/vpc/main.tf:11"; DLPLAN="plan gate G3 downloaded/vpc/main.tf:11 (1 hits)"; }
 q() { jq -e "$1" "$TMP/out.json" > /dev/null 2>&1; echo $?; }
 why() { jq -r --arg d "$1" '(.uncovered[] | select(.dir == $d) | .why) // (if any(.covered[]; .dir == $d) then "covered" else "absent" end)' "$TMP/out.json"; }
 all_why() { [ "$(why examples/s1)" = "$1" ] && [ "$(why examples/s2)" = "$1" ] && [ "$(why examples/s3)" = "$1" ]; }
@@ -275,8 +311,7 @@ t_first_ok() { # the first example is sensitive, the second is not: the second i
   fresh; reset_knobs; plain_change
   run_case || return 1
   jq '.sensitive["module.lb.aws_lb.this"] = ["security_groups"]' "$TMP/addr/addresses-1.json" > "$TMP/a1" && mv "$TMP/a1" "$TMP/addr/addresses-1.json"
-  "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
-    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" > "$TMP/out.json" || return 1
+  recheck || return 1
   all_why covered && [ "$(q 'all(.covered[]; .witnesses[0].example == "examples/e2")')" = 0 ]
 }
 t_first_ok; check "the first qualifying example in path order is the witness" $?
@@ -358,8 +393,7 @@ t_g0; check "a G0 skip and a failed plan: wrong-gate-class" $?
 
 t_unresolved() {
   fresh; reset_knobs; plain_change; run_case || return 1
-  "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
-    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base unresolved > "$TMP/out.json" || return 1
+  recheck --base unresolved || return 1
   all_why merge-base-unresolved && [ "$(q '.base_sha == null and .covered == []')" = 0 ]
 }
 t_unresolved; check "an unresolvable merge base: merge-base-unresolved" $?
@@ -381,8 +415,7 @@ t_base_stale; check "a stale base gate record: base-record-missing" $?
 
 t_head_mismatch() {
   fresh; reset_knobs; plain_change; run_case || return 1
-  "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
-    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$BASE" --base "$BASE" > "$TMP/out.json" || return 1
+  recheck --head "$BASE" || return 1
   all_why head-mismatch
 }
 t_head_mismatch; check "the clone not at --head: head-mismatch" $?
@@ -390,8 +423,7 @@ t_head_mismatch; check "the clone not at --head: head-mismatch" $?
 t_runner_record() {
   fresh; reset_knobs; plain_change; run_case || return 1
   perl -pi -e 's/^plan pass mode: laptop$/plan pass mode: runner/' "$TMP/record.txt"
-  "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
-    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" > "$TMP/out.json" || return 1
+  recheck || return 1
   all_why plan-record-unusable
 }
 t_runner_record; check "a runner record: plan-record-unusable" $?
@@ -400,8 +432,7 @@ t_downloaded_hit() { # a downloaded first hit while the clone scope has hits: th
   fresh; reset_knobs; plain_change; run_case || return 1
   # the s1 block reads as if every hit were downloaded, as a stale or forged record would
   perl -0pi -e 's/(example: examples\/s1\n)(gate-hit [^\n]*\n)*plan: [^\n]*/${1}gate-hit G3 downloaded\/x\/main.tf:11\nplan: plan gate G3 downloaded\/x\/main.tf:11 (1 hits)/' "$TMP/record.txt"
-  "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
-    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" > "$TMP/out.json" || return 1
+  recheck || return 1
   [ "$(why examples/s1)" = hit-set-differs ] && [ "$(why examples/s2)" = covered ]
 }
 t_downloaded_hit; check "a downloaded first hit while the clone scope has hits: hit-set-differs" $?
@@ -437,13 +468,90 @@ t_dl_missing() { reset_knobs; DLHITS="G3 downloaded/vpc/main.tf:11
 G3 bogus"; dl_case : hit-set-differs; }
 t_dl_missing; check "a downloaded block with a malformed gate-hit line: hit-set-differs" $?
 
+# --- Review cases: documents Terraform reads, heredocs, forged inputs, links, input counts
+t_md_read() { # a document a .tf file reads with file(), reached only by a skipped example
+  fresh; reset_knobs; plain_change; printf 'More.\n' >> "$C/modules/other/policy.md"
+  run_case && all_why change-not-allowed
+}
+t_md_read; check "a changed document a .tf file names: change-not-allowed" $?
+t_heredoc_open() { # a heredoc interpolation left open past a marker-only line, a following line changed
+  fresh; reset_knobs; plain_change; ed odd.tf 's/acl    = var\.acl/acl    = var.bucket_acl/'
+  run_case && all_why change-not-allowed
+}
+t_heredoc_open; check "a heredoc with an open interpolation in the changed file: change-not-allowed" $?
+t_heredoc_ok() { # the same kind of file with a closed interpolation: the following line is allowed
+  fresh; reset_knobs; ed bucket.tf 's/acl    = var\.acl/acl    = var.bucket_acl/'
+  ADDRJQ='.addresses += ["module.lb.aws_s3_bucket_policy.this"] | .attributes["module.lb.aws_s3_bucket_policy.this"] = ["acl"]
+    | .sensitive["module.lb.aws_s3_bucket_policy.this"] = []'
+  run_case && all_why covered
+}
+t_heredoc_ok; check "a line after a closed heredoc changed: covered" $?
+t_heredoc_body() { fresh; reset_knobs; ed bucket.tf 's/\$\{var\.arn\}/${var.bucket_arn}/'; run_case && all_why change-not-allowed; }
+t_heredoc_body; check "a heredoc body changed: change-not-allowed" $?
+t_block_comment() { fresh; reset_knobs; plain_change; ed bucket.tf 's/(  acl    = var\.acl\n)/$1  \/* note *\/\n/'; run_case && all_why change-not-allowed; }
+t_block_comment; check "a /* comment added: change-not-allowed" $?
+t_base_plain() { # the head expression is plain, the base one is a conditional
+  fresh; reset_knobs; ed main.tf 's/var\.drop != null \? var\.drop : false/var.drop/'
+  ADDRJQ='.attributes["module.lb.aws_lb.this"] += ["drop_invalid_header_fields"]'
+  run_case && all_why change-not-allowed
+}
+t_base_plain; check "a base expression that is not plain: change-not-allowed" $?
+t_two_attrs() { fresh; reset_knobs; plain_change; ed main.tf 's/(  name            = )var\.name/${1}var.lb_name/'; run_case && all_why change-not-allowed; }
+t_two_attrs; check "a change group spanning two attributes: change-not-allowed" $?
+t_non_ascii() {
+  fresh; reset_knobs; ed main.tf 's/(  name            = )var\.name/${1}"caf\x{c3}\x{a9}"/'
+  run_case && all_why change-not-allowed
+}
+t_non_ascii; check "a non-ASCII byte in a changed string: change-not-allowed" $?
+t_cr() { fresh; reset_knobs; ed main.tf 's/(  subnets         = var\.subnets)\n/$1\r\n/'; run_case && all_why change-not-allowed; }
+t_cr; check "a carriage return in a changed line: change-not-allowed" $?
+t_forged() { # the patch claims another expression than the head file holds
+  fresh; reset_knobs; plain_change; run_case || return 1
+  jq '.[0].patch |= (split("\n") | map(if startswith("-  security_groups") then "-  security_groups = var.a"
+        elif startswith("+  security_groups") then "+  security_groups = var.security_groups" else . end) | join("\n"))' \
+    "$TMP/files.json" > "$TMP/f2" && mv "$TMP/f2" "$TMP/files.json"
+  recheck && all_why change-not-allowed
+}
+t_forged; check "a patch that does not match the head file: change-not-allowed" $?
+t_nopatch() { fresh; reset_knobs; plain_change; run_case || return 1; jq 'del(.[0].patch)' "$TMP/files.json" > "$TMP/f2" && mv "$TMP/f2" "$TMP/files.json"; recheck && all_why change-not-allowed; }
+t_nopatch; check "a .tf file with no patch: change-not-allowed" $?
+t_status_changed() { fresh; reset_knobs; plain_change; run_case || return 1; jq '.[0].status = "changed"' "$TMP/files.json" > "$TMP/f2" && mv "$TMP/f2" "$TMP/files.json"; recheck && all_why change-not-allowed; }
+t_status_changed; check "a file with status changed: change-not-allowed" $?
+t_gate_mismatch() { fresh; reset_knobs; plain_change; COVJQ='.unplanned[0].reason = "plan gate G2"'; run_case && [ "$(why examples/s1)" = plan-record-unusable ] && [ "$(why examples/s2)" = covered ]; }
+t_gate_mismatch; check "a record gate other than the coverage reason: plan-record-unusable" $?
+t_head_g0() { # a G0 hit beside the G3 hit, the same at head and base
+  fresh; reset_knobs; plain_change; local keep="$EX"; EX="$EX examples/d2"; COVJQ='.unplanned += [{dir: "examples/d2", reason: "plan gate G3"}]'
+  run_case; local s=$?; EX="$keep"
+  [ "$s" = 0 ] && [ "$(why examples/d2)" = wrong-gate-class ] && [ "$(why examples/s1)" = covered ]
+}
+t_head_g0; check "a G0 hit at head beside a G3 coverage reason: wrong-gate-class" $?
+t_link_dir() { # examples/l1 links to shared/l1; a change there changes the example
+  fresh; reset_knobs; plain_change; printf 'More.\n' >> "$C/shared/l1/README.md"
+  local keep="$EX"; EX="$EX examples/l1"; COVJQ='.unplanned += [{dir: "examples/l1", reason: "plan gate G3"}]'
+  run_case; local s=$?; EX="$keep"
+  [ "$s" = 0 ] && [ "$(why examples/l1)" = dir-changed ] && [ "$(why examples/s1)" = covered ]
+}
+t_link_dir; check "a change in the target of a linked example directory: dir-changed" $?
+t_link_ok() {
+  fresh; reset_knobs; plain_change; local keep="$EX"; EX="$EX examples/l1"; COVJQ='.unplanned += [{dir: "examples/l1", reason: "plan gate G3"}]'
+  run_case; local s=$?; EX="$keep"
+  [ "$s" = 0 ] && [ "$(why examples/l1)" = covered ] && [ "$(q '.covered[] | select(.dir == "examples/l1") | .path == "shared/l1/main.tf"')" = 0 ]
+}
+t_link_ok; check "a linked example directory left alone: covered" $?
+t_count() { fresh; reset_knobs; plain_change; NCH=7; run_case && all_why files-incomplete; }
+t_count; check "a files list shorter than the changed file count: files-incomplete" $?
+t_example_other() { fresh; reset_knobs; plain_change; ADDRJQ='.example = "examples/zz"'; run_case && all_why no-witness; }
+t_example_other; check "an addresses file for another example: no-witness" $?
+t_example_none() { fresh; reset_knobs; plain_change; ADDRJQ='del(.example)'; run_case && all_why no-witness; }
+t_example_none; check "an addresses file with no example: no-witness" $?
+
 # --- Refused inputs: exit 2, nothing printed
 fresh; reset_knobs; plain_change; run_case > /dev/null 2>&1
 refused() { # name, arguments after check <run-dir>
   local o; o="$("$SH" "$SC" check "$RUN" "$@" 2> /dev/null)"; local s=$?
   check "refused: $1" "$([ "$s" = 2 ] && [ -z "$o" ]; echo $?)"
 }
-base_args() { echo --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt"; }
+base_args() { echo --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" --changed-files 1; }
 # shellcheck disable=SC2046 # the paths hold no space
 refused "a short --head" $(base_args) --head abc --base "$BASE"
 # shellcheck disable=SC2046
@@ -451,8 +559,10 @@ refused "a --base that is neither a SHA nor unresolved" $(base_args) --head "$HE
 refused "no --coverage" --files "$TMP/files.json" --plan "$TMP/record.txt" --head "$HEAD" --base "$BASE"
 refused "no --plan" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --head "$HEAD" --base "$BASE"
 echo '{"x": 1}' > "$TMP/bad.json"
-refused "a files list that is not an array" --files "$TMP/bad.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" --head "$HEAD" --base "$BASE"
-refused "a coverage that is not a coverage object" --files "$TMP/files.json" --coverage "$TMP/bad.json" --plan "$TMP/record.txt" --head "$HEAD" --base "$BASE"
+refused "a files list that is not an array" --files "$TMP/bad.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" --head "$HEAD" --base "$BASE" --changed-files 1
+refused "a coverage that is not a coverage object" --files "$TMP/files.json" --coverage "$TMP/bad.json" --plan "$TMP/record.txt" --head "$HEAD" --base "$BASE" --changed-files 1
+refused "no --changed-files" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" --head "$HEAD" --base "$BASE"
+refused "a --changed-files that is not a count" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" --head "$HEAD" --base "$BASE" --changed-files x
 # shellcheck disable=SC2046
 refused "an unknown argument" $(base_args) --head "$HEAD" --base "$BASE" --bogus 1
 # shellcheck disable=SC2046
@@ -460,6 +570,8 @@ o="$("$SH" "$SC" check "$TMP/not-a-run" $(base_args) --head "$HEAD" --base "$BAS
 check "refused: a run directory of another shape" "$([ $? = 2 ] && [ -z "$o" ]; echo $?)"
 "$SH" "$SC" gates "$RUN" --tree "$RUN/base" --base "$HEAD" --coverage "$TMP/coverage.json" --out "$TMP/bg2.txt" 2> /dev/null
 check "refused: a base tree not at --base, and no record written" "$([ $? = 2 ] && [ ! -e "$TMP/bg2.txt" ]; echo $?)"
+(cd "$RUN" && "$SH" "$SC" gates "$RUN" --tree base --base "$BASE" --coverage "$TMP/coverage.json" --out "$TMP/bg3.txt" 2> /dev/null)
+check "refused: a relative --tree, and no record written" "$([ $? = 2 ] && [ ! -e "$TMP/bg3.txt" ]; echo $?)"
 
 # --- Negative self-check: each mutation of a temp copy must make its named case fail.
 mutate() { # name, perl substitution, case function
@@ -483,13 +595,22 @@ mutate "merge allowed" 's/qw\(concat /qw(merge concat /' t_merge
 mutate "count. references allowed" 's/each\|count\|self\|//' t_count_ref
 mutate "the structure and name checks dropped" 's/\$hs eq \$bs && \@\$ha == \@\$ba/1/; s/ && \$h->\{name\} eq \$b->\{name\}//' t_added_attr
 mutate "the hit sets not compared" 's/ or \(\$h\.lines \| sort\) != \(\$b\.lines \| sort\)//' t_relabel
-mutate "changes under the directory ignored" 's/any\(\$paths\[\]; startswith\(\$d \+ "\/"\)\)/false/' t_dir_md
+mutate "changes under the directory ignored" 's/\n           then "dir-changed"/\n           then null/' t_dir_md
 mutate "the sensitive bit ignored" 's/and \(index\(\$c\.attribute\) == null\)//' t_sens
 mutate "the witness head SHA ignored" 's/ and \.head_sha == \$head//' t_otherhead
 mutate "the module call directory ignored" 's/\n            and \(\.value \| resolve\(\$b\.dir\)\) == \$c\.dir//' t_otherdir
 mutate "an added file allowed" 's/if \.s != "modified" or \.prev != null then "other" else \.kind end/.kind/' t_md_added
 mutate "a stale base record accepted" 's/\.\[0\] == "skip-gates 1 " \+ \$sha and //' t_base_stale
 mutate "the merge base not required" 's/elif \(\$base \| sha \| not\) then "merge-base-unresolved"\n//' t_unresolved
+mutate "a document a .tf file names allowed" 's/\[ \$\? = 1 \] && out=ok/out=ok/' t_md_read
+mutate "the base expression not checked" 's/ && plain\(\$b->\{toks\}\)//' t_base_plain
+mutate "patch lines not checked against the head file" 's/ && \$head\[\$hi\] eq \$t//g' t_forged
+mutate "non-ASCII accepted" 's/out\("reject non-ascii or carriage return"\) if [^;]*;//' t_non_ascii
+mutate "the record gate not matched to the reason" 's/ or \$blk\.hit\.gate != \$g\.g//' t_gate_mismatch
+mutate "a head G0 hit ignored" 's/         elif any\(\$h\.lines\[\]; startswith\("hit G0 "\)\) then "wrong-gate-class"\n//' t_head_g0
+mutate "the real directory of a link ignored" 's/ \+ \[\(\$h\.lines\?, \$b\.lines\?\) \| \.\[\]\? \| select\(startswith\("real "\)\) \| \.\[5:\]\]//' t_link_dir
+mutate "the changed file count ignored" 's/\(\$files \| length\) != \$nchanged or //' t_count
+mutate "the example of an addresses file ignored" 's/ and \.example == \$b\.dir//' t_example_other
 mutate "a downloaded hit with no line accepted" 's/\(\.line \/\/ ""\) \| test\("\^:\[0-9\]\+\$"\)/true/' t_dl_noline
 mutate "a downloaded hit taken while the clone scope has hits" 's/ and \(any\(\$h\.lines\[\]; startswith\("hit "\)\) \| not\)//' t_downloaded_hit
 mutate "downloaded hits never covered" 's/elif \$dl and \(all/elif \$dl or (all/' t_dl
