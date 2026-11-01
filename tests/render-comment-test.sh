@@ -1152,9 +1152,9 @@ EOF
 cat > "$TMP/want-556.md" <<'EOF'
 Dropping `compact()` fixes the plan: with an unknown group id the base kept the old value and the head shows an update. It also keeps null and empty-string elements of `vpc_security_group_ids`, and a null element now fails the plan; the description mentions only empty strings.
 
-**Inconclusive.** `validate` passed in all 9 examples; 6 were planned. Not checked: the description past 8000 bytes (200 cut), 3 of 9 examples not planned (safety gate).
+**Inconclusive.** `validate` passed in all 9 examples; 6 were planned. Not checked: the description past 8000 bytes (200 cut), 3 of 9 examples not planned (example code is not run with credentials outside an isolated runner; a limit of the review, not a finding).
 
-To get a conclusive review: shorten the description under 8000 bytes, and plan the 3 gated examples in runner mode.
+To get a conclusive review: shorten the description under 8000 bytes, and plan the 3 skipped examples in runner mode, an isolated container.
 
 - LOW `compat.expression-behaviour-changed` `main.tf:156` - null and empty-string elements of `var.vpc_security_group_ids` now reach the provider, and a null fails the plan.
   - Fix: reject them with a `validation` block in `variables.tf`, or say in the description that they now fail.
@@ -1175,7 +1175,7 @@ t_556() { rc "$(F556)" "$(R556 gold)"; [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] 
 t_556; check "tiers: pull request 556 renders COMPACT, the literal byte for byte" $?
 check "tiers: pull request 556 is inconclusive at rule 4, proposes COMMENT" "$([ "$(verdict)" = "inconclusive COMMENT" ]; echo $?)"
 check "tiers: COMPACT findings.json lists the routed finding last" "$(jq -e 'map(.id) == ["F-001", "F-002"] and all(.[]; keys == ["file","id","line","rule_id","severity","suggested_fix","summary"])' "$O/findings.json" > /dev/null; echo $?)"
-check "tiers: the COMPACT body of pull request 556 is at most 1240 bytes" "$([ "$(wc -c < "$O/comment.md")" -le 1240 ]; echo $?)"
+check "tiers: the COMPACT body of pull request 556 is at most 1400 bytes" "$([ "$(wc -c < "$O/comment.md")" -le 1400 ]; echo $?)"
 # Pull request 556 with the description finding: the body states only the empty strings, the
 # LOW compat.expression-behaviour-changed refutes it, so compat.claim-contradicts-analysis is LOW
 # too (one band below, never above). No rule 2 block: the verdict stays at rule 4.
@@ -1217,7 +1217,7 @@ rc "$(F556)" "$(R556 gold-std-uv '.behaviour.claims[0].state = "unverifiable"')"
 grep -qxF 'Behaviour evidence: 1 changes classified: 0 verified, 0 covered by a plan, 0 inert, 1 reported in a finding, 0 refuted, 0 not verified; 20 claims: 19 verified, 0 refuted, 1 not verified.' "$O/comment.md"
 check "tiers: the STANDARD evidence line counts the reported trigger" $?
 t_cut() { rc "$(F556)" "$(R556 cut)" "$(host cut1 '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 31}]')"; [ "$(tier)" = COMPACT ] &&
-  grep -qF 'Not checked: the description past 8000 bytes (31 cut), 3 of 9 examples not planned (safety gate).' "$O/comment.md"; }
+  grep -qF 'Not checked: the description past 8000 bytes (31 cut), 3 of 9 examples not planned (example code is not run with credentials outside an isolated runner; a limit of the review, not a finding).' "$O/comment.md"; }
 t_cut; check "tiers: the description cause takes the bytes omitted from host.json" $?
 rc "$(F556)" "$(R556 cutt)" "$(host cutt '.could_not_run = [{kind: "prose-truncated", item: "thread", omitted: 40}]')"; std0() { [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ]; }
 check "tiers: a thread item cut forces STANDARD" "$(std0; echo $?)"
@@ -1325,8 +1325,8 @@ rc "$(F556)" "$(R556 noex 'del(.examples)')"; std "a run file without example co
 rc "$(printf '%s\n' "$(f review.tool-disputed LOW main.tf 43 'D.' 'no code change: decide.')" | list disp)" "$(R556 disp2 '.behaviour.triggers[0] |= (.state = "verified" | .outstanding = [] | del(.evidence_digest))')"; std "a disputed note"
 t_g0() {
   rc "$(F556)" "$(R556 g0 '.coverage.unplanned = [{dir: "examples/a", reason: "plan gate G0"}, {dir: "examples/b", reason: "plan gate G2"}]')"
-  [ "$(tier)" = COMPACT ] && grep -qF 'Not checked: the description past 8000 bytes (200 cut), 1 of 9 examples not planned (safety gate), 1 of 9 examples not planned (file gate).' "$O/comment.md" &&
-    grep -qxF 'To get a conclusive review: shorten the description under 8000 bytes, plan the 1 gated example in runner mode, and remove what plan gate G0 refuses from the 1 example.' "$O/comment.md"
+  [ "$(tier)" = COMPACT ] && grep -qF 'Not checked: the description past 8000 bytes (200 cut), 1 of 9 examples not planned (example code is not run with credentials outside an isolated runner; a limit of the review, not a finding), 1 of 9 examples not planned (they hold files the safety checks refuse, such as state, override or variable files).' "$O/comment.md" &&
+    grep -qxF 'To get a conclusive review: shorten the description under 8000 bytes, plan the 1 skipped example in runner mode, an isolated container, and remove the refused files from the 1 example.' "$O/comment.md"
 }
 t_g0; check "tiers: a G0 example gets its own clause, never the runner clause" $?
 t_noplan() {
@@ -1426,7 +1426,7 @@ check "tiers: a G0 hit after a runner-mode pass forces STANDARD" "$(std0; echo $
 refused "a plan mode outside the two" "$G" "" "" "$(runf badmode '.plan_mode = "cloud"')"
 t_one() {
   rc "$(F556)" "$(R556 one1 '.coverage.unplanned = [{dir: "examples/a", reason: "plan gate G3"}]')"
-  [ "$(tier)" = COMPACT ] && grep -qxF 'To get a conclusive review: shorten the description under 8000 bytes, and plan the 1 gated example in runner mode.' "$O/comment.md"
+  [ "$(tier)" = COMPACT ] && grep -qxF 'To get a conclusive review: shorten the description under 8000 bytes, and plan the 1 skipped example in runner mode, an isolated container.' "$O/comment.md"
 }
 t_one; check "tiers: one gated example takes the one form" $?
 # also_categories: the version floor condition reads every category of a merged trigger.
@@ -1508,7 +1508,7 @@ mutate "the description band not enforced" 's/def band_ok:/def band_ok: true; de
 mutate "the module root item dropped under rule 0" 's/def compat_item: [^\n]*/def compat_item: (.rule | startswith("compat."));/' t_root_rule0_item
 mutate "the module root item dropped" 's/elif all\(\.items\[\]; \.file == "\."\)/elif false/' t_root_one_item
 mutate "--standard ignored" 's/--standard\) standard=true; shift ;;/--standard) shift ;;/' t_force
-mutate "a COMPACT string changed in the script only" 's/plan the \{count\} gated examples in runner mode/plan the {count} examples in runner mode/' t_table
+mutate "a COMPACT string changed in the script only" 's/plan the \{count\} skipped examples in runner mode, an isolated container/plan the {count} examples in runner mode/' t_table
 mutate "the verdict line drops the validate sentence" 's/\(if \$run\.plan_ran then " " \+ tx/(if false then " " + tx/' t_556
 mutate "every prose-truncated entry its own line" 's/select\(\.value\.kind != "prose-truncated" or \.key == \$first\)/select(true)/' t_prose_once
 mutate "reported triggers counted as gaps" 's/\. \+ \{state: "reported", judged_by: \[\$e\[\]\.id\]\}/./' t_556
