@@ -120,6 +120,7 @@ RJ -e --slurp --arg head "$head" 'include "host-records"; length == 1 and (.[0] 
 one "$run" render-comment valid_run || die "the run file does not fit its grammar"
 RJ -e -n --slurpfile f "$findings" --slurpfile r "$run" 'include "render-comment"; claims_consistent($f[0]; $r[0])' \
   > /dev/null 2>&1 || die "a claim.* finding with no refuted state in the behaviour object"
+one "$findings" render-comment band_ok || die "$(RJ -n -r 'include "render-comment"; tx("refuse-band")')"
 RJ -e -R --slurp 'include "render-comment"; valid_assessment' "$assessment" > /dev/null 2>&1 \
   || die "the assessment is not printable ASCII text of at most two paragraphs and 700 characters, the STANDARD limit"
 

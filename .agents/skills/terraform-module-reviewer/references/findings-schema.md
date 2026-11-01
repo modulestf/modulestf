@@ -26,7 +26,7 @@ No other field is required. A consumer that needs more may add fields, but a fin
 
 The caps above are hard limits. The default is shorter, so that a short layout, such as the COMPACT tier of the pull request review's [comment](../../terraform-module-pr-review/references/comment-format.md#tiers), shows each finding as written:
 
-Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid, and it forces the STANDARD tier of the rendered comment.
+Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.
 
 The targets change no rule, severity or field, and never cost a fact the fix needs: a fix that needs more room takes it. The schema version stays 3.
 

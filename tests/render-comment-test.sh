@@ -450,7 +450,7 @@ t_table; check "strings: the Host Render Strings table equals the script's strin
 
 # The reviewer writes short by default: the length targets, the COMPACT caps below, are stated
 # word for word in the findings schema and in the caller instruction of the handover.
-LT='Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid, and it forces the STANDARD tier of the rendered comment.'
+LT='Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.'
 t_targets_stated() {
   awk '/^## Length Targets$/ { on = 1; next } on && /^## / { exit } on' \
     "$SRC/.agents/skills/terraform-module-reviewer/references/findings-schema.md" | grep -qF -- "$LT" &&
@@ -746,6 +746,12 @@ todo_is "two blocking findings at the module root take the fixed item with the c
 render "$(f scope.description-only MEDIUM . null "S." "F." | list wt-root3)" "$(host wt-root3 '.prefix = "modules/x"')"
 todo_is "a module root finding under a module root prefix takes the fixed item" '### What to do' '' "$LEAD_BLOCK" '' \
   '- [ ] Resolve `scope.description-only`: see its Fix under Findings.'
+t_root_rule0() {
+  render "$({ f compat.output-removed CRITICAL a.tf 1 "S." "F."; f compat.claim-contradicts-analysis HIGH . null "T." "no code change: G."; } | list wt-root0)"
+}
+t_root_rule0
+todo_is "rule 0, a description finding at the module root takes the fixed item" '### What to do' '' "$LEAD_0" '' \
+  '- `compat.output-removed`: the Fix at `a.tf:1` restores compatibility.' '- [ ] Resolve `compat.claim-contradicts-analysis`: see its Fix under Findings.'
 render "$({ f scope.description-only MEDIUM . null "S." "F."; f scope.description-only MEDIUM a.tf 1 "T." "G."; } | list wt-root4)"
 todo_is "a group with a real location keeps its locations" '### What to do' '' "$LEAD_BLOCK" '' \
   '- [ ] `scope.description-only` (2): apply the Fix at `.`, `a.tf:1`.'
@@ -938,7 +944,7 @@ mutate "What to do rendered at rule 8" 's/if \$v\.rule == 8 then \[\] else/if fa
 mutate "nine locations listed" 's/\$l\[:8\]/\$l[:9]/' t_loc9
 mutate "rule 0 groups as checkboxes" 's/if \$rule == 0 and/if false and/' t_rule0_plain
 t_rule0_mixed() { render "$R0M"; todo | grep -qxF -- '- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.'; }
-mutate "every rule 0 group a compat bullet" 's/\$rule == 0 and \(\.rule \| startswith\("compat\."\)\)/$rule == 0/' t_rule0_mixed
+mutate "every rule 0 group a compat bullet" 's/\$rule == 0 and compat_item/$rule == 0/' t_rule0_mixed
 t_rev_noitem() { render "$TMP/wt-rev6.json"; [ "$ST" = 0 ] && ! todo | grep -qF 'review.path-missing'; }
 mutate "review groups listed as items" 's/select\(\.rule \| startswith\("review\."\) \| not\)/select(true)/' t_rev_noitem
 t_r4_once() { render "$NONE" "$H2"; [ "$(rule)" = 4 ] && ! todo | grep -qF 'could not run; see'; }
@@ -1299,6 +1305,20 @@ t_over_all() {
   [ "$ST" = 2 ] && empty_out && [ "$MSG" = 'render-comment.sh: over the COMPACT limits: the assessment is 351 characters, limit 350; finding F-001 summary is 201 characters, limit 200; finding F-001 suggested_fix is 260 characters, limit 250; finding F-002 summary is 230 characters, limit 200; send it back to the reviewer, or render with --standard' ]
 }
 t_over_all; check "refused: COMPACT every offender named in one message with its length and limit" $?
+
+# The band of compat.claim-contradicts-analysis (quoted-claims.md): one below the highest compat.*
+# code finding, compat.break-unexplained aside, and never without one. Above it, refused.
+BAND_MSG='render-comment.sh: a `compat.claim-contradicts-analysis` finding is rated above the band of the `compat.*` code finding that refutes it, or has none; send it back to the reviewer'
+band_refused() { # name, findings
+  render "$2"
+  check "refused: $1" "$([ "$ST" = 2 ] && empty_out && [ "$MSG" = "$BAND_MSG" ]; echo $?)"
+}
+t_band_low() { render "$({ f compat.expression-behaviour-changed LOW main.tf 1 "S." "F."; f compat.claim-contradicts-analysis HIGH . null "T." "no code change: G."; } | list band-low)"; [ "$ST" = 2 ] && empty_out && [ "$MSG" = "$BAND_MSG" ]; }
+t_band_low; check "refused: a HIGH description finding beside a LOW code finding" $?
+band_refused "a description finding with no compat.* code finding" "$({ f compat.break-unexplained MEDIUM . null "S." "no code change: F."; f compat.claim-contradicts-analysis LOW . null "T." "no code change: G."; } | list band-none)"
+render "$({ f compat.variable-removed HIGH a.tf 1 "S." "F."; f compat.expression-behaviour-changed LOW b.tf 2 "U." "H."
+  f compat.claim-contradicts-analysis MEDIUM . null "T." "no code change: G."; } | list band-ok)"
+check "band: a MEDIUM description finding below the highest code finding, HIGH, is accepted" "$([ "$ST" = 0 ] && [ "$(rule)" = 2 ]; echo $?)"
 render "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-std)" "$TMP/a-351.txt" --standard
 check "tiers: the same text passes in STANDARD with --standard" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ]; echo $?)"
 render "$(F556 "{summary: \"$(head -c 501 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-501)" "" --standard
@@ -1384,6 +1404,7 @@ t_g3() { rc "$TMP/g3b.json" "$TMP/run-r556-g3b.json"; [ "$(tier)" = STANDARD ]; 
 t_vgap() { rc "$(F556)" "$TMP/run-r556-vgap.json"; [ "$(tier)" = STANDARD ]; }
 t_over() { render "$(F556)" "$H556" "" "$(R556 overm)" "$TMP/a-351.txt"; [ "$ST" = 2 ] && empty_out; }
 t_force() { rc "$(F556)" "$(R556 force)" "" --standard; [ "$(tier)" = STANDARD ]; }
+t_root_rule0_item() { t_root_rule0; [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] Resolve `compat.claim-contradicts-analysis`: see its Fix under Findings.'; }
 t_root_one_item() { t_root_one; [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] Resolve `scope.description-only`: see its Fix under Findings.'; }
 
 # Negative self-check for the tier rules.
@@ -1410,7 +1431,9 @@ mutate "the name allowlist dropped" 's/def allowed: test\("\^\[A-Za-z0-9\._\/-\]
 mutate "names not sorted" 's/def name_list: sort \|/def name_list:/' t_names
 mutate "the COMPACT caps dropped" 's/refuse: \(if \$tier == "COMPACT" then compact_refusal\(\$in\) else null end\)/refuse: null/' t_over
 mutate "only the first COMPACT offender named" 's/\(\$o \| join\("; "\)\)/$o[0]/' t_over_all
-mutate "the module root item dropped" 's/all\(\.items\[\]; \.file == "\."\)/false/' t_root_one_item
+mutate "the description band not enforced" 's/def band_ok:/def band_ok: true; def band_ok_unused:/' t_band_low
+mutate "the module root item dropped under rule 0" 's/def compat_item: [^\n]*/def compat_item: (.rule | startswith("compat."));/' t_root_rule0_item
+mutate "the module root item dropped" 's/elif all\(\.items\[\]; \.file == "\."\)/elif false/' t_root_one_item
 mutate "--standard ignored" 's/--standard\) standard=true; shift ;;/--standard) shift ;;/' t_force
 mutate "a COMPACT string changed in the script only" 's/plan the \{count\} gated examples in runner mode/plan the {count} examples in runner mode/' t_table
 mutate "the verdict line drops the validate sentence" 's/\(if \$run\.plan_ran then " " \+ tx/(if false then " " + tx/' t_556

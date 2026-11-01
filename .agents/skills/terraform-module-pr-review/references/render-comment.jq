@@ -133,6 +133,14 @@ def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select
 def claims_consistent($findings; $run):
   (any($findings[]; .rule_id | startswith("claim.")) | not) or (behaviour_of($run) | behaviour_refuted > 0);
 
+# compat.claim-contradicts-analysis sits one band below the highest compat.* code finding that
+# refutes its claim, compat.break-unexplained aside, and never fires without one (quoted-claims.md).
+def sev_rank: {"CRITICAL": 3, "HIGH": 2, "MEDIUM": 1, "LOW": 0}[.];
+def band_ok:
+  ([.[] | select((.rule_id | startswith("compat.")) and (.rule_id | IN("compat.claim-contradicts-analysis", "compat.break-unexplained") | not))
+    | .severity | sev_rank] | max) as $c
+  | all(.[] | select(.rule_id == "compat.claim-contradicts-analysis"); $c != null and (.severity | sev_rank) <= ([$c - 1, 0] | max));
+
 # could_not_run entries counted as gaps: the prose-truncated entries, one per cut item class,
 # count once together, as they render one line.
 def cnr_count: ([.[] | select(.kind != "prose-truncated")] | length) + (if any(.[]; .kind == "prose-truncated") then 1 else 0 end);
@@ -319,6 +327,7 @@ def texts: {
   "todo-mergeability-unknown": "Mergeability could not be read.",
   "todo-gaps-one": "1 check could not run; see Checks that could not run.",
   "todo-gaps-many": "{count} checks could not run; see Checks that could not run.",
+  "refuse-band": "a `compat.claim-contradicts-analysis` finding is rated above the band of the `compat.*` code finding that refutes it, or has none; send it back to the reviewer",
   "fix-fold": "Fix for each location ({count})",
   "behaviour-evidence-reported": "Behaviour evidence: {count} changes classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claims} claims: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "compact-validate-all": "`validate` passed in all {count} examples; {planned} were planned.",
@@ -463,7 +472,8 @@ def loc_list($p): # the first eight locations, then the count of the rest
 def todo_md($l; $rule; $p; $gaps):
   ($l.findings | map(select(.rule_id != "review.tool-disputed"))) as $f
   | $l.signals as $g
-  | def grp($k): (.items | length) as $n
+  | def compat_item: (.rule | startswith("compat.")) and .rule != "compat.claim-contradicts-analysis" and (all(.items[]; .file == ".") | not);
+  def grp($k): (.items | length) as $n
       | tx($k + (if $n == 1 then "-one" else "-many" end); {rule_id: .rule, count: $n, locations: ([.entries[][]] | loc_list($p))});
   # review.* groups are no item: the author cannot act on them. Rule 4 counts them as gaps.
   [sev_order[] as $s | $f | map(select(.severity == $s)) | groups[] | select(.rule | startswith("review.") | not)
@@ -474,7 +484,7 @@ def todo_md($l; $rule; $p; $gaps):
      + (if $l.unresolved == 1 then [{box: true, t: tx("todo-threads-one")}]
         elif $l.unresolved > 1 then [{box: true, t: tx("todo-threads-many"; {count: $l.unresolved})}] else [] end)
      + [ $gs[] | select(.sev != "LOW")
-         | if $rule == 0 and (.rule | startswith("compat.")) then {box: false, t: grp("todo-compat")}
+         | if $rule == 0 and compat_item then {box: false, t: grp("todo-compat")}
            elif all(.items[]; .file == ".") then {box: true, t: grp("todo-fix-root")} # no place to apply it at
            else {box: true, t: grp("todo-fix")} end ]
      + [ $l.refuted_todo[] | {box: true, t: tx("todo-refuted"; trigger_at($p))} ]) as $abc
