@@ -423,8 +423,8 @@ for sh in bash zsh; do
   A="$R/plan-addresses/addresses-13.json"
   check "$sh: the addresses file of the planned example: config addresses, attribute names only" \
     "$(jq -e '{addresses, attributes, module_calls} == {addresses:["aws_kms_key.this","module.s3.aws_s3_bucket.this"], attributes:{"aws_kms_key.this":["policy"],"module.s3.aws_s3_bucket.this":["arn","bucket","logging","region","versioning"]}, module_calls:{"local":"../../"}}' "$A" > /dev/null 2>&1; echo $?)"
-  check "$sh: the addresses file keys, in order, the head commit last" \
-    "$(jq -e 'keys_unsorted == ["addresses","attributes","module_calls","sensitive","head_sha"]' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: the addresses file keys, in order, the head commit and the example last" \
+    "$(jq -e 'keys_unsorted == ["addresses","attributes","module_calls","sensitive","head_sha","example"] and .example == "examples/ok"' "$A" > /dev/null 2>&1; echo $?)"
   check "$sh: the head commit the example was planned at" \
     "$(jq -e --arg h "$(git -C "$R/clone" rev-parse HEAD)" '.head_sha == $h and ($h | test("^[0-9a-f]{40}$"))' "$A" > /dev/null 2>&1; echo $?)"
   check "$sh: a sensitive attribute and a nested sensitive block are listed by top-level name; all-false and not sensitive are not" \
@@ -658,7 +658,7 @@ check "host-pass: could_not_run takes the truncations of the block" \
 # The sensitive names of an addresses file, from ADDR_JQ in plan-pass.sh: the same pattern and
 # 500 cap as attributes, and never a name the attributes leave out.
 AJ="$(sed -n "/^ADDR_JQ='\$/,/^'\$/p" "$PP" | sed '1d;$d')"
-aj() { jq -c --arg h "$2" "$AJ" <<< "$1"; }
+aj() { jq -c --arg h "$2" --arg e "${3:-}" "$AJ" <<< "$1"; }
 o="$(aj "$(jq -n -c '[range(600) | "a\(1000 + .)"] as $n
   | {resource_changes: [{address: "aws_x.big", change: {after: ($n | map({(.): 1}) | add + {Bad: 1}),
       after_sensitive: ($n | map({(.): true}) | add + {Bad: true})}},
@@ -668,6 +668,13 @@ check "addresses: sensitive names keep the pattern and the 500 cap of the attrib
 check "addresses: an instance wholly sensitive marks every attribute of its address" \
   "$(jq -e '.sensitive["aws_x.whole"] == ["a","c"]' <<< "$o" > /dev/null 2>&1; echo $?)"
 check "addresses: no head_sha unless the head is a full SHA" "$(jq -e 'has("head_sha") | not' <<< "$o" > /dev/null 2>&1; echo $?)"
+check "addresses: no example without one" "$(jq -e 'has("example") | not' <<< "$o" > /dev/null 2>&1; echo $?)"
+for bad in '../x' 'examples/../x' 'examples/a b' 'examples/..'; do
+  check "addresses: an example directory outside the pattern is left out ($bad)" \
+    "$(aj '{"resource_changes":[]}' nosha "$bad" | jq -e 'has("example") | not' > /dev/null 2>&1; echo $?)"
+done
+check "addresses: a plain example directory is kept" \
+  "$(aj '{"resource_changes":[]}' nosha 'modules/x/examples/a.b_c-d' | jq -e '.example == "modules/x/examples/a.b_c-d"' > /dev/null 2>&1; echo $?)"
 
 # The runner's clean_addresses in run-pass.sh, which writes the record's addresses files: a
 # sensitive entry outside its shape is dropped, never emptied, and an old file stays without one.
