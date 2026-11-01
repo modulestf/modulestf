@@ -50,10 +50,12 @@
 #   "path", "witnesses": [{"attribute", "example", "address"}]}] with an optional "downloaded":
 #   true when the covering hit is in a downloaded module (skip-coverage.md), and "skip_head_sha" and
 #   "skip_base_sha", its head_sha and base_sha, 40 lowercase hex. dir, path and example are
-#   relative paths, attribute matches ^[a-z0-9_]{1,128}$, and address is 1 to 300 characters with
-#   no control character or backtick; any other shape is refused. The list takes the skipped
-#   examples off ladder rule 4 only when every condition of verdict.md, Covered safety-gate skips,
-#   holds for every one of them, skip_head_sha equal to --head among them; else it is ignored. A
+#   relative paths in one spelling (no leading or trailing slash, no empty, "." or ".."
+#   segment), no dir twice, attribute matches ^[a-z0-9_]{1,128}$, and address is 1 to 300
+#   characters with no control character or backtick; any other shape is refused. The list takes
+#   the skipped examples off ladder rule 4 only when every condition of verdict.md, Covered
+#   safety-gate skips, holds for every one of them, skip_head_sha equal to --head, skip_base_sha
+#   to host.json's merge_base and at most 100 witnesses among them; else it is ignored. A
 #   host.json prose-truncated entry
 #   may carry "item" (body, title or thread) and "omitted" (bytes); only a cut of the body, the
 #   description, is a cause COMPACT admits. The behaviour object's triggers may carry claims-eval's
