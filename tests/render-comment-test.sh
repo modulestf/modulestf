@@ -1530,7 +1530,7 @@ VER='.behaviour.triggers[0] |= (.state = "verified" | .outstanding = [] | del(.e
 cat > "$TMP/want-556k.md" <<'EOF'
 Dropping `compact()` fixes the plan: with an unknown group id the base kept the old value and the head shows an update. It also keeps null and empty-string elements of `vpc_security_group_ids`, and a null element now fails the plan; the description mentions only empty strings.
 
-**Good to merge, with nits.** `validate` passed in all 9 examples; 6 were planned. 3 of 9 examples were not planned because of the review safety checks; the changed code was planned in other examples (see notes).
+**Good to merge, with nits.** `validate` passed in all 9 examples; 6 were planned. 3 of 9 examples were not planned because of the review safety checks; the changed code was planned in `examples/autoscaling` (see notes).
 
 - LOW `compat.expression-behaviour-changed` `main.tf:156` - null and empty-string elements of `var.vpc_security_group_ids` now reach the provider, and a null fails the plan.
   - Fix: reject them with a `validation` block in `variables.tf`, or say in the description that they now fail.
@@ -1539,9 +1539,10 @@ Dropping `compact()` fixes the plan: with an unknown group id the base kept the 
 
 <details><summary>Evidence and notes</summary>
 
-- Not planned, covered: `examples/mysql` (G3 hit in `main.tf`, same at base 89abcde). `vpc_security_group_ids` was planned in `examples/autoscaling` as `module.aurora.aws_rds_cluster.this` at 0123456.
-- Not planned, covered: `examples/s3-import` (G1 hit in `main.tf`, same at base 89abcde). `vpc_security_group_ids` was planned in `examples/autoscaling` as `module.aurora.aws_rds_cluster.this` at 0123456.
-- Not planned, covered: `examples/serverless` (G1 hit in `main.tf`, same at base 89abcde). `vpc_security_group_ids` was planned in `examples/autoscaling` as `module.aurora.aws_rds_cluster.this` at 0123456.
+- Not planned: `examples/mysql` (G3 hit in `main.tf`, same at base 89abcde).
+- Not planned: `examples/s3-import` (G1 hit in `main.tf`, same at base 89abcde).
+- Not planned: `examples/serverless` (G1 hit in `main.tf`, same at base 89abcde).
+- Covered by: `vpc_security_group_ids` planned in `examples/autoscaling` as `module.aurora.aws_rds_cluster.this` at 0123456.
 - Behaviour change at `main.tf:156` reported: judged in F-001 (12 differences). 20 claims verified.
 - Predates this change: `structure.argument-order` at `main.tf:43` - `tags` is not the last argument.
 </details>
@@ -1551,9 +1552,9 @@ t_cov_gold; check "covered: pull request 556 with its skips covered renders COMP
 check "covered: approve with nits proposes COMMENT" "$([ "$(verdict)" = "approve with nits COMMENT" ]; echo $?)"
 check "covered: findings.json lists the routed finding last" "$(jq -e 'map(.id) == ["F-001", "F-002", "F-003"]' "$O/findings.json" > /dev/null; echo $?)"
 
-# The witness lines sit in the collapsed details block, about 200 bytes each; the part a reader
-# sees first, above it, takes one sentence and loses the action line, so it stays near the 556
-# body's own. The 1400 bound of the inconclusive 556 body above is unchanged.
+# The covered lines sit in the collapsed details block, about 80 bytes per skipped example and
+# one witness line of about 130 for all three; the part a reader sees first, above it, takes one
+# sentence and loses the action line, so it stays near the 556 body's own (1723 and 1097 bytes). The 1400 bound of the inconclusive 556 body above is unchanged.
 check "covered: the COMPACT body is at most 2000 bytes, at most 1150 above its details block" \
   "$([ "$(wc -c < "$TMP/want-556k.md")" -le 2000 ] && [ "$(awk '/^<details>/ { exit } { print }' "$TMP/want-556k.md" | wc -c)" -le 1150 ]; echo $?)"
 
@@ -1563,7 +1564,7 @@ unch() {
   local fi="$2" ru="$3" ho="${4:-$H556N}" ch="${5:-$CHK}" b1
   jq 'del(.coverage.covered_skips, .coverage.skip_head_sha, .coverage.skip_base_sha)' "$ru" > "$ru.plain"
   render "$fi" "$ho" "$ch" "$ru" "$TMP/assess-556.txt"; b1="$O"
-  [ "$ST" = 0 ] && ! grep -qE 'Not planned, covered|review safety checks' "$O/comment.md" || return 1
+  [ "$ST" = 0 ] && ! grep -qE 'Covered by: |review safety checks' "$O/comment.md" || return 1
   render "$fi" "$ho" "$ch" "$ru.plain" "$TMP/assess-556.txt"
   [ "$ST" = 0 ] && cmp -s "$b1/comment.md" "$O/comment.md" && cmp -s "$b1/result.json" "$O/result.json"
 }
@@ -1629,8 +1630,28 @@ kref "with a short skip_head_sha" '.coverage.skip_head_sha |= .[:7]'
 t_cov_shaonly() { render "$(F556C)" "$H556N" "" "$(R556K kshaonly 'del(.coverage.covered_skips)')" "$TMP/assess-556.txt"; [ "$ST" = 2 ] && empty_out; }
 t_cov_shaonly; check "refused: the skip SHAs without covered_skips" $?
 t_cov_badshape() { render "$(F556C)" "$H556N" "" "$(R556K kshape '.coverage.covered_skips[0].extra = 1')" "$TMP/assess-556.txt"; [ "$ST" = 2 ] && empty_out; }
-t_cov_dl() { rc "$(F556C)" "$(R556K kdl '.coverage.covered_skips[0].downloaded = true')" "$H556N"; [ "$ST" = 0 ] && cmp -s "$O/comment.md" "$TMP/want-556k.md"; }
-t_cov_dl; check "covered: a downloaded true flag renders the same body" $?
+# A gate hit in a downloaded module is no base measurement: its line names neither a path nor a
+# base, in either tier.
+DLLINE='- Not planned: `examples/mysql` (G3 hit in a downloaded module; the pull request cannot change it).'
+t_cov_dl() {
+  rc "$(F556C)" "$(R556K kdl '.coverage.covered_skips[0].downloaded = true')" "$H556N"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && cmp -s "$O/comment.md" <(sed "s|^- Not planned: \`examples/mysql\` .*|$DLLINE|" "$TMP/want-556k.md") || return 1
+  rc "$(F556C)" "$(R556K kdls '.coverage.covered_skips[0].downloaded = true')" "$H556N" --standard
+  [ "$ST" = 0 ] && grep -qxF -- "$DLLINE" "$O/comment.md" &&
+    grep -qxF -- '- Not planned: `examples/s3-import` (G1 hit in `main.tf`, same at base 89abcde).' "$O/comment.md"
+}
+t_cov_dl; check "covered: a downloaded hit names no path and no base, a measured one both, in both tiers" $?
+# One line per distinct witness: three skips with one witness give one line (the golden); two
+# distinct witnesses give two, in first-seen order, and the sentence says other examples.
+W2='{attribute: "vpc_security_group_ids", example: "examples/postgresql", address: "module.aurora.aws_rds_cluster.this"}'
+t_cov_two() {
+  rc "$(F556C)" "$(R556K ktwo '.coverage.covered_skips[1].witnesses = ['"$W2"']')" "$H556N"
+  [ "$ST" = 0 ] && [ "$(grep -c '^- Covered by: ' "$O/comment.md")" = 2 ] &&
+    [ "$(sed -n 's/^- Covered by: `vpc_security_group_ids` planned in `\(examples\/[a-z]*\)` .*/\1/p' "$O/comment.md" | tr '\n' ' ')" = "examples/autoscaling examples/postgresql " ] &&
+    grep -qF '3 of 9 examples were not planned because of the review safety checks; the changed code was planned in other examples (see notes).' "$O/comment.md"
+}
+t_cov_two; check "covered: two distinct witnesses give two lines and say other examples" $?
+t_cov_gold; check "covered: three skips with one witness give one witness line" "$([ "$(grep -c '^- Covered by: ' "$O/comment.md")" = 1 ]; echo $?)"
 t_cov_dlfalse() { render "$(F556C)" "$H556N" "" "$(R556K kdlf '.coverage.covered_skips[0].downloaded = false')" "$TMP/assess-556.txt"; [ "$ST" = 2 ] && empty_out; }
 t_cov_dlfalse; check "covered: a downloaded false flag is refused" $?
 
@@ -1639,7 +1660,9 @@ t_cov_names() {
   rc "$NONE" "$(R556K knames "$VER"' | .coverage.unplanned = [{dir: "examples/b c", reason: "plan gate G1"}]
     | .coverage.covered_skips = [{dir: "examples/b c", gate: "G1", path: "ma in.tf", witnesses: [{attribute: "tags",
         example: "examples/x y", address: "module.a@org/team.this"}]}]')" "$H556N"
-  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && ! grep -qF '@' "$O/comment.md" && grep -qxF -- '- Not planned, covered: name withheld (G1 hit in name withheld, same at base 89abcde). `tags` was planned in name withheld as name withheld at 0123456.' "$O/comment.md"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && ! grep -qF '@' "$O/comment.md" && grep -qxF -- '- Not planned: name withheld (G1 hit in name withheld, same at base 89abcde).' "$O/comment.md" &&
+    grep -qxF -- '- Covered by: `tags` planned in name withheld as name withheld at 0123456.' "$O/comment.md" &&
+    grep -qF 'the changed code was planned in other examples (see notes).' "$O/comment.md"
 }
 t_cov_names; check "covered: names outside the charset are withheld" $?
 t_cov_leak() {
@@ -1653,16 +1676,16 @@ t_cov_rule8() {
   rc "$NONE" "$(R556K k8 "$VER")" "$H556N"
   [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && [ "$(tier)" = COMPACT ] &&
     cmp -s "$O/comment.md" <(printf '%s\n' "$(cat "$TMP/assess-556.txt")" '' \
-      '**Good to merge, with nits.** `validate` passed in all 9 examples; 6 were planned. 3 of 9 examples were not planned because of the review safety checks; the changed code was planned in other examples (see notes).' '' \
-      '<details><summary>Evidence and notes</summary>' '' "$(sed -n '/^- Not planned, covered:/p' "$TMP/want-556k.md")" '- 20 claims verified.' '</details>')
+      '**Good to merge, with nits.** `validate` passed in all 9 examples; 6 were planned. 3 of 9 examples were not planned because of the review safety checks; the changed code was planned in `examples/autoscaling` (see notes).' '' \
+      '<details><summary>Evidence and notes</summary>' '' "$(sed -nE '/^- (Not planned: |Covered by: )/p' "$TMP/want-556k.md")" '- 20 claims verified.' '</details>')
 }
 t_cov_rule8; check "covered: no finding lands at rule 7, proposes COMMENT, COMPACT byte for byte" $?
 t_cov_rule8_std() {
   rc "$NONE" "$(R556K k8s "$VER")" "$H556N" --standard
   [ "$ST" = 0 ] && [ "$(verdict)" = "approve with nits COMMENT" ] &&
     cmp -s "$O/comment.md" <(printf '%s\n' "$(cat "$TMP/assess-556.txt")" '' '**Good to merge, with nits.**' '' \
-      'No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7). 3 of 9 examples were not planned because of the review safety checks; the changed code was planned in other examples, as listed below.' '' \
-      '### Examples not planned' '' "$(sed -n '/^- Not planned, covered:/p' "$TMP/want-556k.md")")
+      'No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7). 3 of 9 examples were not planned because of the review safety checks; the changed code was planned in `examples/autoscaling`, as listed below.' '' \
+      '### Examples not planned' '' "$(sed -nE '/^- (Not planned: |Covered by: )/p' "$TMP/want-556k.md")")
 }
 t_cov_rule8_std; check "covered: STANDARD with no finding, no What to do, byte for byte" $?
 
@@ -1671,7 +1694,7 @@ t_cov_rule8_std; check "covered: STANDARD with no finding, no What to do, byte f
 t_cov_std() {
   rc "$(F556C)" "$(R556K kstd)" "$H556N" --standard
   [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && cmp -s "$O/comment.md" <(printf '%s\n' "$(cat "$TMP/assess-556.txt")" '' '**Good to merge, with nits.**' '' \
-    'Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7). 3 of 9 examples were not planned because of the review safety checks; the changed code was planned in other examples, as listed below.' '' \
+    'Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7). 3 of 9 examples were not planned because of the review safety checks; the changed code was planned in `examples/autoscaling`, as listed below.' '' \
     '### What to do' '' 'Nothing blocks merge. The items below are optional.' '' \
     '- Optional: `compat.expression-behaviour-changed` at `main.tf:156`.' \
     '- Optional: `compat.claim-contradicts-analysis` at `.`.' \
@@ -1682,7 +1705,7 @@ t_cov_std() {
     '- `compat.claim-contradicts-analysis` - `.` - The description says only empty strings now reach the provider; null elements of `var.vpc_security_group_ids` reach it too.' \
     '  - Fix: no code change: add to the description: "Dropping `compact()` also keeps null elements, and a null element now fails the plan."' \
     '- `structure.argument-order` - `main.tf:43` - `tags` is not the last argument.' '  - Fix: Move `tags` last.' '' \
-    '### Examples not planned' '' "$(sed -n '/^- Not planned, covered:/p' "$TMP/want-556k.md")")
+    '### Examples not planned' '' "$(sed -nE '/^- (Not planned: |Covered by: )/p' "$TMP/want-556k.md")")
 }
 t_cov_std; check "covered: STANDARD lists the witness lines in section 5, byte for byte" $?
 
@@ -1702,15 +1725,15 @@ t_cov_allskip() { unch x "$(F556C)" "$(R556K kall '.examples = {count: 3, valida
 # 100 witnesses in all cover; 101 do not.
 wits() { printf '[range(%s) | %s + {attribute: "a\\(.)"}]' "$1" "$W1"; } # a jq expression of $1 witnesses
 t_cov_w100() {
-  rc "$(F556C)" "$(R556K kw100 '.coverage.covered_skips[0].witnesses += '"$(wits 97)")" "$H556N"
-  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(grep -c '^- Not planned, covered: ' "$O/comment.md")" = 100 ]
+  rc "$(F556C)" "$(R556K kw100 '.coverage.covered_skips[0].witnesses += '"$(wits 99)")" "$H556N"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(grep -c '^- Covered by: ' "$O/comment.md")" = 100 ]
 }
-t_cov_w101() { unch x "$(F556C)" "$(R556K kw101 '.coverage.covered_skips[0].witnesses += '"$(wits 98)")"; }
+t_cov_w101() { unch x "$(F556C)" "$(R556K kw101 '.coverage.covered_skips[0].witnesses += '"$(wits 100)")"; }
 for c in "skip_base_sha other than the merge base:base" "a null merge base:nomb" "a plan pass that did not run:noplan" \
-  "every selected example skipped:allskip" "101 witnesses:w101"; do
+  "every selected example skipped:allskip" "101 distinct witnesses:w101"; do
   "t_cov_${c##*:}"; check "covered: ${c%:*} leaves the body as without covered_skips" $?
 done
-t_cov_w100; check "covered: 100 witnesses cover, one line each" $?
+t_cov_w100; check "covered: 100 distinct witnesses cover, one line each" $?
 
 # One spelling per path, and each directory once.
 kref "with a trailing slash on dir" '.coverage.covered_skips[0].dir = "examples/mysql/"'
@@ -1727,9 +1750,9 @@ t_cov_dupdir; check "refused: covered_skips with a dir listed twice under the sa
 ONE='.coverage.unplanned = [{dir: "examples/mysql", reason: "plan gate G3"}] | .coverage.covered_skips |= .[:1]'
 t_cov_one() {
   rc "$(F556C)" "$(R556K kone "$ONE")" "$H556N"
-  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && grep -qF '`validate` passed in all 9 examples; 8 were planned. 1 of 9 examples was not planned because of the review safety checks; the changed code was planned in other examples (see notes).' "$O/comment.md" || return 1
+  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && grep -qF '`validate` passed in all 9 examples; 8 were planned. 1 of 9 examples was not planned because of the review safety checks; the changed code was planned in `examples/autoscaling` (see notes).' "$O/comment.md" || return 1
   rc "$(F556C)" "$(R556K kones "$ONE")" "$H556N" --standard
-  [ "$ST" = 0 ] && grep -qF '(ladder rule 7). 1 of 9 examples was not planned because of the review safety checks; the changed code was planned in other examples, as listed below.' "$O/comment.md" &&
+  [ "$ST" = 0 ] && grep -qF '(ladder rule 7). 1 of 9 examples was not planned because of the review safety checks; the changed code was planned in `examples/autoscaling`, as listed below.' "$O/comment.md" &&
     ! grep -qF 'see notes' "$O/comment.md" && ! grep -qF 'Checks that could not run' "$O/comment.md"
 }
 t_cov_one; check "covered: one skip takes the one form in both tiers, with the same count, and STANDARD names no notes" $?
@@ -1756,17 +1779,21 @@ mutate "the covered_skips shape not checked" 's/\(\(\.covered_skips \| valid_cov
 mutate "the skip SHAs accepted alone" 's/and \(\[has\("covered_skips", "skip_base_sha", "skip_head_sha"\)\] \| unique \| length == 1\)//' t_cov_shaonly
 mutate "covered names not allowlisted" 's/dir: \(\$c\.dir \| nm\(allowed\)\)/dir: (\$c.dir | nm(true))/' t_cov_names
 mutate "the witness lines left out of section 5" 's/if \$cov != \[\] then covered_lines\("unplanned-covered"; \$cov; \$run\) else/if false then [] else/' t_cov_std
-mutate "the COMPACT sentence dropped" 's/\+ \(if \$cov != \[\] then " " \+ covered_sentence\("compact-covered"; \$run\)/+ (if false then " " + covered_sentence("compact-covered"; \$run)/' t_cov_gold
+mutate "the COMPACT sentence dropped" 's/\+ \(if \$cov != \[\] then " " \+ covered_sentence\("compact-covered"; \$run; \$cov\)/+ (if false then " " + covered_sentence("compact-covered"; \$run; \$cov)/' t_cov_gold
 mutate "What to do with no item rendered" 's/ or \(\$cov != \[\] and \$items == \[\]\)//' t_cov_rule8_std
 mutate "the rule 7 rationale for covered skips alone dropped" 's/elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) then tx\("rationale-7-covered"\)\n//' t_cov_rule8_std
 mutate "the base not checked" 's/ and \$cv\.skip_base_sha == \$in\.host\.merge_base//' t_cov_base
 mutate "a plan pass that did not run accepted" 's/and \$run\.plan_ran and \$run\.plan_mode/and \$run.plan_mode/' t_cov_noplan
 mutate "every example skipped accepted" 's/ and \(\$u \| length\) < \(\$run\.examples\.count \/\/ 0\)//' t_cov_allskip
-mutate "the witness cap dropped" 's/and \(\[\$cs\[\]\.witnesses\[\]\] \| length\) <= 100/and true/' t_cov_w101
+mutate "the witness cap dropped" 's/and \(witnesses\(\$cs\) \| length\) <= 100/and true/' t_cov_w101
 mutate "non-canonical paths accepted" 's/def canon_path: plain_path and [^\n]*/def canon_path: plain_path;/' t_cov_canon
 mutate "a dir listed twice accepted" 's/type == "array" and \(map\(\.dir\?\) \| length == \(unique \| length\)\)/type == "array"/' t_cov_dupdir
 mutate "the one form of the covered sentence dropped" 's/tx\(\$k \+ \(if \$n == 1 then "-one" else "-many" end\); \{count: \$n, total/tx(\$k + "-many"; {count: \$n, total/' t_cov_one
 mutate "STANDARD section 5 keeps its gap heading" 's/section\(if \$cov != \[\] then "Examples not planned" else/section(if false then "Examples not planned" else/' t_cov_one
+mutate "witnesses not deduplicated" 's/if any\(\.\[\]; \. == \$w\) then \. else \. \+ \[\$w\] end/. + [\$w]/' t_cov_gold
+mutate "the downloaded flag ignored" 's/\(if \$c\.downloaded then "-downloaded" else "" end\)/""/' t_cov_dl
+mutate "the one witness example not allowlisted" 's/ and \(\$e\[0\] \| allowed\)//' t_cov_names
+mutate "one example named for several witness examples" 's/if \(\$e \| length\) == 1 and/if true and/' t_cov_two
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi
