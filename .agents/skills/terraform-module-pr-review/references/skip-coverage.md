@@ -1,0 +1,145 @@
+# Skip Coverage
+
+> **Part of:** [terraform-module-pr-review](../SKILL.md)
+> **Purpose:** Which examples a plan gate kept from planning are covered by the plans of other examples: the script, its inputs, the allow-list of changes, the base and head gate records, the witnesses, the reasons, the output and its limits.
+
+A laptop plan pass skips an example whose files hit gate G1, G2 or G3 ([plan-pass.md](plan-pass.md#gates)), and [plan coverage](verify-pass.md#plan-coverage) lists it as not planned, an unknown at [verdict.md](verdict.md#the-ladder) rule 4. Such a skip says nothing about the change when the change cannot reach the gated code and the code it does change was planned elsewhere. This file decides that for conditions 1 and 2 of the rule; the render checks the rest ([render-comment.sh](render-comment.sh)). Any doubt leaves the skip an unknown, as it is today.
+
+The script is [skip-coverage.sh](skip-coverage.sh), with the decision in [skip-coverage.jq](skip-coverage.jq). It runs the same under bash and zsh, reads only files, never runs terraform and never reads the network. Like its siblings it is invoked by an absolute path in the skill as installed, never from the head or the workspace.
+
+## Commands
+
+```
+<bash|zsh> /abs/path/skip-coverage.sh gates <run-dir> --tree <dir> --base <sha> \
+    --coverage <coverage.json> --out <file>
+<bash|zsh> /abs/path/skip-coverage.sh check <run-dir> --files <files.json> \
+    --coverage <coverage.json> --plan <record> --head <sha> --base <sha|unresolved> \
+    [--addresses <dir>] [--base-gates <file>] [--prefix <module-root>]
+```
+
+`gates` writes the base gate record, [Gate records](#gate-records), for every directory in the coverage's `unplanned` list. It refuses, exit 2 and nothing written, unless `--tree` is a git tree whose `HEAD` is the `--base` commit; a step that fails writes nothing either. `check` prints one JSON object, [Output](#output), on standard output.
+
+Exit 0 means the evaluation ran: every directory uncovered is a valid result. Exit 2 is a usage error or a refused input, and nothing is printed: a run directory of another shape, a `--head` that is not a full lowercase SHA, a `--base` that is neither one nor the word `unresolved`, a missing or oversized `--files`, `--coverage` or `--plan`, a files list that is not an array of file objects, or a coverage that is not a plan coverage object.
+
+## Inputs
+
+| Input | What it is |
+|-------|------------|
+| `<run-dir>` | The run directory of [Workspace](github-io.md#workspace), with the clone at head in `<run-dir>/clone` |
+| `--files` | The changed files list, `files.json` of [verify-pass.md](verify-pass.md#inputs): `filename`, `status`, `patch` and `previous_filename` are read |
+| `--coverage` | The output of `verify-pass.sh coverage`; only `unplanned` is read |
+| `--plan` | The plan pass's laptop record, the lines it printed: `plan pass mode:`, and per example `example:` and `plan:` |
+| `--addresses` | The directory of `addresses-<n>.json` beside the record ([plan-pass.md](plan-pass.md#saved-plans-and-addresses)), `<n>` the example's place in the record |
+| `--base-gates` | The base gate record `gates` wrote |
+| `--head` | The head commit, the full SHA; the clone must be at it |
+| `--base` | The merge base, the full SHA from the compare read in Workspace, or `unresolved` when it could not be read |
+| `--prefix` | The module root's repository-relative path, empty by default |
+
+### The base tree
+
+The base gate record needs a tree at the merge base. The run already has one when the merge base re-run added it: the worktree at `<run-dir>/base`. Otherwise the caller adds it the same way, `git -C <run-dir>/clone worktree add --detach <run-dir>/base <base>`,. Then `gates --tree <run-dir>/base --base <base>` writes the record; the worktree may go after that.
+
+With no base tree, or no record, every candidate directory is `base-record-missing`: the skips stay unknowns.
+
+## Conditions
+
+A directory is covered only when every check below holds, in this order; the first that fails gives its reason.
+
+1. It appears once in `unplanned` (else `not-sole-reason`), with the reason `plan gate G1`, `plan gate G2` or `plan gate G3` (else `wrong-gate-class`: G0, a failed plan, no profile, anything else).
+2. The clone is at `--head` (else `head-mismatch`).
+3. The plan record is a laptop record with a block for the directory whose `plan:` line is the same gate with a first hit `<path>:<line>` (else `plan-record-unusable`). A runner record never covers a skip.
+4. The whole change passes [The allow-list](#the-allow-list) and changes at least one attribute (else `change-not-allowed`).
+5. No changed file, by its name or its previous name, lies under the directory (else `dir-changed`).
+6. `--base` is a SHA (else `merge-base-unresolved`).
+7. The base gate record names `--base`, ends with its `end` line and holds the directory with its `done` line (else `base-record-missing`: missing, stale or partial).
+8. Exact base hit: the head gate record, which `check` computes over the clone with the same function, holds the same lines for the directory as the base record, its scope files and its hits as a multiset of gate and path, and the record's first hit is among them (else `hit-set-differs`). A hit the plan pass found in a downloaded module is never in either record, so it always lands here.
+9. No head hit is G0 (else `wrong-gate-class`).
+10. Every changed attribute has a witness, [Witnesses](#witnesses) (else `witness-sensitive` when every attribute without one had a candidate that failed only on its sensitive bit, otherwise `no-witness`).
+
+Checks 2, 4, 6 and 10 are about the whole change, so they give every directory the same reason.
+
+## Gate records
+
+`gates` and `check` build a gate record with one function. For each directory, in the tree at hand: `plan-pass.sh scope` lists the clone scope the plan pass gated, the example's `.tf` files and those of every local module directory it reaches, and `plan-pass.sh gates <run-dir> laptop clone` runs the per-file gates G0 to G3 over that list. Both are the plan pass's own functions, so head and base cannot drift from it. plan-pass.sh reads the tree through a run directory of its own under the script's temporary directory, whose `clone` is a link to the tree, so a local module source in the base tree resolves inside the base tree.
+
+```
+skip-gates 1 <sha>
+dir <dir>
+file <path>
+hit <gate> <path>
+done <dir>
+end
+```
+
+Paths are relative to the tree. A hit keeps its gate and file and drops its line, since an allowed change elsewhere in a shared file moves lines; a directory absent from the tree records `file MISSING`. The pass's downloaded scope is not in the record: it exists only after `init`, which this script never runs.
+
+## The allow-list
+
+Every changed file of the pull request must be one of:
+
+- a `*.md` file anywhere, with status `modified`;
+- a `.tf` file with status `modified` and no `previous_filename`, at the module root or under `modules/`, never under an `examples/` or `wrappers/` directory, whose every change is a plain expression change to an attribute of a resource or data block.
+
+Anything else fails the whole change: any other file type, any status but `modified` (an added, removed, renamed or copied file), a `.tf` elsewhere, a file with no `patch`, and a change of only `*.md` files. A change with no Terraform change at all reaches no HCL read site and is inert; the render handles an inert change without this file, so the skips come back `change-not-allowed` and nothing is lost.
+
+For a `.tf` file the parser in the script works on the head file in the clone and the patch:
+
+1. It rebuilds the base text from the head text and the hunks. Every context and added line must equal the head file at its place and every hunk's line counts must match its header; otherwise the file fails. A file with a non-ASCII byte or a carriage return fails.
+2. It parses both texts into blocks and attributes, with strings, interpolations, heredocs and comments read by a lexer; a `/*` comment, a template directive, a label that is not a plain name or anything it cannot place fails the file.
+3. The skeletons of both texts, every block header and every attribute name in order, must be equal: no block or attribute added, removed, renamed or moved.
+4. Each change group, a run of removed and added lines, must fall wholly inside one attribute, its removed lines in the base and its added lines in the head, and that attribute must be a direct argument of a top-level `resource` or `data` block with two labels. A changed comment or blank line between attributes fails; so does a group that spans two attributes.
+5. The attribute is not `count`, `for_each`, `provider` or `depends_on`; `lifecycle`, `connection`, `provisioner`, `dynamic` and every other nested block fail at step 4.
+6. Its expression, at head and at base, is plain: numbers, strings whose interpolations are plain, `true`, `false`, `null`, references with attribute, index and splat steps, tuples, objects with name or string keys, and calls of only `concat`, `compact`, `flatten`, `distinct`, `join`, `format`, `length`, `toset`, `tolist`, `tomap`, `element`, `keys` and `values`. Any operator, `?:`, `for`, `...`, a heredoc, a reference rooted at `each`, `count` or `self`, and every other function, `try`, `can`, `lookup`, `coalesce`, `merge`, `file`, `templatefile` and `jsondecode` among them, fail.
+
+The changed attribute is then `{dir, address, attribute}`: the file's directory, `.` for the root; the block's address, `<type>.<name>` or `data.<type>.<name>`; and the attribute's name.
+
+## Witnesses
+
+Condition 2 of the rule: a plan of another example planned the changed code. For each changed attribute the examples of the record whose class is `planned` are tried in path order, and the first that qualifies is the witness:
+
+- its `addresses-<n>.json` names `head_sha` equal to `--head`;
+- a module call in its `module_calls`, tried by name, has a local source that resolves from the example directory, as plan coverage resolves it, to exactly the changed file's directory;
+- `module.<call>.<address>` is in its `addresses`, and the attribute is in that address's `attributes`;
+- its `sensitive` map holds that address with an array of names that does not contain the attribute.
+
+These follow from it: count 0 or an empty `for_each` plans no instance, so no address; a registry or git source is not in `module_calls`; the same address under a call whose source resolves elsewhere is not a witness; a missing `sensitive` key, an address missing from it or a value of another shape gives no witness. `planned-no-changes` is not a witness here, since the rule counts it only for a change the ladder classed inert, and the render takes no covered skip for an inert change.
+
+The v1 limit: the address's module path is exactly one `module.<call>` level, called directly by the example, whose source is the module root or the `modules/<sub>` directory of the changed file. A change reached only through a deeper chain, such as the root module calling `modules/<sub>`, has no witness, and the skips stay unknowns.
+
+## Output
+
+```
+{"format": 1, "head_sha": "<40 hex>", "base_sha": "<40 hex>" or null,
+ "covered": [{"dir": "...", "gate": "G3", "path": "...", "witnesses":
+               [{"attribute": "...", "example": "...", "address": "..."}]}],
+ "uncovered": [{"dir": "...", "why": "<reason>"}]}
+```
+
+Every directory of `unplanned` appears once, in its order, in `covered` or in `uncovered`. `path` is the file of the record's first hit, without its line. `witnesses` holds one entry per changed attribute, the same for every covered directory. `base_sha` is null only for `--base unresolved`, and `covered` is then empty.
+
+The reasons, a closed list: `not-sole-reason`, `wrong-gate-class`, `head-mismatch`, `plan-record-unusable`, `change-not-allowed`, `dir-changed`, `merge-base-unresolved`, `base-record-missing`, `hit-set-differs`, `witness-sensitive`, `no-witness`.
+
+## What crosses to the reviewer
+
+Nothing from this script crosses to the reviewer. The host puts `covered` into the run file's `coverage` as `covered_skips`, with `head_sha` and `base_sha` as `skip_head_sha` and `skip_base_sha` ([render-comment.sh](render-comment.sh)), and only when `covered` is not empty; the render applies it only when conditions 3 to 5 also hold, all skips or none. The `uncovered` list and its reasons stay in the run's own log. Directory, path, example and address are names only, and the render checks each against its pattern before it shows one.
+
+## Failure modes
+
+Each fails closed, the skips stay unknowns:
+
+| Failure | Result |
+|---------|--------|
+| No base worktree, or `gates` refused or failed | no record, `base-record-missing` |
+| The record names another SHA, lacks `end`, or a directory lacks `done` | `base-record-missing` |
+| `plan-pass.sh scope` or `gates` failed at head | `hit-set-differs` |
+| The clone moved off `--head` | `head-mismatch` |
+| A head file missing from the clone, a patch that does not apply to it, a file the parser cannot read | `change-not-allowed` |
+| An addresses file missing, oversized, a link, or not JSON | that example gives no witness |
+
+## Limits
+
+- The downloaded scope is never compared, so a skip whose hit is in a downloaded module always stays an unknown.
+- A hit keeps no line, so a second hit of the same gate in the same file that replaces one removed elsewhere in it would compare equal; the allow-list keeps such text out of an allowed change.
+- The parser reads the subset of HCL the allow-list needs and fails on the rest; it is no Terraform parser.
+- A change group spanning two attributes fails, though each half might be allowed alone.
+- Addresses and the sensitive bit come from the head's own plan, read back with `terraform show`: evidence the head could shape, as [plan-pass.md](plan-pass.md#saved-plans-and-addresses) says.
