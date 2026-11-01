@@ -83,14 +83,16 @@ A refuted claim outranks a covered trigger, since rule 2 comes before rule 4 and
 
 The plan pass refuses to run example code at the gates G1 to G3 on a laptop ([plan-pass.md](plan-pass.md)), so a change can leave examples not planned for no fault of its own. [skip-coverage.md](skip-coverage.md) decides, per skipped example, whether its gate hit is the same at the base and whether every changed attribute was planned in another example, and hands the host a `covered_skips` list in the run file's `coverage` ([render-comment.sh](render-comment.sh)). The host render reads that list only when all of these hold, and otherwise renders as if it were absent, today's inconclusive body with no witness line:
 
-- the plan pass ran in laptop mode, the change is not inert, and `skip_head_sha` is the head the render was asked for;
+- the plan pass ran (`plan_ran`), in laptop mode, and the change is not inert;
+- `covered_skips` is not empty, `skip_head_sha` is the head the render was asked for, and `skip_base_sha` is host.json's `merge_base`; a null `merge_base` matches nothing;
 - every example not planned was skipped for `plan gate G1`, `plan gate G2` or `plan gate G3`, each one once, and each is in `covered_skips` under its own gate, which lists nothing else: all or nothing;
-- no witness example is itself one of the skipped examples;
+- at least one selected example was planned: fewer examples were not planned than `examples.count`;
+- no witness example is itself one of the skipped examples, and the witnesses number at most 100 in all, which keeps the body within the size a comment may have;
 - the behaviour step ran, with at least one trigger or claim, every trigger `verified`, `covered`, `inert` or `reported` and none over the cap, and every claim `verified`;
 - `validate` passed in every selected example, and the run file says so in `examples`;
 - no other rule 4 unknown: no triage run, no unknown host signal, no `review.*` finding other than the disputed note, no verification gap and no `could_not_run` entry, the description cut among them.
 
-When they hold, the covered examples leave rule 4 together. Rules 0 to 3, 5 and 6 run unchanged, and the best verdict is approve with nits at rule 7, which proposes `COMMENT`: rule 8 is not reachable while a covered skip exists, so no run with one proposes `APPROVE`. The body names each witness ([comment-format.md](comment-format.md#host-render-strings), `evidence-covered-skip` and `unplanned-covered`). A `covered_skips` of the wrong shape is a refused input: exit 2, and nothing is written.
+When they hold, the covered examples leave rule 4 together. Rules 0 to 3, 5 and 6 run unchanged, and the best verdict is approve with nits at rule 7, which proposes `COMMENT`: rule 8 is not reachable while a covered skip exists, so no run with one proposes `APPROVE`. The body names each witness ([comment-format.md](comment-format.md#host-render-strings), `evidence-covered-skip` and `unplanned-covered`). A `covered_skips` of the wrong shape is a refused input, exit 2 and nothing written: an entry with keys other than `dir`, `gate`, `path`, `witnesses` and an optional `downloaded` true, a gate other than G1 to G3, a `dir` listed twice, a `dir`, `path` or witness `example` that is not a relative path in one spelling (no leading or trailing slash, no empty, `.` or `..` segment), an empty witness list, or a witness with keys other than `attribute`, `example` and `address`, an attribute outside `^[a-z0-9_]{1,128}$` or an address of more than 300 characters or with a control character or backtick; and the two SHAs, 40 lowercase hex, come with the list or not at all.
 
 ## Clamps
 
