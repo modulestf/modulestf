@@ -469,7 +469,8 @@ def loc_list($p): # the first eight locations, then the count of the rest
   | ($l[:8] | join(", ")) + (if ($l | length) > 8 then tx("todo-more"; {count: (($l | length) - 8)}) else "" end);
 
 # $gaps: the section 5 entries less the thread resolution one, which has its own item.
-def todo_md($l; $rule; $p; $gaps):
+# The optional items and the gaps line are quiet: a rule 4 list of quiet items alone does not render.
+def todo_items($l; $rule; $p; $gaps):
   ($l.findings | map(select(.rule_id != "review.tool-disputed"))) as $f
   | $l.signals as $g
   | def compat_item: (.rule | startswith("compat.")) and .rule != "compat.claim-contradicts-analysis" and (all(.items[]; .file == ".") | not);
@@ -489,7 +490,7 @@ def todo_md($l; $rule; $p; $gaps):
            else {box: true, t: grp("todo-fix")} end ]
      + [ $l.refuted_todo[] | {box: true, t: tx("todo-refuted"; trigger_at($p))} ]) as $abc
   | ($abc
-     + [ $gs[] | select(.sev == "LOW") | {box: false, t: grp("todo-optional")} ]
+     + [ $gs[] | select(.sev == "LOW") | {box: false, quiet: true, t: grp("todo-optional")} ]
      + (if any($l.findings[]; .suggested_fix | stale_live) then [{box: any($abc[]; .box), t: tx("todo-generated")}] else [] end)
      + (if $rule != 4 then [] else
           [ (select($l.triage) | "todo-triage"),
@@ -498,10 +499,12 @@ def todo_md($l; $rule; $p; $gaps):
             (select($g.review_decision == "unknown") | "todo-review-decision-unknown"),
             (select($g.mergeability == "unknown") | "todo-mergeability-unknown")
           | {box: false, t: tx(.)} ]
-          + (if $gaps == 1 then [{box: false, t: tx("todo-gaps-one")}]
-             elif $gaps > 1 then [{box: false, t: tx("todo-gaps-many"; {count: $gaps})}] else [] end)
-        end)) as $items
-  | tx(if $rule == 0 then "todo-lead-0" elif $rule == 4 then "todo-lead-4" elif $rule == 7 then "todo-lead-7"
+          + (if $gaps == 1 then [{box: false, quiet: true, t: tx("todo-gaps-one")}]
+             elif $gaps > 1 then [{box: false, quiet: true, t: tx("todo-gaps-many"; {count: $gaps})}] else [] end)
+        end));
+
+def todo_md($rule; $items):
+  tx(if $rule == 0 then "todo-lead-0" elif $rule == 4 then "todo-lead-4" elif $rule == 7 then "todo-lead-7"
        else "todo-lead-block" end)
     + (if $items == [] then "" else "\n\n" + ($items | map((if .box then "- [ ] " else "- " end) + .t) | join("\n")) end);
 
@@ -538,9 +541,12 @@ def gap_lines($h; $run; $b; $p):
             (.capped | select(. > 0) | tx("behaviour-capped"; {count: .})),
             (.claims[] | select(.state == "unverifiable") | tx("behaviour-claim"; {claim_id})) ] end);
 
-# The one evidence line under the rationale, when the behaviour step ran and classified anything.
+# The one evidence line under the rationale, when the behaviour step ran and a trigger or claim
+# is refuted or not verified; a run where all passed or were reported has none.
 def evidence_lines($b):
-  if $b == null or $b.status != "ran" or ($b.triggers == [] and $b.claims == [] and $b.capped == 0) then []
+  if $b == null or $b.status != "ran"
+     or ($b.capped == 0 and all($b.triggers[]; .state | IN("verified", "covered", "inert", "reported"))
+         and all($b.claims[]; .state == "verified")) then []
   else
     def n($xs; $s): [$xs[] | select(.state == $s)] | length;
     [tx(if n($b.triggers; "reported") > 0 then "behaviour-evidence-reported" else "behaviour-evidence" end;
@@ -686,12 +692,14 @@ def compact_ok($l; $v; $c; $run; $b):
 
 # Over a COMPACT cap the model text goes back to the reviewer; nothing is cut.
 # Every offender, in input order, with its length and its limit, in one message.
+# A needs decision: fix keeps its length target, 600, which is also its STANDARD cap.
 def compact_refusal($in):
   [ ($in.assessment | length | select(. > 350) | "the assessment is \(.) characters, limit 350"),
     ($in.assessment | select(test("\n\n")) | "the assessment is more than one paragraph, limit one"),
     ($in.findings[] | .id as $id
       | (.summary | length | select(. > 200) | "finding \($id) summary is \(.) characters, limit 200"),
-        (.suggested_fix | length | select(. > 250) | "finding \($id) suggested_fix is \(.) characters, limit 250")) ] as $o
+        (.suggested_fix | (if startswith("needs decision:") then 600 else 250 end) as $cap
+          | length | select(. > $cap) | "finding \($id) suggested_fix is \(.) characters, limit \($cap)")) ] as $o
   | if $o == [] then null else "over the COMPACT limits: " + ($o | join("; ")) end;
 
 # Names the pull request controls render only in the details block: allowlisted, sorted, at most
@@ -702,6 +710,12 @@ def name_list: sort | (.[:3] | map(if allowed then "`\(.)`" else tx("name-withhe
 def safe_loc($p): (.file | repo_path($p)) as $f
   | if $f | allowed then "`" + $f + (if .line == null then "" else ":\(.line)" end) + "`" else tx("name-withheld") end;
 
+# The rule 4 action line: one clause per cause, in table order; none when a cause is outside the table.
+def action_line($c):
+  if $c.other or $c.admitted == [] then [] else
+    [tx("compact-action"; {actions: ([$c.admitted[] | tx("action-" + .key + (if .key | IN("safety-gate", "file-gate") then (if .count == 1 then "-one" else "-many" end) else "" end); .)]
+       | if length == 1 then .[0] else (.[:-1] | join(", ")) + ", and " + .[-1] end)})] end;
+
 def compact_body($in; $l; $v; $c; $b; $p):
   $in.run as $run | $in.host as $h | $run.examples as $x
   | ([$run.coverage.unplanned[] | select(.reason != "no example directory") | .dir]) as $names
@@ -710,8 +724,7 @@ def compact_body($in; $l; $v; $c; $b; $p):
      + (if $run.plan_ran then " " + tx(if $x.validated == $x.count then "compact-validate-all" else "compact-validate-some" end;
           {validated: $x.validated, count: $x.count, planned: ($x.count - ($names | length))}) else "" end)
      + (if $v.rule == 4 then " " + tx("compact-not-checked"; {causes: ([$c.admitted[] | tx("cause-" + .key; .)] | join(", "))}) else "" end)) as $verdict
-  | (if $v.rule == 4 then [tx("compact-action"; {actions: ([$c.admitted[] | tx("action-" + .key + (if .key | IN("safety-gate", "file-gate") then (if .count == 1 then "-one" else "-many" end) else "" end); .)]
-       | if length == 1 then .[0] else (.[:-1] | join(", ")) + ", and " + .[-1] end)})] else [] end) as $action
+  | (if $v.rule == 4 then action_line($c) else [] end) as $action
   | [$o[] | select(routed | not) | tx("compact-finding"; {severity, rule_id, location: loc($p), summary})
        + "\n" + tx("compact-fix"; {fix: .suggested_fix})] as $bullets
   | ((if $names == [] then [] else [tx("evidence-not-planned"; {names: ($names | name_list)})] end)
@@ -740,20 +753,24 @@ def render($in):
      unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end)} as $l
   | ($l | ladder) as $v
   | ($v | rationale($l)) as $why
+  | causes($l; $h; $in.run; $b) as $c
+  | (if $v.rule == 8 then [] else todo_items($l; $v.rule; $p;
+       ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | cnr_count) + ($in.run.verify_gaps | length)
+       + $l.unplanned + ($b | behaviour_gaps)) end) as $items
+  # At rule 4 a list of quiet items alone, which section 5 already holds, gives way to the action line.
+  | ($v.rule == 4 and all($items[]; .quiet)) as $quiet
   | ([$in.assessment, "**\($v.verdict | verdict_line)**"]
      + (if $in.run.triage then ["Triage only: the full review of this change has not run yet."] else [] end)
+     + (if $quiet then action_line($c) else [] end)
      + [$why]
      + evidence_lines($b)
-     + (if $v.rule == 8 then [] else ["### What to do\n\n" + todo_md($l; $v.rule; $p;
-          ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | cnr_count) + ($in.run.verify_gaps | length)
-          + $l.unplanned + ($b | behaviour_gaps))] end)
+     + (if $v.rule == 8 or $quiet then [] else ["### What to do\n\n" + todo_md($v.rule; $items)] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
      + section("Checks that could not run"; gap_lines($h; $in.run; $b; $p); "\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")
      + section("Existing threads"; thread_lines($h; $in.findings; $p); "\n")
      + section("Conversation comments"; conversation_lines($h.conversation; $in.run.counts); "\n\n")
      | join("\n\n") + "\n") as $standard
-  | causes($l; $h; $in.run; $b) as $c
   | (if ($in.standard | not) and compact_ok($l; $v; $c; $in.run; $b) then "COMPACT" else "STANDARD" end) as $tier
   | (if $tier == "COMPACT" then compact_body($in; $l; $v; $c; $b; $p)
      else {body: $standard, findings: ($in.findings | body_order($p))} end) as $out
