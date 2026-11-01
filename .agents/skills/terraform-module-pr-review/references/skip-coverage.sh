@@ -9,7 +9,8 @@
 #       --coverage <coverage.json> --out <file>
 #       The base gate record: for every unplanned example directory in <coverage.json>, the
 #       clone scope plan-pass.sh gives in <dir>, a worktree at <sha>, and the per-file gates
-#       plan-pass.sh runs over it. Writes <file> complete or not at all.
+#       plan-pass.sh runs over it. Writes <file> complete or not at all. Exit 3 when the
+#       clone does not hold <sha>: the caller fetches the merge base first.
 #   <bash|zsh> /abs/path/skip-coverage.sh check <run-dir> --files <files.json> \
 #       --coverage <coverage.json> --plan <record> --head <sha> --base <sha|unresolved> \
 #       --changed-files <n> [--addresses <dir>] [--base-gates <file>] [--prefix <module-root>]
@@ -105,6 +106,9 @@ if [ "$CMD" = gates ]; then
   [ -d "$TREE" ] || die "--tree must name a directory"
   case "$OUT" in /?*) ;; *) die "--out must be an absolute path" ;; esac
   [ -d "${OUT%/*}/" ] || die "the directory of --out must exist"
+  # The merge base must be in the clone: a worktree cannot be added for a commit never fetched
+  git -C "$RUN/clone" cat-file -e "$BASESHA^{commit}" 2> /dev/null \
+    || { echo "skip-coverage.sh: the base commit is not in the clone; fetch it first" >&2; exit 3; }
   [ "$(git -C "$TREE" rev-parse --verify 'HEAD^{commit}' 2> /dev/null)" = "$BASESHA" ] || die "--tree is not at --base"
   record_gates "$TREE" "$BASESHA" > "$OUT.tmp" || { rm -f -- "$OUT.tmp"; die "the gates did not run"; }
   mv -- "$OUT.tmp" "$OUT" || die "cannot write $OUT"
@@ -125,6 +129,8 @@ jq -e 'type == "array" and all(.[]; type == "object" and (.filename | type == "s
   || die "--files is not a JSON array of file objects"
 
 CLONE="$(cd "$RUN/clone" && pwd -P)"
+# A merge base the clone does not hold cannot be resolved here: --base unresolved, in effect
+[ "$BASESHA" = unresolved ] || git -C "$CLONE" cat-file -e "$BASESHA^{commit}" 2> /dev/null || BASESHA=unresolved
 HEADOK=false
 [ "$(git -C "$CLONE" rev-parse --verify 'HEAD^{commit}' 2> /dev/null)" = "$HEADSHA" ] && HEADOK=true
 

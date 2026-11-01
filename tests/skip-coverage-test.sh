@@ -169,7 +169,7 @@ records() {
     for e in $(printf '%s\n' $EX); do
       i=$((i + 1)); echo "example: $e"
       case "$e" in
-        examples/s*|examples/l*) h="$(hits_of "$e")"; printf '%s\n' "$h" | sed 's/^/gate-hit /'
+        examples/s*|examples/l*) h="$(hits_of "$e" | awk '!seen[$0]++')"; printf '%s\n' "$h" | sed 's/^/gate-hit /'
            echo "plan: plan gate $(printf '%s\n' "$h" | head -n 1) ($(printf '%s\n' "$h" | grep -c .) hits)" ;;
         examples/d2) h="$(hits_of "$e")"; printf '%s\n' "$h" | sed 's/^/gate-hit /'
            echo "plan: plan gate $(printf '%s\n' "$h" | grep '^G3' | head -n 1) ($(printf '%s\n' "$h" | grep -c .) hits)" ;;
@@ -545,6 +545,31 @@ t_example_other; check "an addresses file for another example: no-witness" $?
 t_example_none() { fresh; reset_knobs; plain_change; ADDRJQ='del(.example)'; run_case && all_why no-witness; }
 t_example_none; check "an addresses file with no example: no-witness" $?
 
+# --- The merge base absent from the clone, and duplicate hits
+NOBASE=1111111111111111111111111111111111111111
+t_gates_nobase() {
+  fresh; reset_knobs; plain_change; run_case || return 1
+  local e; e="$("$SH" "$SC" gates "$RUN" --tree "$RUN/base" --base "$NOBASE" --coverage "$TMP/coverage.json" --out "$TMP/bg4.txt" 2>&1)"
+  [ $? = 3 ] && [ ! -e "$TMP/bg4.txt" ] && [ "$e" = "skip-coverage.sh: the base commit is not in the clone; fetch it first" ]
+}
+t_gates_nobase; check "gates with a base commit the clone does not hold: exit 3, its message, no record" $?
+t_check_nobase() {
+  fresh; reset_knobs; plain_change; run_case || return 1
+  recheck --base "$NOBASE" && all_why merge-base-unresolved && [ "$(q '.base_sha == null and .covered == []')" = 0 ]
+}
+t_check_nobase; check "check with a base commit the clone does not hold: merge-base-unresolved" $?
+t_dup_both() { # the per-file gates print the s1 hit twice at head and at base; the record, like the pass, once
+  fresh; reset_knobs; plain_change; run_case || return 1
+  [ "$(grep -c '^hit G3 examples/s1/main.tf$' "$TMP/base-gates.txt")" = 2 ] && grep -q '^plan: plan gate G3 examples/s1/main.tf:[0-9]* (1 hits)$' "$TMP/record.txt" \
+    && all_why covered
+}
+t_dup_both; check "a hit printed twice at head and at base: covered" $?
+t_dup_one() { # the base record holds the s1 hit once, the head twice
+  fresh; reset_knobs; plain_change; BGEDIT='s/^(hit G3 examples\/s1\/main\.tf\n)\1/$1/m'
+  run_case && [ "$(why examples/s1)" = hit-set-differs ] && [ "$(why examples/s2)" = covered ]
+}
+t_dup_one; check "a hit printed twice on one side only: hit-set-differs" $?
+
 # --- Refused inputs: exit 2, nothing printed
 fresh; reset_knobs; plain_change; run_case > /dev/null 2>&1
 refused() { # name, arguments after check <run-dir>
@@ -611,6 +636,8 @@ mutate "a head G0 hit ignored" 's/         elif any\(\$h\.lines\[\]; startswith\
 mutate "the real directory of a link ignored" 's/ \+ \[\(\$h\.lines\?, \$b\.lines\?\) \| \.\[\]\? \| select\(startswith\("real "\)\) \| \.\[5:\]\]//' t_link_dir
 mutate "the changed file count ignored" 's/\(\$files \| length\) != \$nchanged or //' t_count
 mutate "the example of an addresses file ignored" 's/ and \.example == \$b\.dir//' t_example_other
+mutate "duplicate hits folded" 's/\| sort\n/| sort -u\n/' t_dup_one
+mutate "a base commit missing from the clone not caught by check" 's/ \|\| BASESHA=unresolved//' t_check_nobase
 mutate "a downloaded hit with no line accepted" 's/\(\.line \/\/ ""\) \| test\("\^:\[0-9\]\+\$"\)/true/' t_dl_noline
 mutate "a downloaded hit taken while the clone scope has hits" 's/ and \(any\(\$h\.lines\[\]; startswith\("hit "\)\) \| not\)//' t_downloaded_hit
 mutate "downloaded hits never covered" 's/elif \$dl and \(all/elif \$dl or (all/' t_dl

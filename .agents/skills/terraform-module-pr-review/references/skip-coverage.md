@@ -19,7 +19,7 @@ The script is [skip-coverage.sh](skip-coverage.sh), with the decision in [skip-c
 
 `gates` writes the base gate record, [Gate records](#gate-records), for every directory in the coverage's `unplanned` list. It refuses, exit 2 and nothing written, unless `--tree` is an absolute path to a git tree whose `HEAD` is the `--base` commit; a step that fails writes nothing either. `check` prints one JSON object, [Output](#output), on standard output.
 
-Exit 0 means the evaluation ran: every directory uncovered is a valid result. Exit 2 is a usage error or a refused input, and nothing is printed: a run directory of another shape, a `--head` that is not a full lowercase SHA, a `--base` that is neither one nor the word `unresolved`, a missing or oversized `--files`, `--coverage` or `--plan`, a `--changed-files` that is not a count, a files list that is not an array of file objects, or a coverage that is not a plan coverage object.
+Exit 0 means the evaluation ran: every directory uncovered is a valid result. `gates` exits 3, writing nothing, when the clone does not hold the `--base` commit ([The base tree](#the-base-tree)). Exit 2 is a usage error or a refused input, and nothing is printed: a run directory of another shape, a `--head` that is not a full lowercase SHA, a `--base` that is neither one nor the word `unresolved`, a missing or oversized `--files`, `--coverage` or `--plan`, a `--changed-files` that is not a count, a files list that is not an array of file objects, or a coverage that is not a plan coverage object.
 
 ## Inputs
 
@@ -38,9 +38,9 @@ Exit 0 means the evaluation ran: every directory uncovered is a valid result. Ex
 
 ### The base tree
 
-The base gate record needs a tree at the merge base. The run already has one when the merge base re-run added it: the worktree at `<run-dir>/base`. Otherwise the caller adds it the same way, through `clone_git` of [Workspace](github-io.md#workspace), which carries the hook and filter options: `GIT_LFS_SKIP_SMUDGE=1 git -C <run-dir>/clone -c core.hooksPath=/dev/null -c filter.lfs.smudge=cat -c filter.lfs.process= -c filter.lfs.required=false worktree add --detach -- <run-dir>/base <base>`. Then `gates --tree <run-dir>/base --base <base>` writes the record; the worktree may go after that.
+The base gate record needs a tree at the merge base. The run already has one when the merge base re-run added it: the worktree at `<run-dir>/base`. Otherwise the caller first fetches the merge base into the clone, as [Workspace](github-io.md#workspace) does for that re-run with `clone_git fetch --depth=1 origin "$BASE"`, since in an interactive run nothing else may have fetched it, and then adds the worktree the same way, through `clone_git` of [Workspace](github-io.md#workspace), which carries the hook and filter options: `GIT_LFS_SKIP_SMUDGE=1 git -C <run-dir>/clone -c core.hooksPath=/dev/null -c filter.lfs.smudge=cat -c filter.lfs.process= -c filter.lfs.required=false worktree add --detach -- <run-dir>/base <base>`. Then `gates --tree <run-dir>/base --base <base>` writes the record; the worktree may go after that. A worktree added only for this needs no clone-wide G0 run, `plan-pass.sh g0 <run-dir> base`: only `gates` reads the worktree and runs no terraform there, the per-file G0 still enters the record through `gates`, and only a directory skipped for G1, G2 or G3 alone can be covered, with its G0 state judged at head (condition 9).
 
-With no base tree, or no record, every candidate directory is `base-record-missing`: the skips stay unknowns.
+With no base tree, or no record, every candidate directory is `base-record-missing`: the skips stay unknowns. When the clone does not hold the base commit, `gates` writes nothing and exits 3 with `the base commit is not in the clone; fetch it first`, and `check` reads such a `--base` as `unresolved`: every candidate directory is `merge-base-unresolved`.
 
 ## Conditions
 
@@ -73,7 +73,7 @@ done <dir>
 end
 ```
 
-Paths are relative to the tree. `real` is the directory's real path, so a directory that is a link records its target. A hit keeps its gate and file and drops its line, since an allowed change elsewhere in a shared file moves lines; a directory absent from the tree records `file MISSING`. The pass's downloaded scope is not in the record: it exists only after `init`, which this script never runs. Its hits come from the plan record instead, [Downloaded hits](#downloaded-hits).
+Paths are relative to the tree. `real` is the directory's real path, so a directory that is a link records its target. The per-file gates can print the same hit twice for one file, when two of its patterns match the same place; the record keeps every line, so the comparison counts such a hit the same way at head and base. The plan record's `(<n> hits)` counts distinct hits after the pass rewrites their paths, so it can be smaller than the number of `hit` lines. A hit keeps its gate and file and drops its line, since an allowed change elsewhere in a shared file moves lines; a directory absent from the tree records `file MISSING`. The pass's downloaded scope is not in the record: it exists only after `init`, which this script never runs. Its hits come from the plan record instead, [Downloaded hits](#downloaded-hits).
 
 ## Downloaded hits
 
@@ -90,7 +90,7 @@ Rules, each failing closed:
 - The head gate record of the directory has no hit: the pass gates the downloaded scope only when the clone scope is clean, so a clone hit beside a downloaded first hit means the record does not match the clone, `hit-set-differs`.
 - The clone-scope comparison of condition 8 still applies.
 
-The covered element then carries `"downloaded": true`.
+The covered element then carries `"downloaded": true`. Such a hit was never gated at the base: a consumer must not describe it as found or measured at the base, only as a hit in a downloaded module the pull request cannot change.
 
 ## The allow-list
 
@@ -136,7 +136,7 @@ The v1 limit: the address's module path is exactly one `module.<call>` level, ca
  "uncovered": [{"dir": "...", "why": "<reason>"}]}
 ```
 
-Every directory of `unplanned` appears once, in its order, in `covered` or in `uncovered`. `path` is the file of the record's first hit, without its line. `downloaded` is present, and true, only when that hit is in a downloaded module ([Downloaded hits](#downloaded-hits)); a consumer that does not show it may ignore it. `witnesses` holds one entry per changed attribute, the same for every covered directory. `base_sha` is null only for `--base unresolved`, and `covered` is then empty.
+Every directory of `unplanned` appears once, in its order, in `covered` or in `uncovered`. `path` is the file of the record's first hit, without its line. `downloaded` is present, and true, only when that hit is in a downloaded module ([Downloaded hits](#downloaded-hits)); a consumer that does not show it may ignore it. `witnesses` holds one entry per changed attribute, the same for every covered directory. `base_sha` is null only for `--base unresolved` or a base commit the clone does not hold, and `covered` is then empty.
 
 The reasons, a closed list: `not-sole-reason`, `wrong-gate-class`, `head-mismatch`, `files-incomplete`, `plan-record-unusable`, `change-not-allowed`, `dir-changed`, `merge-base-unresolved`, `base-record-missing`, `hit-set-differs`, `witness-sensitive`, `no-witness`.
 
