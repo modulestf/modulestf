@@ -229,7 +229,8 @@ the skill's plan pass whenever a container runtime is available.
   block holds `plan: planned` runs `--phase show`: no network, no credentials, the work
   volume and the saved plans read-only. It reads the saved plan with
   `terraform show -json` and prints one `addresses-json:` line. The host keeps only the
-  configuration addresses and attribute names that match their patterns and writes them to
+  configuration addresses, attribute names, sensitive names and local module calls that
+  match their patterns, drops a malformed sensitive entry whole, and writes them to
   the record as `addresses-<n>.json` ([plan-pass.md](../plan-pass.md#saved-plans-and-addresses)).
   It counts against the same budget.
 - **Merge base re-run:** only for the examples whose plan block holds `plan: code-error` and

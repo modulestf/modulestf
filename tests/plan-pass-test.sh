@@ -33,7 +33,7 @@ show)
   # The saved plan is read with no credentials, from the file the plan wrote
   [ -z "\$AWS_ACCESS_KEY_ID" ] || echo "show with credentials" >> "$TMP/tf.log"
   for a; do f="\$a"; done; [ -f "\$f" ] || { echo "Error: no saved plan"; exit 1; }
-  printf '{"resource_changes":[{"address":"module.s3.aws_s3_bucket.this[\\\\"k1\\\\"]","change":{"after":{"bucket":"b","tags":null},"after_unknown":{"arn":true,"id":false}}},{"address":"module.s3.aws_s3_bucket.this[\\\\"k2\\\\"]","change":{"after":{"region":"r"}}},{"address":"weird name","change":{}}],"configuration":{"root_module":{"module_calls":{"s3":{"source":"terraform-aws-modules/s3-bucket/aws"},"local":{"source":"../../"}}}}}\n' ;;
+  printf '{"resource_changes":[{"address":"module.s3.aws_s3_bucket.this[\\\\"k1\\\\"]","change":{"after":{"bucket":"b","tags":null,"versioning":[{"enabled":true}],"logging":[{"target":"t"}]},"after_unknown":{"arn":true,"id":false},"after_sensitive":{"bucket":true,"tags":false,"versioning":[{"enabled":false}],"logging":[{"target":true}]}}},{"address":"module.s3.aws_s3_bucket.this[\\\\"k2\\\\"]","change":{"after":{"region":"r"},"after_sensitive":{"region":false}}},{"address":"aws_kms_key.this","change":{"after":{"policy":"p"}}},{"address":"weird name","change":{}}],"configuration":{"root_module":{"module_calls":{"s3":{"source":"terraform-aws-modules/s3-bucket/aws"},"local":{"source":"../../"}}}}}\n' ;;
 init)
   printf 'provider "registry.terraform.io/hashicorp/aws" {\n}\n' >> .terraform.lock.hcl
   if [ "\${PWD##*/}" = ok ]; then
@@ -422,7 +422,15 @@ for sh in bash zsh; do
     "$(grep -qx 'ok plan' "$TMP/tf.log" && grep -qx 'ok show' "$TMP/tf.log" && ! grep -q 'show with credentials' "$TMP/tf.log"; echo $?)"
   A="$R/plan-addresses/addresses-13.json"
   check "$sh: the addresses file of the planned example: config addresses, attribute names only" \
-    "$(jq -e '. == {addresses:["module.s3.aws_s3_bucket.this"], attributes:{"module.s3.aws_s3_bucket.this":["arn","bucket","region"]}, module_calls:{"local":"../../"}}' "$A" > /dev/null 2>&1; echo $?)"
+    "$(jq -e '{addresses, attributes, module_calls} == {addresses:["aws_kms_key.this","module.s3.aws_s3_bucket.this"], attributes:{"aws_kms_key.this":["policy"],"module.s3.aws_s3_bucket.this":["arn","bucket","logging","region","versioning"]}, module_calls:{"local":"../../"}}' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: the addresses file keys, in order, the head commit and the example last" \
+    "$(jq -e 'keys_unsorted == ["addresses","attributes","module_calls","sensitive","head_sha","example"] and .example == "examples/ok"' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: the head commit the example was planned at" \
+    "$(jq -e --arg h "$(git -C "$R/clone" rev-parse HEAD)" '.head_sha == $h and ($h | test("^[0-9a-f]{40}$"))' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: a sensitive attribute and a nested sensitive block are listed by top-level name; all-false and not sensitive are not" \
+    "$(jq -e '.sensitive["module.s3.aws_s3_bucket.this"] == ["bucket","logging"]' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: an instance with no sensitive bit marks every attribute of its address sensitive" \
+    "$(jq -e '.sensitive["aws_kms_key.this"] == ["policy"]' "$A" > /dev/null 2>&1; echo $?)"
   check "$sh: no addresses file for an example that did not plan" "$([ ! -s "$R/plan-addresses/addresses-1.json" ]; echo $?)"
   check "$sh: the saved plans go with the pass's own files" "$(test ! -e "$R/plan"; echo $?)"
 
@@ -549,7 +557,7 @@ good="$(hrec good 'host example 1: examples/complete' 'example: examples/complet
   'host example 5: examples/nochange' 'plan: planned-no-changes' \
   'host example 6: examples/imports' 'plan: planned | Plan: 2 to import, 1 to add, 0 to change, 4 to destroy.' \
   'host example 7: examples/new' 'plan: code-error' 'base: new under this change (absent at base)')"
-echo '{"addresses":["module.s3.aws_s3_bucket.this","x[\"k\"]"],"attributes":{"module.s3.aws_s3_bucket.this":["bucket","Name"],"y":["z"]}}' > "$good/addresses-1.json"
+echo '{"addresses":["module.s3.aws_s3_bucket.this","x[\"k\"]"],"attributes":{"module.s3.aws_s3_bucket.this":["bucket","Name"],"y":["z"]},"sensitive":{"module.s3.aws_s3_bucket.this":["bucket"]}}' > "$good/addresses-1.json"
 echo '{"addresses":["aws_b.c"]}' > "$good/addresses-2.json"
 check "hosted-record: a good record is reduced" "$(hr "$good")"
 check "hosted-record: the exact top-level keys, head and merge base" \
@@ -646,6 +654,47 @@ check "host.json: two prose-truncated entries for one item are refused" \
 # host-pass.sh writes the entries from the capped block, not a bare kind.
 check "host-pass: could_not_run takes the truncations of the block" \
   "$(grep -F '+ ($b[0].items | truncations)),' "${PP%/*}/host-pass.sh" > /dev/null; echo $?)"
+
+# The sensitive names of an addresses file, from ADDR_JQ in plan-pass.sh: the same pattern and
+# 500 cap as attributes, and never a name the attributes leave out.
+AJ="$(sed -n "/^ADDR_JQ='\$/,/^'\$/p" "$PP" | sed '1d;$d')"
+aj() { jq -c --arg h "$2" --arg e "${3:-}" "$AJ" <<< "$1"; }
+o="$(aj "$(jq -n -c '[range(600) | "a\(1000 + .)"] as $n
+  | {resource_changes: [{address: "aws_x.big", change: {after: ($n | map({(.): 1}) | add + {Bad: 1}),
+      after_sensitive: ($n | map({(.): true}) | add + {Bad: true})}},
+    {address: "aws_x.whole", change: {after: {a: 1, b: null}, after_unknown: {c: true}, after_sensitive: true}}]}')" nosha)"
+check "addresses: sensitive names keep the pattern and the 500 cap of the attributes" \
+  "$(jq -e '(.attributes["aws_x.big"] | length) == 500 and .sensitive["aws_x.big"] == .attributes["aws_x.big"]' <<< "$o" > /dev/null 2>&1; echo $?)"
+check "addresses: an instance wholly sensitive marks every attribute of its address" \
+  "$(jq -e '.sensitive["aws_x.whole"] == ["a","c"]' <<< "$o" > /dev/null 2>&1; echo $?)"
+check "addresses: no head_sha unless the head is a full SHA" "$(jq -e 'has("head_sha") | not' <<< "$o" > /dev/null 2>&1; echo $?)"
+check "addresses: no example without one" "$(jq -e 'has("example") | not' <<< "$o" > /dev/null 2>&1; echo $?)"
+for bad in '../x' 'examples/../x' 'examples/a b' 'examples/..'; do
+  check "addresses: an example directory outside the pattern is left out ($bad)" \
+    "$(aj '{"resource_changes":[]}' nosha "$bad" | jq -e 'has("example") | not' > /dev/null 2>&1; echo $?)"
+done
+check "addresses: a plain example directory is kept" \
+  "$(aj '{"resource_changes":[]}' nosha 'modules/x/examples/a.b_c-d' | jq -e '.example == "modules/x/examples/a.b_c-d"' > /dev/null 2>&1; echo $?)"
+
+# The runner's clean_addresses in run-pass.sh, which writes the record's addresses files: a
+# sensitive entry outside its shape is dropped, never emptied, and an old file stays without one.
+CA="$(sed -n "/^clean_addresses='/,/'\$/p" "${PP%/*}/plan-runner/run-pass.sh")"
+CA="${CA#clean_addresses=\'}"; CA="${CA%\'}"
+ca() { jq -c "$CA" <<< "$1"; }
+o="$(ca '{"addresses":["aws_a.b"],"attributes":{"aws_a.b":["x"]},"module_calls":{}}')"
+check "clean_addresses: an old file without sensitive is accepted, still without it" \
+  "$([ "$o" = '{"addresses":["aws_a.b"],"attributes":{"aws_a.b":["x"]},"module_calls":{}}' ]; echo $?)"
+o="$(ca '{"addresses":["aws_a.b","aws_c.d"],"attributes":{"aws_a.b":["x","y"]},"sensitive":{"aws_a.b":["y","x","y"],"aws_c.d":[],"aws_e.f":["x"]}}')"
+check "clean_addresses: sensitive kept for planned addresses, sorted, an empty list kept" \
+  "$(jq -e '.sensitive == {"aws_a.b":["x","y"],"aws_c.d":[]}' <<< "$o" > /dev/null 2>&1; echo $?)"
+for bad in '"x"' '["x"]' 'null'; do
+  check "clean_addresses: a sensitive key that is not an object is dropped ($bad)" \
+    "$(ca "{\"addresses\":[\"aws_a.b\"],\"sensitive\":$bad}" | jq -e 'has("sensitive") | not' > /dev/null 2>&1; echo $?)"
+done
+o="$(ca "$(jq -n -c '{addresses: ["aws_a.b","aws_c.d","aws_e.f","aws_g.h","aws_i.j"],
+  sensitive: {"aws_a.b": "x", "aws_c.d": ["x","Bad"], "aws_e.f": [1], "aws_g.h": [range(501) | "a\(.)"], "aws_i.j": [range(500) | "a\(.)"]}}')")"
+check "clean_addresses: a malformed sensitive entry is dropped, never emptied; 500 names pass, 501 do not" \
+  "$(jq -e '.sensitive | keys == ["aws_i.j"] and (.["aws_i.j"] | length) == 500' <<< "$o" > /dev/null 2>&1; echo $?)"
 
 [ "$fails" -eq 0 ] && echo "all passed" || echo "$fails failed"
 [ "$fails" -eq 0 ]
