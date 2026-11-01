@@ -317,7 +317,9 @@ def texts: {
   "unplanned-more": "- {count} more examples that were not planned are not listed.",
   "unplanned-no-examples": "- The module has no example directory, so no example could be planned.",
   "unplanned-inert": "- The change reaches no Terraform configuration, so the examples below that were not planned leave nothing unknown.",
-  "unplanned-covered": "- Not planned, covered: {dir} ({gate} hit in {path}, same at base {base}). `{attribute}` was planned in {example} as {address} at {head}.",
+  "unplanned-covered": "- Not planned: {dir} ({gate} hit in {path}, same at base {base}).",
+  "unplanned-covered-downloaded": "- Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it).",
+  "unplanned-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
   "behaviour-trigger": "- Behaviour change at `{location}` ({category}): not verified.",
   "behaviour-capped": "- {count} more behaviour changes over the classifier cap: not verified.",
@@ -373,11 +375,13 @@ def texts: {
   "compact-fix": "  - Fix: {fix}",
   "evidence-summary": "Evidence and notes",
   "evidence-not-planned": "- Not planned: {names}.",
-  "compact-covered-one": "1 of {total} examples was not planned because of the review safety checks; the changed code was planned in other examples (see notes).",
-  "compact-covered-many": "{count} of {total} examples were not planned because of the review safety checks; the changed code was planned in other examples (see notes).",
-  "rationale-covered-one": "1 of {total} examples was not planned because of the review safety checks; the changed code was planned in other examples, as listed below.",
-  "rationale-covered-many": "{count} of {total} examples were not planned because of the review safety checks; the changed code was planned in other examples, as listed below.",
-  "evidence-covered-skip": "- Not planned, covered: {dir} ({gate} hit in {path}, same at base {base}). `{attribute}` was planned in {example} as {address} at {head}.",
+  "compact-covered-one": "1 of {total} examples was not planned because of the review safety checks; the changed code was planned {where} (see notes).",
+  "compact-covered-many": "{count} of {total} examples were not planned because of the review safety checks; the changed code was planned {where} (see notes).",
+  "rationale-covered-one": "1 of {total} examples was not planned because of the review safety checks; the changed code was planned {where}, as listed below.",
+  "rationale-covered-many": "{count} of {total} examples were not planned because of the review safety checks; the changed code was planned {where}, as listed below.",
+  "evidence-covered": "- Not planned: {dir} ({gate} hit in {path}, same at base {base}).",
+  "evidence-covered-downloaded": "- Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it).",
+  "evidence-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
   "evidence-reported": "Behaviour change at {location} reported: judged in {findings} ({count} differences).",
   "evidence-claims-one": "1 claim verified.",
   "evidence-claims-many": "{count} claims verified.",
@@ -550,20 +554,29 @@ def body_order($p): ordered | seven($p);
 
 # --- Sections 5 to 8, from host.json (host-pass.md, Host Facts), the checks file and the run file.
 
-# One line per witness of the covered skips, in their order, under the key of the tier; every
-# name the pull request controls in a code span when allowlisted, else withheld.
+# The distinct witnesses of the covered skips, {attribute, example, address}, in first-seen order.
+def witnesses($cs): reduce ($cs[].witnesses[] | {attribute, example, address}) as $w ([]; if any(.[]; . == $w) then . else . + [$w] end);
+
+# The covered skips under the key prefix of the tier: one line per skipped example, its gate hit
+# measured at the base or in a downloaded module, then one line per distinct witness. Every name
+# the pull request controls is in a code span when allowlisted, else withheld.
+def nm(ok): if ok then "`\(.)`" else tx("name-withheld") end;
 def covered_lines($key; $cov; $run):
-  def nm(ok): if ok then "`\(.)`" else tx("name-withheld") end;
-  [$cov[] as $c | $c.witnesses[]
-   | tx($key; {dir: ($c.dir | nm(allowed)), gate: $c.gate, path: ($c.path | nm(allowed)),
-       base: $run.coverage.skip_base_sha[:7], attribute, example: (.example | nm(allowed)),
-       address: (.address | nm(test("^[A-Za-z0-9_.-]{1,300}$"))), head: $run.coverage.skip_head_sha[:7]})];
+  [ ($cov[] as $c
+     | tx($key + (if $c.downloaded then "-downloaded" else "" end);
+         {dir: ($c.dir | nm(allowed)), gate: $c.gate, path: ($c.path | nm(allowed)), base: $run.coverage.skip_base_sha[:7]})),
+    (witnesses($cov)[]
+     | tx($key + "-by"; {attribute, example: (.example | nm(allowed)),
+         address: (.address | nm(test("^[A-Za-z0-9_.-]{1,300}$"))), head: $run.coverage.skip_head_sha[:7]})) ];
 
 # The examples not planned, which both tiers count, and the covered sentence of a tier: $k is
-# compact-covered or rationale-covered.
+# compact-covered or rationale-covered. {where} names the one witness example when there is
+# exactly one and it is allowlisted.
 def not_planned($run): [$run.coverage.unplanned[] | select(.reason != "no example directory") | .dir];
-def covered_sentence($k; $run): (not_planned($run) | length) as $n
-  | tx($k + (if $n == 1 then "-one" else "-many" end); {count: $n, total: $run.examples.count});
+def covered_sentence($k; $run; $cov): (not_planned($run) | length) as $n
+  | ([witnesses($cov)[].example] | unique) as $e
+  | tx($k + (if $n == 1 then "-one" else "-many" end); {count: $n, total: $run.examples.count,
+      where: (if ($e | length) == 1 and ($e[0] | allowed) then "in `\($e[0])`" else "in other examples" end)});
 
 def gap_lines($h; $run; $b; $p; $cov):
   # Several prose-truncated entries, one per cut item class, render one line; each still counts.
@@ -771,12 +784,12 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
   | ("**\($v.verdict | verdict_line)**"
      + (if $run.plan_ran then " " + tx(if $x.validated == $x.count then "compact-validate-all" else "compact-validate-some" end;
           {validated: $x.validated, count: $x.count, planned: ($x.count - ($names | length))}) else "" end)
-     + (if $cov != [] then " " + covered_sentence("compact-covered"; $run) else "" end)
+     + (if $cov != [] then " " + covered_sentence("compact-covered"; $run; $cov) else "" end)
      + (if $v.rule == 4 then " " + tx("compact-not-checked"; {causes: ([$c.admitted[] | tx("cause-" + .key; .)] | join(", "))}) else "" end)) as $verdict
   | (if $v.rule == 4 then action_line($c) else [] end) as $action
   | [$o[] | select(routed | not) | tx("compact-finding"; {severity, rule_id, location: loc($p), summary})
        + "\n" + tx("compact-fix"; {fix: .suggested_fix})] as $bullets
-  | ((if $cov != [] then covered_lines("evidence-covered-skip"; $cov; $run)
+  | ((if $cov != [] then covered_lines("evidence-covered"; $cov; $run)
       elif $names == [] then [] else [tx("evidence-not-planned"; {names: ($names | name_list)})] end)
      + ([($b.triggers[] | select(.state == "reported")
           | tx("evidence-reported"; {location: safe_loc($p), findings: (.judged_by | and_join), count: (.outstanding | length)})),
@@ -797,7 +810,7 @@ def covered_of($in; $l; $b):
   | if $cs != [] and $cv.skip_head_sha == $in.host.head_sha and $cv.skip_base_sha == $in.host.merge_base
        and $run.plan_ran and $run.plan_mode == "laptop" and ($cv.inert | not)
        # the witness lines stay bounded, and at least one example was planned
-       and ([$cs[].witnesses[]] | length) <= 100 and ($u | length) < ($run.examples.count // 0)
+       and (witnesses($cs) | length) <= 100 and ($u | length) < ($run.examples.count // 0)
        and ($u | map(.dir) | length == (unique | length))
        and all($u[]; .reason | IN("plan gate G1", "plan gate G2", "plan gate G3"))
        # all or nothing: every skip covered, and every covered entry a skip of its own gate
@@ -830,7 +843,7 @@ def render($in):
   | ($l + {covered: ($cov | length)} | .unplanned_open = .unplanned - .covered) as $l
   | ($l | ladder) as $v
   | ($v | rationale($l)
-     + (if $cov != [] then " " + covered_sentence("rationale-covered"; $in.run) else "" end)) as $why
+     + (if $cov != [] then " " + covered_sentence("rationale-covered"; $in.run; $cov) else "" end)) as $why
   | causes($l; $h; $in.run; $b) as $c
   | (if $v.rule == 8 then [] else todo_items($l; $v.rule; $p;
        ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | cnr_count) + ($in.run.verify_gaps | length)

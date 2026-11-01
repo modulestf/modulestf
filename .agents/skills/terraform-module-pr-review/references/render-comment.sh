@@ -55,7 +55,7 @@
 #   characters with no control character or backtick; any other shape is refused. The list takes
 #   the skipped examples off ladder rule 4 only when every condition of verdict.md, Covered
 #   safety-gate skips, holds for every one of them, skip_head_sha equal to --head, skip_base_sha
-#   to host.json's merge_base and at most 100 witnesses among them; else it is ignored. A
+#   to host.json's merge_base and at most 100 distinct witnesses among them; else it is ignored. A
 #   host.json prose-truncated entry
 #   may carry "item" (body, title or thread) and "omitted" (bytes); only a cut of the body, the
 #   description, is a cause COMPACT admits. The behaviour object's triggers may carry claims-eval's
