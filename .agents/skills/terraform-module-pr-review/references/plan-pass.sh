@@ -32,6 +32,10 @@
 #   <bash|zsh> /abs/path/plan-pass.sh gates <run-dir> <laptop|runner> <clone|downloaded>
 #       The per-file gates alone, over the absolute .tf paths on standard input. Read only,
 #       for the fixtures.
+#   <bash|zsh> /abs/path/plan-pass.sh scope <run-dir> <absolute directory>
+#       The clone scope of one example directory under the clone: its .tf files and those of
+#       the local module directories it reaches, one absolute path per line. Read only, for
+#       skip-coverage.sh.
 #
 # <run-dir> is the absolute run directory Workspace printed, "<root>/pr-review.XXXXXX", holding
 # the clone at <run-dir>/clone and, when it exists, the base worktree at <run-dir>/base.
@@ -262,6 +266,25 @@ while (my $f = <STDIN>) {
   }
 }
 '
+scope() { # absolute example directory
+  perl -MCwd=realpath -e '
+    my ($root, @q) = (realpath($ARGV[0]), realpath($ARGV[1])); my (%seen, %f);
+    while (defined(my $d = shift @q)) {
+      next if $seen{$d}++;
+      opendir(my $h, $d) or do { print "UNREADABLE\n"; next };
+      for my $n (sort grep { /\.tf\z/ } readdir $h) {
+        my $p = "$d/$n"; $f{$p} = 1;
+        open(my $fh, "<", $p) or do { print "UNREADABLE\n"; next };
+        local $/; my $t = <$fh>;
+        while ($t =~ /\bsource\s*=\s*"(\.\.?\/[^"]*)"/g) {
+          my $r = realpath("$d/$1");
+          push @q, $r if defined $r && -d $r && index("$r/", "$root/") == 0;
+        }
+      }
+    }
+    print "$_\n" for sort keys %f;
+  ' "$CROOT" "$1"
+}
 rel() { sed -e "s|^$CROOT\$|.|" -e "s|$CROOT/||g" -e "s|$PLAN/data/[^/]*/modules/|downloaded/|g"; }
 gate_class() { # all hits as one argument: prints each, sets CLASS to the first and the count
   GH="$(printf '%s\n' "$1" | rel | awk '!seen[$0]++')"; n="$(printf '%s\n' "$GH" | grep -c .)"
@@ -284,6 +307,11 @@ if [ "${1:-}" = gates ]; then
   [ -n "$h" ] && { printf '%s\n' "$h"; exc_or_gate "$h" > /dev/null; echo "class: $CLASS"; }
   exit 0
 fi
+if [ "${1:-}" = scope ]; then
+  [ -d "${3:-}" ] || { echo "plan-pass.sh: scope <run-dir> <absolute directory>" >&2; exit 2; }
+  scope "$3"
+  exit 0
+fi
 if [ "${1:-}" = g0 ]; then
   if [ "${3:-}" = base ]; then
     [ -d "$RUN/base" ] || { echo "plan-pass.sh: no base worktree in $RUN" >&2; exit 2; }
@@ -295,7 +323,7 @@ if [ "${1:-}" = g0 ]; then
   fi
   exit 0
 fi
-[ "${1:-}" = plan ] || { echo "plan-pass.sh: first argument is g0, plan or gates" >&2; exit 2; }
+[ "${1:-}" = plan ] || { echo "plan-pass.sh: first argument is g0, plan, gates or scope" >&2; exit 2; }
 
 PROFILE=${3:-}
 shift 3 2>/dev/null || { echo "plan pass not run: arguments missing"; exit 0; }
@@ -435,25 +463,6 @@ get_creds() {
   case "$PROBE" in *'(UnauthorizedOperation)'*) PROBE= ;; *) PROBE=; return 1 ;; esac
 }
 
-scope() { # absolute example directory
-  perl -MCwd=realpath -e '
-    my ($root, @q) = (realpath($ARGV[0]), realpath($ARGV[1])); my (%seen, %f);
-    while (defined(my $d = shift @q)) {
-      next if $seen{$d}++;
-      opendir(my $h, $d) or do { print "UNREADABLE\n"; next };
-      for my $n (sort grep { /\.tf\z/ } readdir $h) {
-        my $p = "$d/$n"; $f{$p} = 1;
-        open(my $fh, "<", $p) or do { print "UNREADABLE\n"; next };
-        local $/; my $t = <$fh>;
-        while ($t =~ /\bsource\s*=\s*"(\.\.?\/[^"]*)"/g) {
-          my $r = realpath("$d/$1");
-          push @q, $r if defined $r && -d $r && index("$r/", "$root/") == 0;
-        }
-      }
-    }
-    print "$_\n" for sort keys %f;
-  ' "$CROOT" "$1"
-}
 lock_hits() { # lock file: providers outside the mode's allowlist
   grep -Eo '^provider "[^"]*"' "$1" 2>/dev/null | sed 's/^provider "//; s/"$//' | grep -Evx "$PROV_RE" |
     while IFS= read -r p; do
