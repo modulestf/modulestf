@@ -206,7 +206,11 @@ ladder() { # name, expected "verdict EVENT", expected rule, render args...
 }
 ladder "a CRITICAL compat break alone" "hold for the next major COMMENT" 0 "$(pair compat.output-removed CRITICAL structure.grouping MEDIUM)"
 ladder "a CRITICAL compat break and a HIGH non-compat finding" "block REQUEST_CHANGES" 1 "$(pair compat.output-removed CRITICAL structure.docs-contradict-code HIGH)"
-ladder "a HIGH compat break alone" "block REQUEST_CHANGES" 2 "$(one compat.claim-contradicts-analysis HIGH a.tf 1 "S." "F.")"
+ladder "a HIGH compat break alone" "block REQUEST_CHANGES" 2 "$(one compat.variable-removed HIGH a.tf 1 "S." "F.")"
+# compat.claim-contradicts-analysis sits one band below the compat.* code finding that refutes its
+# claim: HIGH only beside a CRITICAL one, which arms rule 0 itself.
+ladder "a CRITICAL compat break and the HIGH description finding it refutes" "hold for the next major COMMENT" 0 "$(pair compat.output-removed CRITICAL compat.claim-contradicts-analysis HIGH)"
+ladder "a HIGH compat break and the MEDIUM description finding it refutes" "block REQUEST_CHANGES" 2 "$(pair compat.variable-removed HIGH compat.claim-contradicts-analysis MEDIUM)"
 ladder "a CRITICAL non-compat finding" "block REQUEST_CHANGES" 1 "$(one structure.docs-contradict-code CRITICAL a.tf 1 "S." "F.")"
 ladder "a HIGH finding and a failing check" "block REQUEST_CHANGES" 2 "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")" "" "$(checks fail fail)"
 ladder "a failing check" "block REQUEST_CHANGES" 3 "$NONE" "" "$(checks fail fail)"
@@ -443,6 +447,16 @@ t_table() {
     'include "render-comment"; ($d[0] | length) > 30 and $d[0] == texts' > /dev/null 2>&1
 }
 t_table; check "strings: the Host Render Strings table equals the script's strings" $?
+
+# The reviewer writes short by default: the length targets, the COMPACT caps below, are stated
+# word for word in the findings schema and in the caller instruction of the handover.
+LT='Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.'
+t_targets_stated() {
+  awk '/^## Length Targets$/ { on = 1; next } on && /^## / { exit } on' \
+    "$SRC/.agents/skills/terraform-module-reviewer/references/findings-schema.md" | grep -qF -- "$LT" &&
+    awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -qF -- "$LT"
+}
+t_targets_stated; check "strings: the length targets are stated in the findings schema and the handover" $?
 
 # --- Leak scan: a match blocks every file and says what matched and where.
 
@@ -718,6 +732,29 @@ render "$({ f structure.docs-contradict-code HIGH a.tf 1 "S." "F."; f structure.
 todo_is "mixed blocking and LOW groups under block" '### What to do' '' "$LEAD_BLOCK" '' \
   '- [ ] `structure.docs-contradict-code`: apply the Fix at `a.tf:1`.' '- [ ] `structure.grouping` (2): apply the Fix at `b.tf:2`, `c.tf:3`.' \
   '- Optional: `structure.argument-order` at `d.tf:4`.'
+# A group whose every finding is at the module root, `.`, has no place to apply a Fix at: it
+# takes the fixed todo-fix-root item. A group with a real location keeps its locations.
+t_root_one() {
+  render "$({ f scope.description-only MEDIUM . null "S." "F."; f structure.grouping MEDIUM b.tf 2 "T." "G."; } | list wt-root1)"
+}
+t_root_one
+todo_is "a blocking finding at the module root takes the fixed item" '### What to do' '' "$LEAD_BLOCK" '' \
+  '- [ ] Resolve `scope.description-only`: see its Fix under Findings.' '- [ ] `structure.grouping`: apply the Fix at `b.tf:2`.'
+render "$({ f scope.description-only HIGH . null "S." "F."; f scope.description-only HIGH . null "T." "G."; } | list wt-root2)"
+todo_is "two blocking findings at the module root take the fixed item with the count" '### What to do' '' "$LEAD_BLOCK" '' \
+  '- [ ] Resolve `scope.description-only` (2): see its Fixes under Findings.'
+render "$(f scope.description-only MEDIUM . null "S." "F." | list wt-root3)" "$(host wt-root3 '.prefix = "modules/x"')"
+todo_is "a module root finding under a module root prefix takes the fixed item" '### What to do' '' "$LEAD_BLOCK" '' \
+  '- [ ] Resolve `scope.description-only`: see its Fix under Findings.'
+t_root_rule0() {
+  render "$({ f compat.output-removed CRITICAL a.tf 1 "S." "F."; f compat.claim-contradicts-analysis HIGH . null "T." "no code change: G."; } | list wt-root0)"
+}
+t_root_rule0
+todo_is "rule 0, a description finding at the module root takes the fixed item" '### What to do' '' "$LEAD_0" '' \
+  '- `compat.output-removed`: the Fix at `a.tf:1` restores compatibility.' '- [ ] Resolve `compat.claim-contradicts-analysis`: see its Fix under Findings.'
+render "$({ f scope.description-only MEDIUM . null "S." "F."; f scope.description-only MEDIUM a.tf 1 "T." "G."; } | list wt-root4)"
+todo_is "a group with a real location keeps its locations" '### What to do' '' "$LEAD_BLOCK" '' \
+  '- [ ] `scope.description-only` (2): apply the Fix at `.`, `a.tf:1`.'
 
 # Commit and repository targets: the host render takes a pull request only, so the rule that
 # they carry no What to do section is held in comment-format.md, under each target's heading.
@@ -907,7 +944,7 @@ mutate "What to do rendered at rule 8" 's/if \$v\.rule == 8 then \[\] else/if fa
 mutate "nine locations listed" 's/\$l\[:8\]/\$l[:9]/' t_loc9
 mutate "rule 0 groups as checkboxes" 's/if \$rule == 0 and/if false and/' t_rule0_plain
 t_rule0_mixed() { render "$R0M"; todo | grep -qxF -- '- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.'; }
-mutate "every rule 0 group a compat bullet" 's/\$rule == 0 and \(\.rule \| startswith\("compat\."\)\)/$rule == 0/' t_rule0_mixed
+mutate "every rule 0 group a compat bullet" 's/\$rule == 0 and compat_item/$rule == 0/' t_rule0_mixed
 t_rev_noitem() { render "$TMP/wt-rev6.json"; [ "$ST" = 0 ] && ! todo | grep -qF 'review.path-missing'; }
 mutate "review groups listed as items" 's/select\(\.rule \| startswith\("review\."\) \| not\)/select(true)/' t_rev_noitem
 t_r4_once() { render "$NONE" "$H2"; [ "$(rule)" = 4 ] && ! todo | grep -qF 'could not run; see'; }
@@ -1091,6 +1128,23 @@ t_556; check "tiers: pull request 556 renders COMPACT, the literal byte for byte
 check "tiers: pull request 556 is inconclusive at rule 4, proposes COMMENT" "$([ "$(verdict)" = "inconclusive COMMENT" ]; echo $?)"
 check "tiers: COMPACT findings.json lists the routed finding last" "$(jq -e 'map(.id) == ["F-001", "F-002"] and all(.[]; keys == ["file","id","line","rule_id","severity","suggested_fix","summary"])' "$O/findings.json" > /dev/null; echo $?)"
 check "tiers: the COMPACT body of pull request 556 is at most 1240 bytes" "$([ "$(wc -c < "$O/comment.md")" -le 1240 ]; echo $?)"
+# Pull request 556 with the description finding: the body states only the empty strings, the
+# LOW compat.expression-behaviour-changed refutes it, so compat.claim-contradicts-analysis is LOW
+# too (one band below, never above). No rule 2 block: the verdict stays at rule 4.
+F556C() {
+  jq --arg s 'The description says only empty strings now reach the provider; null elements of `var.vpc_security_group_ids` reach it too.' \
+    --arg x 'no code change: add to the description: "Dropping `compact()` also keeps null elements, and a null element now fails the plan."' \
+    '.[:1] + [{id: "F-002", rule_id: "compat.claim-contradicts-analysis", severity: "LOW", file: ".", line: null,
+      summary: $s, suggested_fix: $x, source: "llm"}] + (.[1:] | map(.id = "F-003"))' "$(F556)" > "$TMP/f556c.json"
+  echo "$TMP/f556c.json"
+}
+{ sed -n '1,8p' "$TMP/want-556.md"
+  printf '%s\n' '- LOW `compat.claim-contradicts-analysis` `.` - The description says only empty strings now reach the provider; null elements of `var.vpc_security_group_ids` reach it too.' \
+    '  - Fix: no code change: add to the description: "Dropping `compact()` also keeps null elements, and a null element now fails the plan."'
+  sed -n '9,$p' "$TMP/want-556.md"; } > "$TMP/want-556c.md"
+t_556c() { rc "$(F556C)" "$(R556 claimdesc)"; [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 4 ] && cmp -s "$O/comment.md" "$TMP/want-556c.md"; }
+t_556c; check "tiers: pull request 556 with its LOW description finding renders COMPACT, byte for byte" $?
+check "tiers: the LOW description finding blocks nothing, inconclusive at rule 4" "$([ "$(verdict)" = "inconclusive COMMENT" ]; echo $?)"
 rc "$(F556)" "$(R556 gold-std)" "" --standard
 check "tiers: --standard forces STANDARD on the same inputs" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && grep -qxF '### What to do' "$O/comment.md"; echo $?)"
 grep -qxF 'Behaviour evidence: 1 changes classified: 0 verified, 0 covered by a plan, 0 inert, 1 reported in a finding, 0 refuted, 0 not verified; 20 claims: 20 verified, 0 refuted, 0 not verified.' "$O/comment.md"
@@ -1237,11 +1291,34 @@ over() { # name, findings, assessment file, want message
   check "refused: COMPACT $4" "$([ "$ST" = 2 ] && empty_out && printf '%s' "$MSG" | grep -qF "$3" && printf '%s' "$MSG" | grep -qF 'COMPACT limit'; echo $?)"
 }
 { head -c 351 /dev/zero | tr '\0' a; echo; } > "$TMP/a-351.txt"
-over "$(F556)" "$TMP/a-351.txt" 'over 350 characters' "an assessment over 350 characters"
+over "$(F556)" "$TMP/a-351.txt" 'the assessment is 351 characters, limit 350' "an assessment over 350 characters"
 printf 'One.\n\nTwo.\n' > "$TMP/a-2p.txt"
-over "$(F556)" "$TMP/a-2p.txt" 'more than one paragraph' "an assessment of two paragraphs"
-over "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'summary is over 200 characters' "a summary over 200 characters"
-over "$(F556 "{suggested_fix: \"$(head -c 251 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'suggested_fix is over 250 characters' "a fix over 250 characters"
+over "$(F556)" "$TMP/a-2p.txt" 'the assessment is more than one paragraph, limit one' "an assessment of two paragraphs"
+over "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'finding F-001 summary is 201 characters, limit 200' "a summary over 200 characters"
+over "$(F556 "{suggested_fix: \"$(head -c 251 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'finding F-001 suggested_fix is 251 characters, limit 250' "a fix over 250 characters"
+# Every offender in one message, in input order, each with its length and its limit.
+t_over_all() {
+  jq --arg s1 "$(head -c 201 /dev/zero | tr '\0' s)" --arg x1 "$(head -c 260 /dev/zero | tr '\0' x)" \
+    --arg s2 "$(head -c 230 /dev/zero | tr '\0' t)" '.[0].summary = $s1 | .[0].suggested_fix = $x1 | .[1].summary = $s2' \
+    "$(F556)" > "$TMP/over-all.json"
+  render "$TMP/over-all.json" "$H556" "" "$(R556 overall)" "$TMP/a-351.txt"
+  [ "$ST" = 2 ] && empty_out && [ "$MSG" = 'render-comment.sh: over the COMPACT limits: the assessment is 351 characters, limit 350; finding F-001 summary is 201 characters, limit 200; finding F-001 suggested_fix is 260 characters, limit 250; finding F-002 summary is 230 characters, limit 200; send it back to the reviewer, or render with --standard' ]
+}
+t_over_all; check "refused: COMPACT every offender named in one message with its length and limit" $?
+
+# The band of compat.claim-contradicts-analysis (quoted-claims.md): one below the highest compat.*
+# code finding, compat.break-unexplained aside, and never without one. Above it, refused.
+BAND_MSG='render-comment.sh: a `compat.claim-contradicts-analysis` finding is rated above the band of the `compat.*` code finding that refutes it, or has none; send it back to the reviewer'
+band_refused() { # name, findings
+  render "$2"
+  check "refused: $1" "$([ "$ST" = 2 ] && empty_out && [ "$MSG" = "$BAND_MSG" ]; echo $?)"
+}
+t_band_low() { render "$({ f compat.expression-behaviour-changed LOW main.tf 1 "S." "F."; f compat.claim-contradicts-analysis HIGH . null "T." "no code change: G."; } | list band-low)"; [ "$ST" = 2 ] && empty_out && [ "$MSG" = "$BAND_MSG" ]; }
+t_band_low; check "refused: a HIGH description finding beside a LOW code finding" $?
+band_refused "a description finding with no compat.* code finding" "$({ f compat.break-unexplained MEDIUM . null "S." "no code change: F."; f compat.claim-contradicts-analysis LOW . null "T." "no code change: G."; } | list band-none)"
+render "$({ f compat.variable-removed HIGH a.tf 1 "S." "F."; f compat.expression-behaviour-changed LOW b.tf 2 "U." "H."
+  f compat.claim-contradicts-analysis MEDIUM . null "T." "no code change: G."; } | list band-ok)"
+check "band: a MEDIUM description finding below the highest code finding, HIGH, is accepted" "$([ "$ST" = 0 ] && [ "$(rule)" = 2 ]; echo $?)"
 render "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-std)" "$TMP/a-351.txt" --standard
 check "tiers: the same text passes in STANDARD with --standard" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ]; echo $?)"
 render "$(F556 "{summary: \"$(head -c 501 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-501)" "" --standard
@@ -1327,6 +1404,8 @@ t_g3() { rc "$TMP/g3b.json" "$TMP/run-r556-g3b.json"; [ "$(tier)" = STANDARD ]; 
 t_vgap() { rc "$(F556)" "$TMP/run-r556-vgap.json"; [ "$(tier)" = STANDARD ]; }
 t_over() { render "$(F556)" "$H556" "" "$(R556 overm)" "$TMP/a-351.txt"; [ "$ST" = 2 ] && empty_out; }
 t_force() { rc "$(F556)" "$(R556 force)" "" --standard; [ "$(tier)" = STANDARD ]; }
+t_root_rule0_item() { t_root_rule0; [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] Resolve `compat.claim-contradicts-analysis`: see its Fix under Findings.'; }
+t_root_one_item() { t_root_one; [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] Resolve `scope.description-only`: see its Fix under Findings.'; }
 
 # Negative self-check for the tier rules.
 mutate "the subset-of-union test dropped" 's/if \(\$t\.outstanding - \[\$e\[\]\.explains\[\]\]\) == \[\] then/if true then/' t_partial
@@ -1351,6 +1430,10 @@ mutate "G0 sent to the runner clause" 's/\{"plan gate G0": "file-gate"/{"plan ga
 mutate "the name allowlist dropped" 's/def allowed: test\("\^\[A-Za-z0-9\._\/-\]\+\$"\);/def allowed: true;/' t_names
 mutate "names not sorted" 's/def name_list: sort \|/def name_list:/' t_names
 mutate "the COMPACT caps dropped" 's/refuse: \(if \$tier == "COMPACT" then compact_refusal\(\$in\) else null end\)/refuse: null/' t_over
+mutate "only the first COMPACT offender named" 's/\(\$o \| join\("; "\)\)/$o[0]/' t_over_all
+mutate "the description band not enforced" 's/def band_ok:/def band_ok: true; def band_ok_unused:/' t_band_low
+mutate "the module root item dropped under rule 0" 's/def compat_item: [^\n]*/def compat_item: (.rule | startswith("compat."));/' t_root_rule0_item
+mutate "the module root item dropped" 's/elif all\(\.items\[\]; \.file == "\."\)/elif false/' t_root_one_item
 mutate "--standard ignored" 's/--standard\) standard=true; shift ;;/--standard) shift ;;/' t_force
 mutate "a COMPACT string changed in the script only" 's/plan the \{count\} gated examples in runner mode/plan the {count} examples in runner mode/' t_table
 mutate "the verdict line drops the validate sentence" 's/\(if \$run\.plan_ran then " " \+ tx/(if false then " " + tx/' t_556

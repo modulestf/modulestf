@@ -133,6 +133,14 @@ def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select
 def claims_consistent($findings; $run):
   (any($findings[]; .rule_id | startswith("claim.")) | not) or (behaviour_of($run) | behaviour_refuted > 0);
 
+# compat.claim-contradicts-analysis sits one band below the highest compat.* code finding that
+# refutes its claim, compat.break-unexplained aside, and never fires without one (quoted-claims.md).
+def sev_rank: {"CRITICAL": 3, "HIGH": 2, "MEDIUM": 1, "LOW": 0}[.];
+def band_ok:
+  ([.[] | select((.rule_id | startswith("compat.")) and (.rule_id | IN("compat.claim-contradicts-analysis", "compat.break-unexplained") | not))
+    | .severity | sev_rank] | max) as $c
+  | all(.[] | select(.rule_id == "compat.claim-contradicts-analysis"); $c != null and (.severity | sev_rank) <= ([$c - 1, 0] | max));
+
 # could_not_run entries counted as gaps: the prose-truncated entries, one per cut item class,
 # count once together, as they render one line.
 def cnr_count: ([.[] | select(.kind != "prose-truncated")] | length) + (if any(.[]; .kind == "prose-truncated") then 1 else 0 end);
@@ -303,6 +311,8 @@ def texts: {
   "todo-threads-many": "Resolve the {count} open review threads.",
   "todo-fix-one": "`{rule_id}`: apply the Fix at {locations}.",
   "todo-fix-many": "`{rule_id}` ({count}): apply the Fix at {locations}.",
+  "todo-fix-root-one": "Resolve `{rule_id}`: see its Fix under Findings.",
+  "todo-fix-root-many": "Resolve `{rule_id}` ({count}): see its Fixes under Findings.",
   "todo-compat-one": "`{rule_id}`: the Fix at {locations} restores compatibility.",
   "todo-compat-many": "`{rule_id}` ({count}): the Fix at {locations} restores compatibility.",
   "todo-optional-one": "Optional: `{rule_id}` at {locations}.",
@@ -317,6 +327,7 @@ def texts: {
   "todo-mergeability-unknown": "Mergeability could not be read.",
   "todo-gaps-one": "1 check could not run; see Checks that could not run.",
   "todo-gaps-many": "{count} checks could not run; see Checks that could not run.",
+  "refuse-band": "a `compat.claim-contradicts-analysis` finding is rated above the band of the `compat.*` code finding that refutes it, or has none; send it back to the reviewer",
   "fix-fold": "Fix for each location ({count})",
   "behaviour-evidence-reported": "Behaviour evidence: {count} changes classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claims} claims: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "compact-validate-all": "`validate` passed in all {count} examples; {planned} were planned.",
@@ -461,7 +472,8 @@ def loc_list($p): # the first eight locations, then the count of the rest
 def todo_md($l; $rule; $p; $gaps):
   ($l.findings | map(select(.rule_id != "review.tool-disputed"))) as $f
   | $l.signals as $g
-  | def grp($k): (.items | length) as $n
+  | def compat_item: (.rule | startswith("compat.")) and .rule != "compat.claim-contradicts-analysis" and (all(.items[]; .file == ".") | not);
+  def grp($k): (.items | length) as $n
       | tx($k + (if $n == 1 then "-one" else "-many" end); {rule_id: .rule, count: $n, locations: ([.entries[][]] | loc_list($p))});
   # review.* groups are no item: the author cannot act on them. Rule 4 counts them as gaps.
   [sev_order[] as $s | $f | map(select(.severity == $s)) | groups[] | select(.rule | startswith("review.") | not)
@@ -472,7 +484,8 @@ def todo_md($l; $rule; $p; $gaps):
      + (if $l.unresolved == 1 then [{box: true, t: tx("todo-threads-one")}]
         elif $l.unresolved > 1 then [{box: true, t: tx("todo-threads-many"; {count: $l.unresolved})}] else [] end)
      + [ $gs[] | select(.sev != "LOW")
-         | if $rule == 0 and (.rule | startswith("compat.")) then {box: false, t: grp("todo-compat")}
+         | if $rule == 0 and compat_item then {box: false, t: grp("todo-compat")}
+           elif all(.items[]; .file == ".") then {box: true, t: grp("todo-fix-root")} # no place to apply it at
            else {box: true, t: grp("todo-fix")} end ]
      + [ $l.refuted_todo[] | {box: true, t: tx("todo-refuted"; trigger_at($p))} ]) as $abc
   | ($abc
@@ -672,13 +685,14 @@ def compact_ok($l; $v; $c; $run; $b):
   and ($run | has("examples"));
 
 # Over a COMPACT cap the model text goes back to the reviewer; nothing is cut.
+# Every offender, in input order, with its length and its limit, in one message.
 def compact_refusal($in):
-  if ($in.assessment | length) > 350 or ($in.assessment | test("\n\n")) then
-    "the assessment is over 350 characters or more than one paragraph, the COMPACT limit"
-  else first($in.findings[]
-    | if (.summary | length) > 200 then "finding \(.id): the summary is over 200 characters, the COMPACT limit"
-      elif (.suggested_fix | length) > 250 then "finding \(.id): the suggested_fix is over 250 characters, the COMPACT limit"
-      else empty end) // null end;
+  [ ($in.assessment | length | select(. > 350) | "the assessment is \(.) characters, limit 350"),
+    ($in.assessment | select(test("\n\n")) | "the assessment is more than one paragraph, limit one"),
+    ($in.findings[] | .id as $id
+      | (.summary | length | select(. > 200) | "finding \($id) summary is \(.) characters, limit 200"),
+        (.suggested_fix | length | select(. > 250) | "finding \($id) suggested_fix is \(.) characters, limit 250")) ] as $o
+  | if $o == [] then null else "over the COMPACT limits: " + ($o | join("; ")) end;
 
 # Names the pull request controls render only in the details block: allowlisted, sorted, at most
 # three and the count of the rest; a name outside the charset is withheld and still counts.

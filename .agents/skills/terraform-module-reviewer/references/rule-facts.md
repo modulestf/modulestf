@@ -29,7 +29,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `claim.fix-not-effective` | none | - | - | never | llm | config-semantic | touched-expression | no | root, submodule | none | HIGH | - | - |
 | `claim.refuted` | none | - | - | never | llm | config-semantic | touched-expression | yes | root, submodule | none | HIGH | - | - |
 | `compat.break-unexplained` | none | - | - | never | llm | config-semantic | any-file-in-area | yes | root | tool-findings, candidates, interface-diff | MEDIUM | - | - |
-| `compat.claim-contradicts-analysis` | none | - | - | never | llm | config-semantic | any-file-in-area | yes | root | tool-findings, candidates, interface-diff | HIGH | - | - |
+| `compat.claim-contradicts-analysis` | none | - | - | never | llm | config-semantic | any-file-in-area | yes | root | tool-findings, candidates, interface-diff | HIGH, MEDIUM, LOW | - | - |
 | `compat.default-changed` | none | - | - | never | candidate | config-semantic | touched-expression | no | root, submodule | candidates, interface-diff | CRITICAL, HIGH, MEDIUM | lead | mid |
 | `compat.expression-behaviour-changed` | none | - | - | never | llm | config-semantic | touched-expression | no | root, submodule | interface-diff | CRITICAL, HIGH, LOW | - | - |
 | `compat.generated-policy-narrowed` | none | - | - | never | candidate | config-semantic | touched-block | no | root, submodule | candidates | CRITICAL, HIGH | lead | mid |
@@ -136,7 +136,7 @@ The host merge does not apply pair 2: it keeps both findings. This is the owner'
 
 Not deduplicated, so both findings are kept:
 
-- A break in the code and `compat.claim-contradicts-analysis` about that break: the Final Step carve-out, and [Check A](check-a-compatibility.md) says the pair is not deduplicated.
+- A `compat.*` code finding and `compat.claim-contradicts-analysis` about the claim it refutes: the Final Step carve-out, and [quoted-claims.md](quoted-claims.md#compatclaim-contradicts-analysis) says both are emitted, the description finding one band below the code finding.
 - A break in the code and `compat.break-unexplained` about that break: Check A says it never replaces the finding for the break.
 - A `scope.*` file rule and a `profile.*` rule on the same path for the same edit. [Check F](check-f-scope.md) calls them one defect and lists its pairs as examples, "not a closed list". The owner decided they stay unmerged in step 2, so both are kept.
 
