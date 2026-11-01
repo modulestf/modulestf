@@ -51,8 +51,9 @@
 #   "complete", "outstanding" and "evidence_digest" (behaviour-pass.md, The Run Object); a trigger
 #   whose outstanding differences findings explain is reported (verdict.md, Behaviour evidence).
 #   The caps are per tier: STANDARD 700, 500 and 600 characters for the assessment, a summary and
-#   a fix, COMPACT 350 in one paragraph, 200 and 250. Over a cap the input is refused, never cut;
-#   one message names every offender with its length and its limit.
+#   a fix, COMPACT 350 in one paragraph, 200 and 250, or 600 for a fix that starts with
+#   "needs decision:". Over a cap the input is refused, never cut; one message names every
+#   offender with its length and its limit.
 #
 # Writes comment.md, findings.json and result.json, in that order, result.json last by a rename,
 # and prints "rendered <verdict> (ladder rule <n>), proposed event <EVENT>, tier <TIER>". Exit 2 is a usage
@@ -160,7 +161,7 @@ RJ -n --slurpfile f "$findings" --slurpfile h "$host" --slurpfile r "$run" --raw
   | del(.parts)' > "$TMP/render.json" || die "the render failed"
 
 refuse="$(jq -r '.refuse // ""' "$TMP/render.json")"
-[ -z "$refuse" ] || die "$refuse; send it back to the reviewer, or render with --standard"
+[ -z "$refuse" ] || die "$refuse; send it back to the reviewer once; if it keeps the finding because it is within the schema targets, render with --standard"
 leak="$(jq -r 'if .leak then "\(.leak.pattern) in \(.leak.src)" else "" end' "$TMP/render.json")"
 [ -z "$leak" ] || stop "leak scan: $leak; nothing written"
 [ "$(jq -r '.mention_left' "$TMP/render.json")" = false ] || stop "an at-mention is left outside a code span; nothing written"

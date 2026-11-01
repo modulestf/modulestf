@@ -194,7 +194,10 @@ invariant() {
     7) jq -e 'all(.[]; .severity == "LOW")' "$O/findings.json" > /dev/null && ! todo | grep -q '^- \[ \] ' ;;
     8) jq -e 'all(.[]; .rule_id == "review.tool-disputed")' "$O/findings.json" > /dev/null && [ -z "$(todo)" ] ;;
     0) todo | grep -q '^- `[^`]*`.* restores compatibility\.$' ;;
-    4) [ -n "$(todo)" ] ;;
+    # Rule 4 renders What to do only with an item other than Optional and the gaps line; a list
+    # of those alone gives way to the action line, and section 4 or 5 holds the unknowns.
+    4) if [ -n "$(todo)" ]; then todo | grep -v -e '^- Optional: ' -e ' could not run; see Checks that could not run\.$' | grep -q '^- '
+       else grep -qE '^### (Findings|Checks that could not run)$' "$O/comment.md"; fi ;;
     *) false ;;
   esac
 }
@@ -235,10 +238,13 @@ ladder "coverage none for want of a profile" "inconclusive COMMENT" 4 "$NONE" ""
 t_cov_lines() {
   awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" > "$TMP/cov-s5.txt"
   printf '%s\n' '' '- 2 examples were not planned: no AWS profile named.' '  - `examples/a`' '  - `examples/b`' | cmp -s - "$TMP/cov-s5.txt" &&
-    grep -qxF -- '- 2 checks could not run; see Checks that could not run.' "$O/comment.md" &&
+    [ -z "$(todo)" ] && sed -n 3,5p "$O/comment.md" | cmp -s - <(printf '%s\n' '**Inconclusive.**' '' 'To get a conclusive review: name an AWS profile.') &&
     grep -qxF -- "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-listed"]')" "$O/comment.md"
 }
-t_cov_lines; check "coverage: the unplanned examples are section 5, one clause per reason with the names under it, golden, counted in What to do" $?
+t_cov_lines; check "coverage: the unplanned examples are section 5, one clause per reason with the names under it, golden; the action line in place of What to do" $?
+render "$NONE" "$(host covcnt '.signals.mergeability = "unknown"')" "" "$TMP/run-cov-none.json"
+grep -qxF -- '- 2 checks could not run; see Checks that could not run.' "$O/comment.md" && ! grep -qF 'To get a conclusive review' "$O/comment.md"
+check "coverage: beside another rule 4 item, What to do counts the unplanned examples and no action line renders" $?
 ladder "partial coverage under a LOW finding" "inconclusive COMMENT" 4 "$(one structure.grouping LOW a.tf 1 "S." "F.")" "" "" \
   "$(runf cov-part '.verify_gaps = [{dir: "examples/c", reason: "init failed"}] | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/d", reason: "plan gate G1"}]}')"
 grep -A4 -xF '### Checks that could not run' "$O/comment.md" | tail -n 3 | cmp -s - <(printf '%s\n' '- Verification of `examples/c`: `init` failed.' '- 1 example was not planned: plan gate G1.' '  - `examples/d`')
@@ -457,6 +463,16 @@ t_targets_stated() {
     awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -qF -- "$LT"
 }
 t_targets_stated; check "strings: the length targets are stated in the findings schema and the handover" $?
+# A COMPACT refusal gives one piece of advice, the same in the script, SKILL.md Step 10, the
+# handover and Tiers.
+ADVICE='send it back to the reviewer once; if it keeps the finding because it is within the schema targets, render with --standard'
+t_advice() {
+  grep -qF -- "\$refuse; $ADVICE\"" "$RCU" &&
+    grep -F -- '- **Step 10 - Render.**' "$SRC/.agents/skills/terraform-module-pr-review/SKILL.md" | grep -qF -- "\`$ADVICE\`" &&
+    awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -qF -- "\`$ADVICE\`" &&
+    awk '/^## Tiers$/ { on = 1; next } on && /^## / { exit } on' "$CF" | grep -qF -- "\`$ADVICE\`"
+}
+t_advice; check "strings: the COMPACT refusal advice is one sentence in the script, SKILL.md Step 10, the handover and Tiers" $?
 
 # --- Leak scan: a match blocks every file and says what matched and where.
 
@@ -683,9 +699,25 @@ todo_is "rule 4 with every unknown, triage and a check-not-run finding" '### Wha
   '- This was a triage run. The full review has not run.' '- Check results could not be read or are still running.' \
   '- Review thread resolution could not be read.' '- The reviews could not be read.' '- Mergeability could not be read.' \
   '- 3 checks could not run; see Checks that could not run.'
-render "$(f review.check-not-run LOW . null "Check B did not run." "no code change: none." | list wt-r4c)"
+render "$(f review.check-not-run LOW . null "Check B did not run." "no code change: none." | list wt-r4c)" "" "$(checks wt-r4c unknown)"
 todo_is "rule 4 with a LOW review finding, counted once and no Optional item" '### What to do' '' "$LEAD_4" '' \
-  '- 1 check could not run; see Checks that could not run.'
+  '- Check results could not be read or are still running.' '- 1 check could not run; see Checks that could not run.'
+# Quiet items alone, Optional ones and the gaps line, give way to the action line; a cause
+# outside the cause table, here a review.* finding, has no action clause, so no line renders.
+t_quiet_other() {
+  render "$({ f review.check-not-run LOW . null "Check B did not run." "no code change: none."; f structure.grouping LOW a.tf 1 "S." "F."; } | list wt-r4q)" "" "" \
+    "$(runf wt-r4q '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}')"
+  [ "$(rule)" = 4 ] && [ -z "$(todo)" ] && ! grep -qF 'To get a conclusive review' "$O/comment.md" && grep -qxF '### Findings' "$O/comment.md"
+}
+t_quiet_other; check "what to do: rule 4 with Optional items and the gaps line alone renders none, and a cause outside the table no action line" $?
+t_quiet_action() {
+  render "$(f structure.grouping LOW a.tf 1 "S." "F." | list wt-r4qa)" "" "" \
+    "$(runf wt-r4qa '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}')"
+  [ "$(rule)" = 4 ] && [ -z "$(todo)" ] && grep -qxF -- '- `structure.grouping` - `a.tf:1` - S.' "$O/comment.md" &&
+    sed -n 3,7p "$O/comment.md" | cmp -s - <(printf '%s\n' '**Inconclusive.**' '' 'To get a conclusive review: name an AWS profile.' '' \
+      'A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).')
+}
+t_quiet_action; check "what to do: rule 4 with quiet items and table causes alone: the action line right under the verdict" $?
 t_r4_threads() { render "$NONE" "$H2"; [ "$(rule)" = 4 ]; }
 t_r4_threads
 todo_is "rule 4, thread resolution unknown is not also counted as a gap" '### What to do' '' "$LEAD_4" '' \
@@ -940,7 +972,13 @@ mutate "item e never a checkbox" 's/\{box: any\(\$abc\[\]; \.box\), t: tx\("todo
 mutate "the none suppression made case-insensitive" 's/"\^ none\(/"^ (?i)none(/' t_none_fires
 mutate "the Fix block from four entries" 's/\(\.entries \| length\) >= 3/(.entries | length) >= 4/' t_fold3
 mutate "the Fix block guard dropped" 's/\n  and all\(\.items\[\]; all\(\.summary, \.suggested_fix, loc\(\$p\); test\("<\/\?details\|\\n"; "i"\) \| not\)\)//' t_unf_fix
-mutate "What to do rendered at rule 8" 's/if \$v\.rule == 8 then \[\] else/if false then [] else/' t_rule8_none
+mutate "What to do rendered at rule 8" 's/if \$v\.rule == 8 or \$quiet then \[\] else/if \$quiet then [] else/' t_rule8_none
+mutate "a quiet What to do rendered at rule 4" 's/if \$v\.rule == 8 or \$quiet then \[\] else/if \$v.rule == 8 then [] else/' t_quiet_other
+mutate "the STANDARD action line dropped" 's/\(if \$quiet then action_line\(\$c\) else \[\] end\)/[]/' t_quiet_action
+mutate "the action line beside a cause outside the table" 's/if \$c\.other or \$c\.admitted == \[\] then/if \$c.admitted == [] then/' t_quiet_other
+mutate "the Optional items not quiet" 's/\{box: false, quiet: true, t: grp\("todo-optional"\)\}/{box: false, t: grp("todo-optional")}/' t_quiet_action
+t_rule7_todo() { render "$G"; [ "$(rule)" = 7 ] && todo | grep -qxF "$LEAD_7"; }
+mutate "What to do quiet at a rule other than 4" 's/\(\$v\.rule == 4 and all\(\$items\[\]; \.quiet\)\)/all(\$items[]; .quiet)/' t_rule7_todo
 mutate "nine locations listed" 's/\$l\[:8\]/\$l[:9]/' t_loc9
 mutate "rule 0 groups as checkboxes" 's/if \$rule == 0 and/if false and/' t_rule0_plain
 t_rule0_mixed() { render "$R0M"; todo | grep -qxF -- '- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.'; }
@@ -962,16 +1000,21 @@ brun() { # name, triggers json, claims json [, capped] -> run file
 LOWF="$(f structure.argument-order LOW main.tf 43 "S." "F." | list lowf)" # its own file: one() reuses a name
 BOK="$(brun ok "[$(bt T-001 wrapper-change verified), $(bt T-002 unknown-propagation-candidate covered), $(bt T-003 literal-argument-change inert)]" '[{claim_id: "C-1", state: "verified"}]')"
 ladder "behaviour verified, covered and inert with a LOW finding" "approve with nits COMMENT" 7 "$LOWF" "" "" "$BOK"
-grep -qxF 'Behaviour evidence: 3 changes classified: 1 verified, 1 covered by a plan, 1 inert, 0 refuted, 0 not verified; 1 claims: 1 verified, 0 refuted, 0 not verified.' "$O/comment.md"
+! grep -q 'Behaviour evidence' "$O/comment.md"; check "behaviour: every trigger and claim passed renders no evidence line" $?
+BUV="$(brun uv "[$(bt T-001 wrapper-change unverifiable), $(bt T-002 unknown-propagation-candidate unverifiable)]" '[{claim_id: "C-1", state: "unverifiable"}]')"
+render "$LOWF" "" "" "$BUV"
+grep -qxF 'Behaviour evidence: 2 changes classified: 0 verified, 0 covered by a plan, 0 inert, 0 refuted, 2 not verified; 1 claims: 0 verified, 0 refuted, 1 not verified.' "$O/comment.md"
 check "behaviour: the evidence line follows the rationale" $?
-awk 'p == "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7)." && /^$/ { getline; print; exit } { p = $0 }' "$O/comment.md" | grep -q '^Behaviour evidence: '
+awk 'p == "A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4)." && /^$/ { getline; print; exit } { p = $0 }' "$O/comment.md" | grep -q '^Behaviour evidence: '
 check "behaviour: the evidence line is the paragraph after the rationale" $?
+render "$LOWF" "" "" "$(brun one-uv "[$(bt T-001 wrapper-change verified)]" '[{claim_id: "C-1", state: "verified"}, {claim_id: "C-2", state: "unverifiable"}]')"
+grep -q '^Behaviour evidence: 1 changes classified: 1 verified' "$O/comment.md"; check "behaviour: one unverified claim beside passing triggers keeps the evidence line" $?
 ladder "an inert change" "approve APPROVE" 8 "$NONE" "" "" "$(brun inert '[]' '[]')"
 ! grep -q 'Behaviour evidence' "$O/comment.md"; check "behaviour: nothing classified renders no evidence line" $?
-BUV="$(brun uv "[$(bt T-001 wrapper-change unverifiable), $(bt T-002 unknown-propagation-candidate unverifiable)]" '[{claim_id: "C-1", state: "unverifiable"}]')"
 ladder "an unverified trigger with a LOW finding" "inconclusive COMMENT" 4 "$LOWF" "" "" "$BUV"
 grep -qxF 'A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).' "$O/comment.md"
 check "behaviour: rule 4 names the listed checks" $?
+render "$LOWF" "" "$(checks bcount unknown)" "$BUV"
 grep -qxF -- '- 3 checks could not run; see Checks that could not run.' "$O/comment.md"; check "behaviour: What to do counts each unverified trigger and claim" $?
 ladder "an unverified claim alone" "inconclusive COMMENT" 4 "$NONE" "" "" "$(brun uc "[$(bt T-001 wrapper-change verified)]" '[{claim_id: "C-2", state: "unverifiable"}]')"
 grep -qxF -- '- Claim C-2 from the description: not verified.' "$O/comment.md"; check "behaviour: the unverified claim is listed" $?
@@ -1011,12 +1054,14 @@ refused "a behaviour object with an extra key" "$G" "" "" "$(runf be '.behaviour
 refused "a trigger path out of the module" "$G" "" "" "$(brun bp '[{id: "T-001", file: "../main.tf", line: 2, category: "wrapper-change", state: "verified"}]' '[]')"
 t_bgaps() { render "$LOWF" "" "" "$BUV"; [ "$(rule)" = 4 ]; }
 t_bvi() { render "$(one review.verification-incomplete MEDIUM . null "S." "no code change: none.")"; [ "$(rule)" = 4 ]; }
-t_bev() { render "$LOWF" "" "" "$BOK"; grep -q '^Behaviour evidence: 3 changes' "$O/comment.md"; }
+t_bev() { render "$LOWF" "" "" "$BUV"; grep -q '^Behaviour evidence: 2 changes' "$O/comment.md"; }
+t_bev_none() { render "$LOWF" "" "" "$BOK"; [ "$ST" = 0 ] && ! grep -q '^Behaviour evidence: ' "$O/comment.md"; }
 t_bstate() { render "$G" "" "" "$TMP/run-b-bs.json"; [ "$ST" = 2 ]; }
 mutate "behaviour gaps not counted" 's/ \+ \(\$b \| behaviour_gaps\)\),\n     unplanned:/),\n     unplanned:/' t_bgaps
 mutate "unverified triggers not counted" 's/select\(\.state == "unverifiable"\)\] \| length\)/select(false)] | length)/' t_bgaps
 mutate "review.verification-incomplete not an unknown" 's/, "review\.verification-incomplete"\)\)/))/' t_bvi
 mutate "the evidence line dropped" 's/\+ evidence_lines\(\$b\)//' t_bev
+mutate "the evidence line kept when every trigger and claim passed" 's/or \(\$b\.capped == 0 and all/or (false and all/' t_bev_none
 mutate "any trigger state accepted" 's/\(\.state \| IN\("inert", "verified", "covered", "refuted", "unverifiable"\)\)/true/' t_bstate
 # A run file without the behaviour key: outside a triage run the host did not run the step, an
 # unknown with its line; in a triage run nothing more.
@@ -1146,13 +1191,28 @@ t_556c() { rc "$(F556C)" "$(R556 claimdesc)"; [ "$ST" = 0 ] && [ "$(tier)" = COM
 t_556c; check "tiers: pull request 556 with its LOW description finding renders COMPACT, byte for byte" $?
 check "tiers: the LOW description finding blocks nothing, inconclusive at rule 4" "$([ "$(verdict)" = "inconclusive COMMENT" ]; echo $?)"
 rc "$(F556)" "$(R556 gold-std)" "" --standard
-check "tiers: --standard forces STANDARD on the same inputs" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && grep -qxF '### What to do' "$O/comment.md"; echo $?)"
-grep -qxF 'Behaviour evidence: 1 changes classified: 0 verified, 0 covered by a plan, 0 inert, 1 reported in a finding, 0 refuted, 0 not verified; 20 claims: 20 verified, 0 refuted, 0 not verified.' "$O/comment.md"
-check "tiers: the STANDARD evidence line counts the reported trigger" $?
+# STANDARD at rule 4 with only Optional items and the gaps line: no What to do, the COMPACT
+# action line under the verdict, and no evidence line, since every trigger and claim passed or
+# was reported.
+{ sed -n '1,4p' "$TMP/want-556.md"; sed -n '5,6p' "$TMP/want-556.md"
+  printf '%s\n' 'A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).' '' \
+    '### Findings' '' '**LOW**' '' \
+    '- `compat.expression-behaviour-changed` - `main.tf:156` - null and empty-string elements of `var.vpc_security_group_ids` now reach the provider, and a null fails the plan.' \
+    '  - Fix: reject them with a `validation` block in `variables.tf`, or say in the description that they now fail.' \
+    '- `structure.argument-order` - `main.tf:43` - `tags` is not the last argument.' '  - Fix: Move `tags` last.' '' \
+    '### Checks that could not run' '' \
+    '- Quoted prose was truncated, so part of the discussion was not read.' '- 2 examples were not planned: plan gate G1.' \
+    '  - `examples/serverless`' '  - `examples/s3-import`' '- 1 example was not planned: plan gate G3.' '  - `examples/mysql`'
+} > "$TMP/want-556s.md"
+sed -i.bak '3s/ `validate` passed.*$//' "$TMP/want-556s.md"
+check "tiers: --standard forces STANDARD on the same inputs, byte for byte" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && cmp -s "$O/comment.md" "$TMP/want-556s.md"; echo $?)"
 awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" | cmp -s - <(printf '%s\n' '' \
   '- Quoted prose was truncated, so part of the discussion was not read.' '- 2 examples were not planned: plan gate G1.' \
   '  - `examples/serverless`' '  - `examples/s3-import`' '- 1 example was not planned: plan gate G3.' '  - `examples/mysql`')
 check "tiers: STANDARD section 5 groups the not-planned examples by reason, golden, and lists no reported trigger" $?
+rc "$(F556)" "$(R556 gold-std-uv '.behaviour.claims[0].state = "unverifiable"')" "" --standard
+grep -qxF 'Behaviour evidence: 1 changes classified: 0 verified, 0 covered by a plan, 0 inert, 1 reported in a finding, 0 refuted, 0 not verified; 20 claims: 19 verified, 0 refuted, 1 not verified.' "$O/comment.md"
+check "tiers: the STANDARD evidence line counts the reported trigger" $?
 t_cut() { rc "$(F556)" "$(R556 cut)" "$(host cut1 '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 31}]')"; [ "$(tier)" = COMPACT ] &&
   grep -qF 'Not checked: the description past 8000 bytes (31 cut), 3 of 9 examples not planned (safety gate).' "$O/comment.md"; }
 t_cut; check "tiers: the description cause takes the bytes omitted from host.json" $?
@@ -1162,7 +1222,7 @@ grep -qxF -- '- Quoted prose was truncated, so part of the discussion was not re
 rc "$(F556)" "$(R556 cuto)" "$(host cuto '.could_not_run = [{kind: "prose-truncated"}]')"
 check "tiers: a prose-truncated entry that names no item forces STANDARD" "$(std0; echo $?)"
 t_prose_once() {
-  rc "$NONE" "$(runf prose1)" "$(host prose3 '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 9}, {kind: "prose-truncated", item: "thread", omitted: 4}, {kind: "prose-truncated", item: "title", omitted: 2}, {kind: "patch-unavailable", path: "a.tf"}]')"
+  rc "$NONE" "$(runf prose1)" "$(host prose3 '.signals.mergeability = "unknown" | .could_not_run = [{kind: "prose-truncated", item: "body", omitted: 9}, {kind: "prose-truncated", item: "thread", omitted: 4}, {kind: "prose-truncated", item: "title", omitted: 2}, {kind: "patch-unavailable", path: "a.tf"}]')"
   std0 && [ "$(grep -c -xF -- '- Quoted prose was truncated, so part of the discussion was not read.' "$O/comment.md")" = 1 ] &&
     grep -qxF -- '- 2 checks could not run; see Checks that could not run.' "$O/comment.md"
 }
@@ -1296,13 +1356,21 @@ printf 'One.\n\nTwo.\n' > "$TMP/a-2p.txt"
 over "$(F556)" "$TMP/a-2p.txt" 'the assessment is more than one paragraph, limit one' "an assessment of two paragraphs"
 over "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'finding F-001 summary is 201 characters, limit 200' "a summary over 200 characters"
 over "$(F556 "{suggested_fix: \"$(head -c 251 /dev/zero | tr '\0' s)\"}")" "$TMP/assess-556.txt" 'finding F-001 suggested_fix is 251 characters, limit 250' "a fix over 250 characters"
+# A needs decision: fix keeps the 600 the length targets give it: one of 409 characters, the
+# length that once forced STANDARD, renders COMPACT, and one of 600 still does.
+ND409="needs decision: $(head -c 393 /dev/zero | tr '\0' d)"
+t_nd409() { rc "$(F556 "{suggested_fix: \"$ND409\"}")" "$(R556 nd409)"; [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && grep -qxF -- "  - Fix: $ND409" "$O/comment.md"; }
+t_nd409; check "tiers: a needs decision fix of 409 characters renders COMPACT" $?
+t_nd600() { rc "$(F556 "{suggested_fix: \"needs decision: $(head -c 584 /dev/zero | tr '\0' d)\"}")" "$(R556 nd600)"; [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ]; }
+t_nd600; check "tiers: a needs decision fix of 600 characters renders COMPACT" $?
+over "$(F556 "{suggested_fix: \"Needs decision: $(head -c 393 /dev/zero | tr '\0' d)\"}")" "$TMP/assess-556.txt" 'finding F-001 suggested_fix is 409 characters, limit 250' "a fix of 409 characters without the exact needs decision prefix"
 # Every offender in one message, in input order, each with its length and its limit.
 t_over_all() {
   jq --arg s1 "$(head -c 201 /dev/zero | tr '\0' s)" --arg x1 "$(head -c 260 /dev/zero | tr '\0' x)" \
     --arg s2 "$(head -c 230 /dev/zero | tr '\0' t)" '.[0].summary = $s1 | .[0].suggested_fix = $x1 | .[1].summary = $s2' \
     "$(F556)" > "$TMP/over-all.json"
   render "$TMP/over-all.json" "$H556" "" "$(R556 overall)" "$TMP/a-351.txt"
-  [ "$ST" = 2 ] && empty_out && [ "$MSG" = 'render-comment.sh: over the COMPACT limits: the assessment is 351 characters, limit 350; finding F-001 summary is 201 characters, limit 200; finding F-001 suggested_fix is 260 characters, limit 250; finding F-002 summary is 230 characters, limit 200; send it back to the reviewer, or render with --standard' ]
+  [ "$ST" = 2 ] && empty_out && [ "$MSG" = 'render-comment.sh: over the COMPACT limits: the assessment is 351 characters, limit 350; finding F-001 summary is 201 characters, limit 200; finding F-001 suggested_fix is 260 characters, limit 250; finding F-002 summary is 230 characters, limit 200; send it back to the reviewer once; if it keeps the finding because it is within the schema targets, render with --standard' ]
 }
 t_over_all; check "refused: COMPACT every offender named in one message with its length and limit" $?
 
@@ -1430,6 +1498,8 @@ mutate "G0 sent to the runner clause" 's/\{"plan gate G0": "file-gate"/{"plan ga
 mutate "the name allowlist dropped" 's/def allowed: test\("\^\[A-Za-z0-9\._\/-\]\+\$"\);/def allowed: true;/' t_names
 mutate "names not sorted" 's/def name_list: sort \|/def name_list:/' t_names
 mutate "the COMPACT caps dropped" 's/refuse: \(if \$tier == "COMPACT" then compact_refusal\(\$in\) else null end\)/refuse: null/' t_over
+mutate "the needs decision fix held to 250 in COMPACT" 's/then 600 else 250 end/then 250 else 250 end/' t_nd409
+mutate "the refusal advice reworded in the script only" 's/send it back to the reviewer once; if it keeps the finding because it is within the schema targets, render with --standard/send it back to the reviewer, or render with --standard/' t_advice
 mutate "only the first COMPACT offender named" 's/\(\$o \| join\("; "\)\)/$o[0]/' t_over_all
 mutate "the description band not enforced" 's/def band_ok:/def band_ok: true; def band_ok_unused:/' t_band_low
 mutate "the module root item dropped under rule 0" 's/def compat_item: [^\n]*/def compat_item: (.rule | startswith("compat."));/' t_root_rule0_item

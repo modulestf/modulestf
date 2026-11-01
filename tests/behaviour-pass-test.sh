@@ -170,8 +170,10 @@ awk '/^### Checks that could not run$/ { on = 1 } on && /^### / && !/could not r
 cmp -s "$TMP/want-gaps" "$TMP/got-gaps"; check "acceptance: section 5 lists the unverified triggers and claims" $?
 grep -qxF 'Behaviour evidence: 2 changes classified: 0 verified, 0 covered by a plan, 0 inert, 0 refuted, 2 not verified; 3 claims: 0 verified, 0 refuted, 3 not verified.' "$TMP/render/comment.md"
 check "acceptance: the evidence line" $?
-grep -qxF -- '- 5 checks could not run; see Checks that could not run.' "$TMP/render/comment.md"
-check "acceptance: What to do counts the five gaps" $?
+# The five gaps alone are quiet items: section 5 lists them, so no What to do renders, and an
+# unverified trigger is a cause outside the cause table, so no action line either.
+! grep -qxF '### What to do' "$TMP/render/comment.md" && ! grep -qF 'To get a conclusive review' "$TMP/render/comment.md"
+check "acceptance: the five gaps are section 5 alone, with no What to do and no action line" $?
 
 # --- A ladder record handed in is passed as it is; no claims file means no --claims.
 setup
