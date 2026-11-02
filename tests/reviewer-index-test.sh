@@ -319,6 +319,11 @@ refusal_check() {
   printf '# Sibling\n\n## Part\n\ns\n' > "$TMP/rc/skills/sibling.md"
   expect 2 "an absolute path outside the skills directory" "$TMP/out/x.md" outside
   expect 0 "a file of a sibling skill" ../sibling.md part
+  out="$(cd "$TMP/rc/skills" && bash "$h" reviewer/references/fixture.md two 2> /dev/null)" ||
+    printf 'refusal\ta path relative to the skills directory\texits non-zero\n'
+  [ "$out" = "$(printf '## Two\n\ny\n')" ] || printf 'refusal\ta path relative to the skills directory\tprinted the wrong section\n'
+  out="$(cd "$TMP/out" && bash "$h" x.md outside 2> /dev/null)" &&
+    printf 'refusal\ta current-directory path outside the skills directory\texits 0\n'
   expect 2 "a relative path that climbs out" "references/../../../../../../../../$TMP/out/x.md" outside
   expect 2 "a symbolic link to a file outside" references/link.md outside
   expect 2 "a file under a linked directory" references/linkdir/x.md outside
