@@ -7,6 +7,8 @@ When unsure whether a row's **Applies when** holds, it holds.
 
 With `G-ladder` out of scope in `depth.json`, only the claim reading [Reading by Depth](../../SKILL.md#reading-by-depth) describes runs, and no row below and no section of [verification-ladder.md](../verification-ladder.md) is read.
 
+Open [quoted-claims.md](../quoted-claims.md) only when the task's untrusted block has a title, description or comment that makes a claim, starting at [Marked Items](../quoted-claims.md#marked-items); otherwise no claim is read from prose and nothing of it is opened.
+
 ## Read First
 
 When any row below applies: [Reads, Fails When and Severity](../check-g-behaviour.md#reads-fails-when-and-severity).

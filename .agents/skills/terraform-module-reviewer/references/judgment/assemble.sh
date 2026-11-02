@@ -116,10 +116,19 @@ drops_of() {
 CHECKS="a-compatibility b-coverage c-structure d-examples e-profile f-scope"
 copy "$J/workflow.md" "" "-" ""
 echo
-# Reading by Depth and the section helper serve the full variant, which reads by run
-# summary; the host's schema trust terms bind the host step, not a judgment run.
+# The router sections, the section helper and the host's task lines serve the full variant,
+# which reads by run summary; the host's schema trust terms bind the host step, not a judgment
+# run. The text SKILL.md routes to is copied from the files it moved to, in its old order of
+# headings, minus the parts a judgment run reads on demand or never.
 copy "$S/SKILL.md" "../../" "Skill" \
-  "h:When to Use This Skill|h:Reading by Depth|h:Responsibility Boundaries|h:Output|h:Reference Files|h:Check A: Backwards Compatibility|h:Check B: Coverage Gaps Against the Provider Schema|h:Check C: Module Structure|h:Check D: Examples|h:Check E: Profile Conventions|h:Check F: Scope|h:Check G: Behaviour Changes and Claims|l:^8[.] If .mtf-facts. is installed|l:^Classify the changed paths, order the areas|l:^Each check.s full [*][*]Reads|l:^The .rule_id. values named in the checks above|l:^- With it, the diff file the caller.s own task text names|l:^- A third addition: this skill.s own|l:^Trust anchors [(]provider source allowlist|l:^[*][*]See:[*][*] .Schema Validation Guide."
+  "h:When to Use This Skill|h:Run Order per Depth|h:Reading by Depth|h:Read When|h:Moved Sections|l:^- With it, the diff file the caller.s own task text names|l:^- With it too, the files the caller.s own task text names on an .Output:. line|l:^- A third addition: this skill.s own|l:^Trust anchors [(]provider source allowlist|l:^[*][*]See:[*][*] .Schema Validation Guide."
+echo
+copy "$R/inputs.md" "../" "Skill" "u:Review Inputs|h:Responsibility Boundaries"
+echo
+copy "$R/output.md" "../" "Skill" "u:Severity and Output|h:Output"
+echo
+copy "$R/workflow.md" "../" "Skill" \
+  "u:Review Steps|h:Check A: Backwards Compatibility|h:Check B: Coverage Gaps Against the Provider Schema|h:Check C: Module Structure|h:Check D: Examples|h:Check E: Profile Conventions|h:Check F: Scope|h:Check G: Behaviour Changes and Claims|l:^8[.] If .mtf-facts. is installed|l:^Classify the changed paths, order the areas|l:^Each check.s full [*][*]Reads|l:^The .rule_id. values named in the checks above"
 for c in $CHECKS; do
   echo
   # Pointer lines to the engine files and the rule id lists say nothing a judgment run needs.
