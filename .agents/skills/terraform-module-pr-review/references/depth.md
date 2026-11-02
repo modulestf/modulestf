@@ -10,7 +10,7 @@ The host decides the depth before the reviewer starts, from the git trees at the
 | Depth | When | Runs | Out of scope |
 |-------|------|------|--------------|
 | light | Every changed file is documentation (`*.md`, `CHANGELOG*`, a `docs/` directory, `LICENSE`, `.gitignore`, `.editorconfig`), none is read by Terraform, no string expression in the head resolves to a changed file, every string expression resolves, and the classifier calls the change inert | `validate` in every example, Checks C (on the changed files it covers), E and F, and Check G's claim reading without the ladder | Checks A, B and D, the rest of Check G, the plan pass, the ladder, provider facts |
-| focused | A Terraform change within the limits below, with no deep class | Checks A, C, E, F and G; D when a selected example reaches the change or an example changes; B on touched types; every touched and caller example planned; provider facts from fact sheets | Check B with no touched type, Check D with no example reached or changed, an example `mtf-facts` proves does not reach the change |
+| focused | A Terraform change within the limits below, with no deep class | Checks A, C, E, F and G; D when a selected example reaches the change or an example changes; B on touched types; every touched and caller example planned; provider facts from fact sheets | Check B with no touched type, an example `mtf-facts` proves does not reach the change; Check D stays in scope |
 | deep | Everything else | The whole pipeline | Nothing |
 
 Focused limits, over all changed files, examples included: at most 6 Terraform files, 200 changed lines, 4 changed resource, data and module blocks, and 12 selected examples. A change past one is deep.
@@ -30,8 +30,8 @@ The `mtf-facts depth` object, every key required and no other:
 | `format` | `1` |
 | `depth` | `light`, `focused` or `deep` |
 | `reasons` | The reason tokens below, at least one, each once; every one starts with the depth's own word (`light-`, `focused-` or `deep-`) |
-| `checks_out_of_scope` | At light a subset of `A`, `B`, `D` and `G-ladder` (Check G without its claim reading), at focused a subset of `B` and `D`, at deep empty |
-| `examples_selected`, `examples_out_of_scope` | Example directories, repository-relative in one spelling; no directory in both; at deep nothing out of scope |
+| `checks_out_of_scope` | At light a subset of `A`, `B`, `D` and `G-ladder` (Check G without its claim reading), at focused empty or `B` alone, at deep empty |
+| `examples_selected`, `examples_out_of_scope` | Example directories, repository-relative in one spelling; no directory in both; only focused puts one out of scope |
 | `touched_types` | Resource and data source types, `^[a-z][a-z0-9_]{0,127}$` |
 | `walk` | `{"complete": bool, "unwalked": n}`; a reduced depth needs a complete walk |
 | `limits` | `tf_files`, `changed_lines`, `changed_blocks`, `selected_examples`; a reduced depth needs them within the focused limits, and light no Terraform file |
@@ -45,6 +45,7 @@ The tokens `mtf-facts depth` gives, in its order:
 
 - `light-docs-only`
 - `focused-within-limits`
+- `focused-no-example`
 - `deep-terraform-block`
 - `deep-lock-file`
 - `deep-cli-config`
@@ -108,6 +109,6 @@ A check or an example out of scope by the table above is not an unknown at rule 
 The run file carries `depth.json` as its `depth` key, and [render-comment.sh](render-comment.sh) refuses it, exit 2 and nothing written, unless it fits the grammar above, its `head_sha` is the head rendered and its `merge_base` is host.json's. The body then states, in both tiers ([comment-format.md](comment-format.md#host-render-strings)):
 
 - `depth-line`: the depth and its reasons;
-- `depth-out-of-scope`: the checks out of scope, at light the plan pass, then the examples out of scope, the first 20 and `depth-more` with the count of the rest; none when nothing is out of scope.
+- `depth-out-of-scope`: the checks out of scope, at light the plan pass, the ladder and the provider facts, then the examples out of scope, the first 20 and `depth-more` with the count of the rest; none when nothing is out of scope.
 
 STANDARD puts them under `### Review depth` after the checks that could not run; COMPACT puts them in its details block. An example name is shown in a code span when every character is in `[A-Za-z0-9._/-]`, else as `name-withheld`. A run file without `depth` renders the body it rendered before the key existed.
