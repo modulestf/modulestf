@@ -66,7 +66,10 @@ The tokens `mtf-facts depth` gives, in its order:
 - `deep-limits`
 - `deep-classifier-category`
 - `deep-classifier-unavailable`
+- `deep-classifier-invalid`
+- `deep-classifier-mismatch`
 - `deep-affected-fallback`
+- `deep-affected-invalid`
 - `deep-parse-failure`
 - `deep-unwalked`
 - `deep-unresolved-consumer`
