@@ -35,7 +35,9 @@ set -f
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 sha_re='^[0-9a-f]{40}$'
 repo_re='^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$'
-path_re='^[A-Za-z0-9._][A-Za-z0-9._/-]{0,299}$'
+# Unbounded patterns with separate length checks: bash 3.2's regex refuses a bound over 255.
+path_re='^[A-Za-z0-9._][A-Za-z0-9._/-]*$'
+plain_ok() { [ "${#1}" -le 300 ] && [[ "$1" =~ $path_re ]]; } # a plain path of at most 300 characters
 WRITE_SHORT='Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.'
 
 # A provenance line of schema-pass.md, Focused Mode: mirror, release tag, schema file SHA-256.
@@ -69,6 +71,8 @@ open_run() {
   RUN="$(cd -- "$d" && pwd -P)" || die "the run directory cannot be read"
   [ "$RUN" = "$d" ] || die "the run directory must be given as its resolved path"
   ROOT="${RUN%/*}"
+  # cleanup deletes any run prepare made, a refused or stopped one included, and reads nothing else.
+  if [ "$CMD" = cleanup ]; then [ -f "$RUN/state/args.json" ] || die "no run prepare made in that directory"; return 0; fi
   [ -f "$RUN/state/args.json" ] && [ -f "$RUN/index.json" ] || die "no prepared run in that directory"
   jq -e '.status == "ok"' "$RUN/index.json" > /dev/null 2>&1 || fail "the run was refused at prepare"
   HEAD_SHA="$(jq -r '.head' "$RUN/index.json")"; MB="$(jq -r '.merge_base // ""' "$RUN/index.json")"
@@ -78,7 +82,7 @@ open_run() {
   [ -z "$MB" ] || [[ "$MB" =~ $sha_re ]] || die "the run's merge base is not a SHA"
   MROOT="$RUN/clone"; [ -z "$PREFIX" ] || MROOT="$RUN/clone/$PREFIX"
   # A run a failed escalation stopped takes no later step but cleanup.
-  [ "$CMD" = cleanup ] || [ ! -e "$RUN/state/stop" ] || fail "the run stopped: $(head -c 120 "$RUN/state/stop" | tr -cd 'a-z0-9 :-')"
+  [ ! -e "$RUN/state/stop" ] || fail "the run stopped: $(head -c 120 "$RUN/state/stop" | tr -cd 'a-z0-9 :-')"
   check_pin
 }
 arg() { jq -r --arg k "$1" '.[$k] // "" | tostring' "$RUN/state/args.json"; }
@@ -113,10 +117,22 @@ ready() {
   [ -f "$RUN/coverage.json" ] && [ -f "$RUN/behaviour/record.txt" ] || fail "$1 needs plan and ladder first"
   [ "$(depth)" != focused ] || [ "$(cat "$RUN/state/schema" 2> /dev/null)" = ok ] || fail "$1 at focused needs schema first"
 }
+base_git() {
+  GIT_LFS_SKIP_SMUDGE=1 git -C "$RUN/base" -c core.hooksPath=/dev/null \
+    -c filter.lfs.smudge=cat -c filter.lfs.process= \
+    -c filter.lfs.required=false "$@"
+}
 clone_git() {
   GIT_LFS_SKIP_SMUDGE=1 git -C "$RUN/clone" -c core.hooksPath=/dev/null \
     -c filter.lfs.smudge=cat -c filter.lfs.process= \
     -c filter.lfs.required=false "$@"
+}
+
+affected_to() { # mtf-facts, root, files list, out: the affected report, or no file when it gave none
+  if ! (cd "$RUN/state" && limit 70 "$1" affected "$2" --diff "$3" --json) > "$4" 2> /dev/null ||
+      ! jq -e 'type == "object"' "$4" > /dev/null 2>&1; then
+    rm -f "$4"
+  fi
 }
 
 # --- prepare ---------------------------------------------------------------------------------
@@ -148,7 +164,8 @@ cmd_prepare() {
   [[ "$pr" =~ ^[1-9][0-9]{0,9}$ ]] || die "--pr must be a pull request number"
   [ -z "$profile$role" ] || {
     [[ "$profile" =~ ^[A-Za-z0-9][A-Za-z0-9_.+=,@-]{0,63}$ ]] || die "--profile must be a profile name"
-    [[ "$role" =~ ^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$ ]] || die "--role-arn must be a role ARN"
+    [[ "$role" =~ ^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$ ]] && [ "${#role}" -le 600 ] &&
+      { local rname="${role#*:role/}"; [ "${#rname}" -le 512 ]; } || die "--role-arn must be a role ARN"
   }
   [ -z "$owner_depth" ] || [ "$owner_depth" = deep ] || die "--owner-depth takes only deep"
   [ -z "$opid" ] || [[ "$opid" =~ ^[1-9][0-9]{0,9}$ ]] || die "--owner-pid must be a process id"
@@ -212,7 +229,11 @@ cmd_prepare() {
     ts="$(git -C "$RUN/clone" log --no-walk --format=%ct "$mb" "$base" 2> /dev/null | sort -n | head -n 1)"
     [[ "$ts" =~ ^[0-9]+$ ]] && clone_git fetch -q --shallow-since="$((ts - 86400)) +0000" origin \
       "refs/pull/$pr/head" "$base" "$mb" 2> /dev/null
-    clone_git worktree add -q --detach "$RUN/base" "$mb" 2> /dev/null && base_tree=true
+    # The merge base tree as a checkout of its own, with a .git directory: a worktree's .git is a
+    # file, which mtf-facts depth reads as a changed path of the tree.
+    git init -q --template= "$RUN/base" && git -C "$RUN/base" remote add origin "https://github.com/$repo.git" &&
+      base_git fetch -q --depth=1 origin "$mb" 2> /dev/null && base_git checkout -q --detach FETCH_HEAD 2> /dev/null &&
+      [ "$(git -C "$RUN/base" rev-parse HEAD)" = "$mb" ] && base_tree=true
   fi
   [ "$(git -C "$RUN/clone" rev-parse HEAD)" = "$head" ] || refuse head-moved "the clone left the head"
 
@@ -246,19 +267,31 @@ cmd_prepare() {
       --prefix "$prefix" ${sch[@]+"${sch[@]}"} --out "$RUN/behaviour" > "$RUN/state/classify.out" 2>&1
     if [ -f "$RUN/behaviour/behaviour.json" ]; then behaviour=classified
     else behaviour="not-run: $(head -c 64 "$RUN/behaviour/status" 2> /dev/null | tr -cd 'a-z -')"; fi
-    # mtf-facts affected, as verify-pass.md Example selection runs it; {} when it gave nothing.
+    # mtf-facts affected, as verify-pass.md Example selection runs it; no file when it gave nothing.
     jq --arg p "$prefix" '[.[] | select($p == "" or (.filename | startswith($p + "/")))
       | .filename |= (if $p == "" then . else .[($p | length) + 1:] end)
       | if .previous_filename then .previous_filename |= (if $p == "" then . else ltrimstr($p + "/") end) else . end]' \
       "$RUN/host/files.json" > "$RUN/state/files-module.json"
-    if ! (cd "$RUN/state" && limit 70 "$facts" affected "$mroot" --diff "$RUN/state/files-module.json" --json) \
-        > "$RUN/affected.json" 2> /dev/null || ! jq -e 'type == "object"' "$RUN/affected.json" > /dev/null 2>&1; then
-      echo '{}' > "$RUN/affected.json"
-    fi
+    affected_to "$facts" "$mroot" "$RUN/state/files-module.json" "$RUN/affected.json"
     local od=(); [ -z "$owner_depth" ] || od=(--owner-depth deep)
     [ "$base_tree" = true ] || refuse merge-base-unavailable "the merge base could not be checked out for the depth binding"
+    # mtf-facts depth reads the trees from the repository root, so its classifier and affected
+    # reports must have repository-relative paths: with a module root prefix, a second classify and
+    # affected run on the clone root, used for the depth alone.
+    local dcl="$RUN/behaviour/behaviour.json" daf="$RUN/affected.json"
+    if [ -n "$prefix" ]; then
+      mkdir "$RUN/state/depth-behaviour"
+      bash "$HERE/behaviour-pass.sh" classify --facts "$facts" --dir "$RUN/clone" --diff "$RUN/host/files.json" \
+        ${sch[@]+"${sch[@]}"} --out "$RUN/state/depth-behaviour" > "$RUN/state/depth-classify.out" 2>&1
+      dcl="$RUN/state/depth-behaviour/behaviour.json"
+      affected_to "$facts" "$RUN/clone" "$RUN/host/files.json" "$RUN/state/affected-depth.json"
+      daf="$RUN/state/affected-depth.json"
+    fi
+    local dargs=()
+    [ ! -f "$dcl" ] || dargs+=(--classify "$dcl")
+    [ ! -f "$daf" ] || dargs+=(--affected "$daf")
     bash "$HERE/depth.sh" compute --clone "$RUN/clone" --base-tree "$RUN/base" --base "$base" \
-      --files "$RUN/host/files.json" --classify "$RUN/behaviour/behaviour.json" --affected "$RUN/affected.json" \
+      --files "$RUN/host/files.json" ${dargs[@]+"${dargs[@]}"} \
       --out "$RUN/depth.json" ${od[@]+"${od[@]}"} > "$RUN/state/depth.out" 2>&1
     case $? in
       0) ;;
@@ -287,7 +320,7 @@ write_index() { # checks file, changed files, behaviour, mode
   jq -n --arg cf "$1" --arg changed "$2" --arg beh "$3" --arg mode "$4" --arg pre "$path_re" \
     --slurpfile h "$RUN/host/host.json" --slurpfile a "$RUN/state/args.json" --slurpfile s "$RUN/selection.json" \
     --slurpfile f "$RUN/host/files.json" --slurpfile d "$( [ -f "$RUN/depth.json" ] && echo "$RUN/depth.json" || echo /dev/null)" '
-    def paths: [.[]? | select(type == "string" and test($pre))];
+    def paths: [.[]? | select(type == "string" and length <= 300 and test($pre))];
     ($h[0]) as $h | ($a[0]) as $a | ($d[0] // null) as $d
     | {format: 1, status: "ok", head: $h.head_sha, base: $h.base_sha, merge_base: $h.merge_base,
        prefix: (if $h.prefix | test($pre) then $h.prefix else "" end),
@@ -361,7 +394,7 @@ cmd_verify() {
   if [ "$outside" = true ]; then
     [ -f "$RUN/verify.json" ] || fail "verify --outside needs a verify run first"
     local dirs=() d
-    while IFS= read -r d; do [[ "$d" =~ $path_re ]] && dirs+=(--dir "$d"); done < <(
+    while IFS= read -r d; do plain_ok "$d" && dirs+=(--dir "$d"); done < <(
       jq -r '.dirs[] | select(.head.record == "not-run-environment") | .dir' "$RUN/verify.json")
     [ "${#dirs[@]}" -gt 0 ] || { echo "verify: nothing ended not run: environment"; return 0; }
     rm -f "$RUN/verify-outside.json" "$RUN/verify-merged.json"
@@ -400,27 +433,39 @@ plan_dirs() { # the examples to plan, repository-relative, in selection order
 cmd_plan() {
   need_full plan
   [ ! -e "$RUN/coverage.json" ] || fail "plan already ran in this run"
-  local profile role mode src=(--no-plan) d dirs=() base=()
+  local profile role mode src=(--no-plan) d dirs=() base=() rc=0 missed=""
   profile="$(arg profile)"; role="$(arg role_arn)"; mode="$(cat "$RUN/state/mode")"
   [ -z "$MB" ] || base=(--base "$MB")
   if [ -n "$profile" ] && [ "$(depth)" != light ]; then
-    while IFS= read -r d; do [[ "$d" =~ $path_re ]] && dirs+=("$d"); done < <(plan_dirs)
+    while IFS= read -r d; do plain_ok "$d" && dirs+=("$d"); done < <(plan_dirs)
     if [ "${#dirs[@]}" -gt 0 ] && [ "$mode" = runner ]; then
       bash "$HERE/plan-runner/run-pass.sh" --build --clone "$RUN/runner-clone" --record "$RUN/plan-record" \
         --tmp "$RUN" --profile "$profile" --role-arn "$role" ${base[@]+"${base[@]}"} "${dirs[@]}" \
-        > "$RUN/state/plan.out" 2> "$RUN/state/plan.err"
+        > "$RUN/state/plan.out" 2> "$RUN/state/plan.err" || rc=$?
       [ -f "$RUN/plan-record/plan-pass.txt" ] && src=(--plan "$RUN/plan-record/plan-pass.txt" --addresses "$RUN/plan-record")
     elif [ "${#dirs[@]}" -gt 0 ]; then
       bash "$HERE/plan-pass.sh" plan "$RUN" "$profile" --role-arn "$role" --mode laptop ${base[@]+"${base[@]}"} \
-        "${dirs[@]}" > "$RUN/plan-out.txt" 2> "$RUN/state/plan.err"
-      src=(--plan "$RUN/plan-out.txt"); [ ! -d "$RUN/plan-addresses" ] || src+=(--addresses "$RUN/plan-addresses")
+        "${dirs[@]}" > "$RUN/plan-out.txt" 2> "$RUN/state/plan.err" || rc=$?
+      # A record is usable when the pass printed its mode line or a plan line for an example.
+      if grep -qE '^(plan pass mode:|plan:)' "$RUN/plan-out.txt"; then
+        src=(--plan "$RUN/plan-out.txt"); [ ! -d "$RUN/plan-addresses" ] || src+=(--addresses "$RUN/plan-addresses")
+      fi
+    fi
+    # A profile was named and the pass left no record: the unplanned examples say why, never that
+    # no profile was named (verify-pass.md, Plan coverage).
+    if [ "${#dirs[@]}" -gt 0 ] && [ "${src[0]}" = --no-plan ]; then
+      if [ "$rc" = 2 ]; then missed="plan pass did not run: refused"; else missed="plan pass did not run: failed"; fi
     fi
   fi
   [ "${src[0]}" = --no-plan ] || note plan ran
   bash "$HERE/verify-pass.sh" coverage "$RUN" --files "$RUN/host/files.json" --out "$RUN/coverage.json" \
     --prefix "$PREFIX" "${src[@]}" > /dev/null 2> "$RUN/state/coverage.err" || fail "verify-pass.sh coverage failed"
-  [ -f "$RUN/state/plan" ] && echo "plan: $(grep -m1 '^plan summary:' "$(plan_record)" 2> /dev/null || echo 'no summary line')" ||
-    echo "plan: not run ($( [ -n "$profile" ] && echo "depth $(depth)" || echo 'no AWS profile named'))"
+  if [ -n "$missed" ]; then
+    jq --arg r "$missed" '.unplanned |= map(if .reason == "no AWS profile named" then .reason = $r else . end)' \
+      "$RUN/coverage.json" > "$RUN/coverage.tmp" && mv "$RUN/coverage.tmp" "$RUN/coverage.json" || fail "the coverage could not be rewritten"
+    echo "plan: $missed"
+  elif [ -f "$RUN/state/plan" ]; then echo "plan: $(grep -m1 '^plan summary:' "$(plan_record)" 2> /dev/null || echo 'no summary line')"
+  else echo "plan: not run ($( [ -n "$profile" ] && echo "depth $(depth)" || echo 'no AWS profile named'))"; fi
   jq -r '"plan coverage: \(.class), \(.unplanned | length) not planned"' "$RUN/coverage.json"
 }
 plan_record() { if [ -f "$RUN/plan-record/plan-pass.txt" ]; then echo "$RUN/plan-record/plan-pass.txt"; else echo "$RUN/plan-out.txt"; fi; }
@@ -552,12 +597,16 @@ cmd_handover() {
   n="$(grep -n -m1 '^The block below holds text quoted' "$t" | cut -d: -f1)"
   [[ "$n" =~ ^[0-9]+$ ]] || fail "task.md has no block preamble"
   if [ "$TRIAGE" = false ]; then record_lines > "$out/record.txt" || fail "the record could not be assembled"; fi
+  # The diff of the task, module-root-relative, as a file the reviewer's mtf-facts lint reads.
+  awk 'p == 1 && $0 == f { exit } p == 1 { print; next } p == 2 { f = $0; sub(/diff$/, "", f); p = 1; next }
+       /^The diff:$/ { p = 2 }' "$t" > "$out/change.diff"
   {
     printf 'Workspace: %s\n' "$MROOT"
     head -n $((n - 1)) "$t"
     grep -qxF "$WRITE_SHORT" "$t" || printf '%s\n' "$WRITE_SHORT"
     [ ! -f "$RUN/depth.json" ] || [ "$TRIAGE" = true ] || printf 'Depth: %s\n' "$RUN/depth.json"
     [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || printf 'Provider fact sheets: %s\n' "$RUN/facts"
+    printf 'Diff: %s\n' "$out/change.diff"
     sed -n "$n,\$p" "$t" | sed '$d'
     [ "$TRIAGE" = true ] || { printf 'RECORD-%s\n' "$s"; cat "$out/record.txt"; }
     printf 'UNTRUSTED-%s END\n' "$s"
@@ -600,7 +649,9 @@ cmd_render() {
   # The three counts of the reviewer's summary line; absent means 0, a malformed one drops them all.
   local counts=null
   if [ -n "$summary" ] && [ -f "$summary" ]; then
-    counts="$(head -n 1 "$summary" | jq -R -c '
+    # The reviewer's summary line (findings-schema.md): the line that starts with "summary: ", else
+    # the first line.
+    counts="$( { grep -m1 '^summary: ' "$summary" || head -n 1 "$summary"; } | jq -R -c '
       def n($k): [scan("(?:^|[ ,;.])" + ($k | gsub("\\."; "\\.")) + ":([^ ,;]*)")[0]] | .[0] // "0";
       {"instruction-like-text-from-others": n("instruction-like-text-from-others"),
        "conversation-claims-unread": n("conversation-claims-unread"),

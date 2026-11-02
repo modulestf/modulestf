@@ -46,6 +46,13 @@ case "${SCHEMA_STUB:-overflow}" in
 esac
 echo "schema pass: escalate overflow"; exit 3
 EOF
+cat > "$SK/plan-pass.sh" <<'EOF'
+#!/bin/bash
+# stub: g0 passes; plan leaves no record and exits PLAN_STUB_RC
+echo "plan-pass $*" >> "${STUB_LOG:?}"
+[ "$1" = g0 ] && exit 0
+exit "${PLAN_STUB_RC:-1}"
+EOF
 cat > "$SK/ladder-pass.sh" <<'EOF'
 #!/bin/bash
 echo "ladder $*" >> "${STUB_LOG:?}"
@@ -172,7 +179,8 @@ RR="$SK/review-run.sh"
 export PATH="$TMP/bin:$PATH" TMPDIR="$TMP/root" HOST_PASS_WAIT=0 XDG_CACHE_HOME="$TMP/cache"
 mkdir -p "$TMPDIR"
 unset CI GITHUB_ACTIONS GITHUB_RUN_ID
-run_rr() { (cd "$TMP/cwd" && bash "$RR" "$@"); } # every run from a scratch cwd, to catch a stray file
+SH=bash; [ ! -x /bin/bash ] || SH=/bin/bash # the system bash: 3.2 on macOS, whose regex refuses a bound over 255
+run_rr() { (cd "$TMP/cwd" && "$SH" "$RR" "$@"); } # every run from a scratch cwd, to catch a stray file
 mkdir -p "$TMP/cwd"
 no_stray() { [ -z "$(find "$TMP/cwd" "$TMP/root" -maxdepth 4 \( -name x -o -name y -o -name b \) -print 2> /dev/null | grep -v '/clone/\|/base/')" ]; echo $?; }
 
@@ -181,16 +189,23 @@ ROOTD="$(cd "$TMPDIR" && pwd -P)"
 FR="$(mktemp -d "$ROOTD/pr-review.XXXXXX")"
 cp -R "$FX/." "$FR/"; rm -rf "$FR/expected" "$FR/reviewer"; mkdir "$FR/clone"
 run_rr handover "$FR" > "$TMP/h.out"
-sed "s#^Workspace: $FR/clone\$#Workspace: RUN/clone#" "$FR/handover/task.md" > "$TMP/task.norm"
+sed -e "s#^Workspace: $FR/clone\$#Workspace: RUN/clone#" -e "s#^Diff: $FR/#Diff: RUN/#" "$FR/handover/task.md" > "$TMP/task.norm"
 check "acceptance: handover reproduces the hand-assembled task byte for byte" "$(cmp -s "$TMP/task.norm" "$FX/expected/task.md"; echo $?)"
 check "acceptance: handover reproduces the hand-assembled verification record" "$(cmp -s "$FR/handover/record.txt" "$FX/expected/record.txt"; echo $?)"
 check "acceptance: handover prints at most 30 lines" "$(lines_ok "$TMP/h.out")"
+check "acceptance: the Diff file is the task's diff, module-root-relative" \
+  "$(awk '/^```diff$/{p=1; next} p && /^```$/{exit} p' "$FX/expected/task.md" | cmp -s - "$FR/handover/change.diff"; echo $?)"
 run_rr render "$FR" --findings "$FX/reviewer/findings.json" --assessment "$FX/reviewer/assessment.txt" \
   --summary "$FX/reviewer/summary.txt" --out "$TMP/render1" > "$TMP/r.out"
 check "acceptance: render reproduces the current renderer's comment byte for byte" "$(cmp -s "$TMP/render1/comment.md" "$FX/expected/comment.md"; echo $?)"
 check "acceptance: render prints the render line" "$(grep -q '^rendered approve with nits (ladder rule 7), proposed event COMMENT, tier COMPACT$' "$TMP/r.out"; echo $?)"
 check "acceptance: the run file carries the counts of the summary line" \
   "$(q "$FR/render/run-file.json" '.counts == {"instruction-like-text-from-others": 0, "conversation-claims-unread": 0, "review.quoted-claim-unverifiable": 1} and (has("depth") | not)')"
+printf '%s\n' '- F-001 ...' 'summary: critical:0 high:0 medium:0 low:3 mode:full checks:A,C,D,E,F,G instruction-like-text-from-others:2 conversation-claims-unread:0 review.quoted-claim-unverifiable:1' 'Facts comparison: ...' > "$TMP/summary2.txt"
+run_rr render "$FR" --findings "$FX/reviewer/findings.json" --assessment "$FX/reviewer/assessment.txt" \
+  --summary "$TMP/summary2.txt" --out "$TMP/render1b" > /dev/null 2>&1
+check "render reads the counts from the reviewer's summary: line, wherever it stands" \
+  "$(q "$FR/render/run-file.json" '.counts == {"instruction-like-text-from-others": 2, "conversation-claims-unread": 0, "review.quoted-claim-unverifiable": 1}')"
 check "acceptance: render refuses an output directory inside the run" \
   "$(run_rr render "$FR" --findings "$FX/reviewer/findings.json" --assessment "$FX/reviewer/assessment.txt" --out "$FR/o" > /dev/null 2>&1; [ $? != 0 ]; echo $?)"
 echo 'not json' > "$TMP/bad.json"
@@ -353,24 +368,54 @@ check "self-check: the mutant has no depth.sh verify in handover" \
 check "self-check: without the call the moved head would reach the reviewer" "$([ -f "$RUN/handover/task.md" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 
+# A named profile whose plan pass leaves no record never reads as "no AWS profile named".
+for rc in 2 1; do
+  DEPTH_STUB=deep prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review
+  run_rr verify "$RUN" > /dev/null; PLAN_STUB_RC=$rc run_rr plan "$RUN" > "$TMP/pl.out"
+  want="plan pass did not run: $([ "$rc" = 2 ] && echo refused || echo failed)"
+  check "plan: a plan pass that exits $rc with no record gives '$want'" \
+    "$([ "$(jq -r '[.unplanned[].reason] | unique | join(",")' "$RUN/coverage.json")" = "$want" ] && grep -qx "plan: $want" "$TMP/pl.out"; echo $?)"
+  run_rr cleanup "$RUN" > /dev/null
+done
+
 # --- 4. merged pull request, several module roots ----------------------------------------------------
 ghfiles closed true APPROVED
 run_rr prepare --repo example-org/widget --pr 7 > "$TMP/p3.out" 2>&1
 RUN="$(sed -n 's/^RUN=//p' "$TMP/p3.out")"
 check "defect: a merged pull request has mergeability not-applicable" "$(q "$RUN/host/host.json" '.signals.mergeability == "not-applicable" and .state.merged')"
 run_rr cleanup "$RUN" > /dev/null
-HT="$GHD/tree-$HEADC"
-jq '.tree |= map(select(.path | IN("main.tf", "variables.tf", "versions.tf") | not))
-  + [{path: "modules/a/main.tf"}, {path: "modules/a/variables.tf"}, {path: "modules/a/versions.tf"},
-     {path: "modules/b/main.tf"}, {path: "modules/b/variables.tf"}, {path: "modules/b/versions.tf"}]
-  | .tree |= map(. + {mode: (.mode // "100644"), type: (.type // "blob"), sha: (.sha // "0000000000000000000000000000000000000000"), size: (.size // 1)})' \
-  "$HT" > "$HT.t" && mv "$HT.t" "$HT"
+HT="$GHD/tree-$HEADC"; cp "$HT" "$TMP/tree-orig"
+mktree() { # root files to drop (jq list), module directories to add
+  local drop="$1"; shift
+  jq --argjson drop "$drop" '.tree |= map(select(.path | IN($drop[]) | not))
+    + [$ARGS.positional[] as $d | ("main.tf", "variables.tf", "versions.tf") | {path: ($d + "/" + .)}]
+    | .tree |= map(. + {mode: (.mode // "100644"), type: (.type // "blob"), sha: (.sha // "0000000000000000000000000000000000000000"), size: (.size // 1)})' \
+    "$TMP/tree-orig" --args "$@" > "$HT"
+}
+# A root holding a Terraform file but not a whole module, two module roots, a change in neither.
+mktree '["variables.tf", "versions.tf"]' modules/a modules/b
 ghfiles open false APPROVED
 run_rr prepare --repo example-org/widget --pr 7 > "$TMP/p4.out" 2>&1
 RUN="$(sed -n 's/^RUN=//p' "$TMP/p4.out")"
-check "defect: several module roots and changed paths in none of them is refused with a fixed reason" \
+check "defect: a root module file and changed paths in no single module root are refused with a fixed reason" \
   "$([ "$(q "$RUN/index.json" '. == {format: 1, status: "refused", reason: "several-module-roots"}')" = 0 ] && grep -q 'the run is inconclusive' "$TMP/p4.out"; echo $?)"
 check "a refused run takes no later subcommand" "$(run_rr handover "$RUN" > /dev/null 2>&1; [ $? = 1 ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null 2>&1
+check "cleanup deletes a run prepare refused" "$([ $? = 0 ] && [ ! -e "$RUN" ]; echo $?)"
+# No Terraform file at the top, a change across modules/<m>, wrappers/<m> and examples: the
+# repository root is the workspace.
+mktree '["main.tf", "variables.tf", "versions.tf"]' modules/a modules/b wrappers/a wrappers/b
+jq -n '[{filename: "modules/a/main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"},
+  {filename: "wrappers/a/main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"},
+  {filename: "examples/one/main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"}]' > "$GHD/files"
+run_rr prepare --repo example-org/widget --pr 7 > "$TMP/p5.out" 2>&1
+RUN="$(sed -n 's/^RUN=//p' "$TMP/p5.out")"
+check "defect: no root Terraform file and a change across module roots reviews the repository root" \
+  "$([ "$(q "$RUN/index.json" '.status == "ok" and .prefix == ""')" = 0 ] && [ "$(q "$RUN/host/host.json" '.prefix == ""')" = 0 ] &&
+     grep -qx "Workspace: $RUN/clone" <(run_rr verify "$RUN" > /dev/null; run_rr plan "$RUN" > /dev/null; run_rr ladder "$RUN" > /dev/null
+       run_rr handover "$RUN" > /dev/null; head -n 1 "$RUN/handover/task.md"); echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+mktree '["variables.tf", "versions.tf"]' modules/a modules/b
 jq '[{filename: "modules/a/main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"}]' -n > "$GHD/files"
 HP="$SK/host-pass.sh"
 GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/hp1" > /dev/null 2>&1
@@ -383,9 +428,96 @@ check "usage: a run directory outside the pattern is refused" "$(run_rr verify /
 check "usage: a repository with a shell word is refused" "$(run_rr prepare --repo 'a/$(touch x)' --pr 1 > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
 check "usage: a profile name that starts like an option is refused" \
   "$(run_rr prepare --repo a/b --pr 1 --profile -x --role-arn arn:aws:iam::000000000000:role/r > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
+# Long values under the system bash: a role name of 512 characters and a 300 character path pass.
+LONGARN="arn:aws:iam::000000000000:role/$(printf 'r%.0s' $(seq 512))"
+run_rr prepare --repo example-org/nothing --pr 7 --profile p1 --role-arn "$LONGARN" > "$TMP/p6.out" 2>&1
+check "regex: a role ARN with a 512 character name is accepted by $SH" "$([ $? = 1 ] && grep -q '^prepare refused: ' "$TMP/p6.out"; echo $?)"
+RUN="$(sed -n 's/^RUN=//p' "$TMP/p6.out")"; [ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null
+check "regex: a role ARN with a 513 character name is refused" \
+  "$(run_rr prepare --repo a/b --pr 1 --profile p1 --role-arn "${LONGARN}r" > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
+sed -n '/^path_re=/p; /^plain_ok()/p' "$RR" > "$TMP/plain.sh"
+printf '%s\n' '. "$1"; plain_ok "$2"' > "$TMP/plain-check.sh"
+P300="examples/$(printf 'a%.0s' $(seq 291))"
+check "regex: a 300 character path passes plain_ok under $SH" "$("$SH" "$TMP/plain-check.sh" "$TMP/plain.sh" "$P300"; echo $?)"
+check "regex: a 301 character path does not" "$("$SH" "$TMP/plain-check.sh" "$TMP/plain.sh" "${P300}a"; [ $? = 1 ]; echo $?)"
+# A shell-side pattern (=~, grep -E, sed -E or a *_re/*RE variable) with a bound over 255.
+check "regex: no shell-side repetition bound over 255 in the skill's scripts" \
+  "$(find "$SKILL/references" -name '*.sh' -exec perl -ne 'next if /^\s*#/; next unless /=~|_re=|RE=|grep -[a-zA-Z]*E|sed -[a-zA-Z]*E/;
+     while (/\{(\d+)(?:,(\d*))?\}/g) { if ($1 > 255 or ($2 // 0) > 255) { print "$ARGV:$.: $_"; } }' {} + | grep . > /dev/null; [ $? = 1 ]; echo $?)"
 check "usage: --owner-depth takes only deep" "$(run_rr prepare --repo a/b --pr 1 --owner-depth light > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
 check "the script has no eval and no bash -c" "$(! grep -nE '(^|[;&|(])[[:space:]]*eval[[:space:]]|bash -c' "$SKILL/references/review-run.sh"; echo $?)"
 check "nothing in a host string ran, end of run" "$(no_stray)"
+
+# --- 5b. End to end with the real mtf-facts: depth from prepare, the handover diff for lint ------------
+# The binary is built from the facts repository named by MTF_FACTS_SRC (default: a sibling checkout
+# ../facts); without Go or that checkout the section is skipped with a note.
+# MTF_FACTS_BIN names a built binary to use instead.
+FACTS_SRC="${MTF_FACTS_SRC:-$SRC/../facts}"
+mkdir -p "$TMP/real"
+if { [ -n "${MTF_FACTS_BIN:-}" ] && [ -x "$MTF_FACTS_BIN" ] && cp "$MTF_FACTS_BIN" "$TMP/real/mtf-facts"; } ||
+    { command -v go > /dev/null && [ -d "$FACTS_SRC/cmd/mtf-facts" ] &&
+      (cd "$FACTS_SRC" && go build -o "$TMP/real/mtf-facts" ./cmd/mtf-facts) > /dev/null 2>&1; }; then
+  SK2="$TMP/skill2/references"; mkdir -p "$TMP/skill2"; cp -R "$SKILL/references" "$SK2"
+  cp "$SK/ladder-pass.sh" "$SK2/ladder-pass.sh" # acquisition needs the network; the classifier runs without its schema
+  mkrepo2() { # case -> a module with one example, the change of the case, and its gh answers
+    local w="$TMP/work-e2e" b="$TMP/remote/example-org/e2e.git"
+    rm -rf "$w" "$b"; mkdir -p "$w/examples/one"; git init -q "$w"
+    printf 'resource "aws_s3_bucket" "this" {\n  bucket = var.name\n\n  force_destroy = false\n}\n' > "$w/main.tf"
+    printf 'variable "name" {\n  type = string\n}\n' > "$w/variables.tf"
+    printf 'output "id" {\n  value = aws_s3_bucket.this.id\n}\n' > "$w/outputs.tf"
+    printf 'terraform {\n  required_providers {\n    aws = {\n      source  = "hashicorp/aws"\n      version = ">= 5.0"\n    }\n  }\n}\n' > "$w/versions.tf"
+    printf 'module "m" {\n  source = "../.."\n  name   = "x"\n}\n' > "$w/examples/one/main.tf"
+    printf '# m\n\nA module.\n' > "$w/README.md"
+    (cd "$w" && git add -A && git -c user.name=t -c user.email=t@t commit -q -m base)
+    BASEC="$(git -C "$w" rev-parse HEAD)"
+    case "$1" in
+      readme) printf '# m\n\nA module, better described.\n' > "$w/README.md" ;;
+      arg) sed -i.bak 's/force_destroy = false/force_destroy = true/' "$w/main.tf" && rm "$w/main.tf.bak" ;;
+      floor) sed -i.bak 's/>= 5.0/>= 6.0/' "$w/versions.tf" && rm "$w/versions.tf.bak" ;;
+    esac
+    (cd "$w" && git add -A && git -c user.name=t -c user.email=t@t commit -q -m head)
+    HEADC="$(git -C "$w" rev-parse HEAD)"
+    git clone -q --bare "$w" "$b"; git -C "$b" update-ref refs/pull/7/head "$HEADC"
+    git -C "$b" config uploadpack.allowAnySHA1InWant true
+    tree() { git -C "$w" ls-tree -r -l "$1" | awk -v OFS='\t' '{print $1, $2, $3, $4, substr($0, index($0, "\t") + 1)}' |
+      jq -R -s '{truncated: false, tree: [split("\n")[] | select(. != "") | split("\t") | {mode: .[0], type: .[1], sha: .[2], size: (.[3] | tonumber), path: .[4]}]}'; }
+    tree "$HEADC" > "$GHD/tree-$HEADC"; tree "$BASEC" > "$GHD/tree-$BASEC"
+    ghfiles open false APPROVED
+    # The files list as GitHub gives it, a blank context line written as an empty line.
+    git -C "$w" diff --numstat "$BASEC" "$HEADC" | while IFS="$(printf '\t')" read -r a d f; do
+      git -C "$w" diff "$BASEC" "$HEADC" -- "$f" | sed -n '/^@@/,$p' | sed 's/^ $//' |
+        jq -R -s --arg f "$f" --argjson a "$a" --argjson d "$d" '{filename: $f, status: "modified", additions: $a, deletions: $d, patch: rtrimstr("\n")}'
+    done | jq -s '.' > "$GHD/files"
+    jq '.changed_files = 1' "$GHD/meta" > "$GHD/meta.t" && mv "$GHD/meta.t" "$GHD/meta"
+  }
+  e2e() { # case -> RUN
+    mkrepo2 "$1"
+    (cd "$TMP/cwd" && PATH="$TMP/real:$PATH" "$SH" "$SK2/review-run.sh" prepare --repo example-org/e2e --pr 7) > "$TMP/e2e.out" 2>&1
+    RUN="$(sed -n 's/^RUN=//p' "$TMP/e2e.out")"
+  }
+  e2e readme
+  check "e2e: a README-only change is light through prepare and the real mtf-facts" \
+    "$([ "$(jq -r '.depth + " " + (.reasons | join(","))' "$RUN/index.json")" = "light light-docs-only" ]; echo $?)"
+  (cd "$TMP/cwd" && "$SH" "$SK2/review-run.sh" cleanup "$RUN") > /dev/null
+  e2e arg
+  check "e2e: a one-line resource argument change is focused" \
+    "$([ "$(jq -r '.depth' "$RUN/index.json")" = focused ]; echo $?)"
+  for c in verify plan ladder; do (cd "$TMP/cwd" && PATH="$TMP/real:$PATH" "$SH" "$SK2/review-run.sh" "$c" "$RUN") > /dev/null 2>&1; done
+  echo ok > "$RUN/state/schema" # the schema pass needs the mirror; its own test covers it
+  (cd "$TMP/cwd" && PATH="$TMP/real:$PATH" "$SH" "$SK2/review-run.sh" handover "$RUN") > /dev/null 2>&1
+  check "e2e: the handover diff writes a blank context line with its leading space" \
+    "$(grep -qx ' ' "$RUN/handover/change.diff" && ! grep -qx '' "$RUN/handover/change.diff"; echo $?)"
+  "$TMP/real/mtf-facts" lint "$RUN/clone" --diff "$RUN/handover/change.diff" --json > /dev/null 2> "$TMP/lint.err"
+  lrc=$?
+  check "e2e: mtf-facts lint --diff accepts the handover diff (exit $lrc)" "$([ "$lrc" != 2 ] && ! grep -q 'hunk line' "$TMP/lint.err"; echo $?)"
+  (cd "$TMP/cwd" && "$SH" "$SK2/review-run.sh" cleanup "$RUN") > /dev/null
+  e2e floor
+  check "e2e: a provider floor bump is deep" \
+    "$([ "$(jq -r '.depth' "$RUN/index.json")" = deep ]; echo $?)"
+  (cd "$TMP/cwd" && "$SH" "$SK2/review-run.sh" cleanup "$RUN") > /dev/null
+else
+  echo "skip end to end: no MTF_FACTS_BIN, and no Go toolchain or no facts checkout at $FACTS_SRC (set MTF_FACTS_SRC)"
+fi
 
 # --- 6. The workflow move: SKILL.md + references/workflow.md hold the pinned sentence multiset --------
 # Sentences: the text of both files with fenced blocks, headings, table rows and block quotes
