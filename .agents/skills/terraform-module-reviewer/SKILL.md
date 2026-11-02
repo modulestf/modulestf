@@ -130,7 +130,7 @@ A host that computed the change's depth names its file in the task with the line
 
 At every depth, each check in scope is read through its run summary, [references/run/](references/run/check-a.md) `check-a.md` to `check-g.md`, an index of its rules that holds no rule text:
 
-1. Read the summary. For each row, decide from the diff, the task and the verification record whether **Applies when** holds. When unsure, it holds.
+1. Read the summary. For each row, decide from the diff, the task and the verification record whether **Applies when** holds. When unsure, it holds. A row whose rule the `mtf-facts` report of Step 1 gives a finding or candidate for, in any area, holds whatever its condition says: its sections are opened and the rule is judged.
 2. When any row holds, open the summary's Read first sections, then the sections of every row that holds, then each other section whose **Open when** holds, and apply every rule in them. Open a section with `bash <skill root>/references/section.sh <file> <anchor>`: a link `../x.md#y` in a summary is the file `references/x.md` and the anchor `y`. A section the helper refuses or cannot find is read whole from its file instead.
 3. A row that does not hold is neither run nor reported. When no row holds, the check opens nothing and reports nothing.
 4. The **Provider facts** column is the need of [rule-facts.md](references/rule-facts.md), which a summary row copies, for the need list of Step 1 and the [Budget](references/large-changes.md#budget).

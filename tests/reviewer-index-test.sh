@@ -11,6 +11,9 @@
 # - every level-2 section of the check file and the engine file is linked from the summary;
 # - SKILL.md links every summary, and each summary's Read First links its check file's first
 #   section;
+# - SKILL.md's Reading by Depth makes a row hold when the mtf-facts report gives its rule a
+#   finding or candidate, and facts-engine.md pairs `row not applied` only with clean or
+#   not_applicable;
 # - every check file and engine file holds, headings aside, the same multiset of sentences as
 #   at the merge base with master, so spec text is moved, never rewritten. Without a master
 #   ref the comparison is skipped with a note.
@@ -112,6 +115,12 @@ index_check() {
       gsub(/^ +| +$/, "", f); gsub(/^ +| +$/, "", p)
       print id "\t" f (p == "-" ? "" : "; page entry when: " p)
     }' "$rf" > "$TMP/ix-facts"
+  bash "$d/references/section.sh" SKILL.md reading-by-depth 2> /dev/null |
+    grep -F -q 'gives a finding or candidate for, in any area, holds whatever its condition says' ||
+    printf 'facts rows\tSKILL.md#reading-by-depth\ta facts-engine finding or candidate does not make its row hold\n'
+  bash "$d/references/section.sh" references/facts-engine.md facts-comparison 2> /dev/null |
+    grep -F -q '`row not applied` pairs only with a tool `clean` or `not_applicable`' ||
+    printf 'facts rows\treferences/facts-engine.md#facts-comparison\t`row not applied` is not limited to clean and not_applicable\n'
   for pair in $CHECKS; do
     x="${pair%%:*}"; spec="${pair#*:}"; sum="references/run/check-$x.md"
     if [ ! -f "$d/$sum" ]; then printf 'summary\t%s\tmissing\n' "$sum"; continue; fi
@@ -343,6 +352,8 @@ a summary SKILL.md does not link~skill links~SKILL.md~s/(references\/run\/check-
 a sentence of the spec rewritten~sentences~references/check-g-behaviour.md~s/^- `claim.refuted`: a `claim` line has state `refuted`/- `claim.refuted`: a `claim` line says `refuted`/
 a sentence of an engine file rewritten~sentences~references/engine/check-d-examples.md~s/^- A submodule added by the change has no example of its own\./- A submodule added by the change has no example./
 Read First dropped~read first~references/run/check-a.md~/^When any row below applies: /d
+a facts-engine candidate no longer forcing its row~facts rows~SKILL.md~s/ A row whose rule the `mtf-facts` report of Step 1 gives a finding or candidate for, in any area, holds whatever its condition says: its sections are opened and the rule is judged\.//
+row not applied paired with a candidate again~facts rows~references/facts-engine.md~s/ so `row not applied` pairs only with a tool `clean` or `not_applicable`\./ so `row not applied` pairs with any tool result./
 section.sh past the next heading~section.sh~references/section.sh~s/if (on \&\& lvl <= on) on = 0/if (on \&\& lvl < on) on = 0/
 section.sh stopping at a deeper heading~section.sh~references/section.sh~s/if (on \&\& lvl <= on) on = 0/if (on) on = 0/
 section.sh reading fenced headings~section.sh fixture~references/section.sh~s/} else if (fence == 0 \&\& /} if (/
