@@ -1,0 +1,1 @@
+This drops `compact()` around `vpc_security_group_ids` on `aws_rds_cluster.this`, so a security group id that is unknown at plan now shows as known after apply instead of hiding the change. Null and empty-string entries of `var.vpc_security_group_ids` now reach the provider too; the description names only the empty strings.

@@ -1,0 +1,13 @@
+{
+  "repo": "example-org/terraform-aws-widget",
+  "pr": 12,
+  "render_only": true,
+  "triage": false,
+  "profile": "",
+  "role_arn": "",
+  "owner_depth": "",
+  "owner_pid": "",
+  "cache": "/nonexistent",
+  "login": "octo-reviewer",
+  "posting": "enabled"
+}
