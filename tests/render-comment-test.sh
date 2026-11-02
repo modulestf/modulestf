@@ -9,6 +9,8 @@ set -uo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd -P)"
 REF="$SRC/.agents/skills/terraform-module-pr-review/references"
+# The step text of SKILL.md, Step 10 included: references/workflow.md once it moved there.
+STEPS="$REF/workflow.md"; [ -f "$STEPS" ] || STEPS="$SRC/.agents/skills/terraform-module-pr-review/SKILL.md"
 CF="$REF/comment-format.md"
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/render-comment-test.XXXXXX")" && pwd -P)" && [ -n "$TMP" ] || { echo "FAIL no temporary directory"; exit 1; }
 [ -n "${KEEP:-}" ] || trap 'rm -rf "$TMP"' EXIT
@@ -468,7 +470,7 @@ t_targets_stated; check "strings: the length targets are stated in the findings 
 ADVICE='send it back to the reviewer once; if it keeps the finding because it is within the schema targets, render with --standard'
 t_advice() {
   grep -qF -- "\$refuse; $ADVICE\"" "$RCU" &&
-    grep -F -- '- **Step 10 - Render.**' "$SRC/.agents/skills/terraform-module-pr-review/SKILL.md" | grep -qF -- "\`$ADVICE\`" &&
+    grep -F -- '- **Step 10 - Render.**' "$STEPS" | grep -qF -- "\`$ADVICE\`" &&
     awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -qF -- "\`$ADVICE\`" &&
     awk '/^## Tiers$/ { on = 1; next } on && /^## / { exit } on' "$CF" | grep -qF -- "\`$ADVICE\`"
 }
@@ -1458,7 +1460,7 @@ t_predloc; check "tiers: a predates location outside the charset is withheld" $?
 # The examples jq of SKILL.md, Step 10, on verify-pass.sh output of the shape verify-pass.md gives:
 # only verified directories count, and validated counts those whose head validate exited 0.
 t_examples_jq() {
-  local q; q="$(sed -n 's/.*`examples`, `{"count": M, "validated": K}`, from .*: `jq '"'"'\(.*\)'"'"'`\..*/\1/p' "$SRC/.agents/skills/terraform-module-pr-review/SKILL.md")"
+  local q; q="$(sed -n 's/.*`examples`, `{"count": M, "validated": K}`, from .*: `jq '"'"'\(.*\)'"'"'`\..*/\1/p' "$STEPS")"
   [ -n "$q" ] && jq -n '{head_sha: "h", base_sha: "b", terraform_version: null, selection: {}, dirs: [
       {dir: "examples/a", reason: "verified", affected: "touched", head: {init: 0, validate: 0, record: "code-result", line: null}, base: null, outside: false},
       {dir: "examples/b", reason: "verified", affected: "all", head: {init: 0, validate: 1, record: "code-result", line: "x"}, base: null, outside: false},
@@ -1794,6 +1796,157 @@ mutate "witnesses not deduplicated" 's/if any\(\.\[\]; \. == \$w\) then \. else 
 mutate "the downloaded flag ignored" 's/\(if \$c\.downloaded then "-downloaded" else "" end\)/""/' t_cov_dl
 mutate "the one witness example not allowlisted" 's/ and \(\$e\[0\] \| allowed\)//' t_cov_names
 mutate "one example named for several witness examples" 's/if \(\$e \| length\) == 1 and/if true and/' t_cov_two
+
+# --- Depth (depth.md, verdict.md Rule 4 per depth): the run file's optional depth key, bound to
+# the head and host.json's merge base, known keys and values only; an example out of scope is no
+# unknown; the comment states the depth, its reasons and what is out of scope.
+DIGEST="$(printf 'diff' | shasum -a 256 | cut -c1-64)"
+dep() { # depth, jq update -> one depth object, bound to the fixtures' head and merge base
+  jq -nc --arg d "$1" --arg h "$HEAD" --arg b "$BASE" --arg x "$DIGEST" '{format: 1, depth: $d,
+    reasons: ({"light": ["light-docs-only"], "focused": ["focused-within-limits"], "deep": ["deep-policy"]}[$d]),
+    checks_out_of_scope: ({"light": ["A", "B", "D", "G-ladder"], "focused": ["B"], "deep": []}[$d]),
+    examples_selected: ["examples/complete"], examples_out_of_scope: (if $d == "focused" then ["examples/other"] else [] end),
+    touched_types: [], walk: {complete: ($d != "deep"), unwalked: 0},
+    limits: {tf_files: (if $d == "light" then 0 else 2 end), changed_lines: 10, changed_blocks: 1, selected_examples: 1},
+    schema_providers: ["head:.:aws=hashicorp/aws:>=5.0"], schema_types: [".:resource:aws_s3_bucket:hashicorp/aws"],
+    schema_locks: ["examples/complete:hashicorp/aws=5.1.0"],
+    binding: {head_sha: $h, base_sha: $b, merge_base: $b, diff_sha256: $x}} | '"${2:-.}"
+}
+rund() { runf "$1" ".depth = $(dep "$2" "${3:-.}") | ${4:-.}"; } # name, depth, depth update, run update
+# The Review depth section of the last render, without its heading line; empty when absent.
+dsec() { awk '/^### Review depth$/ { on = 1; getline; next } on && /^### / { exit } on' "$O/comment.md" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'; }
+
+ladder "light, nothing open" "approve APPROVE" 8 "$NONE" "" "" "$(rund d-light light)"
+t_dlight() {
+  dsec | cmp -s - <(printf '%s\n' 'Review depth: light. Reasons: `light-docs-only`.' '' \
+    'Out of scope at this depth, so not unknowns: Check A, Check B, Check D, Check G beyond its claim reading, the plan pass.')
+}
+t_dlight; check "depth: light states its depth, reason and the checks out of scope, golden" $?
+# At light no plan pass runs: verify-pass.sh coverage --no-plan lists every example not planned.
+NOPLAN='.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/complete", reason: "no AWS profile named"}]}'
+t_dlight_noplan() { render "$NONE" "" "" "$(rund d-lnp light . "$NOPLAN")"; [ "$ST" = 0 ] && [ "$(rule)" = 8 ] && ! grep -qF 'not planned' "$O/comment.md"; }
+t_dlight_noplan; check "depth: light, the plan pass out of scope, an example not planned is no unknown (rule 8)" $?
+ladder "focused, an example in scope not planned" "inconclusive COMMENT" 4 "$NONE" "" "" "$(rund d-fnp focused . "$NOPLAN")"
+ladder "light, an example that did not validate" "inconclusive COMMENT" 4 "$NONE" "" "" "$(rund d-lgap light . '.verify_gaps = [{dir: "examples/complete", reason: "init failed"}]')"
+GAPS='.verify_gaps = [{dir: "examples/other", reason: "not run: budget"}] | .coverage = {class: "none", inert: false, unplanned: [{dir: "examples/other", reason: "no AWS profile named"}]}'
+t_dfocused() {
+  render "$NONE" "" "" "$(rund d-foc focused . "$GAPS")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 8 ] && [ "$(verdict)" = "approve APPROVE" ] && ! grep -qF 'Checks that could not run' "$O/comment.md" &&
+    dsec | cmp -s - <(printf '%s\n' 'Review depth: focused. Reasons: `focused-within-limits`.' '' \
+      'Out of scope at this depth, so not unknowns: Check B, `examples/other`.')
+}
+t_dfocused; check "depth: focused, an example out of scope that did not verify or plan is no unknown (rule 8)" $?
+ladder "focused, the same gaps in an example in scope" "inconclusive COMMENT" 4 "$NONE" "" "" \
+  "$(rund d-foc-in focused . "$(printf '%s' "$GAPS" | sed 's/examples\/other/examples\/complete/g')")"
+grep -qxF -- '- Verification of `examples/complete`: not run: budget.' "$O/comment.md"; check "depth: an example in scope that did not verify is still listed in section 5" $?
+ladder "deep, an unverified example" "inconclusive COMMENT" 4 "$NONE" "" "" "$(rund d-deep deep . '.verify_gaps = [{dir: "examples/complete", reason: "init failed"}]')"
+check "depth: deep states its depth and reasons, nothing out of scope" "$(dsec | cmp -s - <(printf '%s\n' 'Review depth: deep. Reasons: `deep-policy`.'); echo $?)"
+ladder "deep, a MEDIUM finding" "block REQUEST_CHANGES" 6 "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "" "" "$(rund d-deep6 deep)"
+t_dtriage() { render "$NONE" "" "" "$(rund d-tri light . '.triage = true')"; [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "inconclusive COMMENT" ]; }
+t_dtriage; check "depth: a triage run at light never approves" $?
+render "$NONE" "" "" "$(rund d-tri-f focused . '.triage = true')"
+check "depth: a triage run at focused never approves" "$([ "$(rule)" = 4 ]; echo $?)"
+# The first 20 out-of-scope items and a count of the rest; a name outside the charset withheld.
+t_d20() {
+  render "$NONE" "" "" "$(rund d-20 focused '.checks_out_of_scope = ["B", "D"] | .examples_out_of_scope = ["examples/a b"] + [range(24) | "examples/e\(.)"]')"
+  [ "$ST" = 0 ] && dsec | grep -qxF -- "Out of scope at this depth, so not unknowns: Check B, Check D, name withheld, $(seq 0 16 | sed 's/.*/`examples\/e&`/' | paste -sd, - | sed 's/,/, /g'), and 7 more."
+}
+t_d20; check "depth: the first 20 out-of-scope items and the count of the rest, a name outside the charset withheld" $?
+# COMPACT puts the depth lines in its details block.
+t_dcompact() {
+  rc "$(F556)" "$(R556 d556 ".depth = $(dep focused '.examples_out_of_scope = []')")"
+  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 4 ] &&
+    awk '/^<details><summary>Evidence and notes<\/summary>$/ { on = 1 } on' "$O/comment.md" | grep -qxF -- '- Review depth: focused. Reasons: `focused-within-limits`.' &&
+    ! grep -q '^### ' "$O/comment.md"
+}
+t_dcompact; check "depth: COMPACT states the depth in its details block" $?
+
+# Refused: exit 2 and nothing written.
+refused "depth: an unknown key" "$NONE" "" "" "$(rund dr-key light '.extra = 1')"
+refused "depth: an unknown depth" "$NONE" "" "" "$(rund dr-val light '.depth = "shallow"')"
+refused "depth: an unknown reason token" "$NONE" "" "" "$(rund dr-tok light '.reasons = ["light-everything"]')"
+refused "depth: a reason of another depth" "$NONE" "" "" "$(rund dr-mix light '.reasons = ["focused-within-limits"]')"
+refused "depth: Check C out of scope at light" "$NONE" "" "" "$(rund dr-c light '.checks_out_of_scope += ["C"]')"
+refused "depth: Check A out of scope at focused" "$NONE" "" "" "$(rund dr-a focused '.checks_out_of_scope = ["A"]')"
+refused "depth: a check out of scope at deep" "$NONE" "" "" "$(rund dr-deepc deep '.checks_out_of_scope = ["B"]')"
+refused "depth: an example out of scope at deep" "$NONE" "" "" "$(rund dr-deepx deep '.examples_out_of_scope = ["examples/other"]')"
+refused "depth: an example both selected and out of scope" "$NONE" "" "" "$(rund dr-both focused '.examples_out_of_scope = ["examples/complete"]')"
+refused "depth: an example path with a dot segment" "$NONE" "" "" "$(rund dr-dot focused '.examples_out_of_scope = ["./examples/other"]')"
+refused "depth: focused past the limits" "$NONE" "" "" "$(rund dr-lim focused '.limits.changed_lines = 201')"
+refused "depth: a schema token outside its pattern" "$NONE" "" "" "$(rund dr-sp light '.schema_types = [".:module:x:hashicorp/aws"]')"
+refused "depth: no binding" "$NONE" "" "" "$(rund dr-nob light 'del(.binding)')"
+t_dhead() { render "$NONE" "" "" "$(rund dr-head light '.binding.head_sha = "'"$BASE"'"')"; [ "$ST" = 2 ] && empty_out && printf '%s' "$MSG" | grep -qF 'not bound'; }
+t_dhead; check "refused: depth: bound to another head" $?
+refused "depth: bound to another merge base" "$NONE" "" "" "$(rund dr-mb light '.binding.merge_base = "'"$HEAD"'"')"
+t_dnomb() { render "$NONE" "$(host dr-nomb '.merge_base = null')" "" "$(rund dr-nomb light)"; [ "$ST" = 2 ] && empty_out; }
+t_dnomb; check "refused: depth: host.json with no merge base" $?
+
+# Byte for byte: without the key, the body is the one the scripts of b3f74cf rendered.
+OLD="$TMP/old"; mkdir -p "$OLD"
+if git -C "$SRC" cat-file -e b3f74cf^{commit} 2> /dev/null; then
+  for x in render-comment.sh render-comment.jq host-records.jq host-pass.sh; do
+    git -C "$SRC" show "b3f74cf:.agents/skills/terraform-module-pr-review/references/$x" > "$OLD/$x"
+  done
+  t_same() { # render args: the same body from the old scripts and the new
+    local keep="$RCU"; RCU="$OLD/render-comment.sh"; render "$@"; local a="$O/comment.md" s1="$ST"
+    RCU="$keep"; render "$@"; [ "$s1" = 0 ] && [ "$ST" = 0 ] && cmp -s "$a" "$O/comment.md"
+  }
+  t_same "$NONE"; check "depth absent: nothing open renders as before, byte for byte" $?
+  t_same "$WF" "$H2" "" "" "$TMP/assess-worked.txt"; check "depth absent: worked example 2 renders as before, byte for byte" $?
+  t_same "$TMP/pr410.json" "$H410" "" "" "$TMP/assess-410.txt"; check "depth absent: pull request 410 renders as before, byte for byte" $?
+  t_same "$(F556)" "$H556" "" "$(R556 same)" "$TMP/assess-556.txt"; check "depth absent: the COMPACT pull request 556 renders as before, byte for byte" $?
+  t_same "$NONE" "" "" "$TMP/run-cov-none.json"; check "depth absent: unplanned examples render as before, byte for byte" $?
+else
+  echo "skip depth absent: commit b3f74cf is not in this clone"
+fi
+
+# --- Closed and merged pull requests: host.json's mergeability not-applicable is no unknown, and
+# the body says the verdict describes a pull request that is no longer open. host-records.jq is
+# the host pass's; a copy that takes not-applicable on every state stands in for it here, so the
+# open case reaches the render.
+na() { # render args: the script under test, beside a host-records.jq that takes not-applicable
+  local keep="$RCU" d="$TMP/na-$oc"; mkdir -p "$d"
+  cp "$(dirname "$RCU")/render-comment.sh" "$(dirname "$RCU")/render-comment.jq" "$REF/host-records.jq" "$REF/host-pass.sh" "$d/"
+  perl -0pi -e 's/\(\.mergeability \| IN\(([^)]*)\)\)/(.mergeability | IN($1, "not-applicable"))/' "$d/host-records.jq"
+  RCU="$d/render-comment.sh"; render "$@"; RCU="$keep"
+}
+CLAMP='Comment only: this verdict describes a pull request that is no longer open.'
+HMERGED="$(host na-merged '.state.state = "closed" | .state.merged = true | .signals.mergeability = "not-applicable"')"
+t_merged() {
+  na "$NONE" "$HMERGED"
+  [ "$ST" = 0 ] && [ "$(rule)" = 8 ] && [ "$(verdict)" = "approve COMMENT" ] &&
+    sed -n 3,6p "$O/comment.md" | cmp -s - <(printf '%s\n' '**Good to merge.**' '' "$CLAMP" '') &&
+    grep -qxF 'Checks pass. Mergeability: not applicable. No review yet. Threads resolved.' "$O/comment.md"
+}
+t_merged; check "merged: not-applicable is no unknown, the no longer open line under the verdict, the signal line shows it" $?
+na "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "$(host na-closed '.state.state = "closed" | .signals.mergeability = "not-applicable"')"
+check "closed: a MEDIUM finding blocks, proposes COMMENT, says no longer open" "$([ "$(verdict)" = "block COMMENT" ] && grep -qxF "$CLAMP" "$O/comment.md"; echo $?)"
+t_naopen() { na "$NONE" "$(host na-open '.signals.mergeability = "not-applicable"')"; [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qF 'Mergeability: unknown.' "$O/comment.md" && ! grep -qxF "$CLAMP" "$O/comment.md"; }
+t_naopen; check "open: not-applicable reads as unknown, rule 4, no no-longer-open line" $?
+t_naclosed_line() { render "$NONE" "$(host cl2 '.state.state = "closed"')"; grep -qxF "$CLAMP" "$O/comment.md"; }
+t_naclosed_line; check "closed: the line renders with the host records of today too" $?
+t_nacompact() {
+  na "$(F556)" "$(host na556 '.repo = "example/terraform-aws-rds-aurora" | .number = 556 | .could_not_run = ['"$CUT"'] | .state.state = "closed" | .state.merged = true | .signals.mergeability = "not-applicable"')" "" "$(R556 na556)" "$TMP/assess-556.txt"
+  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && sed -n 5p "$O/comment.md" | grep -qxF "$CLAMP" &&
+    grep -qxF -- '- Checks pass. Mergeability: not applicable. No review yet. Threads resolved.' "$O/comment.md"
+}
+t_nacompact; check "merged: COMPACT says no longer open under the verdict and shows not-applicable in its notes" $?
+
+# Negative self-check for depth and the closed clamp.
+mutate "out-of-scope examples still counted" 's/\(\$in \| \.run \|= scoped_run\) as \$in\n  \| //' t_dfocused
+mutate "the depth binding not checked" 's/\|\| die "the run file.s depth is not bound to this head and host\.json.s merge base"/|| true/' t_dhead
+mutate "the depth binding check passes a null merge base" 's/\$h\.merge_base != null and //; s/ and \.binding\.merge_base == \$h\.merge_base//' t_dnomb
+t_dfocused_a() { render "$NONE" "" "" "$(rund dr-a2 focused '.checks_out_of_scope = ["A"]')"; [ "$ST" = 2 ] && empty_out; }
+mutate "the scope table not checked" 's/and \(\.depth as \$d \| \.checks_out_of_scope - depth_scope\[\$d\] == \[\]\)//' t_dfocused_a
+mutate "all out-of-scope items listed" 's/\$i\[:20\]/\$i/' t_d20
+mutate "the depth section dropped" 's/\+ section\("Review depth"; depth_lines\(\$in\.run\); "\\n\\n"\)//' t_dlight
+mutate "the COMPACT depth lines dropped" 's/\[\(depth_lines\(\$run\)\[\], state_lines/[(state_lines/' t_dcompact
+mutate "depth example names not allowlisted" 's/\[\$d\.examples_out_of_scope\[\] \| nm\(allowed\)\]/[\$d.examples_out_of_scope[] | nm(true)]/' t_d20
+mutate "not-applicable trusted on an open pull request" 's/if \.mergeability == "not-applicable" and \(is_closed\(\$h\) \| not\)/if false/' t_naopen
+mutate "the no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\)\n//' t_merged
+mutate "the COMPACT no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\) \+ \$action/+ \$action/' t_nacompact
+mutate "the plan pass in scope at light" 's/\| if \.depth\.depth == "light" then \.coverage\.unplanned = \[\] else \. end//' t_dlight_noplan
+mutate "triage approves at a depth" 's/elif \.triage or any/elif any/' t_dtriage
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

@@ -35,6 +35,12 @@
 #                 section 5 line and a gap, each refuted state blocks at rule 2, and it adds the
 #                 evidence line under the rationale. A claim.* finding with no refuted state is refused.
 #                 Without the key, outside a triage run, the step counts as not run by the host.
+#                 One optional key more, "depth": the depth.json object depth.sh wrote (depth.md),
+#                 known keys and values only, its binding head_sha equal to --head and its
+#                 merge_base to host.json's, else refused. An example out of scope by it is no
+#                 verification gap and no example not planned, and the body states the depth, its
+#                 reasons and what is out of scope (verdict.md, Rule 4 per depth). Without the key
+#                 the body is the one this script rendered before the key existed.
 #   --assessment  section 1, the one part the model writes: printable ASCII, at most two short
 #                 paragraphs and 700 characters, no line that starts like a heading, a bold line, HTML or a list item
 #   --run-dir     the run directory, which the leak scan looks for and --out must lie outside
@@ -130,6 +136,9 @@ one "$findings" render-comment valid_findings || die "the findings do not fit th
 RJ -e --slurp --arg head "$head" 'include "host-records"; length == 1 and (.[0] | valid_host($head))' \
   "$host" > /dev/null 2>&1 || die "host.json is not valid for this head"
 one "$run" render-comment valid_run || die "the run file does not fit its grammar"
+RJ -e -n --slurpfile r "$run" --slurpfile h "$host" \
+  'include "render-comment"; ($r[0] | has("depth") | not) or ($r[0].depth | depth_bound($h[0]))' > /dev/null 2>&1 \
+  || die "the run file's depth is not bound to this head and host.json's merge base"
 RJ -e -n --slurpfile f "$findings" --slurpfile r "$run" 'include "render-comment"; claims_consistent($f[0]; $r[0])' \
   > /dev/null 2>&1 || die "a claim.* finding with no refuted state in the behaviour object"
 one "$findings" render-comment band_ok || die "$(RJ -n -r 'include "render-comment"; tx("refuse-band")')"
