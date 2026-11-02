@@ -9,14 +9,16 @@
 # - every link of a summary resolves to a file of the skill and, with an anchor, to a heading;
 # - the sections a row links, as section.sh prints them, name its rule_id;
 # - every level-2 section of the check file and the engine file is linked from the summary;
-# - SKILL.md links every summary, and each summary's Read First links its check file's first
-#   section;
+# - references/workflow.md links every summary, and each summary's Read First links its check
+#   file's first section;
 # - SKILL.md's Reading by Depth makes a row hold when the mtf-facts report gives its rule a
 #   finding or candidate, and facts-engine.md pairs `row not applied` only with clean or
 #   not_applicable;
-# - every check file and engine file holds, headings aside, the same multiset of sentences as
-#   at the merge base with master, so spec text is moved, never rewritten. Without a master
-#   ref the comparison is skipped with a note.
+# - headings aside, SKILL.md with the references its text moved to (inputs.md, output.md,
+#   workflow.md), and each check file and engine file, hold the multiset of sentences of the
+#   base commit tests/reviewer-index-sentences.txt names, changed only by the "+" and "-"
+#   lines it lists, so spec text is moved, never rewritten. When that commit is not an
+#   ancestor of HEAD, the comparison is skipped with a note.
 # references/section.sh prints, for every heading of every markdown file of the skill,
 # exactly the lines from the heading to the next heading of the same or a higher level; it
 # prints the section of every relative link with an anchor from a run summary, check file or
@@ -69,36 +71,53 @@ heads() {
     }' | if [ "${IDS:-0}" = 1 ]; then sort -u; else cat; fi)
 }
 
-# sentences FILE: the file's sentences, one per line, sorted: headings left out, every other
-# line outside fenced code trimmed and split after a full stop, question or exclamation mark.
+# sentences FILE...: the files' sentences, one per line, sorted: headings left out, link
+# targets emptied, so a moved sentence may point its links anew, and every other line outside
+# fenced code trimmed and split after a full stop, question or exclamation mark.
 sentences() {
-  awk '
+  cat "$@" | awk '
     { s = $0; sub(/^ ? ? ?/, "", s) }
     s ~ /^(```|~~~)/ { fence = !fence; print; next }
     fence { print; next }
     /^#+[ \t]/ { next }
-    { t = $0; gsub(/[ \t]+/, " ", t); sub(/^ /, "", t); sub(/ $/, "", t)
+    { t = $0; gsub(/[ \t]+/, " ", t); sub(/^ /, "", t); sub(/ $/, "", t); gsub(/\]\([^)]*\)/, "]()", t)
       while (match(t, /[.!?] /)) { print substr(t, 1, RSTART); t = substr(t, RSTART + 2) }
-      if (t != "") print t }' "$1" | sort
+      if (t != "") print t }' | sort
 }
 
-# The base sentences, once: from the merge base with master, or none.
-BASE="$(git merge-base HEAD master 2> /dev/null || git merge-base HEAD origin/master 2> /dev/null || true)"
+# The spec groups: a name, then the files whose sentences it holds. SKILL.md's text lives in
+# SKILL.md and the references it moved to; each check and engine file is its own group.
+groups() {
+  echo "SKILL.md SKILL.md references/inputs.md references/output.md references/workflow.md"
+  for pair in $CHECKS; do
+    for f in "references/${pair#*:}.md" "references/engine/${pair#*:}.md"; do echo "$f $f"; done
+  done
+}
+
+# The base sentences of each group, once, from the commit the first line of
+# tests/reviewer-index-sentences.txt names, with the changes the record lists since then
+# applied: each "+" line adds one sentence, each "-" line removes one. The commit must be an
+# ancestor of HEAD; when it is missing, as in a shallow clone, the comparison is skipped.
+REC="$SRC/tests/reviewer-index-sentences.txt"
+BASE="$(awk -F'\t' 'NR == 1 && $1 == "base" { print $2 }' "$REC")"
+{ [ -n "$BASE" ] && git cat-file -e "$BASE^{commit}" 2> /dev/null && git merge-base --is-ancestor "$BASE" HEAD; } || BASE=""
 mkdir "$TMP/base"
 if [ -n "$BASE" ]; then
-  for pair in $CHECKS; do
-    for f in "references/${pair#*:}.md" "references/engine/${pair#*:}.md"; do
-      git show "$BASE:$RSK/$f" > "$TMP/base/f" 2> /dev/null || continue
-      mkdir -p "$TMP/base/$(dirname "$f")"; sentences "$TMP/base/f" > "$TMP/base/$f"
+  groups | while read -r g members; do
+    k="$(printf '%s' "$g" | tr '/' '_')"; : > "$TMP/base/$k.raw"; got=0
+    for f in $members; do
+      git show "$BASE:$RSK/$f" >> "$TMP/base/$k.raw" 2> /dev/null && got=1 && echo >> "$TMP/base/$k.raw"
     done
+    [ "$got" = 1 ] || continue
+    sentences "$TMP/base/$k.raw" |
+      awk -F'\t' -v g="$g" '
+        FILENAME == ARGV[1] { if ($2 == g) { op[++n] = $1; t[n] = $3 }; next }
+        { c[$0]++ }
+        END {
+          for (i = 1; i <= n; i++) c[t[i]] += (op[i] == "+") ? 1 : -1
+          for (x in c) for (j = 0; j < c[x]; j++) print x
+        }' "$REC" - | sort > "$TMP/base/$k"
   done
-  # Sentences added on purpose since the merge base, each with the file it is in. Only engine
-  # criteria (Confirm when) may grow here; rule text is moved, never added to.
-  while IFS=$'\t' read -r f t; do
-    [ -f "$TMP/base/$f" ] && { cat "$TMP/base/$f"; printf '%s\n' "$t"; } | sort > "$TMP/base/add" && mv "$TMP/base/add" "$TMP/base/$f"
-  done <<'ADDED'
-references/engine/check-f-scope.md	- Both bullets must hold.
-ADDED
 fi
 
 # index_check DIR: one line per problem with the summaries of the skill at DIR:
@@ -124,8 +143,8 @@ index_check() {
   for pair in $CHECKS; do
     x="${pair%%:*}"; spec="${pair#*:}"; sum="references/run/check-$x.md"
     if [ ! -f "$d/$sum" ]; then printf 'summary\t%s\tmissing\n' "$sum"; continue; fi
-    grep -F -q "](references/run/check-$x.md)" "$d/SKILL.md" ||
-      printf 'skill links\tSKILL.md\tno link to %s\n' "$sum"
+    grep -F -q "](run/check-$x.md)" "$d/references/workflow.md" ||
+      printf 'skill links\treferences/workflow.md\tno link to %s\n' "$sum"
     # The rule_ids the check owns.
     { cat "$d/references/$spec.md" "$d/references/engine/$spec.md" 2> /dev/null | grep -oE "$ID_RE" | tr -d '`'
       cut -f1 "$TMP/ix-facts"; } | sort -u |
@@ -157,16 +176,7 @@ index_check() {
     first="$(awk -F'\t' -v f="references/$spec.md" '$1 == f && $3 == 2 { print $4; exit }' "$TMP/ix-heads")"
     awk '/^## /{ on = ($0 == "## Read First") } on' "$d/$sum" | grep -F -q "](../$spec.md#$first)" ||
       printf 'read first\t%s\tRead First does not link %s#%s\n' "$sum" "$spec.md" "$first"
-    # Headings aside, the spec text is the base's, sentence for sentence.
-    if [ -n "$BASE" ]; then
-      for f in "references/$spec.md" "references/engine/$spec.md"; do
-        [ -f "$d/$f" ] || [ -f "$TMP/base/$f" ] || continue
-        if [ ! -f "$TMP/base/$f" ]; then printf 'sentences\t%s\tnot at the merge base with master\n' "$f"; continue; fi
-        if [ ! -f "$d/$f" ]; then printf 'sentences\t%s\tmissing, while the merge base has it\n' "$f"; continue; fi
-        sentences "$d/$f" | diff "$TMP/base/$f" - > /dev/null ||
-          printf 'sentences\t%s\tits sentences differ from the merge base with master\n' "$f"
-      done
-    fi
+    : # The spec groups are compared once per run, after the checks.
     # Every link resolves; the sections a row links name its rule_id; every level-2 section of
     # the check file and the engine file is linked. Link paths are relative to references/run.
     awk -F'\t' -v sum="$sum" -v spec="$spec" '
@@ -201,6 +211,18 @@ index_check() {
       END { for (k in h2) if (!(k in linked)) print "unlinked section\t" sum "\t" k " is linked from no row or section line" }
     ' "$TMP/ix-files" "$TMP/ix-heads" "$TMP/ix-named" "$d/$sum"
   done
+  # Headings aside, each spec group holds the base's sentences, with the recorded changes.
+  if [ -n "$BASE" ]; then
+    groups | while read -r g members; do
+      k="$(printf '%s' "$g" | tr '/' '_')"
+      if [ ! -f "$TMP/base/$k" ]; then
+        (cd "$d" && ls $members > /dev/null 2>&1) && printf 'sentences\t%s\tnot at the recorded base\n' "$g"
+        continue
+      fi
+      (cd "$d" && sentences $members 2> /dev/null) | diff "$TMP/base/$k" - > "$TMP/ix-sdiff" ||
+        printf 'sentences\t%s\t%s sentences differ from the recorded base and the record\n' "$g" "$(grep -c '^[<>]' "$TMP/ix-sdiff")"
+    done
+  fi
 }
 
 # section_check DIR [FILE...]: section.sh against an independent cut for every heading of
@@ -311,7 +333,7 @@ report() { # label: lines on stdin, each reported as a failure
   return "$n"
 }
 
-[ -n "$BASE" ] || echo "note sentence multiset skipped: no master or origin/master ref"
+[ -n "$BASE" ] || echo "note sentence multiset skipped: the recorded base commit is not an ancestor here"
 report "run summaries" < <(index_check "$RSK") && echo "ok   run summaries ($(cat "$RSK"/references/run/check-*.md | grep -cE '^\| `[a-z]+\.') rows)"
 report "section helper" < <(section_check "$RSK") && echo "ok   section helper ($(wc -l < "$TMP/sc/list" | tr -d ' ') sections)"
 report "section refusals" < <(refusal_check "$RSK") && echo "ok   section refusals"
@@ -348,9 +370,11 @@ a row with no section link~sections~references/run/check-f.md~/^| `scope.tests` 
 a row linking a section that does not name it~not in section~references/run/check-a.md~/^| `compat.type-narrowed` /s/#compattype-narrowed/#compatvariable-removed/
 an other section unlinked~unlinked section~references/run/check-f.md~/^| \[Decisions\]/d
 a rule named in a check file with no row~missing row~references/check-g-behaviour.md~s/^`rule_id` prefixes: /`claim.new-rule`; &/
-a summary SKILL.md does not link~skill links~SKILL.md~s/(references\/run\/check-e\.md)/(references\/run\/check-e.md#rules)/
+a summary the workflow does not link~skill links~references/workflow.md~s/(run\/check-e\.md)/(run\/check-e.md#rules)/
 a sentence of the spec rewritten~sentences~references/check-g-behaviour.md~s/^- `claim.refuted`: a `claim` line has state `refuted`/- `claim.refuted`: a `claim` line says `refuted`/
 a sentence of an engine file rewritten~sentences~references/engine/check-d-examples.md~s/^- A submodule added by the change has no example of its own\./- A submodule added by the change has no example./
+a sentence moved out of SKILL.md rewritten~sentences~references/inputs.md~s/^- The workspace is the only source of file content\./- The workspace is the sole source of file content./
+a navigation line added to SKILL.md unrecorded~sentences~SKILL.md~s/ These headings keep their links\./ These headings keep their links. They hold no text./
 Read First dropped~read first~references/run/check-a.md~/^When any row below applies: /d
 a facts-engine candidate no longer forcing its row~facts rows~SKILL.md~s/ A row whose rule the `mtf-facts` report of Step 1 gives a finding or candidate for, in any area, holds whatever its condition says: its sections are opened and the rule is judged\.//
 row not applied paired with a candidate again~facts rows~references/facts-engine.md~s/ so `row not applied` pairs only with a tool `clean` or `not_applicable`\./ so `row not applied` pairs with any tool result./
