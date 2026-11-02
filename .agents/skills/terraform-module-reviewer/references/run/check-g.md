@@ -3,6 +3,8 @@
 > **Part of:** [terraform-module-reviewer](../../SKILL.md), [Check G](../check-g-behaviour.md)
 > **Purpose:** The index a run reads for Check G, as [Reading by Depth](../../SKILL.md#reading-by-depth) says: each `rule_id`, when it applies, the provider facts it needs as [rule-facts.md](../rule-facts.md) gives them, and the sections that hold its text. It holds no rule text; the sections are operative.
 
+When unsure whether a row's **Applies when** holds, it holds.
+
 With `G-ladder` out of scope in `depth.json`, only the claim reading [Reading by Depth](../../SKILL.md#reading-by-depth) describes runs, and no row below and no section of [verification-ladder.md](../verification-ladder.md) is read.
 
 ## Read First
@@ -15,7 +17,7 @@ When any row below applies: [Reads, Fails When and Severity](../check-g-behaviou
 |-----------|--------------|----------------|----------|
 | `claim.fix-not-effective` | The verification record has a `claim` line. | none | [Check G](../check-g-behaviour.md#reads-fails-when-and-severity) |
 | `claim.refuted` | The verification record has a `claim` line. | none | [Check G](../check-g-behaviour.md#reads-fails-when-and-severity) |
-| `compat.expression-behaviour-changed` | The change edits an expression in a resource, data, module, local, variable or output block, or the record has a `trigger` or `change` line. | none | [Check G](../check-g-behaviour.md#reads-fails-when-and-severity) |
+| `compat.expression-behaviour-changed` | The change edits an expression in a resource, data, module, local, variable, output or provider block, or a file an HCL read site names, or the record has a `trigger` or `change` line. | none | [Check G](../check-g-behaviour.md#reads-fails-when-and-severity) |
 | `review.verification-incomplete` | The verification record has a `behaviour:` line. | none | [Check G](../check-g-behaviour.md#reads-fails-when-and-severity) |
 
 ## Other Sections
