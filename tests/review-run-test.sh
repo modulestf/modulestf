@@ -43,6 +43,8 @@ echo "schema $SCHEMA_DEPTH $*" >> "${STUB_LOG:?}"
 src="schema pass: source modulestf/terraform-schema-mirror hashicorp_aws-v6.1.0 $(printf 'ab%.0s' $(seq 32))"
 case "${SCHEMA_STUB:-overflow}" in
   ok) mkdir -p "$1"; echo "$src"; echo "schema pass: focused, mirror stub, 1 sheets, 10 bytes"; exit 0 ;;
+  deeppartial) mkdir -p "$1"; echo '{"format": 1, "reasons": ["page"], "missing": []}' > "$1/missing.json"; echo "$src"
+    echo "schema pass: deep partial page, 1 sheets, 10 bytes, 1 types without a sheet"; exit 0 ;;
   badsource) mkdir -p "$1"; echo "$src"; echo "schema pass: source modulestf/m x \$(touch x)"; echo "schema pass: focused"; exit 0 ;;
 esac
 echo "schema pass: escalate overflow"; exit 3
@@ -360,7 +362,10 @@ check "verify: a new validate failure in an out-of-scope example escalates a foc
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=deep prep
-SCHEMA_STUB=ok run_rr schema "$RUN" > "$TMP/s.out"
+SCHEMA_STUB=deeppartial run_rr schema "$RUN" > "$TMP/s.out"
+check "schema at deep: a deep partial line is a success, its source lines recorded" \
+  "$(grep -q '^schema: schema pass: deep partial page' "$TMP/s.out" && [ "$(cat "$RUN/state/schema")" = ok ] && [ -f "$RUN/facts/missing.json" ] &&
+     [ "$(grep -c . "$RUN/state/schema-sources.txt")" = 1 ]; echo $?)"
 full; run_rr handover "$RUN" > /dev/null
 check "schema at deep: partial sheets are named in the handover" "$(grep -qx "Provider fact sheets: $RUN/facts" "$RUN/handover/task.md"; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
