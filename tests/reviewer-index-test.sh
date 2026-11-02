@@ -361,6 +361,7 @@ report "cross links" < <(link_check "$RSK") && echo "ok   cross links ($(cat "$T
 # result must be reported under the invariant it breaks.
 nmut=0
 while IFS='~' read -r name inv target script; do
+  [ -n "$BASE" ] || [ "$inv" != sentences ] || continue # no base commit, no sentence comparison
   nmut=$((nmut + 1))
   # The copy keeps the sibling skills, the targets of cross-skill links.
   rm -rf "$TMP/mut"; cp -R "${RSK%/*}" "$TMP/mut"; m="$TMP/mut/${RSK##*/}"

@@ -20,6 +20,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # reviewer-index-test.sh compares sentences with a recorded base commit
       - name: Install test tools
         run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep zsh
       - name: Run tests
