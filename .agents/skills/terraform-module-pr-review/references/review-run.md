@@ -54,7 +54,7 @@ The default pass runs in every example at every depth. The plan pass plans every
 
 | Reason | When |
 |---|---|
-| `several-module-roots` | No single module root holds every changed path ([github-io.md](github-io.md#workspace)) |
+| `several-module-roots` | The top of the repository holds a Terraform file, and no single module root holds every changed path ([github-io.md](github-io.md#workspace)). With no Terraform file at the top, such a change is reviewed from the repository root, prefix `""`, and is not refused |
 | `path-outside-root` | A changed path is outside the module root or not plain text |
 | `host-read-failed` | The metadata, the head tree or the files list could not be read |
 | `records-rejected` | The host records failed `host-pass.sh check` |
@@ -65,7 +65,7 @@ The default pass runs in every example at every depth. The plan pass plans every
 | `depth-refused` | `depth.sh compute` refused its input |
 | `index-failed` | `index.json` could not be written |
 
-A refused run renders nothing. The reply says the review is inconclusive and why, and the run ends with `cleanup`.
+A refused run renders nothing. The reply says the review is inconclusive and why, and the run ends with `cleanup`, which deletes any run directory `prepare` made, a refused or stopped one included, and reads nothing else in it.
 
 `handover` and `render` run `depth.sh verify` first; a binding that does not match stops the run with nothing rendered.
 
@@ -80,18 +80,18 @@ An escalation is refused once `handover` has run. A refusal of that kind, a `dep
 `handover/task.md` is the records' `task.md` with these changes, as [host-pass.md](host-pass.md#handover) sets out:
 
 - `Workspace: <clone at the module root>` before its first line.
-- In the skill's own task text, just before the line that introduces the block: the `Write short:` line when the records lack it, `Depth: <run>/depth.json` outside a triage run, and `Provider fact sheets: <run>/facts` when `schema` succeeded.
+- In the skill's own task text, just before the line that introduces the block: the `Write short:` line when the records lack it, `Depth: <run>/depth.json` outside a triage run, `Provider fact sheets: <run>/facts` when `schema` succeeded, and `Diff: <run>/handover/change.diff`, the task's diff as a file outside the clone for the reviewer's `mtf-facts lint --diff`.
 - `RECORD-<s>` and the verification record just before `UNTRUSTED-<s> END`, outside a triage run.
 
 The record follows the order of [Handover](github-io.md#handover): the `example selection:` line and one line per example from `verify.json`, in the words of [verify-pass.md](verify-pass.md#output); the `plan pass runner:` line when a profile was named; the plan pass's `plan pass mode:`, `example:`, `plan:`, `scope:`, `modules:`, `base:` and `plan summary:` lines; the `plan coverage:` and `not planned:` lines; at focused, the `schema pass: source` lines of [schema-pass.md](schema-pass.md#focused-mode); then `behaviour/record.txt`. `schema` copies a source line only after it matches `schema pass: source <owner>/<name> <namespace>_<name>-v<x.y.z> <64 hex>`; any line that does not match fails the step, which escalates with `deep-schema-source-line`, and nothing of it is copied. A failed `validate` reads `<dir> (<affected>): terraform init -backend=false exit <n>, terraform validate exit <n>: <line>; at the merge base: <result>`, the result one of `new under this change`, `already failing at the base`, `absent at base`, `merge base not available` or `merge base not run: <reason>`.
 
 ## Render
 
-`render` adds `source: "llm"` to each finding and reads the three counts from the first line of `--summary`. A count absent there is 0; a malformed one, or no summary, makes `counts` null. It builds the run file of render-comment.sh: `triage`, `plan_ran`, `verify_gaps` from `verify.json` by the gap reasons of [verify-pass.md](verify-pass.md#records), `coverage` with `covered_skips` when `skip-check.json` covers any, `counts`, `behaviour`, `examples`, `plan_mode` from the record's own line, and `depth`, the `depth.json` object, when the run has one. It then runs render-comment.sh with the run's host records and check runs directory, and prints its line, the body path and the identity line the confirmation shows. `--out` must lie outside the run directory, since cleanup deletes it.
+`render` adds `source: "llm"` to each finding and reads the three counts from the reviewer's summary line in `--summary`, the line that starts with `summary: `, else the first line. A count absent there is 0; a malformed one, or no summary, makes `counts` null. It builds the run file of render-comment.sh: `triage`, `plan_ran`, `verify_gaps` from `verify.json` by the gap reasons of [verify-pass.md](verify-pass.md#records), `coverage` with `covered_skips` when `skip-check.json` covers any, `counts`, `behaviour`, `examples`, `plan_mode` from the record's own line, and `depth`, the `depth.json` object, when the run has one. It then runs render-comment.sh with the run's host records and check runs directory, and prints its line, the body path and the identity line the confirmation shows. `--out` must lie outside the run directory, since cleanup deletes it.
 
 ## Shell Safety
 
-Host strings never reach a command line, a `bash -c` or an `eval`. Titles, bodies, comments, branch names and file names stay in the files host-pass.sh writes, and travel through `jq --arg` and `--slurpfile`. Every expansion is quoted, arrays carry optional arguments, and a path read back from JSON for a command line is matched against a plain path pattern first. The test runs a title holding `$(touch x)`, a branch name holding a newline and files named `a;b` and `$(touch x)` through every command.
+Every pattern a shell test matches has no repetition bound over 255, which bash 3.2's regex refuses on macOS: a longer value takes an unbounded pattern and a separate length check, a role name of up to 512 characters and a path of up to 300. Host strings never reach a command line, a `bash -c` or an `eval`. Titles, bodies, comments, branch names and file names stay in the files host-pass.sh writes, and travel through `jq --arg` and `--slurpfile`. Every expansion is quoted, arrays carry optional arguments, and a path read back from JSON for a command line is matched against a plain path pattern first. The test runs a title holding `$(touch x)`, a branch name holding a newline and files named `a;b` and `$(touch x)` through every command.
 
 ## Workflow Move
 
