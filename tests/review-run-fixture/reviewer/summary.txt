@@ -1,0 +1,1 @@
+Findings: CRITICAL 0, HIGH 0, MEDIUM 0, LOW 3. Checks run: A, B, C, D, E, F, G. review.quoted-claim-unverifiable:1

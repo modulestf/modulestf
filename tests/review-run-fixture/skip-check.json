@@ -1,0 +1,45 @@
+{
+  "format": 1,
+  "head_sha": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "base_sha": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "covered": [
+    {
+      "dir": "examples/echo",
+      "gate": "G3",
+      "path": "downloaded/vpc_endpoints/modules/vpc-endpoints/main.tf",
+      "downloaded": true,
+      "witnesses": [
+        {
+          "attribute": "vpc_security_group_ids",
+          "example": "examples/alpha",
+          "address": "module.widget.aws_rds_cluster.this"
+        }
+      ]
+    },
+    {
+      "dir": "examples/golf",
+      "gate": "G3",
+      "path": "examples/golf/main.tf",
+      "witnesses": [
+        {
+          "attribute": "vpc_security_group_ids",
+          "example": "examples/alpha",
+          "address": "module.widget.aws_rds_cluster.this"
+        }
+      ]
+    },
+    {
+      "dir": "examples/hotel",
+      "gate": "G3",
+      "path": "examples/hotel/main.tf",
+      "witnesses": [
+        {
+          "attribute": "vpc_security_group_ids",
+          "example": "examples/alpha",
+          "address": "module.widget.aws_rds_cluster.this"
+        }
+      ]
+    }
+  ],
+  "uncovered": []
+}
