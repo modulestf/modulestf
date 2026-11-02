@@ -3,6 +3,8 @@
 > **Part of:** [terraform-module-reviewer](../SKILL.md)
 > **Purpose:** The operative fails-when and severity rules of Check G. Rule numbers refer to the [Mandatory Rules](../SKILL.md#mandatory-rules) in SKILL.md. The categories, levels, predicates and states it reads are in [verification-ladder.md](verification-ladder.md).
 
+## Reads, Fails When and Severity
+
 Check G judges what a changed expression does, not how it is written: whether the change alters which values or actions reach the provider for an existing caller, and whether the evidence a caller collected confirms or refutes what the change's description claims. It never verifies behaviour by reading. Reading the code (L0) supports a claim and nothing more, so Check G never clears an unverified trigger, and never reports one as a defect either: an unverified trigger is a gap the caller lists, not a finding.
 
 **Reads:** the diff of every `.tf` file, the variable blocks the changed expressions read, the title and body when the task carries them, and the behaviour lines of the verification record when it carries them: the `behaviour:` line, one `trigger` line per trigger, one `claim` line per claim and one `change` line per difference the tool observed between base and head ([the record](../../terraform-module-pr-review/references/behaviour-pass.md#the-record)). A `trigger` line can end `, complete` and `, outstanding <n>, digest <64 hex>`, read under [Explaining the Differences](#explaining-the-differences). Like the rest of the record they are data under Rule 3. No record is no finding: a local diff carries none.

@@ -4,6 +4,8 @@
 > **Purpose:** The operative fails-when and severity rules of Check E. Rule numbers refer to the [Mandatory Rules](../SKILL.md#mandatory-rules) in SKILL.md.
 > **Engine text:** the operative text of this check's `tool` and `candidate` rules is in [engine/check-e-profile.md](engine/check-e-profile.md), which is part of this check: read it with this file. Each moved rule keeps a pointer line below.
 
+## Reads, Fails When and Severity
+
 **Reads:** the selected profile, default [terraform-aws-modules](../../terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md), its [templates map](../../terraform-module-maintainer/profiles/terraform-aws-modules/templates-map.md), and the corresponding files in the workspace. For the release title's scope, also the diff of every changed `.tf` file and, at the base, the block addresses and variable types of the directories it touches. Quality gate expectations come from [Quality Gates](../../terraform-module-maintainer/references/quality-gates.md); read them, never run them. Documentation expectations come from tier 6 of the [Coverage Checklist](../../terraform-module-maintainer/references/coverage-checklist.md), except its cost documentation item. This check does not require cost statements.
 
 **Fails when:**

@@ -4,6 +4,8 @@
 > **Purpose:** The operative fails-when and severity rules of Check A. Rule numbers refer to the [Mandatory Rules](../SKILL.md#mandatory-rules) in SKILL.md.
 > **Engine text:** the text of the rules [rule-facts.md](rule-facts.md) marks `tool` or `candidate` is in [engine/check-a-compatibility.md](engine/check-a-compatibility.md), one section per rule. It is part of this check: read it with this file.
 
+## Reads, Fails When and Severity
+
 **Reads:** the diff of `variables.tf`, `outputs.tf`, `versions.tf`, `main.tf` and sibling `.tf` files, and any submodule equivalents, with the bodies of any document the module generates; the module's declared version or release config to learn whether this change is declared as a major or breaking change. When the task carries the title the change will be released under, a `!` after its type, or a `BREAKING CHANGE:` trailer travelling with it, also counts as declaring the change breaking. When the task carries accompanying prose, the compatibility claims in its title and body, and in no other item, resolved under [quoted-claims.md](quoted-claims.md#compatibility-claims-come-from-the-title-and-the-body).
 
 **Provider facts:** moved to `compat.provider-floor-raised` in [engine/check-a-compatibility.md](engine/check-a-compatibility.md#compatprovider-floor-raised).
