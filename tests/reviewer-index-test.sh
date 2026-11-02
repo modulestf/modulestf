@@ -9,7 +9,11 @@
 # - every link of a summary resolves to a file of the skill and, with an anchor, to a heading;
 # - the sections a row links, as section.sh prints them, name its rule_id;
 # - every level-2 section of the check file and the engine file is linked from the summary;
-# - SKILL.md links every summary.
+# - SKILL.md links every summary, and each summary's Read First links its check file's first
+#   section;
+# - every check file and engine file holds, headings aside, the same multiset of sentences as
+#   at the merge base with master, so spec text is moved, never rewritten. Without a master
+#   ref the comparison is skipped with a note.
 # references/section.sh prints, for every heading of every markdown file of the skill,
 # exactly the lines from the heading to the next heading of the same or a higher level, and
 # refuses a path outside the skill, a symbolic link, a file that is not markdown, a value that
@@ -60,6 +64,31 @@ heads() {
     }' | if [ "${IDS:-0}" = 1 ]; then sort -u; else cat; fi)
 }
 
+# sentences FILE: the file's sentences, one per line, sorted: headings left out, every other
+# line outside fenced code trimmed and split after a full stop, question or exclamation mark.
+sentences() {
+  awk '
+    { s = $0; sub(/^ ? ? ?/, "", s) }
+    s ~ /^(```|~~~)/ { fence = !fence; print; next }
+    fence { print; next }
+    /^#+[ \t]/ { next }
+    { t = $0; gsub(/[ \t]+/, " ", t); sub(/^ /, "", t); sub(/ $/, "", t)
+      while (match(t, /[.!?] /)) { print substr(t, 1, RSTART); t = substr(t, RSTART + 2) }
+      if (t != "") print t }' "$1" | sort
+}
+
+# The base sentences, once: from the merge base with master, or none.
+BASE="$(git merge-base HEAD master 2> /dev/null || git merge-base HEAD origin/master 2> /dev/null || true)"
+mkdir "$TMP/base"
+if [ -n "$BASE" ]; then
+  for pair in $CHECKS; do
+    for f in "references/${pair#*:}.md" "references/engine/${pair#*:}.md"; do
+      git show "$BASE:$RSK/$f" > "$TMP/base/f" 2> /dev/null || continue
+      mkdir -p "$TMP/base/$(dirname "$f")"; sentences "$TMP/base/f" > "$TMP/base/$f"
+    done
+  done
+fi
+
 # index_check DIR: one line per problem with the summaries of the skill at DIR:
 # invariant, where, detail.
 index_check() {
@@ -106,6 +135,20 @@ index_check() {
       }
       END { for (id in own) if (n[id] != 1) print "missing row\t" sum "\t" id " has " n[id] + 0 " rows, not one" }
     ' "$TMP/ix-owned" "$TMP/ix-facts" "$TMP/ix-rows"
+    # Read First links the check file's first section.
+    first="$(awk -F'\t' -v f="references/$spec.md" '$1 == f && $3 == 2 { print $4; exit }' "$TMP/ix-heads")"
+    awk '/^## /{ on = ($0 == "## Read First") } on' "$d/$sum" | grep -F -q "](../$spec.md#$first)" ||
+      printf 'read first\t%s\tRead First does not link %s#%s\n' "$sum" "$spec.md" "$first"
+    # Headings aside, the spec text is the base's, sentence for sentence.
+    if [ -n "$BASE" ]; then
+      for f in "references/$spec.md" "references/engine/$spec.md"; do
+        [ -f "$d/$f" ] || [ -f "$TMP/base/$f" ] || continue
+        if [ ! -f "$TMP/base/$f" ]; then printf 'sentences\t%s\tnot at the merge base with master\n' "$f"; continue; fi
+        if [ ! -f "$d/$f" ]; then printf 'sentences\t%s\tmissing, while the merge base has it\n' "$f"; continue; fi
+        sentences "$d/$f" | diff "$TMP/base/$f" - > /dev/null ||
+          printf 'sentences\t%s\tits sentences differ from the merge base with master\n' "$f"
+      done
+    fi
     # Every link resolves; the sections a row links name its rule_id; every level-2 section of
     # the check file and the engine file is linked. Link paths are relative to references/run.
     awk -F'\t' -v sum="$sum" -v spec="$spec" '
@@ -218,6 +261,7 @@ report() { # label: lines on stdin, each reported as a failure
   return "$n"
 }
 
+[ -n "$BASE" ] || echo "note sentence multiset skipped: no master or origin/master ref"
 report "run summaries" < <(index_check "$RSK") && echo "ok   run summaries ($(cat "$RSK"/references/run/check-*.md | grep -cE '^\| `[a-z]+\.') rows)"
 report "section helper" < <(section_check "$RSK") && echo "ok   section helper ($(wc -l < "$TMP/sc/list" | tr -d ' ') sections)"
 report "section refusals" < <(refusal_check "$RSK") && echo "ok   section refusals"
@@ -250,6 +294,9 @@ a row linking a section that does not name it~not in section~references/run/chec
 an other section unlinked~unlinked section~references/run/check-f.md~/^| \[Decisions\]/d
 a rule named in a check file with no row~missing row~references/check-g-behaviour.md~s/^`rule_id` prefixes: /`claim.new-rule`; &/
 a summary SKILL.md does not link~skill links~SKILL.md~s/(references\/run\/check-e\.md)/(references\/run\/check-e.md#rules)/
+a sentence of the spec rewritten~sentences~references/check-g-behaviour.md~s/^- `claim.refuted`: a `claim` line has state `refuted`/- `claim.refuted`: a `claim` line says `refuted`/
+a sentence of an engine file rewritten~sentences~references/engine/check-d-examples.md~s/^- A submodule added by the change has no example of its own\./- A submodule added by the change has no example./
+Read First dropped~read first~references/run/check-a.md~/^When any row below applies: /d
 section.sh past the next heading~section.sh~references/section.sh~s/if (on \&\& lvl <= on) on = 0/if (on \&\& lvl < on) on = 0/
 section.sh stopping at a deeper heading~section.sh~references/section.sh~s/if (on \&\& lvl <= on) on = 0/if (on) on = 0/
 section.sh reading fenced headings~section.sh fixture~references/section.sh~s/} else if (fence == 0 \&\& /} if (/
