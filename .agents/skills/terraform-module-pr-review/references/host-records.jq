@@ -33,6 +33,16 @@ def prefix_for($candidates):
   | [$candidates[] | . as $c | select($c != "" and all($paths[]; startswith($c + "/")))]
   | if length == 1 then .[0] else null end;
 
+# Whether the top of a head tree holds a Terraform file: without one there is no root module, and
+# a change no single module root holds is reviewed from the repository root, prefix "".
+def root_has_tf: any(.tree[]; .type == "blob" and (.path | test("/") | not) and (.path | test("\\.tf(\\.json)?$")));
+
+# The prefix of a change: the one candidate; else the one that holds every changed path; else ""
+# when the top holds no Terraform file; else null, no module root to review. Input: the files list.
+def prefix_choice($candidates; $root_tf):
+  if ($candidates | length) == 1 then $candidates[0]
+  else (prefix_for($candidates) // (if $root_tf then null else "" end)) end;
+
 # --- Changed files: diff, renames, empty files and the patch-unavailable list.
 
 # Files from the files list, the head and merge base trees as path -> entry maps, and the
@@ -60,6 +70,12 @@ def classify($head; $base; $prefix):
                 | $e != null and $e.type == "blob" and $e.size == 0)
         then .class = "empty"
       else .class = "unavailable" end);
+
+# A unified diff's context lines start with a space: GitHub's patch can carry a blank context line
+# as an empty line, which a diff reader such as mtf-facts refuses. A final empty element is the
+# patch's own newline and stays. Used for the task's diff and the records' files.json.
+def context: split("\n") | (length - 1) as $last
+  | [to_entries[] | if .value == "" and .key < $last then " " else .value end] | join("\n");
 
 # --- Discussion: the review decision, from the reviews list.
 
