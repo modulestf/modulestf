@@ -151,7 +151,7 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 +	references/check-g-behaviour.md	At the base the same variable already set the same argument name, as the bare reference `var.<name>`, as a direct argument of another resource or data block of this module, expanded by `count` or `for_each` or not; or the base description of the variable says that it sets this argument on this block, named by its full address, or on every resource and data source of the module.
 +	references/check-g-behaviour.md	Each is read from the code of the base and the head and from the base's variable description, never from the pull request text ([worked example]()).
 +	references/check-g-behaviour.md	Had `var.region` defaulted to a fixed region, condition 2 fails, and the finding is CRITICAL unless the change declares the break.
-+	references/check-g-behaviour.md	It asks for a line in the release notes, and the change needs no major release.
++	references/check-g-behaviour.md	The summary also asks for a line in the release notes, and the change needs no major release.
 +	references/check-g-behaviour.md	It is not CRITICAL, and the change needs no major release.
 +	references/check-g-behaviour.md	Its summary says that module calls that set `region` now pass it to `data.aws_cloudwatch_event_bus.this`, as the module's resources already did, so it reads the existing bus in that region; that an unknown region moves that read to apply; and that the release notes should say so.
 +	references/check-g-behaviour.md	Only a module call that sets the variable to a value other than `null` plans a different value, and the variable now reaches this argument as it already reached the anchor argument, or as its base description says.
