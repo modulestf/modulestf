@@ -4,8 +4,9 @@
 # higher level.
 #   bash section.sh <file> <anchor>
 # FILE is relative to the skill root, as references/check-a-compatibility.md, or absolute;
-# a relative FILE whose directory is not under the skill root is read from the current
-# directory, so terraform-module-reviewer/references/x.md works from the skills directory.
+# a relative FILE that is no file under the skill root is read from the current directory,
+# so terraform-module-reviewer/references/x.md works from the skills directory and x.md
+# from references/.
 # It must resolve inside the skills directory that holds this skill, so a link to a sibling
 # skill, such as ../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md,
 # works and nothing outside that directory does. A link in a run summary, ../x.md#y, is
@@ -31,7 +32,7 @@ a="${2#\#}"
 case "$a" in '' | *[!a-z0-9_-]*) refuse "not an anchor: $2" ;; esac
 case "$f" in
   /*) ;;
-  *) if [ ! -d "$S/$(dirname "$f")" ] && [ -d "$(dirname "$f")" ]; then f="$PWD/$f"; else f="$S/$f"; fi ;;
+  *) if [ ! -f "$S/$f" ] && [ -f "$f" ]; then f="$PWD/$f"; else f="$S/$f"; fi ;;
 esac
 d="${f%/*}"
 b="${f##*/}"

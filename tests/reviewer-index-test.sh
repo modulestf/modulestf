@@ -322,6 +322,8 @@ refusal_check() {
   out="$(cd "$TMP/rc/skills" && bash "$h" reviewer/references/fixture.md two 2> /dev/null)" ||
     printf 'refusal\ta path relative to the skills directory\texits non-zero\n'
   [ "$out" = "$(printf '## Two\n\ny\n')" ] || printf 'refusal\ta path relative to the skills directory\tprinted the wrong section\n'
+  out="$(cd "$c/references" && bash "$h" fixture.md two 2> /dev/null)" ||
+    printf 'refusal\ta bare name from references/\texits non-zero\n'
   out="$(cd "$TMP/out" && bash "$h" x.md outside 2> /dev/null)" &&
     printf 'refusal\ta current-directory path outside the skills directory\texits 0\n'
   expect 2 "a relative path that climbs out" "references/../../../../../../../../$TMP/out/x.md" outside
