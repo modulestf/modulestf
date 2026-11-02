@@ -390,6 +390,7 @@ a row linking a section that does not name it~not in section~references/run/chec
 an other section unlinked~unlinked section~references/run/check-f.md~/^| \[Decisions\]/d
 a rule named in a check file with no row~missing row~references/check-g-behaviour.md~s/^`rule_id` prefixes: /`claim.new-rule`; &/
 a summary the workflow does not link~skill links~references/workflow.md~s/(run\/check-e\.md)/(run\/check-e.md#rules)/
+the ignored-input band without its null default~sentences~references/check-g-behaviour.md~s/, and its default is `null`\.$/./
 a sentence of the spec rewritten~sentences~references/check-g-behaviour.md~s/^- `claim.refuted`: a `claim` line has state `refuted`/- `claim.refuted`: a `claim` line says `refuted`/
 a sentence of an engine file rewritten~sentences~references/engine/check-d-examples.md~s/^- A submodule added by the change has no example of its own\./- A submodule added by the change has no example./
 a sentence moved out of SKILL.md rewritten~sentences~references/inputs.md~s/^- The workspace is the only source of file content\./- The workspace is the sole source of file content./

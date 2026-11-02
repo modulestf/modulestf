@@ -136,3 +136,29 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 -	SKILL.md	| [verification-ladder.md]() | Trigger categories, evidence levels, the claims file, claim and trigger states, and their verdict map |
 -	SKILL.md	|------|---------|
 +	references/engine/check-f-scope.md	- Both bullets must hold.
++	references/check-g-behaviour.md	- `compat.expression-behaviour-changed`, the ignored-input band: LOW, decided before the CRITICAL band above, when all four conditions below hold for one direct argument of one resource or data block, never a nested block or a module input.
++	references/check-g-behaviour.md	`var.region` is `string`, defaults to `null`, and nothing in its block changes.
++	references/check-g-behaviour.md	1.
++	references/check-g-behaviour.md	2.
++	references/check-g-behaviour.md	3.
++	references/check-g-behaviour.md	4.
++	references/check-g-behaviour.md	A block of a child module, a module call, a nested block, another variable with a matching name, or a description that only mentions the variable, the block or its type, or excludes it, is not enough.
++	references/check-g-behaviour.md	A module looks an existing event bus up with `data.aws_cloudwatch_event_bus.this` when it creates none.
++	references/check-g-behaviour.md	All four conditions of the ignored-input band hold.
++	references/check-g-behaviour.md	An argument set to `null` is unset, a Terraform language rule for a direct argument of a resource or data block and not a provider fact, so a module call that leaves the variable unset or sets it to `null` plans the same value for this argument at both revisions.
++	references/check-g-behaviour.md	At the base that data source sets no `region`, while the module's resources already set `region = var.region` as a direct argument.
++	references/check-g-behaviour.md	At the base the argument is absent or set to the literal `null`; at the head it is set to the bare reference `var.<name>`.
++	references/check-g-behaviour.md	At the base the same variable already set the same argument name, as the bare reference `var.<name>`, as a direct argument of another resource or data block of this module, expanded by `count` or `for_each` or not; or the base description of the variable says that it sets this argument on this block, named by its full address, or on every resource and data source of the module.
++	references/check-g-behaviour.md	Each is read from the code of the base and the head and from the base's variable description, never from the pull request text ([worked example]()).
++	references/check-g-behaviour.md	Had `var.region` defaulted to a fixed region, condition 2 fails, and the finding is CRITICAL unless the change declares the break.
++	references/check-g-behaviour.md	It asks for a line in the release notes, and the change needs no major release.
++	references/check-g-behaviour.md	It is not CRITICAL, and the change needs no major release.
++	references/check-g-behaviour.md	Its summary says that module calls that set `region` now pass it to `data.aws_cloudwatch_event_bus.this`, as the module's resources already did, so it reads the existing bus in that region; that an unknown region moves that read to apply; and that the release notes should say so.
++	references/check-g-behaviour.md	Only a module call that sets the variable to a value other than `null` plans a different value, and the variable now reaches this argument as it already reached the anchor argument, or as its base description says.
++	references/check-g-behaviour.md	The band rates this value change only: a cycle, a `validate` or plan error, and every other change in the diff are judged under their own rules.
++	references/check-g-behaviour.md	The block exists at the base with the same address, and its `count` and its `for_each` are each unchanged: absent at both revisions, or the same text at both.
++	references/check-g-behaviour.md	The diff changes nothing in the variable's block, and its default is `null`.
++	references/check-g-behaviour.md	The finding is `compat.expression-behaviour-changed` at LOW, at the data source line.
++	references/check-g-behaviour.md	The head adds `region = var.region` to the data source, whose `count` is unchanged and which has no `for_each`.
++	references/check-g-behaviour.md	The summary names the variable, the block's address and that such calls now pass the value to this argument, and, when the block is a data source, that an unknown value moves its read to apply.
++	references/check-g-behaviour.md	When any condition fails, the other bands apply as written.

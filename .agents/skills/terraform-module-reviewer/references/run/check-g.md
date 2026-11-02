@@ -28,6 +28,7 @@ When any row below applies: [Reads, Fails When and Severity](../check-g-behaviou
 |---------|-----------|
 | [Explaining the Differences](../check-g-behaviour.md#explaining-the-differences) | A `trigger` line ends with `complete` or carries `outstanding`. |
 | [Worked Example: A List of Subnet Ids](../check-g-behaviour.md#worked-example-a-list-of-subnet-ids) | The change edits a list or set of identifiers. |
+| [Worked Example: A Region Now Passed to a Data Source](../check-g-behaviour.md#worked-example-a-region-now-passed-to-a-data-source) | The change sets a direct argument of a resource or data block to a bare variable reference where the base set none. |
 | [Suggested Fixes](../check-g-behaviour.md#suggested-fixes) | Check G reports a finding. |
 | [Triggers](../verification-ladder.md#triggers) | The record has a `behaviour:` or `trigger` line. |
 | [Levels](../verification-ladder.md#levels) | The record has a `trigger` or `claim` line. |
