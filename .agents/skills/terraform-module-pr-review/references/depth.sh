@@ -52,11 +52,15 @@ merge_base() { # clone, base, head
   [[ "$all" =~ $sha_re ]] || abort "git merge-base --all gave no commit"
   printf '%s' "$all"
 }
+# The diff goes to a file first, so a failed git diff fails here and is never hashed.
 diff_hash() { # clone, merge base, head
-  local h
-  h="$( { g "$1" diff --no-ext-diff --no-textconv --binary "$2" "$3" || echo FAILED; } | shasum -a 256)" || return 1
-  case "$h" in *FAILED*) return 1 ;; esac
-  printf '%s' "${h%% *}"
+  local f h
+  f="$(mktemp "${TMPDIR:-/tmp}/depth-diff.XXXXXX")" || return 1
+  if g "$1" diff --no-ext-diff --no-textconv --binary "$2" "$3" > "$f" 2> /dev/null && h="$(shasum -a 256 < "$f")"; then
+    rm -f -- "$f"; printf '%s' "${h%% *}"
+  else
+    rm -f -- "$f"; return 1
+  fi
 }
 # The first mtf-facts on PATH from an absolute entry, every link resolved; empty when there is
 # none or it lies under one of the directories given.

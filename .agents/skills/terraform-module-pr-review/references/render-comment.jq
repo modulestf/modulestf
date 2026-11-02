@@ -182,7 +182,7 @@ def valid_covered:
 # --- Depth (depth.md). The object depth.sh writes, which the run file may carry as "depth". The
 # reason tokens: mtf-facts depth's list, then the host's own raises. depth.md holds the same list
 # and tests/depth-test.sh checks the two are equal.
-def depth_reasons: ["light-docs-only", "focused-within-limits",
+def depth_reasons: ["light-docs-only", "focused-within-limits", "focused-no-example",
   "deep-terraform-block", "deep-lock-file", "deep-cli-config", "deep-ci-config", "deep-provider-config",
   "deep-depends-on", "deep-new-type", "deep-block-removed-or-renamed", "deep-variable-contract",
   "deep-output-sensitive", "deep-lifecycle-moved-removed-import", "deep-count-for-each", "deep-provisioner",
@@ -194,8 +194,8 @@ def depth_reasons: ["light-docs-only", "focused-within-limits",
 def depth_host_reasons: ["deep-owner-raise", "deep-validate-failed"];
 def depth_reason: type == "string" and (IN(depth_reasons[], depth_host_reasons[]) or test("^deep-schema-[a-z0-9-]{1,64}$"));
 # The checks a depth may leave out (DECISIONS D-1): light A, B, D and Check G past the claims;
-# focused B and D; deep none.
-def depth_scope: {"light": ["A", "B", "D", "G-ladder"], "focused": ["B", "D"], "deep": []};
+# focused only B, as Check D stays in scope there; deep none.
+def depth_scope: {"light": ["A", "B", "D", "G-ladder"], "focused": ["B"], "deep": []};
 # The schema-pass tokens of schema-pass.md, Inputs: providers, types and head lock files.
 def sp_seg: test("^[A-Za-z0-9._-]{1,64}$") and . != "." and . != "..";
 def sp_dir: . == "." or (split("/") | length <= 8 and all(.[]; sp_seg));
@@ -227,7 +227,8 @@ def valid_depth_shape($bound):
   and (.depth as $d | .checks_out_of_scope - depth_scope[$d] == [])
   and (.examples_selected | str_list(canon_path)) and (.examples_out_of_scope | str_list(canon_path))
   and ((.examples_selected - (.examples_selected - .examples_out_of_scope)) == [])
-  and (.depth != "deep" or .examples_out_of_scope == [])
+  # Only focused puts an example out of scope: light and deep select every one.
+  and (.depth == "focused" or .examples_out_of_scope == [])
   and (.touched_types | str_list(test("^[a-z][a-z0-9_]{0,127}$")))
   and (.walk | type == "object" and keys == ["complete", "unwalked"] and (.complete | type == "boolean") and (.unwalked | nat))
   and (.limits | type == "object" and keys == ["changed_blocks", "changed_lines", "selected_examples", "tf_files"]
@@ -470,7 +471,9 @@ def texts: {
   "depth-check-B": "Check B",
   "depth-check-D": "Check D",
   "depth-check-G-ladder": "Check G beyond its claim reading",
-  "depth-plan-pass": "the plan pass"
+  "depth-plan-pass": "the plan pass",
+  "depth-ladder": "the ladder",
+  "depth-provider-facts": "the provider facts"
 };
 
 def tx($k; $v): texts[$k] | gsub("\\{(?<n>[a-z_]+)\\}"; $v[.n] | tostring);
@@ -649,7 +652,7 @@ def nm(ok): if ok then "`\(.)`" else tx("name-withheld") end;
 def depth_lines($run):
   if $run | has("depth") | not then [] else $run.depth as $d
   | [tx("depth-line"; {depth: $d.depth, reasons: ($d.reasons | map("`\(.)`") | join(", "))})]
-    + (([$d.checks_out_of_scope[] | tx("depth-check-" + .)] + (if $d.depth == "light" then [tx("depth-plan-pass")] else [] end)
+    + (([$d.checks_out_of_scope[] | tx("depth-check-" + .)] + (if $d.depth == "light" then [tx("depth-plan-pass"), tx("depth-ladder"), tx("depth-provider-facts")] else [] end)
         + [$d.examples_out_of_scope[] | nm(allowed)]) as $i
        | if $i == [] then [] else
            [tx("depth-out-of-scope"; {items: (($i[:20] | join(", "))
