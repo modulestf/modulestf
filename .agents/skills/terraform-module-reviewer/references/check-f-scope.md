@@ -4,6 +4,8 @@
 > **Purpose:** The operative fails-when and severity rules of Check F. Rule numbers refer to the [Mandatory Rules](../SKILL.md#mandatory-rules) in SKILL.md. The scope rules themselves live in [module-scope.md](../../terraform-module-maintainer/references/module-scope.md), for Terraform types, and in the profile's [scope.md](../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md), for repository files and tooling. This file maps each of those rules to one `rule_id` and a severity, and says how Check F reads its inputs. It copies none of them.
 > **Engine text:** the operative text of this check's `tool` and `candidate` rules is in [engine/check-f-scope.md](engine/check-f-scope.md), which is part of this check: read it with this file. Each moved rule keeps a pointer line below.
 
+## Reads, Fails When and Severity
+
 Check F asks whether an addition belongs in the module at all, the question of [change-scope](../../change-scope/SKILL.md). It never judges how an addition is written: Checks A to E do that.
 
 **Reads:**
