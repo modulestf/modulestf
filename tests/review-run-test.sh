@@ -36,24 +36,14 @@ lines_ok() { [ "$(wc -l < "$1" | tr -d ' ')" -le 30 ]; echo $?; }
 SK="$TMP/skill/references"
 mkdir -p "$TMP/skill"
 cp -R "$SKILL/references" "$SK"
-cat > "$SK/depth.sh" <<'EOF'
-#!/bin/bash
-# stub: compute writes depth.json at $DEPTH_STUB; verify passes unless $DEPTH_VERIFY_FAIL; escalate logs
-echo "$*" >> "${STUB_LOG:?}"
-case "$1" in
-  compute)
-    while [ $# -gt 0 ]; do [ "$1" = --out ] && out="$2"; shift; done
-    jq -n --arg d "${DEPTH_STUB:-light}" '{format: 1, depth: $d, reasons: (if $d == "light" then ["light-docs-only"] else ["focused-within-limits"] end),
-      checks_out_of_scope: (if $d == "light" then ["A", "B", "D", "G-ladder"] else [] end),
-      examples_selected: ["examples/one"], examples_out_of_scope: [], touched_types: ["aws_s3_bucket"],
-      walk: {complete: true, unwalked: 0}, limits: {tf_files: 0, changed_lines: 2, changed_blocks: 0, selected_examples: 1}}' > "$out" ;;
-  verify) [ -z "${DEPTH_VERIFY_FAIL:-}" ] || exit 1 ;;
-  escalate) jq --arg r "$3" '.depth = "deep" | .reasons += [$r]' "$2" > "$2.t" && mv "$2.t" "$2" ;;
-esac
-EOF
 cat > "$SK/schema-pass.sh" <<'EOF'
 #!/bin/bash
 echo "schema $SCHEMA_DEPTH $*" >> "${STUB_LOG:?}"
+src="schema pass: source modulestf/terraform-schema-mirror hashicorp_aws-v6.1.0 $(printf 'ab%.0s' $(seq 32))"
+case "${SCHEMA_STUB:-overflow}" in
+  ok) mkdir -p "$1"; echo "$src"; echo "schema pass: focused, mirror stub, 1 sheets, 10 bytes"; exit 0 ;;
+  badsource) mkdir -p "$1"; echo "$src"; echo "schema pass: source modulestf/m x \$(touch x)"; echo "schema pass: focused"; exit 0 ;;
+esac
 echo "schema pass: escalate overflow"; exit 3
 EOF
 cat > "$SK/ladder-pass.sh" <<'EOF'
@@ -119,7 +109,22 @@ case "$1" in
   validate) [ ! -f validate.fail ] || { echo "Error: stub failure"; exit 1; } ;;
 esac
 EOF
-printf '#!/bin/sh\nexit 1\n' > "$TMP/bin/mtf-facts"
+# mtf-facts: `depth` prints the depth DEPTH_STUB names for the real depth.sh, `affected` a document
+# depth.sh accepts (verify-pass.sh finds it invalid and selects every example), anything else fails.
+cat > "$TMP/bin/mtf-facts" <<'EOF'
+#!/bin/bash
+case "$1" in
+  depth) jq -n --arg d "${DEPTH_STUB:-light}" '{format: 1, depth: $d,
+      reasons: (if $d == "light" then ["light-docs-only"] elif $d == "focused" then ["focused-within-limits"] else ["deep-limits"] end),
+      checks_out_of_scope: ({"light": ["A", "B", "D", "G-ladder"], "focused": ["B", "D"], "deep": []}[$d]),
+      examples_selected: ["examples/one"], examples_out_of_scope: (if $d == "deep" then [] else ["examples/two"] end),
+      touched_types: (if $d == "focused" then ["aws_s3_bucket"] else [] end), walk: {complete: true, unwalked: 0},
+      limits: {tf_files: (if $d == "light" then 0 else 1 end), changed_lines: 3, changed_blocks: 0, selected_examples: 1},
+      schema_providers: [], schema_types: [], schema_locks: []}' ;;
+  affected) echo '{"schema_version": 1, "inert": false, "fallback": null, "changed": [], "examples": []}' ;;
+  *) exit 1 ;;
+esac
+EOF
 printf '#!/bin/sh\nexit 1\n' > "$TMP/bin/docker"
 chmod +x "$TMP/bin/"*
 
@@ -127,7 +132,8 @@ chmod +x "$TMP/bin/"*
 mkrepo() { # name, extra files... -> bare repo with base and head commits; sets HEADC BASEC
   local w="$TMP/work-$1" b="$TMP/remote/example-org/$1.git"
   rm -rf "$w" "$b"; mkdir -p "$w"; git init -q "$w"
-  (cd "$w" && mkdir -p examples/one && printf 'resource "x" "y" {}\n' > main.tf &&
+  (cd "$w" && mkdir -p examples/one examples/two && printf 'resource "x" "y" {}\n' > main.tf &&
+    printf 'module "m" { source = "../.." }\n' > examples/two/main.tf &&
     : > variables.tf && printf 'terraform {}\n' > versions.tf && printf 'module "m" { source = "../.." }\n' > examples/one/main.tf &&
     printf '# w\n' > README.md && git add -A && git -c user.name=t -c user.email=t@t commit -q -m base)
   BASEC="$(git -C "$w" rev-parse HEAD)"
@@ -191,67 +197,160 @@ echo 'not json' > "$TMP/bad.json"
 check "acceptance: render refuses findings that are not a list" \
   "$(run_rr render "$FR" --findings "$TMP/bad.json" --assessment "$FX/reviewer/assessment.txt" --out "$TMP/render2" > /dev/null 2>&1; [ $? = 1 ]; echo $?)"
 
-# --- 2. prepare to render on a light change with hostile names -------------------------------------
+# --- 2. prepare to render on a light change with hostile names, through the real depth.sh ---------
 mkrepo widget; ghfiles open false CHANGES_REQUESTED
-run_rr prepare --repo example-org/widget --pr 7 --render-only > "$TMP/p.out" 2> "$TMP/p.err"
-RUN="$(sed -n 's/^RUN=//p' "$TMP/p.out")"
+prep() { # extra env as words before; sets RUN
+  run_rr prepare --repo example-org/widget --pr 7 "$@" > "$TMP/p.out" 2> "$TMP/p.err"
+  RUN="$(sed -n 's/^RUN=//p' "$TMP/p.out")"
+}
+full() { run_rr verify "$RUN" > "$TMP/v.out"; run_rr plan "$RUN" > "$TMP/pl.out"; run_rr ladder "$RUN" > "$TMP/l.out"; }
+echo '[]' > "$TMP/f0.json"; echo 'Docs only.' > "$TMP/a0.txt"
+render_to() { run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$1" > "$TMP/re.out" 2>&1; }
+prep --render-only
 check "prepare: prints the run directory and exits 0" "$([ -d "$RUN" ] && grep -q '^next: ' "$TMP/p.out"; echo $?)"
 check "prepare: prints at most 30 lines" "$(lines_ok "$TMP/p.out")"
 check "prepare: the clone holds the head and the base worktree the merge base" \
   "$([ "$(git -C "$RUN/clone" rev-parse HEAD)" = "$HEADC" ] && [ "$(git -C "$RUN/base" rev-parse HEAD)" = "$BASEC" ]; echo $?)"
 check "prepare: git merge-base --all of the base and the head is the merge base alone" \
   "$([ "$(git -C "$RUN/clone" merge-base --all "$BASEC" HEAD)" = "$BASEC" ]; echo $?)"
+check "prepare: the real depth.sh bound depth.json to the head, the base and the merge base" \
+  "$(jq -e --arg h "$HEADC" --arg b "$BASEC" '.depth == "light"
+    and .binding.head_sha == $h and .binding.base_sha == $b and .binding.merge_base == $b' "$RUN/depth.json" > /dev/null; echo $?)"
+check "prepare: the depth pin is recorded" "$([ "$(cat "$RUN/state/depth.sha256")" = "$(shasum -a 256 < "$RUN/depth.json" | cut -d' ' -f1)" ]; echo $?)"
 check "prepare: index.json holds the enumerated fields" \
   "$(jq -e --arg h "$HEADC" '.status == "ok" and .head == $h and .depth == "light"
     and .reasons == ["light-docs-only"] and .checks_out_of_scope == ["A", "B", "D", "G-ladder"]
     and .signals.checks == "accepted" and .counts.files == 3 and .counts.changed_files == 3 and .plan == "no-profile"' "$RUN/index.json" > /dev/null; echo $?)"
 check "prepare: index.json carries no title, body or branch text" "$(! grep -q 'touch\|author1\|feat' "$RUN/index.json"; echo $?)"
 check "prepare: nothing in a title, branch or file name ran" "$(no_stray)"
-check "prepare: depth.sh got the base SHA, the merge base worktree and the affected file" \
-  "$(grep -q "^compute --clone $RUN/clone --base-tree $RUN/base --base $BASEC --files $RUN/host/files.json --classify $RUN/behaviour/behaviour.json --affected $RUN/affected.json --out $RUN/depth.json\$" "$STUB_LOG"; echo $?)"
-check "prepare: a failed mtf-facts affected leaves {} for depth.sh" "$(q "$RUN/affected.json" '. == {}')"
 check "defect: task.md carries the Write short line word for word" \
   "$(grep -qxF 'Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.' "$RUN/host/task.md"; echo $?)"
 check "defect: the posting login's own CHANGES_REQUESTED is left out of a render-only run" \
   "$(q "$RUN/host/host.json" '.signals.review_decision == "none" and .own_review.state == "CHANGES_REQUESTED"')"
 check "records files.json keeps additions and deletions" "$(q "$RUN/host/files.json" 'all(.[]; .additions == 1 and .deletions == 0)')"
-
-touch "$RUN/clone/examples/one/validate.fail"
-run_rr verify "$RUN" > "$TMP/v.out"
-check "verify: a failed validate at light escalates to deep" \
-  "$(grep -q '^depth: escalated to deep (deep-validate-failed)$' "$TMP/v.out" && q "$RUN/depth.json" '.depth == "deep"' | grep -qx 0; echo $?)"
-check "verify: prints at most 30 lines" "$(lines_ok "$TMP/v.out")"
-run_rr plan "$RUN" > "$TMP/pl.out"
-check "plan: with no profile the coverage is --no-plan" \
-  "$(q "$RUN/coverage.json" '.class == "none" and .unplanned == [{"dir": "examples/one", "reason": "no AWS profile named"}]')"
-EVAL=1 run_rr ladder "$RUN" > "$TMP/l.out"
+run_rr handover "$RUN" > /dev/null 2>&1
+check "handover: refused before verify" "$([ $? = 1 ] && [ ! -e "$RUN/handover" ]; echo $?)"
+full
+check "verify: a light run with every example passing stays light" "$([ "$(jq -r .depth "$RUN/depth.json")" = light ]; echo $?)"
+check "plan: at light the coverage is --no-plan" \
+  "$(q "$RUN/coverage.json" '.class == "none" and (.unplanned | map(.reason) | unique) == ["no AWS profile named"]')"
 check "ladder: the claims evaluation ran" "$([ -f "$RUN/behaviour/run-behaviour.json" ]; echo $?)"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render0" > /dev/null 2>&1
+check "render: refused before handover" "$([ $? = 1 ] && [ ! -e "$TMP/render0/comment.md" ]; echo $?)"
 run_rr handover "$RUN" > "$TMP/ho.out"
 T="$RUN/handover/task.md"
 check "handover: Workspace first, Depth line before the block, record inside it" \
   "$([ "$(head -n 1 "$T")" = "Workspace: $RUN/clone" ] && grep -qx "Depth: $RUN/depth.json" "$T" &&
      awk '/^Depth: /{d=NR} /^UNTRUSTED-[0-9a-f]{12} BEGIN$/{b=NR} /^RECORD-[0-9a-f]{12}$/{r=NR} END{exit !(d < b && b < r)}' "$T"; echo $?)"
-check "handover: the failed validate crosses with its decisive line" \
-  "$(grep -q '^examples/one (all): terraform init -backend=false exit 0, terraform validate exit 1: Error: stub failure; at the merge base: ' "$RUN/handover/record.txt"; echo $?)"
 check "handover: the title's text stays inside the block" \
   "$(awk '/^UNTRUSTED-[0-9a-f]{12} BEGIN$/{exit} /title|body/{f=1} END{exit f}' "$T"; echo $?)"
-echo '[]' > "$TMP/f0.json"; echo 'Docs only.' > "$TMP/a0.txt"
-run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render3" > "$TMP/re.out" 2>&1
-check "render: the run file carries depth and the verify gaps" \
-  "$(q "$RUN/render/run-file.json" '.depth.depth == "deep" and .counts == null and .verify_gaps == [] and .examples == {count: 1, validated: 0}')"
+render_to "$TMP/render-light"
+check "render light: the real render-comment.sh states the depth, its reasons and what is out of scope" \
+  "$(grep -qF 'Review depth: light. Reasons: `light-docs-only`.' "$TMP/render-light/comment.md" &&
+     grep -qF 'Out of scope at this depth, so not unknowns: Check A, Check B, Check D, Check G beyond its claim reading, the plan pass' "$TMP/render-light/comment.md"; echo $?)"
+check "render light: the run file carries depth, no gaps and the example counts" \
+  "$(q "$RUN/render/run-file.json" '.depth.depth == "light" and .counts == null and .verify_gaps == [] and .examples == {count: 2, validated: 2}')"
 check "render: prints at most 30 lines" "$(lines_ok "$TMP/re.out")"
-DEPTH_VERIFY_FAIL=1 run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render4" > "$TMP/re2.out" 2>&1
-check "render: a depth binding that does not verify renders nothing" "$([ $? = 1 ] && [ ! -e "$TMP/render4/comment.md" ]; echo $?)"
+# Any edit of depth.json after prepare, raising it included, stops the run.
+jq '.depth = "deep"' "$RUN/depth.json" > "$TMP/d.json"; cp "$RUN/depth.json" "$TMP/depth-keep.json"
+cp "$TMP/d.json" "$RUN/depth.json"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render5" > "$TMP/re5.out" 2>&1
+check "depth.json edited after prepare is refused and stops the run" \
+  "$([ $? = 1 ] && [ ! -e "$TMP/render5/comment.md" ] && grep -q 'differs from the depth this run computed' "$RUN/state/stop"; echo $?)"
+cp "$TMP/depth-keep.json" "$RUN/depth.json"
+check "a stopped run stays stopped, even with depth.json put back" "$(run_rr handover "$RUN" > /dev/null 2>&1; [ $? = 1 ]; echo $?)"
 check "after every subcommand nothing in a host string ran" "$(no_stray)"
 run_rr cleanup "$RUN" > /dev/null
-check "cleanup: the run directory is gone" "$([ ! -e "$RUN" ]; echo $?)"
+check "cleanup: the run directory is gone, a stopped run included" "$([ ! -e "$RUN" ]; echo $?)"
 
-# --- 3. focused: a schema escalation goes to deep --------------------------------------------------
-DEPTH_STUB=focused run_rr prepare --repo example-org/widget --pr 7 > "$TMP/p2.out" 2>&1
-RUN="$(sed -n 's/^RUN=//p' "$TMP/p2.out")"
+# Lowering the depth: a deep run whose depth.json is edited to light is refused.
+DEPTH_STUB=deep prep
+jq '.depth = "light" | .reasons = ["light-docs-only"]' "$RUN/depth.json" > "$TMP/d.json" && cp "$TMP/d.json" "$RUN/depth.json"
+run_rr verify "$RUN" > "$TMP/v.out" 2>&1
+check "depth.json lowered to light is refused before any step" "$([ $? = 1 ] && [ ! -e "$RUN/verify.json" ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+# A failed validate at light escalates; a failed escalation stops the run.
+prep
+touch "$RUN/clone/examples/one/validate.fail"
+run_rr verify "$RUN" > "$TMP/v.out"
+check "verify: a failed validate at light escalates to deep and re-pins depth.json" \
+  "$(grep -q '^depth: escalated to deep (deep-validate-failed)$' "$TMP/v.out" && [ "$(jq -r .depth "$RUN/depth.json")" = deep ] &&
+     [ "$(cat "$RUN/state/depth.sha256")" = "$(shasum -a 256 < "$RUN/depth.json" | cut -d' ' -f1)" ]; echo $?)"
+check "verify: prints at most 30 lines" "$(lines_ok "$TMP/v.out")"
+run_rr plan "$RUN" > /dev/null; run_rr ladder "$RUN" > /dev/null; run_rr handover "$RUN" > /dev/null
+check "handover: the failed validate crosses with its decisive line" \
+  "$(grep -q '^examples/one (all): terraform init -backend=false exit 0, terraform validate exit 1: Error: stub failure; at the merge base: new under this change$' "$RUN/handover/record.txt"; echo $?)"
+render_to "$TMP/render3"
+check "render: an escalated run renders depth deep with its reason" \
+  "$(grep -qF 'Review depth: deep. Reasons: `deep-validate-failed`.' "$TMP/render3/comment.md"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+prep
+touch "$RUN/clone/examples/one/validate.fail" "$RUN/depth.json.tmp"
+run_rr verify "$RUN" > "$TMP/v.out" 2>&1
+check "a failed escalation stops the run" "$([ $? = 1 ] && grep -q 'depth.sh escalate failed' "$RUN/state/stop"; echo $?)"
+rm -f "$RUN/depth.json.tmp"
+check "a stopped run refuses plan, handover and render" \
+  "$(run_rr plan "$RUN" > /dev/null 2>&1; a=$?; run_rr handover "$RUN" > /dev/null 2>&1; b=$?; render_to "$TMP/render6"; c=$?
+     [ "$a$b$c" = 111 ] && [ ! -e "$TMP/render6/comment.md" ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+# --- 3. focused: schema first, out-of-scope validate failures, the handover's depth.sh verify --------
+DEPTH_STUB=focused prep
+full
+run_rr handover "$RUN" > "$TMP/ho.out" 2>&1
+check "handover at focused without schema is refused" "$([ $? = 1 ] && grep -q 'needs schema first' "$TMP/ho.out" && [ ! -e "$RUN/handover" ]; echo $?)"
+check "render at focused without schema is refused" "$(render_to "$TMP/render7"; [ $? = 1 ] && [ ! -e "$TMP/render7/comment.md" ]; echo $?)"
+SCHEMA_STUB=ok run_rr schema "$RUN" > "$TMP/s.out"
+run_rr handover "$RUN" > /dev/null
+check "handover at focused after schema names the fact sheets" "$(grep -qx "Provider fact sheets: $RUN/facts" "$RUN/handover/task.md"; echo $?)"
+check "schema: its source lines cross in the verification record, checked against their grammar" \
+  "$(grep -qx "schema pass: source modulestf/terraform-schema-mirror hashicorp_aws-v6.1.0 $(printf 'ab%.0s' $(seq 32))" "$RUN/handover/record.txt" &&
+     [ "$(grep -c '^schema pass: source ' "$RUN/handover/record.txt")" = 1 ]; echo $?)"
+render_to "$TMP/render-focused"
+check "render focused: the real render-comment.sh states the depth and the out-of-scope checks and example" \
+  "$(grep -qF 'Review depth: focused. Reasons: `focused-within-limits`.' "$TMP/render-focused/comment.md" &&
+     grep -qF 'Out of scope at this depth, so not unknowns: Check B, Check D, ' "$TMP/render-focused/comment.md" &&
+     grep -q 'examples/two' "$TMP/render-focused/comment.md"; echo $?)"
+rm -rf "$RUN/facts"
+SCHEMA_STUB=overflow run_rr schema "$RUN" > "$TMP/s.out" 2>&1
+check "an escalation after the handover is refused and stops the run" \
+  "$([ $? = 1 ] && grep -q 'escalation after the handover' "$RUN/state/stop" && [ "$(jq -r .depth "$RUN/depth.json")" = focused ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+DEPTH_STUB=focused prep
 run_rr schema "$RUN" > "$TMP/s.out"
 check "schema: an escalation at focused sets depth deep with its reason" \
   "$(grep -q '^depth: escalated to deep (deep-schema-overflow)$' "$TMP/s.out" && grep -q "^schema $RUN/depth.json $RUN/facts $RUN/schema-work\$" "$STUB_LOG"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+DEPTH_STUB=focused prep
+SCHEMA_STUB=ok run_rr schema "$RUN" > /dev/null
+touch "$RUN/clone/examples/two/validate.fail"
+run_rr verify "$RUN" > "$TMP/v.out"
+check "verify: a new validate failure in an out-of-scope example escalates a focused run" \
+  "$(grep -q '^depth: escalated to deep (deep-validate-failed)$' "$TMP/v.out" && [ "$(q "$RUN/depth.json" '.examples_out_of_scope == []')" = 0 ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+DEPTH_STUB=focused prep
+SCHEMA_STUB=badsource run_rr schema "$RUN" > "$TMP/s.out"
+check "schema: a source line outside its grammar escalates and nothing of it is recorded" \
+  "$(grep -q '^depth: escalated to deep (deep-schema-source-line)$' "$TMP/s.out" && [ ! -e "$RUN/state/schema-sources.txt" ] && [ ! -e "$RUN/facts" ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+# The handover's depth.sh verify, and a mutation without it: a head moved after prepare is caught.
+DEPTH_STUB=focused prep
+SCHEMA_STUB=ok run_rr schema "$RUN" > /dev/null; full
+git -C "$RUN/clone" -c user.name=t -c user.email=t@t commit -q --allow-empty -m moved
+run_rr handover "$RUN" > "$TMP/ho.out" 2>&1
+check "handover: depth.sh verify refuses a head that moved after prepare" "$([ $? = 1 ] && [ ! -e "$RUN/handover/task.md" ]; echo $?)"
+sed '/^cmd_handover() {/,/^}/{/depth.sh" verify/,/fail "depth.sh verify/c\
+    :
+}' "$RR" > "$SK/review-run-mutant.sh"
+check "self-check: the mutant has no depth.sh verify in handover" \
+  "$(sed -n '/^cmd_handover() {/,/^}/p' "$SK/review-run-mutant.sh" | grep -q 'depth.sh" verify'; [ $? = 1 ]; echo $?)"
+(cd "$TMP/cwd" && bash "$SK/review-run-mutant.sh" handover "$RUN") > /dev/null 2>&1
+check "self-check: without the call the moved head would reach the reviewer" "$([ -f "$RUN/handover/task.md" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 
 # --- 4. merged pull request, several module roots ----------------------------------------------------
@@ -282,6 +381,8 @@ check "host-pass: an empty login is refused without --render-only" \
 # --- 5. usage and run directory refusals --------------------------------------------------------------
 check "usage: a run directory outside the pattern is refused" "$(run_rr verify /tmp > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
 check "usage: a repository with a shell word is refused" "$(run_rr prepare --repo 'a/$(touch x)' --pr 1 > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
+check "usage: a profile name that starts like an option is refused" \
+  "$(run_rr prepare --repo a/b --pr 1 --profile -x --role-arn arn:aws:iam::000000000000:role/r > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
 check "usage: --owner-depth takes only deep" "$(run_rr prepare --repo a/b --pr 1 --owner-depth light > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
 check "the script has no eval and no bash -c" "$(! grep -nE '(^|[;&|(])[[:space:]]*eval[[:space:]]|bash -c' "$SKILL/references/review-run.sh"; echo $?)"
 check "nothing in a host string ran, end of run" "$(no_stray)"

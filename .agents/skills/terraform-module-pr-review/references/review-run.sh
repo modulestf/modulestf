@@ -38,6 +38,9 @@ repo_re='^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$'
 path_re='^[A-Za-z0-9._][A-Za-z0-9._/-]{0,299}$'
 WRITE_SHORT='Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.'
 
+# A provenance line of schema-pass.md, Focused Mode: mirror, release tag, schema file SHA-256.
+SOURCE_RE='^schema pass: source [A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100} [a-z0-9][a-z0-9-]{0,63}_[a-z0-9][a-z0-9-]{0,63}-v[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5} [0-9a-f]{64}$'
+
 die() { echo "review-run.sh: $1" >&2; exit 2; }
 fail() { echo "review-run.sh: $1"; exit 1; }
 
@@ -74,14 +77,41 @@ open_run() {
   [[ "$HEAD_SHA" =~ $sha_re ]] || die "the run's head is not a SHA"
   [ -z "$MB" ] || [[ "$MB" =~ $sha_re ]] || die "the run's merge base is not a SHA"
   MROOT="$RUN/clone"; [ -z "$PREFIX" ] || MROOT="$RUN/clone/$PREFIX"
+  # A run a failed escalation stopped takes no later step but cleanup.
+  [ "$CMD" = cleanup ] || [ ! -e "$RUN/state/stop" ] || fail "the run stopped: $(head -c 120 "$RUN/state/stop" | tr -cd 'a-z0-9 :-')"
+  check_pin
 }
 arg() { jq -r --arg k "$1" '.[$k] // "" | tostring' "$RUN/state/args.json"; }
 depth() { if [ -f "$RUN/depth.json" ]; then jq -r '.depth' "$RUN/depth.json"; else echo deep; fi; }
 note() { printf '%s\n' "$2" > "$RUN/state/$1"; } # a step's own state line
-escalate() { # reason: depth.sh escalate, which rewrites depth.json to deep
+stop() { # reason: the run stops for good; every later command but cleanup refuses
+  printf '%s\n' "$1" > "$RUN/state/stop"
+  fail "the run stops: $1"
+}
+# depth.json is written only by depth.sh compute and escalate; its hash is pinned after each, and
+# every later command refuses a depth.json that differs from the pin, a lowered depth included.
+pin_depth() { shasum -a 256 < "$RUN/depth.json" | cut -d' ' -f1 > "$RUN/state/depth.sha256"; }
+check_pin() {
+  if [ -f "$RUN/state/depth.sha256" ]; then
+    [ -f "$RUN/depth.json" ] && [ ! -L "$RUN/depth.json" ] &&
+      [ "$(shasum -a 256 < "$RUN/depth.json" | cut -d' ' -f1)" = "$(cat "$RUN/state/depth.sha256")" ] ||
+      stop "depth.json differs from the depth this run computed"
+  elif [ -e "$RUN/depth.json" ]; then stop "depth.json has no pin"
+  fi
+}
+escalate() { # reason: depth.sh escalate, which rewrites depth.json to deep, before the handover only
   [ -f "$RUN/depth.json" ] || return 0
-  bash "$HERE/depth.sh" escalate "$RUN/depth.json" "$1" > /dev/null 2>&1 || fail "depth.sh escalate failed: the run stops"
+  [ ! -e "$RUN/handover" ] || stop "escalation after the handover"
+  bash "$HERE/depth.sh" escalate "$RUN/depth.json" "$1" > /dev/null 2>&1 || stop "depth.sh escalate failed"
+  pin_depth
   echo "depth: escalated to $(depth) ($1)"
+}
+# Before the handover or the render: every step the depth needs has its output.
+ready() {
+  [ "$TRIAGE" = false ] || return 0
+  [ -f "$RUN/verify.json" ] || fail "$1 needs verify first"
+  [ -f "$RUN/coverage.json" ] && [ -f "$RUN/behaviour/record.txt" ] || fail "$1 needs plan and ladder first"
+  [ "$(depth)" != focused ] || [ "$(cat "$RUN/state/schema" 2> /dev/null)" = ok ] || fail "$1 at focused needs schema first"
 }
 clone_git() {
   GIT_LFS_SKIP_SMUDGE=1 git -C "$RUN/clone" -c core.hooksPath=/dev/null \
@@ -117,7 +147,7 @@ cmd_prepare() {
   [[ "$repo" =~ $repo_re ]] || die "--repo must be owner/name"
   [[ "$pr" =~ ^[1-9][0-9]{0,9}$ ]] || die "--pr must be a pull request number"
   [ -z "$profile$role" ] || {
-    [[ "$profile" =~ ^[A-Za-z0-9_.+=,@-]{1,64}$ ]] || die "--profile must be a profile name"
+    [[ "$profile" =~ ^[A-Za-z0-9][A-Za-z0-9_.+=,@-]{0,63}$ ]] || die "--profile must be a profile name"
     [[ "$role" =~ ^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$ ]] || die "--role-arn must be a role ARN"
   }
   [ -z "$owner_depth" ] || [ "$owner_depth" = deep ] || die "--owner-depth takes only deep"
@@ -177,8 +207,9 @@ cmd_prepare() {
     refuse clone-failed "the head could not be fetched"
   [ "$(git -C "$RUN/clone" rev-parse HEAD)" = "$head" ] || refuse head-moved "the head moved after it was read"
   local base_tree=false ts
-  if [ -n "$mb" ] && clone_git fetch -q --depth=1 origin "$mb" 2> /dev/null; then
-    ts="$(git -C "$RUN/clone" log -1 --format=%ct "$mb" 2> /dev/null)"
+  if [ -n "$mb" ] && clone_git fetch -q --depth=1 origin "$mb" "$base" 2> /dev/null; then
+    # History from a day before the older of the merge base and the base tip (review-run.md).
+    ts="$(git -C "$RUN/clone" log --no-walk --format=%ct "$mb" "$base" 2> /dev/null | sort -n | head -n 1)"
     [[ "$ts" =~ ^[0-9]+$ ]] && clone_git fetch -q --shallow-since="$((ts - 86400)) +0000" origin \
       "refs/pull/$pr/head" "$base" "$mb" 2> /dev/null
     clone_git worktree add -q --detach "$RUN/base" "$mb" 2> /dev/null && base_tree=true
@@ -234,6 +265,10 @@ cmd_prepare() {
       1) refuse depth-aborted "depth.sh found the merge base not unique, missing or not in the clone" ;;
       *) refuse depth-refused "depth.sh refused its input" ;;
     esac
+    # The merge base git found must be the one GitHub's compare gave; else uniqueness is unproven.
+    jq -e --arg m "$mb" '.binding.merge_base == $m' "$RUN/depth.json" > /dev/null 2>&1 ||
+      refuse depth-aborted "the clone's merge base is not the one the compare read gave"
+    pin_depth
   fi
 
   # The example selection, for the index (verify-pass.sh select, which runs no terraform).
@@ -291,14 +326,26 @@ cmd_schema() {
   need_full schema
   [ "$(depth)" = focused ] || { echo "schema: not run at depth $(depth)"; return 0; }
   [ ! -e "$RUN/facts" ] || fail "schema already ran in this run"
-  local line rc
-  line="$(SCHEMA_DEPTH="$RUN/depth.json" bash "$HERE/schema-pass.sh" "$RUN/facts" "$RUN/schema-work" 2>&1 | tail -n 1)"
-  rc=${PIPESTATUS[0]}
+  rm -rf "$RUN/schema-work" "$RUN/state/schema-sources.txt"
+  local line rc r=""
+  SCHEMA_DEPTH="$RUN/depth.json" bash "$HERE/schema-pass.sh" "$RUN/facts" "$RUN/schema-work" > "$RUN/state/schema.out" 2>&1
+  rc=$?
+  line="$(grep -v '^schema pass: source ' "$RUN/state/schema.out" | tail -n 1)"
   if [ "$rc" = 0 ] && [ -d "$RUN/facts" ]; then
-    note schema ok; echo "schema: ${line:0:200}"; return 0
+    # The provenance lines of schema-pass.md, Focused Mode, each checked against its grammar
+    # before it is copied into the verification record; one that does not match fails the step.
+    grep '^schema pass: source ' "$RUN/state/schema.out" > "$RUN/state/schema-sources.tmp"
+    if grep -qvE "$SOURCE_RE" "$RUN/state/schema-sources.tmp"; then r=source-line
+    else
+      mv "$RUN/state/schema-sources.tmp" "$RUN/state/schema-sources.txt"
+      note schema ok
+      echo "schema: ${line:0:200}"
+      echo "schema: $(grep -c . "$RUN/state/schema-sources.txt") source lines recorded"
+      return 0
+    fi
   fi
-  local r
-  r="$(printf '%s' "$line" | sed -n 's/^schema pass: escalate \([a-z0-9-]\{1,56\}\)$/\1/p')"
+  rm -f "$RUN/state/schema-sources.tmp"
+  [ -n "$r" ] || r="$(printf '%s' "$line" | sed -n 's/^schema pass: escalate \([a-z0-9-]\{1,56\}\)$/\1/p')"
   [ -n "$r" ] || r=failed
   rm -rf "$RUN/facts"; note schema "escalated $r"
   echo "schema: escalate $r"
@@ -335,6 +382,11 @@ cmd_verify() {
   # Light rule 6: anything but a pass in every verified example escalates before the reviewer.
   if [ "$(depth)" = light ] && jq -e 'any(.dirs[]; .reason == "skipped-symlink"
       or (.reason == "verified" and (.head.record != "code-result" or .head.validate != 0)))' "$RUN/verify.json" > /dev/null; then
+    escalate deep-validate-failed
+  # Any depth: a validate failure new under this change, in any example, out of scope included.
+  elif [ "$(depth)" != deep ] && jq -e 'any(.dirs[]; .reason == "verified" and .head.record == "code-result"
+      and .head.validate != 0 and (.base.record == "absent-at-base"
+        or (.base.record == "code-result" and .base.validate == 0)))' "$RUN/verify.json" > /dev/null; then
     escalate deep-validate-failed
   fi
 }
@@ -482,13 +534,12 @@ record_lines() {
   [ ! -f "$RUN/state/runner" ] || cat "$RUN/state/runner"
   [ ! -f "$RUN/state/plan" ] || grep -E '^(plan pass mode:|example:|plan:|scope:|modules:|base:|plan summary:)' "$(plan_record)"
   jq -r '"plan coverage: \(.class)", (.unplanned[] | "not planned: \(.dir): \(.reason)")' "$RUN/coverage.json"
+  [ ! -f "$RUN/state/schema-sources.txt" ] || cat "$RUN/state/schema-sources.txt"
   cat "$RUN/behaviour/record.txt"
 }
 
 cmd_handover() {
-  if [ "$TRIAGE" = false ]; then
-    [ -f "$RUN/coverage.json" ] && [ -f "$RUN/behaviour/record.txt" ] || fail "handover needs plan and ladder first"
-  fi
+  ready handover
   if [ -f "$RUN/depth.json" ]; then
     bash "$HERE/depth.sh" verify "$RUN/depth.json" --clone "$RUN/clone" > /dev/null 2>&1 ||
       fail "depth.sh verify: the depth binding does not match the clone; the run stops"
@@ -511,6 +562,7 @@ cmd_handover() {
     [ "$TRIAGE" = true ] || { printf 'RECORD-%s\n' "$s"; cat "$out/record.txt"; }
     printf 'UNTRUSTED-%s END\n' "$s"
   } > "$out/task.md"
+  [ ! -f "$RUN/depth.json" ] || cp "$RUN/state/depth.sha256" "$RUN/state/handover.sha256"
   echo "handover: $out/task.md ($(wc -l < "$out/task.md" | tr -d ' ') lines, record $( [ -f "$out/record.txt" ] && wc -l < "$out/record.txt" | tr -d ' ' || echo 0) lines)"
   echo "reviewer: workspace $MROOT, task $out/task.md; ask for findings.json and the summary line only"
 }
@@ -531,8 +583,11 @@ cmd_render() {
   done
   [ -f "$findings" ] && [ ! -L "$findings" ] || die "--findings must be a regular file"
   [ -f "$assessment" ] || die "--assessment must be a file"
-  [ "$TRIAGE" = true ] || { [ -f "$RUN/coverage.json" ] && [ -f "$RUN/behaviour/run-behaviour.json" ]; } ||
-    fail "render needs plan and ladder first"
+  ready render
+  [ -f "$RUN/handover/task.md" ] || fail "render needs handover first"
+  # The depth the reviewer was handed is the depth rendered.
+  [ ! -f "$RUN/depth.json" ] || [ "$(cat "$RUN/state/handover.sha256" 2> /dev/null)" = "$(cat "$RUN/state/depth.sha256")" ] ||
+    stop "depth.json changed after the handover"
   case "$out" in /?*) ;; *) die "--out must be an absolute path" ;; esac
   [ -d "$out" ] || mkdir -p -- "$out" || die "--out cannot be made"
   if [ -f "$RUN/depth.json" ]; then
@@ -614,7 +669,7 @@ cmd_cleanup() { # github-io.md, Cleanup; the runner's Docker objects first when 
 
 # --- main ------------------------------------------------------------------------------------
 
-cmd="${1-}"; shift || die "usage: review-run.sh <prepare|schema|verify|plan|skip-coverage|ladder|handover|render|cleanup> ..."
+cmd="${1-}"; CMD="$cmd"; shift || die "usage: review-run.sh <prepare|schema|verify|plan|skip-coverage|ladder|handover|render|cleanup> ..."
 case "$cmd" in
   prepare) cmd_prepare "$@" ;;
   schema | verify | plan | skip-coverage | ladder | handover | render | cleanup)
