@@ -137,6 +137,13 @@ check "versions: versions.json and files.sha256 as in normal mode" "$?"
 ver_bytes="$(sed -n 's/^schema pass: focused, .*, 3 sheets, \([0-9]*\) bytes$/\1/p' "$R.out")"
 [ "$ver_bytes" = "$(cat "$R"/facts/example/demo/*/resources/*.facts | wc -c | tr -d ' ')" ]
 check "versions: the byte count is the sheets' total" "$?"
+src="$(sed -n 's/^schema pass: source //p' "$R.out" | LC_ALL=C sort)"
+want="$(for v in 1.2.0 1.2.5 1.3.0; do printf 'modulestf/terraform-schema-mirror example_demo-v%s %s\n' "$v" \
+  "$(sha256sum < "$SITE/mirror/example_demo-v$v/example_demo-$v.schema.json.gz" | cut -d ' ' -f 1)"; done)"
+idx="$(for v in 1.2.0 1.2.5 1.3.0; do printf 'modulestf/terraform-schema-mirror example_demo-v%s %s\n' "$v" \
+  "$(jq -r .schema_sha256 "$R/facts/example/demo/$v/index.json")"; done)"
+[ -n "$src" ] && [ "$src" = "$want" ] && [ "$src" = "$idx" ]
+check "provenance: one source line per version read, the mirror, the release tag and the schema file's SHA-256, as in index.json" "$?"
 [ ! -e "$TMP/ran-terraform" ] && [ ! -e "$TMP/ran-description" ] && ! grep -rq 'touch' "$R/facts"
 check "nothing downloaded or named in a schema is run, no description reaches a sheet" "$?"
 grep -E '^OPTION' "$R.log"; [ $? = 1 ]
@@ -195,6 +202,10 @@ cp -R "$DEMO" "$TMP/keep"
 reset() { rm -rf "$DEMO" && cp -R "$TMP/keep" "$DEMO"; }
 D="$(mk demo_thing "$PROV" "$TOK" "")"
 sed 's/^[0-9a-f]/0/' "$TMP/keep/SHA256SUMS" > "$DEMO/SHA256SUMS"; run bad-hash; esc "a checksum mismatch" checksum; reset
+printf 'x' >> "$DEMO/example_demo-1.3.0.schema.json.gz"; run tampered-schema; esc "a schema file whose hash disagrees with SHA256SUMS" checksum
+! grep -q '^schema pass: source ' "$R.out"
+check "provenance: no source line when the run escalates" "$?"
+reset
 jq -c '.version = "1.2.0"' "$TMP/keep/manifest.json" > "$DEMO/manifest.json"
 (cd "$DEMO" && sha256sum example_demo-1.3.0.schema.json.gz manifest.json > SHA256SUMS); run bad-manifest; esc "a manifest for another version" manifest; reset
 echo "https://evil.example.com/x" > "$DEMO/REDIRECT"; run evil; esc "a redirect off the host list" host-rejected; reset
@@ -262,6 +273,8 @@ c_fail() { D="$(mk demo_thing "$PROV" "$TOK" ".:example/demo=1.1.0")" run m-fail
 k_fail() { [ "$RC" = 3 ] && grep -qx 'schema pass: escalate not-in-mirror' "$R.out" && [ ! -e "$R/facts" ]; }
 c_tok() { D="$(mk demo_thing "head:.:demo=Example/demo:>=1.2" "$TOK" "")" run m-tok; }
 k_tok() { [ "$RC" = 3 ] && grep -qx 'schema pass: escalate inputs' "$R.out"; }
+c_src() { D="$(mk demo_thing "$PROV" "$TOK" "")" run m-src; }
+k_src() { [ "$RC" = 0 ] && [ "$(grep -c '^schema pass: source modulestf/terraform-schema-mirror example_demo-v1\.[23]\.0 [0-9a-f]\{64\}$' "$R.out")" = 2 ]; }
 mutant sheet-cap 's/^MAX_SHEETS=6$/MAX_SHEETS=60/' c_seven k_seven
 mutant byte-cap 's/^MAX_SHEET_BYTES=49152$/MAX_SHEET_BYTES=491520/' c_big k_big
 mutant any-mirror 's/|| escalate mirror_untrusted$/|| :/' c_trust k_trust
@@ -272,5 +285,6 @@ mutant page-ok 's/|| escalate page$/|| :/' c_miss k_miss
 mutant exit-0 's/rm -rf "\$OUT"; exit 3; }/rm -rf "$OUT"; exit 0; }/' c_fail k_fail
 mutant reasons-ok 's/^  \[ ! -s "\$WORK\/reasons" \] || escalate .*$/  :/' c_fail k_fail
 mutant tokens-dropped 's/^refused_token() { .*$/refused_token() { :; }/' c_tok k_tok
+mutant no-source 's/^    echo "schema pass: source .*$/    :/' c_src k_src
 
 if [ "$fails" = 0 ]; then echo "all passed"; else echo "$fails failed"; exit 1; fi
