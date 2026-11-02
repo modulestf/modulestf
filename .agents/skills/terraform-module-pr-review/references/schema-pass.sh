@@ -4,6 +4,9 @@
 # reason codes. Usage: schema-pass.sh <facts output directory> <work directory> [<handoff directory>]
 # Environment: SCHEMA_PROVIDERS, SCHEMA_TYPES (the gate's tokens), MODULESTF_SCHEMA_MIRROR,
 # and for the schema handoff SCHEMA_HEAD, SCHEMA_MERGE_BASE and SCHEMA_INPUTS.
+# SCHEMA_DEPTH, the path of a depth.json, selects focused mode: the tokens come from it,
+# the mirror is TRUSTED_MIRROR, and any failure or overflow exits 3 with
+# "schema pass: escalate <reason>" and publishes nothing.
 # Nothing downloaded is run. Every body is size-checked before any parser reads it.
 set -uo pipefail
 set -f
@@ -15,7 +18,15 @@ FACTS_JQ="$HERE/schema-facts.jq"
 HANDOFF_JQ="$HERE/schema-handoff.jq"
 HANDOFF="${3:-}"
 : "${SCHEMA_PROVIDERS=}" "${SCHEMA_TYPES=}" "${MODULESTF_SCHEMA_MIRROR=}"
-: "${SCHEMA_HEAD=}" "${SCHEMA_MERGE_BASE=}" "${SCHEMA_INPUTS=}"
+: "${SCHEMA_HEAD=}" "${SCHEMA_MERGE_BASE=}" "${SCHEMA_INPUTS=}" "${SCHEMA_DEPTH=}"
+FOCUSED=""
+[ -z "$SCHEMA_DEPTH" ] || FOCUSED=1
+
+# Focused mode's trust anchor and caps, from this checkout only, never from the input.
+TRUSTED_MIRROR="modulestf/terraform-schema-mirror"
+MAX_SHEETS=6
+MAX_SHEET_BYTES=49152
+CAP_DEPTH=1048576
 
 MAX_PROVIDERS=32
 MAX_PROVIDER_VERSIONS=96
@@ -47,6 +58,9 @@ mkdir -p "$WORK" && [ -z "$(ls -A "$WORK")" ] && mkdir "$WORK/stage" "$WORK/dl" 
 [ -z "$HANDOFF" ] || [ ! -e "$HANDOFF" ] || { echo "schema pass: the handoff directory already exists"; exit 1; }
 : > "$WORK/reasons"
 note() { [[ "$1" =~ $reason_re ]] && echo "$1" >> "$WORK/reasons"; } # reason code only
+# Focused mode: a fixed reason, hyphenated, nothing published, exit 3. Never truncates.
+escalate() { echo "schema pass: escalate ${1//_/-}"; rm -rf "$OUT"; exit 3; }
+refused_token() { [ -z "$FOCUSED" ] || escalate inputs; } # a dropped token fails focused mode
 
 dir_ok() { # directory -> status 0 when it matches the pattern and has no . or .. segment
   [[ "$1" =~ $dir_re ]] || return 1
@@ -144,31 +158,62 @@ satisfying() { # clauses file, candidates file
 }
 has_lower() { grep -qE '^(=|>=|>) ' "$1"; } # clauses file
 
-# 1. The gate's tokens, each checked again here.
+# 0. Focused mode: the mirror is the trusted one, and the tokens come from depth.json:
+# schema_providers as given, schema_types only for a type named in touched_types, and
+# schema_locks, the head lock files' versions. A touched type with no token escalates.
+: > "$WORK/locks"
+if [ -n "$FOCUSED" ]; then
+  [ -z "$MODULESTF_SCHEMA_MIRROR" ] || [ "$MODULESTF_SCHEMA_MIRROR" = "$TRUSTED_MIRROR" ] || escalate mirror_untrusted
+  MODULESTF_SCHEMA_MIRROR="$TRUSTED_MIRROR"
+  [ -f "$SCHEMA_DEPTH" ] && [ ! -L "$SCHEMA_DEPTH" ] && [ "$(wc -c < "$SCHEMA_DEPTH")" -le "$CAP_DEPTH" ] || escalate depth_input
+  jq -r 'def toks($k): .[$k] | if type == "array" and all(.[]; type == "string" and test("^[!-~]{1,300}$")) then .[] else error($k) end;
+    if type == "object" then . else error("shape") end
+    | (toks("touched_types") | "X " + .), (toks("schema_providers") | "P " + .),
+      (toks("schema_types") | "T " + .), (toks("schema_locks") | "L " + .)' "$SCHEMA_DEPTH" > "$WORK/depth" 2> /dev/null || escalate depth_input
+  SCHEMA_PROVIDERS="$(awk '$1 == "P" { print $2 }' "$WORK/depth")"
+  SCHEMA_TYPES="$(awk -F'[ :]' '$1 == "X" { x[$2] = 1; next } $1 == "T" && ($4 in x) { print $2 ":" $3 ":" $4 ":" $5 ":" $6 }' "$WORK/depth" | sed 's/:*$//')"
+  while read -r k t; do
+    [ "$k" = X ] || continue
+    [[ "$t" =~ $type_re ]] || escalate inputs
+    awk -F: -v t="$t" '$3 == t { f = 1 } END { exit !f }' <<< "$SCHEMA_TYPES" || escalate type_unbound
+  done < "$WORK/depth"
+  while read -r k t; do
+    [ "$k" = L ] || continue
+    [[ "$t" =~ ^([^:]+):([^/]+)/([^=]+)=(.*)$ ]] || escalate inputs
+    dir="${BASH_REMATCH[1]}" ns="${BASH_REMATCH[2]}" name="${BASH_REMATCH[3]}" ver="${BASH_REMATCH[4]}"
+    dir_ok "$dir" && [[ "$ns" =~ $name_re && "$name" =~ $name_re && "$ver" =~ $ver_re ]] || escalate inputs
+    echo "$ns/$name $ver" >> "$WORK/locks"
+  done < "$WORK/depth"
+  sort -u -o "$WORK/locks" "$WORK/locks"
+fi
+
+# 1. The gate's tokens, each checked again here. In focused mode a dropped token
+# escalates, and a base token is not read: focused mode reads no old floor.
 : > "$WORK/ptok"
 : > "$WORK/unres"
 for t in $SCHEMA_PROVIDERS; do
   IFS=: read -r rev dir rest <<< "$t"
-  [[ "$rev" =~ $rev_re ]] && dir_ok "$dir" || continue
+  [[ "$rev" =~ $rev_re ]] && dir_ok "$dir" || { refused_token; continue; }
+  [ -z "$FOCUSED" ] || [ "$rev" = head ] || continue
   if [[ "$rest" =~ ^!(constraint_unparsable)$ ]]; then
     echo "$rev $dir ${BASH_REMATCH[1]}" >> "$WORK/unres"; continue
   fi
   lp="${rest%%:*}" con="${rest#*:}"
   [ "$lp" != "$rest" ] || con=""
   loc="${lp%%=*}" src="${lp#*=}"
-  [[ "$loc" =~ $local_re ]] || continue
+  [[ "$loc" =~ $local_re ]] || { refused_token; continue; }
   [[ "$con" =~ $con_re ]] || con="*" # outside the charset: kept, so it resolves as unparsable
   if [ "$src" = "!registry_host" ]; then echo "$rev $dir !$loc registry_host" >> "$WORK/unres"; continue; fi
   ns="${src%%/*}" name="${src#*/}"
-  [[ "$ns" =~ $name_re && "$name" =~ $name_re ]] || continue
+  [[ "$ns" =~ $name_re && "$name" =~ $name_re ]] || { refused_token; continue; }
   echo "$rev|$dir|$ns/$name|${con// /}|$loc" >> "$WORK/ptok"
 done
 : > "$WORK/types"
 for t in $SCHEMA_TYPES; do
   IFS=: read -r dir kind type src extra <<< "$t"
-  [ -z "${extra:-}" ] && dir_ok "$dir" && [[ "$kind" =~ ^(resource|data)$ && "$type" =~ $type_re ]] || continue
+  [ -z "${extra:-}" ] && dir_ok "$dir" && [[ "$kind" =~ ^(resource|data)$ && "$type" =~ $type_re ]] || { refused_token; continue; }
   ns="${src%%/*}" name="${src#*/}"
-  [[ "$ns" =~ $name_re && "$name" =~ $name_re ]] || continue
+  [[ "$ns" =~ $name_re && "$name" =~ $name_re ]] || { refused_token; continue; }
   echo "$dir $ns/$name $kind $type" >> "$WORK/types"
 done
 sort -u -o "$WORK/types" "$WORK/types"
@@ -199,8 +244,9 @@ if [ -n "$HANDOFF" ]; then
 fi
 
 # 2. The directory and provider pairs: every head provider token and every provider a
-# head type is bound to. A provider with no head token is unconstrained.
-{ awk -F'|' '$1 == "head" { print $2, $3 }' "$WORK/ptok"; awk '{ print $1, $2 }' "$WORK/types"; } | sort -u > "$WORK/pairs"
+# head type is bound to. A provider with no head token is unconstrained. Focused mode
+# resolves only the pairs its touched types need.
+{ [ -n "$FOCUSED" ] || awk -F'|' '$1 == "head" { print $2, $3 }' "$WORK/ptok"; awk '{ print $1, $2 }' "$WORK/types"; } | sort -u > "$WORK/pairs"
 # Providers ranked by their count of needed types, most first, then by name.
 awk '{ print $2 }' "$WORK/pairs" | sort -u > "$WORK/provs"
 awk 'FNR == NR { n[$2 " " $3 " " $4]++; next } { c = 0; for (k in n) if (index(k, $1 " ") == 1) c++; print c, $1 }' \
@@ -262,11 +308,13 @@ while read -r -u 3 prov; do
   done 4< "$WORK/pairs"
 done 3< "$WORK/order"
 
-# The provider versions to read, in provider order: latest, minimum, then old floor.
+# The provider versions to read, in provider order: latest, minimum, then old floor, and
+# in focused mode the head lock files' versions of the provider last.
 while read -r prov; do
   for col in 4 5 6; do
     awk -v p="$prov" -v c="$col" '$2 == p && $3 == "ok" && $c != "-" { print p, $c }' "$WORK/resolved"
   done
+  awk -v p="$prov" '$1 == p { print p, $2 }' "$WORK/locks"
 done < "$WORK/order" | awk '!seen[$0]++' > "$WORK/pv-all"
 awk -v m="$MAX_PROVIDER_VERSIONS" 'NR <= m' "$WORK/pv-all" > "$WORK/pv"
 [ "$(wc -l < "$WORK/pv-all")" -le "$MAX_PROVIDER_VERSIONS" ] || note overflow
@@ -408,6 +456,24 @@ while read -r dir prov st latest min floor _; do
   done
 done < "$WORK/resolved" >> "$WORK/wanted-pages"
 sort -u -o "$WORK/wanted-pages" "$WORK/wanted-pages"
+
+# Focused mode publishes only a whole answer: no reason of any kind, every provider version
+# read, every needed type a sheet or absent at every version, and the sheets within both caps.
+if [ -n "$FOCUSED" ]; then
+  [ ! -s "$WORK/reasons" ] || escalate "$(head -n 1 "$WORK/reasons")"
+  [ "$(wc -l < "$WORK/pvok")" = "$(wc -l < "$WORK/pv")" ] || escalate not_in_mirror
+  [ ! -s "$WORK/pagetypes" ] && ! awk '$5 != "sheet" && $5 != "absent" { f = 1 } END { exit !f }' "$WORK/status" || escalate page
+  sheets="$(find "$WORK/stage" -type f -name '*.facts' | wc -l | tr -d ' ')"
+  bytes="$(find "$WORK/stage" -type f -name '*.facts' -exec cat -- {} + | wc -c | tr -d ' ')"
+  [ "$sheets" -le "$MAX_SHEETS" ] && [ "$bytes" -le "$MAX_SHEET_BYTES" ] || escalate overflow
+  echo "schema pass: focused, mirror $TRUSTED_MIRROR, $sheets sheets, $bytes bytes"
+  # The run record's provenance: per provider version, the release tag and the SHA-256 of
+  # the schema file it was read from, checked against that release's SHA256SUMS above.
+  while read -r prov ver; do
+    ns="${prov%%/*}" name="${prov#*/}"
+    echo "schema pass: source $TRUSTED_MIRROR ${ns}_${name}-v$ver $(jq -r .schema_sha256 "$WORK/stage/$ns/$name/$ver/index.json")"
+  done < "$WORK/pvok"
+fi
 
 # 6. Publish: each staged provider version moves whole; then versions.json; then the
 # checksums, last.

@@ -11,7 +11,7 @@ SCHEMA_PROVIDERS="<tokens>" SCHEMA_TYPES="<tokens>" MODULESTF_SCHEMA_MIRROR="<ow
   bash schema-pass.sh <facts output directory> <work directory> [<handoff directory>]
 ```
 
-With a handoff directory, the same run also writes the [schema handoff](#schema-handoff) for the facts engine.
+With a handoff directory, the same run also writes the [schema handoff](#schema-handoff) for the facts engine. With `SCHEMA_DEPTH` set, the run is in [focused mode](#focused-mode).
 
 ## Inputs
 
@@ -103,6 +103,34 @@ A type is read from sheets only when every version it is needed at is `sheet` or
 Each provider version is built in its own staging directory and moved into the output only after every check passed, so a step killed part-way publishes whole versions or none of them. The work directory also gets `wanted-pages`: for a host page cache, each needed version of a `page` type and the latest version of every other type. A type whose name does not start with `<name>_`, such as a `google-beta` type, has no page cache path and is left out; the reviewer fetches its page itself, which changes cost only.
 
 A host checks the output again before a reviewer sees it: `files.sha256` must name every other file exactly once with a matching hash, every file must be a regular file under a size cap at an output path, and `versions.json` must have the shape above. Any mismatch discards the whole output; the page cache is separate and stays.
+
+## Focused Mode
+
+A run at depth `focused` needs whole provider facts or none: `SCHEMA_DEPTH=<run>/depth.json` turns this mode on, and the run script runs it before the reviewer starts.
+
+```sh
+SCHEMA_DEPTH="<run>/depth.json" bash schema-pass.sh <facts output directory> <work directory>
+```
+
+- **Inputs:** the tokens come from `depth.json`, never from `SCHEMA_PROVIDERS` or `SCHEMA_TYPES`: `schema_providers` as given, `schema_types` only for a type named in `touched_types`, and `schema_locks`, one `<dir>:<namespace>/<name>=<x.y.z>` per provider of a head lock file. The file must be a regular file of at most 1 MiB, an object whose four keys are arrays of strings of 1 to 300 printable characters with no space. Base tokens are not read.
+- **Versions:** per touched type, the latest allowed and the declared minimum of its directory, as in [Versions](#versions), and every head lock file version of its provider, deduplicated. There is no old floor.
+- **Trust anchor:** the mirror is `TRUSTED_MIRROR` in `schema-pass.sh`, `modulestf/terraform-schema-mirror`, a file of the reviewer's own skills checkout at the commit the run records. `MODULESTF_SCHEMA_MIRROR` may be unset or that value; any other value escalates. Nothing of the reviewed repository names a mirror or a host. The mirror publishes only the providers it lists, so a provider source outside that list is `not_in_mirror`. Each asset is checked as in [Downloads](#downloads), against the `SHA256SUMS` of the same immutable release.
+- **Caps:** at most 6 sheets and 49152 bytes of sheets in total (`MAX_SHEETS`, `MAX_SHEET_BYTES`). Measured on hashicorp/aws from the mirror, versions 6.71.0, 6.61.0 and 6.28.0: `aws_rds_cluster` 4467 to 4561 bytes, the `aws_cloudwatch_event_bus` data source 505, `aws_ecs_service` 5288 to 5609, `aws_ecs_task_definition` 2294 to 2512, `aws_ecs_cluster` 1135, `aws_security_group` 1122, `aws_vpc_security_group_egress_rule` and `_ingress_rule` 668 and 669; at 6.71.0 `aws_instance` 5920, `aws_db_instance` 4480. So 6 sheets of the larger types fit in the byte cap; `aws_wafv2_web_acl` has no sheet at all (`page`).
+- **Provenance:** the mirror is pinned by repository name only, so a successful run also prints one line per provider version read, `schema pass: source <owner>/<name> <namespace>_<name>-v<version> <sha256>`: the mirror, the release tag and the SHA-256 of the gzipped schema file, the same value as `schema_sha256` in that version's `index.json`. The run script copies these lines into the run record, so drift between runs shows. A schema file whose SHA-256 disagrees with its release's `SHA256SUMS` is `checksum`, and escalates.
+- **Result:** exit 0 and the line `schema pass: focused, mirror <owner>/<name>, <n> sheets, <bytes> bytes` only when every touched type is `sheet` or `absent` at every version and nothing failed. Otherwise the run prints `schema pass: escalate <reason>`, removes the output directory, publishes nothing, never truncates, and exits 3; the run script then sets depth `deep` with that reason. Any other non-zero exit escalates the same way.
+
+The escalate reasons are the [reason codes](#reason-codes) with `_` written `-`, and these:
+
+| Reason | When |
+|---|---|
+| `depth-input` | `depth.json` is missing, a link, over 1 MiB or outside its shape |
+| `inputs` | a token or a touched type outside its pattern |
+| `type-unbound` | a touched type with no `schema_types` token |
+| `mirror-untrusted` | `MODULESTF_SCHEMA_MIRROR` names another mirror |
+| `page` | a needed type is a miss at a version, so it would be read from pages |
+| `overflow` | over 6 sheets or 49152 bytes, or over a cap of [Caps](#caps) |
+
+When a run escalates for several reasons, the line gives the first one met.
 
 ## Schema Handoff
 
