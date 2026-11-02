@@ -116,8 +116,8 @@ cat > "$TMP/bin/mtf-facts" <<'EOF'
 case "$1" in
   depth) jq -n --arg d "${DEPTH_STUB:-light}" '{format: 1, depth: $d,
       reasons: (if $d == "light" then ["light-docs-only"] elif $d == "focused" then ["focused-within-limits"] else ["deep-limits"] end),
-      checks_out_of_scope: ({"light": ["A", "B", "D", "G-ladder"], "focused": ["B", "D"], "deep": []}[$d]),
-      examples_selected: ["examples/one"], examples_out_of_scope: (if $d == "deep" then [] else ["examples/two"] end),
+      checks_out_of_scope: ({"light": ["A", "B", "D", "G-ladder"], "focused": ["B"], "deep": []}[$d]),
+      examples_selected: ["examples/one"], examples_out_of_scope: (if $d == "focused" then ["examples/two"] else [] end),
       touched_types: (if $d == "focused" then ["aws_s3_bucket"] else [] end), walk: {complete: true, unwalked: 0},
       limits: {tf_files: (if $d == "light" then 0 else 1 end), changed_lines: 3, changed_blocks: 0, selected_examples: 1},
       schema_providers: [], schema_types: [], schema_locks: []}' ;;
@@ -310,7 +310,7 @@ check "schema: its source lines cross in the verification record, checked agains
 render_to "$TMP/render-focused"
 check "render focused: the real render-comment.sh states the depth and the out-of-scope checks and example" \
   "$(grep -qF 'Review depth: focused. Reasons: `focused-within-limits`.' "$TMP/render-focused/comment.md" &&
-     grep -qF 'Out of scope at this depth, so not unknowns: Check B, Check D, ' "$TMP/render-focused/comment.md" &&
+     grep -qF 'Out of scope at this depth, so not unknowns: Check B, ' "$TMP/render-focused/comment.md" &&
      grep -q 'examples/two' "$TMP/render-focused/comment.md"; echo $?)"
 rm -rf "$RUN/facts"
 SCHEMA_STUB=overflow run_rr schema "$RUN" > "$TMP/s.out" 2>&1
