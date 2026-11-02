@@ -467,6 +467,12 @@ if [ -n "$FOCUSED" ]; then
   bytes="$(find "$WORK/stage" -type f -name '*.facts' -exec cat -- {} + | wc -c | tr -d ' ')"
   [ "$sheets" -le "$MAX_SHEETS" ] && [ "$bytes" -le "$MAX_SHEET_BYTES" ] || escalate overflow
   echo "schema pass: focused, mirror $TRUSTED_MIRROR, $sheets sheets, $bytes bytes"
+  # The run record's provenance: per provider version, the release tag and the SHA-256 of
+  # the schema file it was read from, checked against that release's SHA256SUMS above.
+  while read -r prov ver; do
+    ns="${prov%%/*}" name="${prov#*/}"
+    echo "schema pass: source $TRUSTED_MIRROR ${ns}_${name}-v$ver $(jq -r .schema_sha256 "$WORK/stage/$ns/$name/$ver/index.json")"
+  done < "$WORK/pvok"
 fi
 
 # 6. Publish: each staged provider version moves whole; then versions.json; then the

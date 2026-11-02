@@ -1819,7 +1819,7 @@ dsec() { awk '/^### Review depth$/ { on = 1; getline; next } on && /^### / { exi
 ladder "light, nothing open" "approve APPROVE" 8 "$NONE" "" "" "$(rund d-light light)"
 t_dlight() {
   dsec | cmp -s - <(printf '%s\n' 'Review depth: light. Reasons: `light-docs-only`.' '' \
-    'Out of scope at this depth, so not unknowns: Check A, Check B, Check D, Check G beyond its claim reading, the plan pass.')
+    'Out of scope at this depth, so not unknowns: Check A, Check B, Check D, Check G beyond its claim reading, the plan pass, the ladder, the provider facts.')
 }
 t_dlight; check "depth: light states its depth, reason and the checks out of scope, golden" $?
 # At light no plan pass runs: verify-pass.sh coverage --no-plan lists every example not planned.
@@ -1848,8 +1848,8 @@ render "$NONE" "" "" "$(rund d-tri-f focused . '.triage = true')"
 check "depth: a triage run at focused never approves" "$([ "$(rule)" = 4 ]; echo $?)"
 # The first 20 out-of-scope items and a count of the rest; a name outside the charset withheld.
 t_d20() {
-  render "$NONE" "" "" "$(rund d-20 focused '.checks_out_of_scope = ["B", "D"] | .examples_out_of_scope = ["examples/a b"] + [range(24) | "examples/e\(.)"]')"
-  [ "$ST" = 0 ] && dsec | grep -qxF -- "Out of scope at this depth, so not unknowns: Check B, Check D, name withheld, $(seq 0 16 | sed 's/.*/`examples\/e&`/' | paste -sd, - | sed 's/,/, /g'), and 7 more."
+  render "$NONE" "" "" "$(rund d-20 focused '.examples_out_of_scope = ["examples/a b"] + [range(24) | "examples/e\(.)"]')"
+  [ "$ST" = 0 ] && dsec | grep -qxF -- "Out of scope at this depth, so not unknowns: Check B, name withheld, $(seq 0 17 | sed 's/.*/`examples\/e&`/' | paste -sd, - | sed 's/,/, /g'), and 6 more."
 }
 t_d20; check "depth: the first 20 out-of-scope items and the count of the rest, a name outside the charset withheld" $?
 # COMPACT puts the depth lines in its details block.
@@ -1868,6 +1868,9 @@ refused "depth: an unknown reason token" "$NONE" "" "" "$(rund dr-tok light '.re
 refused "depth: a reason of another depth" "$NONE" "" "" "$(rund dr-mix light '.reasons = ["focused-within-limits"]')"
 refused "depth: Check C out of scope at light" "$NONE" "" "" "$(rund dr-c light '.checks_out_of_scope += ["C"]')"
 refused "depth: Check A out of scope at focused" "$NONE" "" "" "$(rund dr-a focused '.checks_out_of_scope = ["A"]')"
+refused "depth: Check D out of scope at focused" "$NONE" "" "" "$(rund dr-d focused '.checks_out_of_scope = ["B", "D"]')"
+refused "depth: an example out of scope at light" "$NONE" "" "" "$(rund dr-lx light '.examples_out_of_scope = ["examples/other"]')"
+ladder "focused with no example" "approve APPROVE" 8 "$NONE" "" "" "$(rund d-noex focused '.reasons = ["focused-within-limits", "focused-no-example"] | .checks_out_of_scope = [] | .examples_selected = [] | .examples_out_of_scope = []')"
 refused "depth: a check out of scope at deep" "$NONE" "" "" "$(rund dr-deepc deep '.checks_out_of_scope = ["B"]')"
 refused "depth: an example out of scope at deep" "$NONE" "" "" "$(rund dr-deepx deep '.examples_out_of_scope = ["examples/other"]')"
 refused "depth: an example both selected and out of scope" "$NONE" "" "" "$(rund dr-both focused '.examples_out_of_scope = ["examples/complete"]')"
@@ -1905,9 +1908,12 @@ fi
 # the host pass's; a copy that takes not-applicable on every state stands in for it here, so the
 # open case reaches the render.
 na() { # render args: the script under test, beside a host-records.jq that takes not-applicable
+  # on every state: the host pass refuses it on an open pull request, and the render must still
+  # read it as unknown there, so the copy drops that guard (or adds the value to an older grammar).
   local keep="$RCU" d="$TMP/na-$oc"; mkdir -p "$d"
   cp "$(dirname "$RCU")/render-comment.sh" "$(dirname "$RCU")/render-comment.jq" "$REF/host-records.jq" "$REF/host-pass.sh" "$d/"
-  perl -0pi -e 's/\(\.mergeability \| IN\(([^)]*)\)\)/(.mergeability | IN($1, "not-applicable"))/' "$d/host-records.jq"
+  perl -0pi -e 's/\n[^\n]*\n  and \(\.signals\.mergeability != "not-applicable" or \.state\.state == "closed"\)//;
+    s/\(\.mergeability \| IN\(("pass", "fail", "unknown")\)\)/(.mergeability | IN($1, "not-applicable"))/' "$d/host-records.jq"
   RCU="$d/render-comment.sh"; render "$@"; RCU="$keep"
 }
 CLAMP='Comment only: this verdict describes a pull request that is no longer open.'
@@ -1923,6 +1929,8 @@ na "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "$(host na-closed '.state
 check "closed: a MEDIUM finding blocks, proposes COMMENT, says no longer open" "$([ "$(verdict)" = "block COMMENT" ] && grep -qxF "$CLAMP" "$O/comment.md"; echo $?)"
 t_naopen() { na "$NONE" "$(host na-open '.signals.mergeability = "not-applicable"')"; [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qF 'Mergeability: unknown.' "$O/comment.md" && ! grep -qxF "$CLAMP" "$O/comment.md"; }
 t_naopen; check "open: not-applicable reads as unknown, rule 4, no no-longer-open line" $?
+render "$NONE" "$(host na-open-real '.signals.mergeability = "not-applicable"')"
+check "open: the host records themselves refuse not-applicable on an open pull request" "$([ "$ST" = 2 ] && empty_out; echo $?)"
 t_naclosed_line() { render "$NONE" "$(host cl2 '.state.state = "closed"')"; grep -qxF "$CLAMP" "$O/comment.md"; }
 t_naclosed_line; check "closed: the line renders with the host records of today too" $?
 t_nacompact() {

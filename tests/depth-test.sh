@@ -211,6 +211,23 @@ check "merge base: a base tree not at the merge base aborts" "$([ $? = 1 ] && [ 
 oc=$((oc + 1)); MSG="$("$SH" "$DS" compute --clone "$C" --base-tree "$RUN/base" --base "$(printf 'f%.0s' $(seq 40))" --files "$RUN/files.json" --out "$RUN/depth-$oc.json" 2>&1)"
 check "merge base: a base the clone does not hold aborts" "$([ $? = 1 ]; echo $?)"
 
+# --- A git diff that fails aborts compute and verify, never hashing its error.
+D="$TMP/broken/clone"; G init -q "$D"
+printf 'a\n' > "$D/a"; G -C "$D" add -A; G -C "$D" commit -qm a; DMB="$(git -C "$D" rev-parse HEAD)"
+G -C "$D" checkout -q -b pr; printf 'gone\n' > "$D/b"; G -C "$D" add -A; G -C "$D" commit -qm b
+G -C "$D" worktree add -q --detach "$TMP/broken/base" "$DMB"
+dcompute() { MSG="$("$SH" "$DS" compute --clone "$D" --base-tree "$TMP/broken/base" --base "$DMB" --files "$RUN/files.json" \
+  --classify "$RUN/classify.json" --affected "$RUN/affected.json" --out "$1" 2>&1)"; ST=$?; }
+dcompute "$TMP/broken/ok.json"; check "broken diff: compute on the intact clone" "$([ "$ST" = 0 ]; echo $?)"
+BLOB="$(git -C "$D" rev-parse HEAD:b)"; rm -f "$D/.git/objects/${BLOB:0:2}/${BLOB:2}"
+t_brokendiff() {
+  dcompute "$TMP/broken/x.json"
+  [ "$ST" = 1 ] && [ ! -e "$TMP/broken/x.json" ] && printf '%s' "$MSG" | grep -qF 'git diff failed' &&
+    MSG="$("$SH" "$DS" verify "$TMP/broken/ok.json" --clone "$D" 2>&1)" ; [ $? = 1 ] && printf '%s' "$MSG" | grep -qF 'git diff failed'
+}
+check "broken diff: the blob is gone" "$( ! git -C "$D" cat-file -e "$BLOB" 2> /dev/null; echo $?)"
+t_brokendiff; check "broken diff: a missing blob aborts compute and verify (exit 1), nothing written" $?
+
 # --- Usage.
 for a in "compute --clone rel" "verify" "escalate" "bogus"; do
   set -f; MSG="$("$SH" "$DS" $a 2>&1)"; s=$?; set +f
@@ -250,6 +267,7 @@ mutate "the fixed scope table not checked" 's/and \(\.depth as \$d \| \.checks_o
 mutate "a tool under the clone run" 's/for d in "\$@"; do case "\$f\/" in "\$d"\/\*\) return 0 ;; esac; done//' t_inclone
 mutate "a missing classifier not raised" 's/\|\| raise="\$\(jq -c .\. \+ \["deep-classifier-unavailable"\]. <<< "\$raise"\)"\n//' t_noclass
 mutate "an empty affected output accepted" 's/ and \. != \{\}//' t_affempty
+mutate "a failed git diff hashed" 's/> "\$f" 2> \/dev\/null && h=/> "\$f" 2> \/dev\/null; h=/' t_brokendiff
 mutate "a token dropped from the list" 's/"deep-policy", //' t_tokens
 
 echo
