@@ -16,7 +16,8 @@
 #     module roots resolved by the prefix rule or refused with a fixed reason;
 #   - a failed validate at light escalates, a schema escalation at focused escalates;
 #   - the pr-review SKILL.md workflow move: the sentence multiset of SKILL.md and
-#     references/workflow.md is the pinned one, navigation lines excluded.
+#     references/workflow.md and references/inputs.md is the pinned one, navigation excluded,
+#     and SKILL.md and the run guide stay within their size targets.
 # Run: tests/review-run-test.sh
 set -uo pipefail
 
@@ -42,6 +43,8 @@ echo "schema $SCHEMA_DEPTH $*" >> "${STUB_LOG:?}"
 src="schema pass: source modulestf/terraform-schema-mirror hashicorp_aws-v6.1.0 $(printf 'ab%.0s' $(seq 32))"
 case "${SCHEMA_STUB:-overflow}" in
   ok) mkdir -p "$1"; echo "$src"; echo "schema pass: focused, mirror stub, 1 sheets, 10 bytes"; exit 0 ;;
+  deeppartial) mkdir -p "$1"; echo '{"format": 1, "reasons": ["page"], "missing": []}' > "$1/missing.json"; echo "$src"
+    echo "schema pass: deep partial page, 1 sheets, 10 bytes, 1 types without a sheet"; exit 0 ;;
   badsource) mkdir -p "$1"; echo "$src"; echo "schema pass: source modulestf/m x \$(touch x)"; echo "schema pass: focused"; exit 0 ;;
 esac
 echo "schema pass: escalate overflow"; exit 3
@@ -189,7 +192,7 @@ ROOTD="$(cd "$TMPDIR" && pwd -P)"
 FR="$(mktemp -d "$ROOTD/pr-review.XXXXXX")"
 cp -R "$FX/." "$FR/"; rm -rf "$FR/expected" "$FR/reviewer"; mkdir "$FR/clone"
 run_rr handover "$FR" > "$TMP/h.out"
-sed -e "s#^Workspace: $FR/clone\$#Workspace: RUN/clone#" -e "s#^Diff: $FR/#Diff: RUN/#" "$FR/handover/task.md" > "$TMP/task.norm"
+sed -e "s#$FR/#RUN/#g" "$FR/handover/task.md" > "$TMP/task.norm"
 check "acceptance: handover reproduces the hand-assembled task byte for byte" "$(cmp -s "$TMP/task.norm" "$FX/expected/task.md"; echo $?)"
 check "acceptance: handover reproduces the hand-assembled verification record" "$(cmp -s "$FR/handover/record.txt" "$FX/expected/record.txt"; echo $?)"
 check "acceptance: handover prints at most 30 lines" "$(lines_ok "$TMP/h.out")"
@@ -247,8 +250,8 @@ run_rr handover "$RUN" > /dev/null 2>&1
 check "handover: refused before verify" "$([ $? = 1 ] && [ ! -e "$RUN/handover" ]; echo $?)"
 full
 check "verify: a light run with every example passing stays light" "$([ "$(jq -r .depth "$RUN/depth.json")" = light ]; echo $?)"
-check "plan: at light the coverage is --no-plan" \
-  "$(q "$RUN/coverage.json" '.class == "none" and (.unplanned | map(.reason) | unique) == ["no AWS profile named"]')"
+check "plan: at light every example is unplanned as skipped at light depth" \
+  "$(q "$RUN/coverage.json" '.class == "none" and (.unplanned | map(.reason) | unique) == ["plan pass skipped at light depth"]')"
 check "ladder: the claims evaluation ran" "$([ -f "$RUN/behaviour/run-behaviour.json" ]; echo $?)"
 run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render0" > /dev/null 2>&1
 check "render: refused before handover" "$([ $? = 1 ] && [ ! -e "$TMP/render0/comment.md" ]; echo $?)"
@@ -257,6 +260,10 @@ T="$RUN/handover/task.md"
 check "handover: Workspace first, Depth line before the block, record inside it" \
   "$([ "$(head -n 1 "$T")" = "Workspace: $RUN/clone" ] && grep -qx "Depth: $RUN/depth.json" "$T" &&
      awk '/^Depth: /{d=NR} /^UNTRUSTED-[0-9a-f]{12} BEGIN$/{b=NR} /^RECORD-[0-9a-f]{12}$/{r=NR} END{exit !(d < b && b < r)}' "$T"; echo $?)"
+check "handover: the merge base line names the bound merge base, the output line the review directory" \
+  "$(grep -qx "Merge base: $(jq -r .binding.merge_base "$RUN/depth.json")" "$T" &&
+     grep -qx "Output: write the findings list as JSON to $RUN/review/findings.json, the summary line to $RUN/review/summary.txt and the facts comparison note to $RUN/review/facts-comparison.txt, and nothing else." "$T" &&
+     [ -d "$RUN/review" ]; echo $?)"
 check "handover: the title's text stays inside the block" \
   "$(awk '/^UNTRUSTED-[0-9a-f]{12} BEGIN$/{exit} /title|body/{f=1} END{exit f}' "$T"; echo $?)"
 render_to "$TMP/render-light"
@@ -293,7 +300,14 @@ check "verify: a failed validate at light escalates to deep and re-pins depth.js
   "$(grep -q '^depth: escalated to deep (deep-validate-failed)$' "$TMP/v.out" && [ "$(jq -r .depth "$RUN/depth.json")" = deep ] &&
      [ "$(cat "$RUN/state/depth.sha256")" = "$(shasum -a 256 < "$RUN/depth.json" | cut -d' ' -f1)" ]; echo $?)"
 check "verify: prints at most 30 lines" "$(lines_ok "$TMP/v.out")"
-run_rr plan "$RUN" > /dev/null; run_rr ladder "$RUN" > /dev/null; run_rr handover "$RUN" > /dev/null
+run_rr plan "$RUN" > /dev/null; run_rr ladder "$RUN" > /dev/null
+run_rr handover "$RUN" > "$TMP/ho.out" 2>&1
+check "handover at deep without schema is refused" "$([ $? = 1 ] && grep -q 'at deep needs schema first' "$TMP/ho.out"; echo $?)"
+run_rr schema "$RUN" > "$TMP/s.out"
+check "schema at deep: a failure leaves no sheets and no escalation" \
+  "$(grep -q '^schema: no fact sheets at depth deep (reason overflow)' "$TMP/s.out" && ! grep -q escalated "$TMP/s.out"; echo $?)"
+run_rr handover "$RUN" > /dev/null
+check "handover at deep with no sheets names none" "$(! grep -q '^Provider fact sheets:' "$RUN/handover/task.md"; echo $?)"
 check "handover: the failed validate crosses with its decisive line" \
   "$(grep -q '^examples/one (all): terraform init -backend=false exit 0, terraform validate exit 1: Error: stub failure; at the merge base: new under this change$' "$RUN/handover/record.txt"; echo $?)"
 render_to "$TMP/render3"
@@ -336,7 +350,7 @@ run_rr cleanup "$RUN" > /dev/null
 DEPTH_STUB=focused prep
 run_rr schema "$RUN" > "$TMP/s.out"
 check "schema: an escalation at focused sets depth deep with its reason" \
-  "$(grep -q '^depth: escalated to deep (deep-schema-overflow)$' "$TMP/s.out" && grep -q "^schema $RUN/depth.json $RUN/facts $RUN/schema-work\$" "$STUB_LOG"; echo $?)"
+  "$(grep -q '^depth: escalated to deep (deep-schema-overflow)$' "$TMP/s.out" && grep -q '^schema: escalated to deep (reason overflow)$' "$TMP/s.out" && grep -q "^schema $RUN/depth.json $RUN/facts $RUN/schema-work\$" "$STUB_LOG"; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=focused prep
@@ -345,6 +359,15 @@ touch "$RUN/clone/examples/two/validate.fail"
 run_rr verify "$RUN" > "$TMP/v.out"
 check "verify: a new validate failure in an out-of-scope example escalates a focused run" \
   "$(grep -q '^depth: escalated to deep (deep-validate-failed)$' "$TMP/v.out" && [ "$(q "$RUN/depth.json" '.examples_out_of_scope == []')" = 0 ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+DEPTH_STUB=deep prep
+SCHEMA_STUB=deeppartial run_rr schema "$RUN" > "$TMP/s.out"
+check "schema at deep: a deep partial line is a success, its source lines recorded" \
+  "$(grep -q '^schema: schema pass: deep partial page' "$TMP/s.out" && [ "$(cat "$RUN/state/schema")" = ok ] && [ -f "$RUN/facts/missing.json" ] &&
+     [ "$(grep -c . "$RUN/state/schema-sources.txt")" = 1 ]; echo $?)"
+full; run_rr handover "$RUN" > /dev/null
+check "schema at deep: partial sheets are named in the handover" "$(grep -qx "Provider fact sheets: $RUN/facts" "$RUN/handover/task.md"; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=focused prep
@@ -519,7 +542,8 @@ else
   echo "skip end to end: no MTF_FACTS_BIN, and no Go toolchain or no facts checkout at $FACTS_SRC (set MTF_FACTS_SRC)"
 fi
 
-# --- 6. The workflow move: SKILL.md + references/workflow.md hold the pinned sentence multiset --------
+# --- 6. The SKILL.md move: SKILL.md, references/workflow.md and references/inputs.md hold the pinned
+# sentence multiset; the router's own text is headings, tables and block quotes only.
 # Sentences: the text of both files with fenced blocks, headings, table rows and block quotes
 # removed (the navigation the move added is only those), link targets dropped (the move changes
 # relative paths, never link text), list markers and emphasis stripped, split after ". ",
@@ -533,10 +557,12 @@ sentences() {
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
     sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | LC_ALL=C sort
 }
-sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" > "$TMP/sentences"
+sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
 want=e874ff98c3b6
+check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
+  "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"
 
 echo

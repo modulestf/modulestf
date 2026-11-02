@@ -78,7 +78,7 @@ def gap_reasons: ["terraform was not installed", "init failed", "not run: enviro
 # "plan pass did not run: refused" and "...: failed" are the host's, for a profile named and a plan
 # pass that gave no record (it refused its input, or failed); "no AWS profile named" means none was.
 def unplanned_reasons: ["no example directory", "no AWS profile named", "plan pass did not run: refused",
-  "plan pass did not run: failed", "not reached by the plan pass",
+  "plan pass did not run: failed", "plan pass skipped at light depth", "not reached by the plan pass",
   "code-error, merge base not planned", "environment", "needs input", "output unrecognised", "budget",
   "plan pass ended: credentials", "plan gate G0", "plan gate G1", "plan gate G2", "plan gate G3",
   "exception: example assumes a role in another account", "exception: needs a Docker daemon"];
@@ -261,6 +261,8 @@ def valid_run:
   and ((keys - ["behaviour", "depth", "examples", "plan_mode"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
   and ((has("behaviour") | not) or (.behaviour | valid_behaviour))
   and ((has("depth") | not) or (.depth | valid_depth))
+  # The host writes "plan pass skipped at light depth" at light only, where the plan pass is out of scope.
+  and ((any(.coverage.unplanned[]?; .reason == "plan pass skipped at light depth") | not) or .depth.depth? == "light")
   # The plan pass mode of the plan record, and the example counts the COMPACT verdict line states.
   and ((has("plan_mode") | not) or (.plan_mode | IN("laptop", "runner")))
   and ((has("examples") | not) or (.examples | type == "object" and keys == ["count", "validated"]

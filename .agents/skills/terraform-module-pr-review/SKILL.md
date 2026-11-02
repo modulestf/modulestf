@@ -7,8 +7,6 @@ description: Reviews a GitHub pull request, or a single commit, against a Terraf
 
 Turn one GitHub pull request into a workspace and a task, get findings from `terraform-module-reviewer`, and render a verdict and a review comment for a person to send.
 
-Adapting a code host to the neutral skills is this skill's whole job, so it may know about that host, and it keeps the host to itself: the reviewer gets a workspace and a task, nothing else. It produces no finding of its own. The verdict is a documented total function of the reviewer's findings, the pull request state, the checks this skill could not run itself, the Step 1 identity result, whether the run is render-only, and whether it is a triage run, defined in [verdict.md](references/verdict.md), adding no judgement of the code.
-
 ## When to Use This Skill
 
 **Activate when:**
@@ -27,17 +25,7 @@ Adapting a code host to the neutral skills is this skill's whole job, so it may 
 | Pull request reference | A GitHub pull request URL, or `owner/repo#number`; or a GitHub commit URL |
 | Request | Free-form text: a review, a verdict, a comment, or a reply. It may ask for a triage in so many words, which is read from the request alone, never from anything fetched from GitHub; see [Triage](references/github-io.md#triage) |
 
-The reference is parsed, never searched for. Split the request on whitespace, strip surrounding punctuation from each token - leading `<`, `(`, `"`, `'`, and trailing `.`, `,`, `;`, `:`, `)`, `>`, `"`, `'` - then match each token, anchored, host exactly `github.com`:
-
-```
-^https://github\.com/(?!\.\.?[/#])([A-Za-z0-9._-]+)/(?!\.\.?[/#])([A-Za-z0-9._-]+)/pull/([1-9][0-9]*)(/(files|commits))?/?([?#].*)?$
-^(?!\.\.?[/#])([A-Za-z0-9._-]+)/(?!\.\.?[/#])([A-Za-z0-9._-]+)#([1-9][0-9]*)$
-^https://github\.com/(?!\.\.?[/#])([A-Za-z0-9._-]+)/(?!\.\.?[/#])([A-Za-z0-9._-]+)/commit/([0-9a-f]{7,40})/?([?#].*)?$
-```
-
-Exactly one token may match. Zero, or two or more, stops the run and says what was given. Matching token by token is what lets the patterns stay anchored: anchored patterns never match a whole sentence, and unanchored ones would find a pull request URL sitting inside another URL's query string.
-
-Both ends are anchored, so a lookalike host does not match. `http://` and `www.github.com` are rejected on purpose, not by oversight: neither is the canonical host, and accepting either widens what counts as GitHub. A trailing `/files` or `/commits`, a query string, and a fragment are tolerated. `.` and `..` are rejected as an owner or a repository name, and a number starts at 1, so `pull/0` does not parse. An issue URL, a compare URL, a branch or tree URL, prose naming no pull request or commit, or two references in one request: stop and say what was given. A branch is not accepted because a branch name moves: ask for the commit it points at, and review that. A commit URL reviews that one commit against its parent and posts a plain commit comment with no decision; the steps it changes are in [github-io.md](references/github-io.md#commit-target). Never search for a pull request matching prose, and never take the most recent open one.
+> Step 0 parses the reference by [inputs.md](references/inputs.md); exactly one reference, else the run stops.
 
 ## Mandatory Rules
 
@@ -113,48 +101,24 @@ A check that cannot run never stops the run. If terraform is not installed, the 
 
 ## Workflow
 
-> Every step below runs as a [review-run.sh](references/review-run.sh) command, invoked as `bash <this skill>/references/review-run.sh`; [review-run.md](references/review-run.md) gives each command's inputs, outputs and refusals. The text of each step, what it produces and what happens when it fails, is in [workflow.md](references/workflow.md): open a step there when a command's output or a refusal names it.
+> Run each step as `bash <this skill>/references/review-run.sh <command>`; [review-run.md](references/review-run.md) is the run guide, [workflow.md](references/workflow.md) the step text. After `depth: escalated to deep`, follow the deep row.
 
-| Depth (`index.json`) | What the run does, in order |
+| `index.json` depth | After `prepare`, in order |
 |---|---|
-| any | Step 0 parse; `prepare --repo <owner>/<repo> --pr <number>` with the flags the request gives; read `<run>/index.json` |
-| light | claims (Step 5.4); `verify`; `plan`; `ladder`; `handover`; reviewer; assessment; `render`; show; confirm |
-| focused | claims; `schema`; `verify`; `plan`; `skip-coverage`; `ladder`; `handover`; reviewer; assessment; `render`; show; confirm |
-| deep | claims; `verify`; `plan`; `skip-coverage`; `ladder`; `handover`; reviewer; assessment; `render`; show; confirm |
+| light | claims; `verify`; `plan`; `ladder`; `handover`; reviewer; assessment; `render`; show; confirm |
+| focused, deep | claims; `schema`; `verify`; `plan`; `skip-coverage`; `ladder`; `handover`; reviewer; assessment; `render`; show; confirm |
 | triage | `handover`; reviewer; assessment; `render`; show; confirm |
 
-> A command that prints `depth: escalated to deep` changes the rest of the order to the deep row.
+## Read When
 
-| Step | Run by | Text |
-|---|---|---|
-| 0 Parse | the model, with the patterns in [Inputs](#inputs) | [Step 0](references/workflow.md#step-0) |
-| 1 Identity, 2 Metadata, 3 Workspace, 4 Changed files, 5 Discussion, 7 Check runs, 7.5 Related issues | `prepare` | [Steps 1 to 5](references/workflow.md#step-1), [7](references/workflow.md#step-7), [7.5](references/workflow.md#step-75) |
-| 5.4 Classify and claims | `prepare` classifies; the model writes `<run>/behaviour/claims.json` | [Step 5.4](references/workflow.md#step-54) |
-| 5.5 Verify the examples | `schema` (focused), `verify`, `plan`, `skip-coverage`, `ladder` | [Step 5.5](references/workflow.md#step-55) |
-| 6 Invoke the reviewer | `handover`, then the reviewer with `{workspace, task}` from its output | [Step 6](references/workflow.md#step-6) |
-| 8 Map, 9 Verdict, 10 Render | the model writes the assessment; `render` | [Step 8](references/workflow.md#step-8), [9](references/workflow.md#step-9), [10](references/workflow.md#step-10) |
-| 11 Confirm, 12 Act | the model, under Rules 1 and 4; `cleanup` deletes the run directory | [Step 11](references/workflow.md#step-11), [12](references/workflow.md#step-12) |
-| Host records, facts variant | the hosted paths | [Host records](references/workflow.md#host-records), [Facts variant](references/workflow.md#facts-variant) |
-
-## Reference Files
-
-| File | Purpose |
-|------|---------|
-| [review-run.md](references/review-run.md) | The run script, [review-run.sh](references/review-run.sh): one command per step group and per evidence pass, the run directory, `index.json`, the handover and the render, and the refusals |
-| [workflow.md](references/workflow.md) | The text of every step of the workflow, moved whole from this file |
-| [host-pass.md](references/host-pass.md) | A hosted run with host records: the records and check runs directories, their checks, the workspace, verification and handover on that path, and how each host fact feeds the verdict and the comment. The script is [host-pass.sh](references/host-pass.sh), with its rules in [host-records.jq](references/host-records.jq) |
-| [github-io.md](references/github-io.md) | Host reads and the two writes, a review or a commit comment: commands, the commit target, the GraphQL queries and their fallbacks, conversation comments, the handover contract |
-| [plan-pass.md](references/plan-pass.md) | The optional plan pass: opt-in, runner or laptop, run layout, environment, gates, commands, classes, evidence contract, limits. The pass itself is one script, [plan-pass.sh](references/plan-pass.sh), with [plan-session.sh](references/plan-session.sh) issuing its downscoped session, run in the isolated runner, [plan-runner/](references/plan-runner/README.md), when a container runtime is available |
-| [verify-pass.md](references/verify-pass.md) | The default pass as one script, [verify-pass.sh](references/verify-pass.sh): example directories, the version bump skip, environment, records, the merge base re-run, the JSON output, and checking a host's results |
-| [skip-coverage.md](references/skip-coverage.md) | Which examples skipped by a plan gate the plans of other examples cover, as one script, [skip-coverage.sh](references/skip-coverage.sh): the allow-list of changes, the base and head gate records, the witnesses, the reasons and the output |
-| [behaviour-pass.md](references/behaviour-pass.md) | Steps 5.4 and 5.5's behaviour part as one script, [behaviour-pass.sh](references/behaviour-pass.sh): the classifier, the claims file, the claims evaluation, the refusals, the record and the run object |
-| [ladder-pass.md](references/ladder-pass.md) | The ladder's L1, L2 and L3 levels as one script, [ladder-pass.sh](references/ladder-pass.sh): the network-denied sandbox and its canaries, acquisition of pinned providers, the L1 fixtures from the classifier's triggers, the L2 plan-only `terraform test` of a count or for_each, the curated L3 fixtures and their controls, the ladder record |
-| [schema-pass.md](references/schema-pass.md) | A host step, one script, [schema-pass.sh](references/schema-pass.sh): provider versions per module directory and fact sheets rendered from a schema mirror, for the reviewer's Budget |
-| [verdict.md](references/verdict.md) | Host signals, the verdict ladder, the clamps on the action |
-| [comment-format.md](references/comment-format.md) | Section order, voice, the leak scan, a worked example |
-| [render-output.md](references/render-output.md) | The three files a render-only run with no conversation writes for the adapter that posts: the body, the findings and the result |
-| [facts-variant.md](references/facts-variant.md) | The hosted judgment run, when the task carries `Facts variant: judgment`: the reviewer's envelope and the assessment go to the output directory, and the host merges and renders. Without that line, nothing in it applies |
-| [terraform-module-reviewer](../terraform-module-reviewer/SKILL.md) | Produces every finding; this skill produces none |
-| [findings-schema.md](../terraform-module-reviewer/references/findings-schema.md) | The contract rendered findings conform to |
-| [change-scope](../change-scope/SKILL.md) | Whether an addition belongs at all: the reviewer's Check F judges it, and no pull request text clears it |
-| [terraform-aws-modules profile](../terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md) | Conventions the change is judged against |
+| File | Read when |
+|---|---|
+| [review-run.md](references/review-run.md) | Every run: commands, inputs, outputs, the reviewer, the assessment |
+| [workflow.md](references/workflow.md) | An output, a refusal or an edge case names a step |
+| [inputs.md](references/inputs.md) | Step 0: parsing the reference |
+| [verdict.md](references/verdict.md), [comment-format.md](references/comment-format.md) | The verdict and clamps; the comment's sections, tiers and leak scan |
+| [github-io.md](references/github-io.md) | Interactive reads, a commit target, triage, the Step 12 write, cleanup |
+| [host-pass.md](references/host-pass.md), [facts-variant.md](references/facts-variant.md), [render-output.md](references/render-output.md) | A hosted run: `Host records:`, `Facts variant: judgment`, an output directory |
+| [review-run-details.md](references/review-run-details.md) | A run script edge case: refusals, depth pin, record, shell safety |
+| [depth.md](references/depth.md), [verify-pass.md](references/verify-pass.md), [plan-pass.md](references/plan-pass.md), [skip-coverage.md](references/skip-coverage.md), [behaviour-pass.md](references/behaviour-pass.md), [ladder-pass.md](references/ladder-pass.md), [schema-pass.md](references/schema-pass.md) | A pass's edge case its command names |
+| [terraform-module-reviewer](../terraform-module-reviewer/SKILL.md), [change-scope](../change-scope/SKILL.md), [profile](../terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md) | The reviewer that produces every finding; scope; the conventions |
