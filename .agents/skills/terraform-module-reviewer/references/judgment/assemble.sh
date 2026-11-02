@@ -119,7 +119,7 @@ echo
 # Reading by Depth and the section helper serve the full variant, which reads by run
 # summary; the host's schema trust terms bind the host step, not a judgment run.
 copy "$S/SKILL.md" "../../" "Skill" \
-  "h:When to Use This Skill|h:Reading by Depth|h:Responsibility Boundaries|h:Output|h:Reference Files|h:Check A: Backwards Compatibility|h:Check B: Coverage Gaps Against the Provider Schema|h:Check C: Module Structure|h:Check D: Examples|h:Check E: Profile Conventions|h:Check F: Scope|h:Check G: Behaviour Changes and Claims|l:^8[.] If .mtf-facts. is installed|l:^Classify the changed paths, order the areas|l:^Each check.s full [*][*]Reads|l:^The .rule_id. values named in the checks above|l:^- A third addition: this skill.s own|l:^Trust anchors [(]provider source allowlist|l:^[*][*]See:[*][*] .Schema Validation Guide."
+  "h:When to Use This Skill|h:Reading by Depth|h:Responsibility Boundaries|h:Output|h:Reference Files|h:Check A: Backwards Compatibility|h:Check B: Coverage Gaps Against the Provider Schema|h:Check C: Module Structure|h:Check D: Examples|h:Check E: Profile Conventions|h:Check F: Scope|h:Check G: Behaviour Changes and Claims|l:^8[.] If .mtf-facts. is installed|l:^Classify the changed paths, order the areas|l:^Each check.s full [*][*]Reads|l:^The .rule_id. values named in the checks above|l:^- With it, the diff file the caller.s own task text names|l:^- A third addition: this skill.s own|l:^Trust anchors [(]provider source allowlist|l:^[*][*]See:[*][*] .Schema Validation Guide."
 for c in $CHECKS; do
   echo
   # Pointer lines to the engine files and the rule id lists say nothing a judgment run needs.

@@ -1,14 +1,18 @@
 #!/bin/bash
-# Prints one section of a markdown file of this skill: the heading whose slug is ANCHOR,
-# down to the line before the next heading of the same or a higher level.
+# Prints one section of a markdown file of this skill or of a sibling skill it links to: the
+# heading whose slug is ANCHOR, down to the line before the next heading of the same or a
+# higher level.
 #   bash section.sh <file> <anchor>
-# FILE is relative to the skill root, as references/check-a-compatibility.md, or an
-# absolute path inside it. A link in a run summary, ../x.md#y, is references/x.md and y.
+# FILE is relative to the skill root, as references/check-a-compatibility.md, or absolute.
+# It must resolve inside the skills directory that holds this skill, so a link to a sibling
+# skill, such as ../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md,
+# works and nothing outside that directory does. A link in a run summary, ../x.md#y, is
+# references/x.md and y; a link in a reference file resolves from that file's directory.
 # ANCHOR is the slug of the heading, with or without its leading #, by the rule
 # tests/skills-test.sh checks links with. Headings inside fenced code and front matter are
 # not headings. The script reads that one file and writes only to stdout.
 # Exit status: 0 printed; 1 no heading or more than one has that slug; 2 usage, or a
-# file that is not a regular .md file inside the skill, a symbolic link included.
+# file that is not a regular .md file inside the skills directory, a symbolic link included.
 set -eu
 unset CDPATH
 export LC_ALL=C
@@ -18,6 +22,8 @@ refuse() { echo "section.sh: $1" >&2; exit 2; }
 
 case "$0" in */*) h="${0%/*}" ;; *) h=. ;; esac
 S="$(cd "$h/.." && pwd -P)"
+K="${S%/*}"
+[ -n "$K" ] || refuse "the skill has no skills directory"
 f="$1"
 a="${2#\#}"
 case "$a" in '' | *[!a-z0-9_-]*) refuse "not an anchor: $2" ;; esac
@@ -27,7 +33,7 @@ b="${f##*/}"
 [ -n "$d" ] || d=/
 case "$b" in *.md) ;; *) refuse "not a markdown file: $1" ;; esac
 r="$(cd "$d" 2> /dev/null && pwd -P)" || refuse "no such directory: $1"
-case "$r/" in "$S"/*) ;; *) refuse "outside the skill: $1" ;; esac
+case "$r/" in "$K"/*) ;; *) refuse "outside the skills directory: $1" ;; esac
 [ -f "$r/$b" ] && [ ! -L "$r/$b" ] || refuse "not a regular file: $1"
 
 awk -v want="$a" '
