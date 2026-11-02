@@ -1,0 +1,54 @@
+{
+  "selection": {
+    "tool": "mtf-facts",
+    "fallback": null,
+    "inert": false
+  },
+  "dirs": [
+    {
+      "dir": "examples/alpha",
+      "reason": "verified",
+      "affected": "caller"
+    },
+    {
+      "dir": "examples/bravo",
+      "reason": "verified",
+      "affected": "caller"
+    },
+    {
+      "dir": "examples/charlie",
+      "reason": "verified",
+      "affected": "caller"
+    },
+    {
+      "dir": "examples/delta",
+      "reason": "verified",
+      "affected": "caller"
+    },
+    {
+      "dir": "examples/echo",
+      "reason": "verified",
+      "affected": "caller"
+    },
+    {
+      "dir": "examples/foxtrot",
+      "reason": "verified",
+      "affected": "caller"
+    },
+    {
+      "dir": "examples/golf",
+      "reason": "verified",
+      "affected": "caller"
+    },
+    {
+      "dir": "examples/hotel",
+      "reason": "verified",
+      "affected": "caller"
+    },
+    {
+      "dir": "examples/india",
+      "reason": "verified",
+      "affected": "all"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+[
+  {
+    "filename": "main.tf",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 1,
+    "patch": "@@ -153,7 +153,7 @@ resource \"aws_rds_cluster\" \"this\" {\n   storage_encrypted      = var.storage_encrypted\n   storage_type           = var.storage_type\n   tags                   = merge(var.tags, var.cluster_tags)\n-  vpc_security_group_ids = compact(concat(aws_security_group.this[*].id, var.vpc_security_group_ids))\n+  vpc_security_group_ids = concat(aws_security_group.this[*].id, var.vpc_security_group_ids)\n \n   dynamic \"timeouts\" {\n     for_each = var.cluster_timeouts != null ? [var.cluster_timeouts] : []"
+  }
+]

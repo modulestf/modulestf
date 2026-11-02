@@ -1,0 +1,40 @@
+{
+  "status": "ran",
+  "reason": null,
+  "triggers": [
+    {
+      "id": "T-001",
+      "file": "main.tf",
+      "line": 156,
+      "category": "wrapper-change",
+      "state": "unverifiable",
+      "also_categories": [
+        "unknown-propagation-candidate"
+      ],
+      "complete": true,
+      "outstanding": [
+        "T-001|L1|null-element.empty|length",
+        "T-001|L1|null-element.empty|value",
+        "T-001|L1|null-element.known|length",
+        "T-001|L1|null-element.known|value",
+        "T-001|L3|null-element.unknown-element|error"
+      ],
+      "evidence_digest": "154973851678c6afeeda4a3d53d9809652c0d726a4ac9238c3ab188a53ecd9d4"
+    }
+  ],
+  "claims": [
+    {
+      "claim_id": "C-1",
+      "state": "verified"
+    },
+    {
+      "claim_id": "C-2",
+      "state": "verified"
+    },
+    {
+      "claim_id": "C-3",
+      "state": "verified"
+    }
+  ],
+  "capped": 0
+}

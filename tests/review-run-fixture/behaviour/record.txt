@@ -1,0 +1,9 @@
+behaviour: ran, 1 triggers, 0 over the cap
+trigger T-001 `main.tf` line 156 wrapper-change: unverifiable, complete, outstanding 5, digest 154973851678c6afeeda4a3d53d9809652c0d726a4ac9238c3ab188a53ecd9d4
+change T-001 L1 case typical.unknown-element wholly_unknown: explained by C-1, C-2
+change T-001 L1 case typical.unknown-element unknown_mask: explained by C-1, C-2
+change T-001 L1 case typical.unknown-element length: explained by C-1, C-2
+change T-001 L1 case null-element.empty length: unexplained
+claim C-1 on T-001 at base, expression-output-unknown: verified
+claim C-2 on T-001 at head, expression-output-length-known: verified
+claim C-3 on T-001 at base, expression-output-unknown: verified
