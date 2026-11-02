@@ -11,12 +11,17 @@
 # - every level-2 section of the check file and the engine file is linked from the summary;
 # - SKILL.md links every summary, and each summary's Read First links its check file's first
 #   section;
+# - SKILL.md's Reading by Depth makes a row hold when the mtf-facts report gives its rule a
+#   finding or candidate, and facts-engine.md pairs `row not applied` only with clean or
+#   not_applicable;
 # - every check file and engine file holds, headings aside, the same multiset of sentences as
 #   at the merge base with master, so spec text is moved, never rewritten. Without a master
 #   ref the comparison is skipped with a note.
 # references/section.sh prints, for every heading of every markdown file of the skill,
-# exactly the lines from the heading to the next heading of the same or a higher level, and
-# refuses a path outside the skill, a symbolic link, a file that is not markdown, a value that
+# exactly the lines from the heading to the next heading of the same or a higher level; it
+# prints the section of every relative link with an anchor from a run summary, check file or
+# engine file to a markdown file, in this skill or a sibling skill; and it refuses a path
+# outside the skills directory, a symbolic link, a file that is not markdown, a value that
 # is not an anchor and a slug two headings share. A negative self-check mutates temp copies
 # of the skill and requires each mutation to be reported under the invariant it breaks.
 # Run: tests/reviewer-index-test.sh
@@ -87,6 +92,13 @@ if [ -n "$BASE" ]; then
       mkdir -p "$TMP/base/$(dirname "$f")"; sentences "$TMP/base/f" > "$TMP/base/$f"
     done
   done
+  # Sentences added on purpose since the merge base, each with the file it is in. Only engine
+  # criteria (Confirm when) may grow here; rule text is moved, never added to.
+  while IFS=$'\t' read -r f t; do
+    [ -f "$TMP/base/$f" ] && { cat "$TMP/base/$f"; printf '%s\n' "$t"; } | sort > "$TMP/base/add" && mv "$TMP/base/add" "$TMP/base/$f"
+  done <<'ADDED'
+references/engine/check-f-scope.md	- Both bullets must hold.
+ADDED
 fi
 
 # index_check DIR: one line per problem with the summaries of the skill at DIR:
@@ -103,6 +115,12 @@ index_check() {
       gsub(/^ +| +$/, "", f); gsub(/^ +| +$/, "", p)
       print id "\t" f (p == "-" ? "" : "; page entry when: " p)
     }' "$rf" > "$TMP/ix-facts"
+  bash "$d/references/section.sh" SKILL.md reading-by-depth 2> /dev/null |
+    grep -F -q 'gives a finding or candidate for, in any area, holds whatever its condition says' ||
+    printf 'facts rows\tSKILL.md#reading-by-depth\ta facts-engine finding or candidate does not make its row hold\n'
+  bash "$d/references/section.sh" references/facts-engine.md facts-comparison 2> /dev/null |
+    grep -F -q '`row not applied` pairs only with a tool `clean` or `not_applicable`' ||
+    printf 'facts rows\treferences/facts-engine.md#facts-comparison\t`row not applied` is not limited to clean and not_applicable\n'
   for pair in $CHECKS; do
     x="${pair%%:*}"; spec="${pair#*:}"; sum="references/run/check-$x.md"
     if [ ! -f "$d/$sum" ]; then printf 'summary\t%s\tmissing\n' "$sum"; continue; fi
@@ -219,10 +237,40 @@ section_check() {
   done < "$TMP/sc/list"
 }
 
+# link_check DIR: every relative link with an anchor from a run summary, check file or engine
+# file of the skill at DIR to a markdown file, resolved from the linking file's directory,
+# prints through section.sh. DIR's sibling skills are the link targets outside it.
+link_check() {
+  local d="$1" n=0
+  (cd "$d" && for f in references/run/*.md references/check-*.md references/engine/*.md; do
+    awk -v f="$f" '{ t = $0; gsub(/`[^`]*`/, " ", t)
+      while (match(t, /\]\([^)]*\)/)) { l = substr(t, RSTART + 2, RLENGTH - 3); t = substr(t, RSTART + RLENGTH)
+        if (l !~ /^[a-z]+:/ && l ~ /^[^#]+\.md#./) print f "\t" l } }' "$f"
+  done) | awk -F'\t' '
+    function norm(p,   n, part, i, k, out, r) {   # relative to the skill root, .. kept above it
+      n = split(p, part, "/"); k = 0; up = ""
+      for (i = 1; i <= n; i++) {
+        if (part[i] == "" || part[i] == ".") continue
+        if (part[i] == "..") { if (k > 0) k--; else up = up "../"; continue }
+        out[++k] = part[i]
+      }
+      r = up; for (i = 1; i <= k; i++) r = r (i > 1 ? "/" : "") out[i]
+      return r
+    }
+    { dir = $1; sub(/\/[^\/]*$/, "", dir); l = $2; a = substr(l, index(l, "#") + 1)
+      print norm(dir "/" substr(l, 1, index(l, "#") - 1)) "\t" a }' | sort -u > "$TMP/lc-targets"
+  while IFS=$'\t' read -r f a; do
+    n=$((n + 1))
+    bash "$d/references/section.sh" "$f" "$a" > /dev/null 2>&1 ||
+      printf 'cross link\t%s#%s\tsection.sh does not print it\n' "$f" "$a"
+  done < "$TMP/lc-targets"
+  echo "$n" > "$TMP/lc-count"
+}
+
 # refusal_check DIR: section.sh's refusals and fixtures, on a temp copy of the skill at DIR.
 refusal_check() {
-  local c="$TMP/rc" h out rc
-  rm -rf "$c" "$TMP/out"; cp -R "$1" "$c"; mkdir "$TMP/out"
+  local c="$TMP/rc/skills/reviewer" h out rc
+  rm -rf "$TMP/rc" "$TMP/out"; mkdir -p "$TMP/rc/skills"; cp -R "$1" "$c"; mkdir "$TMP/out"
   h="$c/references/section.sh"
   printf '# Outside\n\ntext\n' > "$TMP/out/x.md"
   ln -s "$TMP/out/x.md" "$c/references/link.md"
@@ -235,7 +283,9 @@ refusal_check() {
     [ "$rc" = "$want" ] || printf 'refusal\t%s\texits %s, not %s\n' "$what" "$rc" "$want"
     [ "$want" = 0 ] || [ -z "$out" ] || printf 'refusal\t%s\tprinted output\n' "$what"
   }
-  expect 2 "an absolute path outside the skill" "$TMP/out/x.md" outside
+  printf '# Sibling\n\n## Part\n\ns\n' > "$TMP/rc/skills/sibling.md"
+  expect 2 "an absolute path outside the skills directory" "$TMP/out/x.md" outside
+  expect 0 "a file of a sibling skill" ../sibling.md part
   expect 2 "a relative path that climbs out" "references/../../../../../../../../$TMP/out/x.md" outside
   expect 2 "a symbolic link to a file outside" references/link.md outside
   expect 2 "a file under a linked directory" references/linkdir/x.md outside
@@ -265,20 +315,25 @@ report() { # label: lines on stdin, each reported as a failure
 report "run summaries" < <(index_check "$RSK") && echo "ok   run summaries ($(cat "$RSK"/references/run/check-*.md | grep -cE '^\| `[a-z]+\.') rows)"
 report "section helper" < <(section_check "$RSK") && echo "ok   section helper ($(wc -l < "$TMP/sc/list" | tr -d ' ') sections)"
 report "section refusals" < <(refusal_check "$RSK") && echo "ok   section refusals"
+report "cross links" < <(link_check "$RSK") && echo "ok   cross links ($(cat "$TMP/lc-count") targets)"
 
 # Negative self-check: each sed script changes one file of a temp copy of the skill, and the
 # result must be reported under the invariant it breaks.
 nmut=0
 while IFS='~' read -r name inv target script; do
   nmut=$((nmut + 1))
-  rm -rf "$TMP/mut"; cp -R "$RSK" "$TMP/mut"
-  sed "$script" "$TMP/mut/$target" > "$TMP/mut-sed" && cat "$TMP/mut-sed" > "$TMP/mut/$target"
-  if cmp -s "$TMP/mut/$target" "$RSK/$target"; then fail "self-check" "$target" "$name (the mutation changed nothing)"; continue; fi
-  case "$target" in
-    references/section.sh)
-      { section_check "$TMP/mut" references/check-f-scope.md references/verification-ladder.md
-        refusal_check "$TMP/mut"; } > "$TMP/mut-out" ;;
-    *) index_check "$TMP/mut" > "$TMP/mut-out" ;;
+  # The copy keeps the sibling skills, the targets of cross-skill links.
+  rm -rf "$TMP/mut"; cp -R "${RSK%/*}" "$TMP/mut"; m="$TMP/mut/${RSK##*/}"
+  sed "$script" "$m/$target" > "$TMP/mut-sed" && cat "$TMP/mut-sed" > "$m/$target"
+  if cmp -s "$m/$target" "$RSK/$target"; then fail "self-check" "$target" "$name (the mutation changed nothing)"; continue; fi
+  case "$inv" in
+    "cross link") link_check "$m" > "$TMP/mut-out" ;;
+    *) case "$target" in
+         references/section.sh)
+           { section_check "$m" references/check-f-scope.md references/verification-ladder.md
+             refusal_check "$m"; } > "$TMP/mut-out" ;;
+         *) index_check "$m" > "$TMP/mut-out" ;;
+       esac ;;
   esac
   cut -f1 "$TMP/mut-out" | grep -F -x -q "$inv" || fail "self-check" "$target" "$name is not reported as $inv"
 done <<'EOF'
@@ -297,9 +352,12 @@ a summary SKILL.md does not link~skill links~SKILL.md~s/(references\/run\/check-
 a sentence of the spec rewritten~sentences~references/check-g-behaviour.md~s/^- `claim.refuted`: a `claim` line has state `refuted`/- `claim.refuted`: a `claim` line says `refuted`/
 a sentence of an engine file rewritten~sentences~references/engine/check-d-examples.md~s/^- A submodule added by the change has no example of its own\./- A submodule added by the change has no example./
 Read First dropped~read first~references/run/check-a.md~/^When any row below applies: /d
+a facts-engine candidate no longer forcing its row~facts rows~SKILL.md~s/ A row whose rule the `mtf-facts` report of Step 1 gives a finding or candidate for, in any area, holds whatever its condition says: its sections are opened and the rule is judged\.//
+row not applied paired with a candidate again~facts rows~references/facts-engine.md~s/ so `row not applied` pairs only with a tool `clean` or `not_applicable`\./ so `row not applied` pairs with any tool result./
 section.sh past the next heading~section.sh~references/section.sh~s/if (on \&\& lvl <= on) on = 0/if (on \&\& lvl < on) on = 0/
 section.sh stopping at a deeper heading~section.sh~references/section.sh~s/if (on \&\& lvl <= on) on = 0/if (on) on = 0/
 section.sh reading fenced headings~section.sh fixture~references/section.sh~s/} else if (fence == 0 \&\& /} if (/
+section.sh bounded by its own skill~cross link~references/section.sh~s/case "\$r\/" in "\$K"\/\*)/case "$r\/" in "$S"\/*)/
 section.sh without the skill boundary~refusal~references/section.sh~/outside the skill/d
 section.sh following a symbolic link~refusal~references/section.sh~s/ \&\& \[ ! -L "\$r\/\$b" \]//
 section.sh taking any anchor~refusal~references/section.sh~/not an anchor/d

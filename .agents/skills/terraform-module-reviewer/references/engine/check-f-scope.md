@@ -211,6 +211,7 @@ Copied from the check file's outcome table, which also covers `llm` rules:
 
 - The root `README.md` at the head lacks the `SWUbanner` line of the profile's `templates/README.md.template`, byte for byte.
 - The change removes the line, or adds a root `README.md` without it.
+- Both bullets must hold.
 
 ### Host templates: `scope.readme-banner`
 
