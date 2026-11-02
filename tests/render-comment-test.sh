@@ -1008,12 +1008,14 @@ ladder "behaviour verified, covered and inert with a LOW finding" "approve with 
 ! grep -q 'Behaviour evidence' "$O/comment.md"; check "behaviour: every trigger and claim passed renders no evidence line" $?
 BUV="$(brun uv "[$(bt T-001 wrapper-change unverifiable), $(bt T-002 unknown-propagation-candidate unverifiable)]" '[{claim_id: "C-1", state: "unverifiable"}]')"
 render "$LOWF" "" "" "$BUV"
-grep -qxF 'Behaviour evidence: 2 changes classified: 0 verified, 0 covered by a plan, 0 inert, 0 refuted, 2 not verified; 1 claims: 0 verified, 0 refuted, 1 not verified.' "$O/comment.md"
+grep -qxF 'Behaviour evidence: 2 changes classified: 0 verified, 0 covered by a plan, 0 inert, 0 refuted, 2 not verified; 1 claim: 0 verified, 0 refuted, 1 not verified.' "$O/comment.md"
 check "behaviour: the evidence line follows the rationale" $?
 awk 'p == "A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4)." && /^$/ { getline; print; exit } { p = $0 }' "$O/comment.md" | grep -q '^Behaviour evidence: '
 check "behaviour: the evidence line is the paragraph after the rationale" $?
 render "$LOWF" "" "" "$(brun one-uv "[$(bt T-001 wrapper-change verified)]" '[{claim_id: "C-1", state: "verified"}, {claim_id: "C-2", state: "unverifiable"}]')"
-grep -q '^Behaviour evidence: 1 changes classified: 1 verified' "$O/comment.md"; check "behaviour: one unverified claim beside passing triggers keeps the evidence line" $?
+t_one_change() { render "$LOWF" "" "" "$(brun one-uv "[$(bt T-001 wrapper-change verified)]" '[{claim_id: "C-1", state: "verified"}, {claim_id: "C-2", state: "unverifiable"}]')"
+  grep -qxF 'Behaviour evidence: 1 change classified: 1 verified, 0 covered by a plan, 0 inert, 0 refuted, 0 not verified; 2 claims: 1 verified, 0 refuted, 1 not verified.' "$O/comment.md"; }
+t_one_change; check "behaviour: one unverified claim beside passing triggers keeps the evidence line, 1 change in the one form" $?
 ladder "an inert change" "approve APPROVE" 8 "$NONE" "" "" "$(brun inert '[]' '[]')"
 ! grep -q 'Behaviour evidence' "$O/comment.md"; check "behaviour: nothing classified renders no evidence line" $?
 ladder "an unverified trigger with a LOW finding" "inconclusive COMMENT" 4 "$LOWF" "" "" "$BUV"
@@ -1092,7 +1094,7 @@ ladder "a refuted state beside a CRITICAL non-compat finding" "block REQUEST_CHA
 cat > "$TMP/want-crit-ref" <<'EOT'
 A CRITICAL finding is open. Any CRITICAL finding blocks merge (ladder rule 1).
 
-Behaviour evidence: 1 changes classified: 0 verified, 0 covered by a plan, 0 inert, 1 refuted, 0 not verified; 1 claims: 0 verified, 1 refuted, 0 not verified.
+Behaviour evidence: 1 change classified: 0 verified, 0 covered by a plan, 0 inert, 1 refuted, 0 not verified; 1 claim: 0 verified, 1 refuted, 0 not verified.
 
 ### What to do
 
@@ -1216,7 +1218,7 @@ awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" | cm
   '  - `examples/serverless`' '  - `examples/s3-import`' '- 1 example was not planned: plan gate G3.' '  - `examples/mysql`')
 check "tiers: STANDARD section 5 groups the not-planned examples by reason, golden, and lists no reported trigger" $?
 rc "$(F556)" "$(R556 gold-std-uv '.behaviour.claims[0].state = "unverifiable"')" "" --standard
-grep -qxF 'Behaviour evidence: 1 changes classified: 0 verified, 0 covered by a plan, 0 inert, 1 reported in a finding, 0 refuted, 0 not verified; 20 claims: 19 verified, 0 refuted, 1 not verified.' "$O/comment.md"
+grep -qxF 'Behaviour evidence: 1 change classified: 0 verified, 0 covered by a plan, 0 inert, 1 reported in a finding, 0 refuted, 0 not verified; 20 claims: 19 verified, 0 refuted, 1 not verified.' "$O/comment.md"
 check "tiers: the STANDARD evidence line counts the reported trigger" $?
 t_cut() { rc "$(F556)" "$(R556 cut)" "$(host cut1 '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 31}]')"; [ "$(tier)" = COMPACT ] &&
   grep -qF 'Not checked: the description past 8000 bytes (31 cut), 3 of 9 examples not planned (example code is not run with credentials outside an isolated runner; a limit of the review, not a finding).' "$O/comment.md"; }
@@ -1955,6 +1957,22 @@ mutate "the no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\(
 mutate "the COMPACT no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\) \+ \$action/+ \$action/' t_nacompact
 mutate "the plan pass in scope at light" 's/\| if \.depth\.depth == "light" then \.coverage\.unplanned = \[\] else \. end//' t_dlight_noplan
 mutate "triage approves at a depth" 's/elif \.triage or any/elif any/' t_dtriage
+
+# --- A profile was named and the plan pass gave no record: its own reason, never "no AWS profile
+# named", an unknown at rule 4 in STANDARD with no advice to name a profile.
+t_plan_failed() {
+  render "$NONE" "" "" "$(runf pnr '.plan_ran = false | .examples = {count: 2, validated: 2}
+    | .coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass did not run: failed"}, {dir: "examples/b", reason: "plan pass did not run: failed"}]}')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(tier)" = STANDARD ] &&
+    grep -qxF -- '- 2 examples were not planned: plan pass did not run: failed.' "$O/comment.md" &&
+    ! grep -qF 'AWS profile' "$O/comment.md"
+}
+t_plan_failed; check "coverage: a plan pass that did not run though a profile was named says so, STANDARD, rule 4, no profile advice" $?
+render "$NONE" "" "" "$(runf pnr2 '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass did not run: refused"}]}')"
+check "coverage: a refused plan pass is its own reason" "$([ "$(rule)" = 4 ] && grep -qxF -- '- 1 example was not planned: plan pass did not run: refused.' "$O/comment.md"; echo $?)"
+refused "coverage: a plan pass reason outside the list" "$NONE" "" "" "$(runf pnr3 '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass did not run: oops"}]}')"
+mutate "a plan pass that did not run read as no profile" 's/"plan pass did not run: failed", "not reached/"no AWS profile named", "not reached/' t_plan_failed
+mutate "the behaviour line one form dropped" 's/\(if \$n == 1 then "-one" else "-many" end\); \{count: \$n\}\);/"-many"; {count: \$n});/' t_one_change
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

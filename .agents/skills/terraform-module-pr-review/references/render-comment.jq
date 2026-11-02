@@ -75,7 +75,10 @@ def gap_reasons: ["terraform was not installed", "init failed", "not run: enviro
   "merge base not run: command limit", "merge base not run: budget"];
 
 # The fixed reasons verify-pass.sh coverage gives an example that was not planned.
-def unplanned_reasons: ["no example directory", "no AWS profile named", "not reached by the plan pass",
+# "plan pass did not run: refused" and "...: failed" are the host's, for a profile named and a plan
+# pass that gave no record (it refused its input, or failed); "no AWS profile named" means none was.
+def unplanned_reasons: ["no example directory", "no AWS profile named", "plan pass did not run: refused",
+  "plan pass did not run: failed", "not reached by the plan pass",
   "code-error, merge base not planned", "environment", "needs input", "output unrecognised", "budget",
   "plan pass ended: credentials", "plan gate G0", "plan gate G1", "plan gate G2", "plan gate G3",
   "exception: example assumes a role in another account", "exception: needs a Docker daemon"];
@@ -399,7 +402,7 @@ def texts: {
   "behaviour-trigger": "- Behaviour change at `{location}` ({category}): not verified.",
   "behaviour-capped": "- {count} more behaviour changes over the classifier cap: not verified.",
   "behaviour-claim": "- Claim {claim_id} from the description: not verified.",
-  "behaviour-evidence": "Behaviour evidence: {count} changes classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claims} claims: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
+  "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "thread-match": "- `{location}`: this review has a finding at the same path and line.",
   "thread-no-match": "- `{location}`: this review has no finding at the same path and line.",
   "todo-lead-block": "To make this mergeable, resolve each checklist item below and push.",
@@ -431,7 +434,7 @@ def texts: {
   "todo-gaps-many": "{count} checks could not run; see Checks that could not run.",
   "refuse-band": "a `compat.claim-contradicts-analysis` finding is rated above the band of the `compat.*` code finding that refutes it, or has none; send it back to the reviewer",
   "fix-fold": "Fix for each location ({count})",
-  "behaviour-evidence-reported": "Behaviour evidence: {count} changes classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claims} claims: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
+  "behaviour-evidence-reported": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "compact-validate-all": "`validate` passed in all {count} examples; {planned} were planned.",
   "compact-validate-some": "`validate` passed in {validated} of {count} examples; {planned} were planned.",
   "compact-not-checked": "Not checked: {causes}.",
@@ -473,7 +476,11 @@ def texts: {
   "depth-check-G-ladder": "Check G beyond its claim reading",
   "depth-plan-pass": "the plan pass",
   "depth-ladder": "the ladder",
-  "depth-provider-facts": "the provider facts"
+  "depth-provider-facts": "the provider facts",
+  "behaviour-changes-one": "1 change",
+  "behaviour-changes-many": "{count} changes",
+  "behaviour-claims-one": "1 claim",
+  "behaviour-claims-many": "{count} claims"
 };
 
 def tx($k; $v): texts[$k] | gsub("\\{(?<n>[a-z_]+)\\}"; $v[.n] | tostring);
@@ -719,10 +726,12 @@ def evidence_lines($b):
   else
     def n($xs; $s): [$xs[] | select(.state == $s)] | length;
     [tx(if n($b.triggers; "reported") > 0 then "behaviour-evidence-reported" else "behaviour-evidence" end;
-       {count: (($b.triggers | length) + $b.capped), reported: n($b.triggers; "reported"),
+       def one_many($k; $n): tx($k + (if $n == 1 then "-one" else "-many" end); {count: $n});
+       {changes: one_many("behaviour-changes"; ($b.triggers | length) + $b.capped),
+       claim_count: one_many("behaviour-claims"; $b.claims | length), reported: n($b.triggers; "reported"),
        verified: n($b.triggers; "verified"), covered: n($b.triggers; "covered"), inert: n($b.triggers; "inert"),
        refuted: n($b.triggers; "refuted"), unverifiable: (n($b.triggers; "unverifiable") + $b.capped),
-       claims: ($b.claims | length), claims_verified: n($b.claims; "verified"),
+       claims_verified: n($b.claims; "verified"),
        claims_refuted: n($b.claims; "refuted"), claims_unverifiable: n($b.claims; "unverifiable")})]
   end;
 

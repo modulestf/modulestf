@@ -56,7 +56,9 @@ cat "$STUB_OUT"
 EOF
 chmod +x "$TMP/bin/mtf-facts"
 export STUB_ARGS="$TMP/args.txt"
-PATH0="$PATH"
+# The caller's PATH less every entry holding an mtf-facts, so only the stub can be found.
+PATH0="$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r d; do [ -x "$d/mtf-facts" ] || printf '%s:' "$d"; done)"
+PATH0="${PATH0%:}"
 export PATH="$TMP/bin:$PATH0"
 
 LIGHT="$TMP/light.json"
