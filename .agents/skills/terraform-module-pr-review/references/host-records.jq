@@ -9,19 +9,39 @@ def crlf: gsub("\r\n"; "\n");
 
 def module_files: ["main.tf", "variables.tf", "versions.tf"];
 
-# A tree as {tree: [{path, mode, type, sha, size}], truncated} -> "" or "<dir>", or null
-# when no single shallowest directory holds all three files.
-def prefix:
+# A tree as {tree: [{path, mode, type, sha, size}], truncated} -> the candidate module roots:
+# [""] when the top holds all three files, else every shallowest directory that does, [] for none.
+def prefixes:
   [.tree[] | select(.type == "blob") | .path] as $blobs
   | ($blobs | map(select(test("/") | not))) as $root
-  | if (module_files - $root) == [] then ""
+  | if (module_files - $root) == [] then [""]
     else
       [$blobs[] | select(test("/")) | capture("^(?<d>.*)/(?<f>[^/]+)$")]
       | group_by(.d) | map(select((module_files - map(.f)) == []) | .[0].d)
       | (map(split("/") | length) | min) as $depth
       | map(select(split("/") | length == $depth))
-      | if length == 1 then .[0] else null end
     end;
+
+# "" or "<dir>", or null when no single shallowest directory holds all three files.
+def prefix: prefixes | if length == 1 then .[0] else null end;
+
+# The prefix rule for several module roots: among the candidates, the one directory that holds
+# every changed path, old paths of renames included; null when none or more than one does.
+# Input: the files list. Github-io.md, Workspace.
+def prefix_for($candidates):
+  [.[] | .filename, (.previous_filename // empty)] as $paths
+  | [$candidates[] | . as $c | select($c != "" and all($paths[]; startswith($c + "/")))]
+  | if length == 1 then .[0] else null end;
+
+# Whether the top of a head tree holds a Terraform file: without one there is no root module, and
+# a change no single module root holds is reviewed from the repository root, prefix "".
+def root_has_tf: any(.tree[]; .type == "blob" and (.path | test("/") | not) and (.path | test("\\.tf(\\.json)?$")));
+
+# The prefix of a change: the one candidate; else the one that holds every changed path; else ""
+# when the top holds no Terraform file; else null, no module root to review. Input: the files list.
+def prefix_choice($candidates; $root_tf):
+  if ($candidates | length) == 1 then $candidates[0]
+  else (prefix_for($candidates) // (if $root_tf then null else "" end)) end;
 
 # --- Changed files: diff, renames, empty files and the patch-unavailable list.
 
@@ -51,14 +71,23 @@ def classify($head; $base; $prefix):
         then .class = "empty"
       else .class = "unavailable" end);
 
+# A unified diff's context lines start with a space: GitHub's patch can carry a blank context line
+# as an empty line, which a diff reader such as mtf-facts refuses. A final empty element is the
+# patch's own newline and stays. Used for the task's diff and the records' files.json.
+def context: split("\n") | (length - 1) as $last
+  | [to_entries[] | if .value == "" and .key < $last then " " else .value end] | join("\n");
+
 # --- Discussion: the review decision, from the reviews list.
 
-# Reviews in list order, the resolved login, and whether the run is render-only.
+# Reviews in list order, the resolved login, and whether the run is render-only. The login's
+# own reviews are left out in every run, render-only included: a body this run does not post
+# can still be posted later by that login, and it then replaces the earlier review.
+# $render_only is kept for callers and changes nothing.
 def decision($login; $render_only):
   [.[] | select(.state != "COMMENTED" and .state != "PENDING")] as $nc
-  | ($nc | map(select(.user.login == $login)) | last
+  | ($nc | map(select($login != "" and .user.login == $login)) | last
      | if . == null then null else {state, commit_id} end) as $own
-  | [$nc[] | select($render_only or .user.login != $login)]
+  | [$nc[] | select($login == "" or .user.login != $login)]
   | group_by(.user.id) | map(last.state) as $latest
   | {review_decision: (if any($latest[]; . == "CHANGES_REQUESTED") then "fail"
                        elif any($latest[]; . == "APPROVED") then "pass" else "none" end),
@@ -229,7 +258,9 @@ def valid_host($head):
   and (.signals | type == "object" and keys == ["mergeability", "review_decision", "threads"]
        and (.threads | IN("pass", "unknown"))
        and (.review_decision | IN("pass", "fail", "unknown", "none"))
-       and (.mergeability | IN("pass", "fail", "unknown")))
+       and (.mergeability | IN("pass", "fail", "unknown", "not-applicable")))
+  # A closed or merged pull request has no mergeability to read, and only it can be not-applicable.
+  and (.signals.mergeability != "not-applicable" or .state.state == "closed")
   and (.own_review == null or (.own_review | type == "object" and keys == ["commit_id", "state"]
        and (.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED")) and (.commit_id | sha)))
   and (.could_not_run | type == "array" and all(.[]; type == "object" and (

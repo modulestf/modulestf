@@ -815,7 +815,7 @@ done <<'EOF'
 a source edited without regenerating~regenerated~sed 's/^- Release or automation config the profile owns/- Release config the profile owns/' references/check-e-profile.md > s && cat s > references/check-e-profile.md && rm s
 prefix.md edited by hand~regenerated~echo extra >> references/judgment/prefix.md
 a prefix over the cap~size~printf '%4000s\n' pad >> references/judgment/workflow.md && bash references/judgment/assemble.sh > p && mv p references/judgment/prefix.md
-a line the assembly drops reworded in its source~assembles~sed 's/^8[.] If `mtf-facts` is installed/8. When `mtf-facts` is installed/' SKILL.md > s && cat s > SKILL.md && rm s
+a line the assembly drops reworded in its source~assembles~sed 's/^8[.] If `mtf-facts` is installed/8. When `mtf-facts` is installed/' references/workflow.md > s && cat s > references/workflow.md && rm s
 a section the assembly drops renamed in its source~assembles~sed 's/^## Plan evidence$/## Plan records/' references/check-d-examples.md > s && cat s > references/check-d-examples.md && rm s
 an assembler that writes into the skill~sources~sed 's/^export LC_ALL=C$/&; : > "$(dirname "$0")\/stray"/' references/judgment/assemble.sh > s && cat s > references/judgment/assemble.sh && rm s
 an assembler whose output varies~deterministic~echo 'echo "$RANDOM$RANDOM"' >> references/judgment/assemble.sh

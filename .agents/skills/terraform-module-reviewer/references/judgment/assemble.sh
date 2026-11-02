@@ -23,6 +23,7 @@ S="$(dirname "$R")"   # the skill root
 # entry of DROPS applied. LABEL "-" copies FILE as written. DROPS is a list of "kind:value"
 # separated by "|":
 #   h:<heading text>  drop the heading and its section, down to the next heading of its level or higher
+#   u:<heading text>  drop the heading line only and keep its section, as text of the heading above
 #   k:<heading start> keep only the sections whose heading starts so, under a level-2 section
 #                     whose Engine line is `candidate`, their level unshifted
 #   l:<ERE>           drop every line that matches, outside fenced code; it must match once at least
@@ -57,6 +58,7 @@ copy() {
       k = split(drops, d, "|")
       for (i = 1; i <= k; i++) {
         if (d[i] ~ /^h:/) dh[substr(d[i], 3)] = 0
+        else if (d[i] ~ /^u:/) du[substr(d[i], 3)] = 0
         else if (d[i] ~ /^k:/) keep = substr(d[i], 3)
         else if (d[i] ~ /^l:/) dl[substr(d[i], 3)] = 0
       }
@@ -76,6 +78,7 @@ copy() {
         if (skip && lvl <= skip) skip = 0
         if (!skip && (text in dh)) { dh[text]++; skip = lvl }
         if (skip) next
+        if (text in du) { du[text]++; next }
         if (label != "" && index(text, label) != 1) text = label ": " text
         out(substr("#######", 1, lvl + shift) " " relink(text)); next
       }
@@ -90,6 +93,7 @@ copy() {
     }
     END {
       for (p in dh) if (!dh[p]) { print "assemble: " src ": no heading " p > "/dev/stderr"; bad = 1 }
+      for (p in du) if (!du[p]) { print "assemble: " src ": no heading " p > "/dev/stderr"; bad = 1 }
       for (p in dl) if (!dl[p]) { print "assemble: " src ": no line matches " p > "/dev/stderr"; bad = 1 }
       if (bad) exit 1
     }
@@ -97,22 +101,34 @@ copy() {
 }
 
 # Each check keeps its Reads, Fails when and Severity text. Its other sections are the
-# on-demand reads workflow.md names; Check B's Fails when sits in its Rules section.
+# on-demand reads workflow.md names; Check B's Fails when sits in its Rules section. The
+# heading that opens that text is an anchor for the run summaries, so it is unwrapped.
 drops_of() {
   case "$1" in
-    a-compatibility) echo "h:Suggested Fixes|h:No base" ;;
-    b-coverage) echo "h:Which blocks|h:Documented omissions|h:Suggested Fixes" ;;
-    c-structure|e-profile) echo "h:Suggested Fixes" ;;
-    d-examples) echo "h:Suggested Fixes|h:Plan evidence" ;;
-    f-scope) echo "h:The suggested fix|h:Suggested Fixes|h:The base revision|h:A new module|h:Renamed files|h:Not evaluated|h:Where Check F yields|h:Decisions|h:Worked Cases" ;;
+    a-compatibility) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:No base" ;;
+    b-coverage) echo "u:Reads|h:Which blocks|h:Documented omissions|h:Suggested Fixes" ;;
+    c-structure|e-profile) echo "u:Reads, Fails When and Severity|h:Suggested Fixes" ;;
+    d-examples) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:Plan evidence" ;;
+    f-scope) echo "u:Reads, Fails When and Severity|h:The suggested fix|h:Suggested Fixes|h:The base revision|h:A new module|h:Renamed files|h:Not evaluated|h:Where Check F yields|h:Decisions|h:Worked Cases" ;;
   esac
 }
 
 CHECKS="a-compatibility b-coverage c-structure d-examples e-profile f-scope"
 copy "$J/workflow.md" "" "-" ""
 echo
+# The router sections, the section helper and the host's task lines serve the full variant,
+# which reads by run summary; the host's schema trust terms bind the host step, not a judgment
+# run. The text SKILL.md routes to is copied from the files it moved to, in its old order of
+# headings, minus the parts a judgment run reads on demand or never.
 copy "$S/SKILL.md" "../../" "Skill" \
-  "h:When to Use This Skill|h:Responsibility Boundaries|h:Output|h:Reference Files|h:Check A: Backwards Compatibility|h:Check B: Coverage Gaps Against the Provider Schema|h:Check C: Module Structure|h:Check D: Examples|h:Check E: Profile Conventions|h:Check F: Scope|h:Check G: Behaviour Changes and Claims|l:^8[.] If .mtf-facts. is installed|l:^Classify the changed paths, order the areas|l:^Each check.s full [*][*]Reads|l:^The .rule_id. values named in the checks above"
+  "h:When to Use This Skill|h:Run Order per Depth|h:Reading by Depth|h:Read When|h:Moved Sections|l:^- With it, the diff file the caller.s own task text names|l:^- With it too, the files the caller.s own task text names on an .Output:. line|l:^- A third addition: this skill.s own|l:^Trust anchors [(]provider source allowlist|l:^[*][*]See:[*][*] .Schema Validation Guide."
+echo
+copy "$R/inputs.md" "../" "Skill" "u:Review Inputs|h:Responsibility Boundaries"
+echo
+copy "$R/output.md" "../" "Skill" "u:Severity and Output|h:Output"
+echo
+copy "$R/workflow.md" "../" "Skill" \
+  "u:Review Steps|h:Check A: Backwards Compatibility|h:Check B: Coverage Gaps Against the Provider Schema|h:Check C: Module Structure|h:Check D: Examples|h:Check E: Profile Conventions|h:Check F: Scope|h:Check G: Behaviour Changes and Claims|l:^8[.] If .mtf-facts. is installed|l:^Classify the changed paths, order the areas|l:^Each check.s full [*][*]Reads|l:^The .rule_id. values named in the checks above"
 for c in $CHECKS; do
   echo
   # Pointer lines to the engine files and the rule id lists say nothing a judgment run needs.

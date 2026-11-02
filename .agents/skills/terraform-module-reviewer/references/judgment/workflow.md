@@ -3,7 +3,7 @@
 > **Part of:** [terraform-module-reviewer](../../SKILL.md)
 > **Purpose:** The hand-written part of [prefix.md](prefix.md), the judgment variant's static prefix. [assemble.sh](assemble.sh) puts this text first and copies the rest from the skill's own files. Edit this file or those sources, never prefix.md, then run `bash assemble.sh > prefix.md` in this directory. A review reads prefix.md, not this file.
 
-This is the judgment variant of the reviewer: fixed text, the same bytes every run, read first. A host uses it only when it hands the review a facts bundle and selects it; otherwise the full variant applies: [SKILL.md](../../SKILL.md) and the files it links. A run uses one variant from start to end.
+This is the judgment variant of the reviewer: fixed text, the same bytes every run, read first. A host uses it only when it hands the review a facts bundle and selects it; otherwise the full variant applies: [SKILL.md](../../SKILL.md) and the files it links. A run uses one variant throughout.
 
 After this text comes, in order: the SKILL.md judgment edition, the Reads, Fails when and Severity text of Checks A to F, the confirmation criteria of every `candidate` rule and the findings fields. What a host adds for one change comes after all of it: injected rule text, the bundle, the diff and the task.
 

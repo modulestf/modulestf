@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "selection": {
+    "tool": "mtf-facts",
+    "fallback": null,
+    "inert": false
+  },
+  "inert": false,
+  "class": "partial",
+  "examples": [
+    {
+      "dir": "examples/alpha",
+      "head": "planned",
+      "base": null,
+      "addresses": [],
+      "attributes": {},
+      "module_calls": {
+        "widget": ".",
+        "disabled_widget": "."
+      }
+    },
+    {
+      "dir": "examples/bravo",
+      "head": "planned",
+      "base": null,
+      "addresses": [],
+      "attributes": {},
+      "module_calls": {
+        "widget_primary": ".",
+        "widget_secondary": "."
+      }
+    },
+    {
+      "dir": "examples/charlie",
+      "head": "planned",
+      "base": null,
+      "addresses": [],
+      "attributes": {},
+      "module_calls": {
+        "widget": "."
+      }
+    },
+    {
+      "dir": "examples/delta",
+      "head": "planned",
+      "base": null,
+      "addresses": [],
+      "attributes": {},
+      "module_calls": {
+        "widget": "."
+      }
+    },
+    {
+      "dir": "examples/echo",
+      "head": "plan gate G3",
+      "base": null,
+      "addresses": [],
+      "attributes": {},
+      "module_calls": {}
+    },
+    {
+      "dir": "examples/foxtrot",
+      "head": "planned",
+      "base": null,
+      "addresses": [],
+      "attributes": {},
+      "module_calls": {
+        "widget": "."
+      }
+    },
+    {
+      "dir": "examples/golf",
+      "head": "plan gate G3",
+      "base": null,
+      "addresses": [],
+      "attributes": {},
+      "module_calls": {}
+    },
+    {
+      "dir": "examples/hotel",
+      "head": "plan gate G3",
+      "base": null,
+      "addresses": [],
+      "attributes": {},
+      "module_calls": {}
+    },
+    {
+      "dir": "examples/india",
+      "head": "planned",
+      "base": null,
+      "addresses": [],
+      "attributes": {},
+      "module_calls": {
+        "dsql_cluster_1": "modules/dsql",
+        "dsql_cluster_2": "modules/dsql",
+        "dsql_single_region": "modules/dsql"
+      }
+    }
+  ],
+  "unplanned": [
+    {
+      "dir": "examples/echo",
+      "reason": "plan gate G3"
+    },
+    {
+      "dir": "examples/golf",
+      "reason": "plan gate G3"
+    },
+    {
+      "dir": "examples/hotel",
+      "reason": "plan gate G3"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+plan pass mode: laptop
+example: examples/alpha
+plan: planned | Plan: 39 to add, 0 to change, 0 to destroy.
+scope: . examples/alpha downloaded/vpc
+modules: vpc registry.terraform.io/example-org/net/aws 6.7.3
+example: examples/bravo
+plan: planned | Plan: 76 to add, 0 to change, 0 to destroy.
+scope: . examples/bravo downloaded/primary_net downloaded/secondary_net
+modules: primary_net registry.terraform.io/example-org/net/aws 6.7.3;secondary_net registry.terraform.io/example-org/net/aws 6.7.3
+example: examples/charlie
+plan: planned | Plan: 40 to add, 0 to change, 0 to destroy.
+scope: . examples/charlie downloaded/vpc
+modules: vpc registry.terraform.io/example-org/net/aws 6.7.3
+example: examples/delta
+plan: planned | Plan: 32 to add, 0 to change, 0 to destroy.
+scope: . examples/delta downloaded/vpc
+modules: vpc registry.terraform.io/example-org/net/aws 6.7.3
+example: examples/echo
+gate-hit G3 downloaded/vpc_endpoints/modules/vpc-endpoints/main.tf:11
+plan: plan gate G3 downloaded/vpc_endpoints/modules/vpc-endpoints/main.tf:11 (1 hits)
+scope: . examples/echo downloaded/kms downloaded/vpc downloaded/vpc_endpoints/modules/vpc-endpoints
+modules: kms registry.terraform.io/example-org/keys/aws 4.2.2;vpc registry.terraform.io/example-org/net/aws 6.7.3;vpc_endpoints registry.terraform.io/example-org/net/aws//modules/vpc-endpoints 6.7.3
+example: examples/foxtrot
+plan: planned | Plan: 47 to add, 0 to change, 0 to destroy.
+scope: . examples/foxtrot downloaded/kms downloaded/vpc
+modules: kms registry.terraform.io/example-org/keys/aws 4.2.2;vpc registry.terraform.io/example-org/net/aws 6.7.3
+example: examples/golf
+gate-hit G3 examples/golf/main.tf:159
+plan: plan gate G3 examples/golf/main.tf:159 (1 hits)
+scope: . examples/golf
+example: examples/hotel
+gate-hit G3 examples/hotel/main.tf:78
+plan: plan gate G3 examples/hotel/main.tf:78 (1 hits)
+scope: . examples/hotel
+example: examples/india
+plan: planned | Plan: 6 to add, 0 to change, 0 to destroy.
+scope: examples/india modules/dsql
+plan summary: 9 examples, 6 planned, 0 exceptions, 3 other

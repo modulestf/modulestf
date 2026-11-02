@@ -75,7 +75,10 @@ def gap_reasons: ["terraform was not installed", "init failed", "not run: enviro
   "merge base not run: command limit", "merge base not run: budget"];
 
 # The fixed reasons verify-pass.sh coverage gives an example that was not planned.
-def unplanned_reasons: ["no example directory", "no AWS profile named", "not reached by the plan pass",
+# "plan pass did not run: refused" and "...: failed" are the host's, for a profile named and a plan
+# pass that gave no record (it refused its input, or failed); "no AWS profile named" means none was.
+def unplanned_reasons: ["no example directory", "no AWS profile named", "plan pass did not run: refused",
+  "plan pass did not run: failed", "plan pass skipped at light depth", "not reached by the plan pass",
   "code-error, merge base not planned", "environment", "needs input", "output unrecognised", "budget",
   "plan pass ended: credentials", "plan gate G0", "plan gate G1", "plan gate G2", "plan gate G3",
   "exception: example assumes a role in another account", "exception: needs a Docker daemon"];
@@ -179,10 +182,87 @@ def valid_covered:
           and (.attribute | type == "string" and test("^[a-z0-9_]{1,128}$")) and (.example | canon_path)
           and (.address | type == "string" and length > 0 and length <= 300 and (test("[\\x00-\\x1f\\x7f`]") | not)))));
 
+# --- Depth (depth.md). The object depth.sh writes, which the run file may carry as "depth". The
+# reason tokens: mtf-facts depth's list, then the host's own raises. depth.md holds the same list
+# and tests/depth-test.sh checks the two are equal.
+def depth_reasons: ["light-docs-only", "focused-within-limits", "focused-no-example",
+  "deep-terraform-block", "deep-lock-file", "deep-cli-config", "deep-ci-config", "deep-provider-config",
+  "deep-depends-on", "deep-new-type", "deep-block-removed-or-renamed", "deep-variable-contract",
+  "deep-output-sensitive", "deep-lifecycle-moved-removed-import", "deep-count-for-each", "deep-provisioner",
+  "deep-policy", "deep-module-source-version", "deep-dynamic-structure", "deep-wrappers", "deep-limits",
+  "deep-classifier-category", "deep-classifier-unavailable", "deep-classifier-invalid", "deep-classifier-mismatch",
+  "deep-affected-fallback", "deep-affected-invalid", "deep-parse-failure",
+  "deep-unwalked", "deep-unresolved-consumer", "deep-unresolved-file-dependency", "deep-path-unsafe",
+  "deep-too-many-examples", "deep-too-many-files", "deep-test-or-mock", "deep-files-list-mismatch",
+  "deep-non-terraform-change"];
+def depth_host_reasons: ["deep-owner-raise", "deep-validate-failed"];
+def depth_reason: type == "string" and (IN(depth_reasons[], depth_host_reasons[]) or test("^deep-schema-[a-z0-9-]{1,64}$"));
+# The checks a depth may leave out (DECISIONS D-1): light A, B, D and Check G past the claims;
+# focused only B, as Check D stays in scope there; deep none.
+def depth_scope: {"light": ["A", "B", "D", "G-ladder"], "focused": ["B"], "deep": []};
+# The schema-pass tokens of schema-pass.md, Inputs: providers, types and head lock files.
+def sp_seg: test("^[A-Za-z0-9._-]{1,64}$") and . != "." and . != "..";
+def sp_dir: . == "." or (split("/") | length <= 8 and all(.[]; sp_seg));
+def sp_src: split("/") | length == 2 and all(.[]; test("^[a-z0-9][a-z0-9-]{0,63}$"));
+def sp_local: test("^[A-Za-z][A-Za-z0-9_-]{0,63}$");
+def sp_provider: split(":") as $p
+  | ($p[0] | IN("head", "base")) and ($p[1] | sp_dir)
+  and (if ($p | length) == 3 then $p[2] == "!constraint_unparsable"
+         or ($p[2] | split("=") | length == 2 and (.[0] | sp_local) and .[1] == "!registry_host")
+       elif ($p | length) == 4 then ($p[2] | split("=") | length == 2 and (.[0] | sp_local) and (.[1] | sp_src))
+         and ($p[3] | test("^[0-9A-Za-z.,<>=~! -]{0,64}$"))
+       else false end);
+def sp_type: split(":") as $p | ($p | length) == 4 and ($p[0] | sp_dir) and ($p[1] | IN("resource", "data"))
+  and ($p[2] | test("^[a-z][a-z0-9_]{0,127}$")) and ($p[3] | sp_src);
+def sp_lock: split(":") as $p | ($p | length) == 2 and ($p[0] | sp_dir)
+  and ($p[1] | split("=") | length == 2 and (.[0] | sp_src) and (.[1] | test("^[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}$")));
+def str_list(f): type == "array" and length <= 4096 and all(.[]; type == "string" and f) and length == (unique | length);
+# $bound: the object depth.sh writes, with its binding; else the mtf-facts depth output alone.
+def valid_depth_shape($bound):
+  type == "object"
+  and keys == (["format", "depth", "reasons", "checks_out_of_scope", "examples_selected", "examples_out_of_scope",
+                "touched_types", "walk", "limits", "schema_providers", "schema_types", "schema_locks"]
+               + (if $bound then ["binding"] else [] end) | sort)
+  and .format == 1 and (.depth | IN("light", "focused", "deep"))
+  and (.reasons | type == "array" and length > 0 and length <= 64 and all(.[]; depth_reason)
+       and length == (unique | length))
+  and (.depth as $d | all(.reasons[]; startswith($d + "-")))
+  and (.checks_out_of_scope | str_list(IN(depth_scope["light"][])))
+  and (.depth as $d | .checks_out_of_scope - depth_scope[$d] == [])
+  and (.examples_selected | str_list(canon_path)) and (.examples_out_of_scope | str_list(canon_path))
+  and ((.examples_selected - (.examples_selected - .examples_out_of_scope)) == [])
+  # Only focused puts an example out of scope: light and deep select every one.
+  and (.depth == "focused" or .examples_out_of_scope == [])
+  and (.touched_types | str_list(test("^[a-z][a-z0-9_]{0,127}$")))
+  and (.walk | type == "object" and keys == ["complete", "unwalked"] and (.complete | type == "boolean") and (.unwalked | nat))
+  and (.limits | type == "object" and keys == ["changed_blocks", "changed_lines", "selected_examples", "tf_files"]
+       and all(.[]; nat))
+  # A reduced depth only on a whole walk within the D-4 limits; light reads no Terraform file.
+  and (.depth == "deep" or (.walk.complete and .walk.unwalked == 0 and .limits.tf_files <= 6
+       and .limits.changed_lines <= 200 and .limits.changed_blocks <= 4 and .limits.selected_examples <= 12))
+  and (.depth != "light" or .limits.tf_files == 0)
+  and (.schema_providers | str_list(sp_provider)) and (.schema_types | str_list(sp_type))
+  and (.schema_locks | str_list(sp_lock))
+  and (($bound | not) or (.binding | type == "object" and keys == ["base_sha", "diff_sha256", "head_sha", "merge_base"]
+       and all(.head_sha, .base_sha, .merge_base; sha40) and (.diff_sha256 | digest)));
+def valid_depth: valid_depth_shape(true);
+
+# Raise to deep with reasons: nothing stays out of scope, and the reasons of a reduced depth go.
+def depth_raise($r):
+  .reasons = ((if .depth == "deep" then .reasons else [] end) + $r | reduce .[] as $x ([]; if IN(.[]; $x) then . else . + [$x] end))
+  | .depth = "deep" | .checks_out_of_scope = []
+  | .examples_selected = (.examples_selected + .examples_out_of_scope | unique) | .examples_out_of_scope = [];
+
+# The binding the render checks: the head it renders and host.json's merge base, never null.
+def depth_bound($h): .binding.head_sha == $h.head_sha and $h.merge_base != null and .binding.merge_base == $h.merge_base;
+
 def valid_run:
   type == "object"
-  and ((keys - ["behaviour", "examples", "plan_mode"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((keys - ["behaviour", "depth", "examples", "plan_mode"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
   and ((has("behaviour") | not) or (.behaviour | valid_behaviour))
+  and ((has("depth") | not) or (.depth | valid_depth))
+  # The host writes "plan pass skipped at light depth" at light only, where the plan pass is out of scope.
+  and ((any(.coverage.unplanned[]?; .reason == "plan pass skipped at light depth") | not) or .depth.depth? == "light")
   # The plan pass mode of the plan record, and the example counts the COMPACT verdict line states.
   and ((has("plan_mode") | not) or (.plan_mode | IN("laptop", "runner")))
   and ((has("examples") | not) or (.examples | type == "object" and keys == ["count", "validated"]
@@ -298,6 +378,7 @@ def texts: {
   "mergeability-pass": "Mergeable.",
   "mergeability-fail": "Not mergeable.",
   "mergeability-unknown": "Mergeability: unknown.",
+  "mergeability-not-applicable": "Mergeability: not applicable.",
   "review-decision-pass": "Approved.",
   "review-decision-fail": "Changes requested.",
   "review-decision-none": "No review yet.",
@@ -324,7 +405,7 @@ def texts: {
   "behaviour-trigger": "- Behaviour change at `{location}` ({category}): not verified.",
   "behaviour-capped": "- {count} more behaviour changes over the classifier cap: not verified.",
   "behaviour-claim": "- Claim {claim_id} from the description: not verified.",
-  "behaviour-evidence": "Behaviour evidence: {count} changes classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claims} claims: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
+  "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "thread-match": "- `{location}`: this review has a finding at the same path and line.",
   "thread-no-match": "- `{location}`: this review has no finding at the same path and line.",
   "todo-lead-block": "To make this mergeable, resolve each checklist item below and push.",
@@ -356,7 +437,7 @@ def texts: {
   "todo-gaps-many": "{count} checks could not run; see Checks that could not run.",
   "refuse-band": "a `compat.claim-contradicts-analysis` finding is rated above the band of the `compat.*` code finding that refutes it, or has none; send it back to the reviewer",
   "fix-fold": "Fix for each location ({count})",
-  "behaviour-evidence-reported": "Behaviour evidence: {count} changes classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claims} claims: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
+  "behaviour-evidence-reported": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "compact-validate-all": "`validate` passed in all {count} examples; {planned} were planned.",
   "compact-validate-some": "`validate` passed in {validated} of {count} examples; {planned} were planned.",
   "compact-not-checked": "Not checked: {causes}.",
@@ -387,7 +468,22 @@ def texts: {
   "evidence-claims-many": "{count} claims verified.",
   "evidence-predates": "- Predates this change: `{rule_id}` at {location} - {summary}",
   "evidence-more": "+{count}",
-  "name-withheld": "name withheld"
+  "name-withheld": "name withheld",
+  "clamp-closed": "Comment only: this verdict describes a pull request that is no longer open.",
+  "depth-line": "Review depth: {depth}. Reasons: {reasons}.",
+  "depth-out-of-scope": "Out of scope at this depth, so not unknowns: {items}.",
+  "depth-more": ", and {count} more",
+  "depth-check-A": "Check A",
+  "depth-check-B": "Check B",
+  "depth-check-D": "Check D",
+  "depth-check-G-ladder": "Check G beyond its claim reading",
+  "depth-plan-pass": "the plan pass",
+  "depth-ladder": "the ladder",
+  "depth-provider-facts": "the provider facts",
+  "behaviour-changes-one": "1 change",
+  "behaviour-changes-many": "{count} changes",
+  "behaviour-claims-one": "1 claim",
+  "behaviour-claims-many": "{count} claims"
 };
 
 def tx($k; $v): texts[$k] | gsub("\\{(?<n>[a-z_]+)\\}"; $v[.n] | tostring);
@@ -561,6 +657,27 @@ def witnesses($cs): reduce ($cs[].witnesses[] | {attribute, example, address}) a
 # measured at the base or in a downloaded module, then one line per distinct witness. Every name
 # the pull request controls is in a code span when allowlisted, else withheld.
 def nm(ok): if ok then "`\(.)`" else tx("name-withheld") end;
+# The depth lines (depth.md, Comment lines): the depth and its reasons, then the checks and the
+# examples out of scope, the first 20 and a count of the rest; example names as covered names.
+def depth_lines($run):
+  if $run | has("depth") | not then [] else $run.depth as $d
+  | [tx("depth-line"; {depth: $d.depth, reasons: ($d.reasons | map("`\(.)`") | join(", "))})]
+    + (([$d.checks_out_of_scope[] | tx("depth-check-" + .)] + (if $d.depth == "light" then [tx("depth-plan-pass"), tx("depth-ladder"), tx("depth-provider-facts")] else [] end)
+        + [$d.examples_out_of_scope[] | nm(allowed)]) as $i
+       | if $i == [] then [] else
+           [tx("depth-out-of-scope"; {items: (($i[:20] | join(", "))
+              + (if ($i | length) > 20 then tx("depth-more"; {count: (($i | length) - 20)}) else "" end))})] end)
+  end;
+
+# Rule 4 per depth (verdict.md): an example out of scope by the run's depth is no verification gap
+# and no example not planned, and at light the plan pass is out of scope, so no example is
+# unplanned; the depth lines list them instead.
+def scoped_run: if has("depth") | not then . else .depth.examples_out_of_scope as $o
+  | .verify_gaps |= map(select(.dir | IN($o[]) | not))
+  | .coverage.unplanned |= map(select(.dir | IN($o[]) | not))
+  | if .depth.depth == "light" then .coverage.unplanned = [] else . end
+  | if .coverage.unplanned == [] then .coverage.class = "complete" else . end end;
+
 def covered_lines($key; $cov; $run):
   [ ($cov[] as $c
      | tx($key + (if $c.downloaded then "-downloaded" else "" end);
@@ -612,16 +729,24 @@ def evidence_lines($b):
   else
     def n($xs; $s): [$xs[] | select(.state == $s)] | length;
     [tx(if n($b.triggers; "reported") > 0 then "behaviour-evidence-reported" else "behaviour-evidence" end;
-       {count: (($b.triggers | length) + $b.capped), reported: n($b.triggers; "reported"),
+       def one_many($k; $n): tx($k + (if $n == 1 then "-one" else "-many" end); {count: $n});
+       {changes: one_many("behaviour-changes"; ($b.triggers | length) + $b.capped),
+       claim_count: one_many("behaviour-claims"; $b.claims | length), reported: n($b.triggers; "reported"),
        verified: n($b.triggers; "verified"), covered: n($b.triggers; "covered"), inert: n($b.triggers; "inert"),
        refuted: n($b.triggers; "refuted"), unverifiable: (n($b.triggers; "unverifiable") + $b.capped),
-       claims: ($b.claims | length), claims_verified: n($b.claims; "verified"),
+       claims_verified: n($b.claims; "verified"),
        claims_refuted: n($b.claims; "refuted"), claims_unverifiable: n($b.claims; "unverifiable")})]
   end;
 
+# A merged or closed pull request has no mergeability: host.json says not-applicable, which is no
+# unknown. On an open pull request the word proves nothing, so it reads as unknown.
+def is_closed($h): $h.state.state == "closed" or $h.state.merged;
+def signals_of($h): $h.signals
+  | if .mergeability == "not-applicable" and (is_closed($h) | not) then .mergeability = "unknown" else . end;
+
 def state_lines($h; $c):
-  ($h.signals + {checks: $c.signal}) as $g
-  | (if any($g[]; . == "fail" or . == "unknown") then
+  (signals_of($h) + {checks: $c.signal}) as $g
+  | (if any($g[]; . == "fail" or . == "unknown" or . == "not-applicable") then
       [ [tx("checks-" + $g.checks), tx("mergeability-" + $g.mergeability),
          tx("review-decision-" + $g.review_decision),
          (if $g.threads == "unknown" then tx("threads-unknown")
@@ -796,8 +921,8 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
          ($b.claims | length | select(. > 0) | if . == 1 then tx("evidence-claims-one") else tx("evidence-claims-many"; {count: .}) end)]
         | if . == [] then [] else ["- " + join(" ")] end)
      + [$o[] | select(routed) | tx("evidence-predates"; {rule_id, location: safe_loc($p), summary})]
-     + [(state_lines($h; $in.checks)[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
-  | {body: ([$in.assessment, $verdict] + $action + (if $bullets == [] then [] else [$bullets | join("\n")] end)
+     + [(depth_lines($run)[], state_lines($h; $in.checks)[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
+  | {body: ([$in.assessment, $verdict] + (if is_closed($h) then [tx("clamp-closed")] else [] end) + $action + (if $bullets == [] then [] else [$bullets | join("\n")] end)
             + (if $notes == [] then [] else ["<details><summary>\(tx("evidence-summary"))</summary>\n\n" + ($notes | join("\n")) + "\n</details>"] end)
             | join("\n\n") + "\n"),
      findings: ([$o[] | select(routed | not)] + [$o[] | select(routed)] | seven($p))};
@@ -830,9 +955,10 @@ def covered_of($in; $l; $b):
 # --- The whole render. $in: {findings, host, checks, run, assessment, standard}.
 
 def render($in):
-  $in.host as $h | $in.host.prefix as $p
+  ($in | .run |= scoped_run) as $in
+  | $in.host as $h | $in.host.prefix as $p
   | (behaviour_of($in.run) | with_reported($in.findings)) as $b
-  | {findings: $in.findings, signals: ($h.signals + {checks: $in.checks.signal}),
+  | {findings: $in.findings, signals: (signals_of($h) + {checks: $in.checks.signal}),
      unresolved: ($h.unresolved_threads | length), triage: $in.run.triage, refuted: ($b | behaviour_refuted),
      # A refuted trigger no blocking claim.* finding words is its own checklist item.
      refuted_todo: (if any($in.findings[]; (.rule_id | startswith("claim.")) and (.severity | IN("CRITICAL", "HIGH"))) then []
@@ -851,6 +977,7 @@ def render($in):
   # At rule 4 a list of quiet items alone, which section 5 already holds, gives way to the action line.
   | ($v.rule == 4 and all($items[]; .quiet)) as $quiet
   | ([$in.assessment, "**\($v.verdict | verdict_line)**"]
+     + (if is_closed($h) then [tx("clamp-closed")] else [] end)
      + (if $in.run.triage then ["Triage only: the full review of this change has not run yet."] else [] end)
      + (if $quiet then action_line($c) else [] end)
      + [$why]
@@ -861,6 +988,7 @@ def render($in):
      # Covered skips leave no gap, so section 5 then holds only their witness lines, which no
      # check that could not run describes.
      + section(if $cov != [] then "Examples not planned" else "Checks that could not run" end; gap_lines($h; $in.run; $b; $p; $cov); "\n")
+     + section("Review depth"; depth_lines($in.run); "\n\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")
      + section("Existing threads"; thread_lines($h; $in.findings; $p); "\n")
      + section("Conversation comments"; conversation_lines($h.conversation; $in.run.counts); "\n\n")

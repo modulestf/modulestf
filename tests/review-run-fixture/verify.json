@@ -1,0 +1,129 @@
+{
+  "head_sha": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "base_sha": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "terraform_version": "1.17.0",
+  "selection": {
+    "tool": "mtf-facts",
+    "fallback": null,
+    "inert": false
+  },
+  "dirs": [
+    {
+      "dir": "examples/alpha",
+      "reason": "verified",
+      "affected": "caller",
+      "head": {
+        "init": 0,
+        "validate": 0,
+        "record": "code-result",
+        "line": null
+      },
+      "base": null,
+      "outside": false
+    },
+    {
+      "dir": "examples/bravo",
+      "reason": "verified",
+      "affected": "caller",
+      "head": {
+        "init": 0,
+        "validate": 0,
+        "record": "code-result",
+        "line": null
+      },
+      "base": null,
+      "outside": false
+    },
+    {
+      "dir": "examples/charlie",
+      "reason": "verified",
+      "affected": "caller",
+      "head": {
+        "init": 0,
+        "validate": 0,
+        "record": "code-result",
+        "line": null
+      },
+      "base": null,
+      "outside": false
+    },
+    {
+      "dir": "examples/delta",
+      "reason": "verified",
+      "affected": "caller",
+      "head": {
+        "init": 0,
+        "validate": 0,
+        "record": "code-result",
+        "line": null
+      },
+      "base": null,
+      "outside": false
+    },
+    {
+      "dir": "examples/echo",
+      "reason": "verified",
+      "affected": "caller",
+      "head": {
+        "init": 0,
+        "validate": 0,
+        "record": "code-result",
+        "line": null
+      },
+      "base": null,
+      "outside": false
+    },
+    {
+      "dir": "examples/foxtrot",
+      "reason": "verified",
+      "affected": "caller",
+      "head": {
+        "init": 0,
+        "validate": 0,
+        "record": "code-result",
+        "line": null
+      },
+      "base": null,
+      "outside": false
+    },
+    {
+      "dir": "examples/golf",
+      "reason": "verified",
+      "affected": "caller",
+      "head": {
+        "init": 0,
+        "validate": 0,
+        "record": "code-result",
+        "line": null
+      },
+      "base": null,
+      "outside": false
+    },
+    {
+      "dir": "examples/hotel",
+      "reason": "verified",
+      "affected": "caller",
+      "head": {
+        "init": 0,
+        "validate": 0,
+        "record": "code-result",
+        "line": null
+      },
+      "base": null,
+      "outside": false
+    },
+    {
+      "dir": "examples/india",
+      "reason": "verified",
+      "affected": "all",
+      "head": {
+        "init": 0,
+        "validate": 0,
+        "record": "code-result",
+        "line": null
+      },
+      "base": null,
+      "outside": false
+    }
+  ]
+}

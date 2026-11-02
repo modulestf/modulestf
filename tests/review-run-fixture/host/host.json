@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "repo": "example-org/terraform-aws-widget",
+  "number": 12,
+  "head_sha": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "base_sha": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "merge_base": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "prefix": "",
+  "state": {
+    "state": "open",
+    "merged": false,
+    "draft": false,
+    "base_is_default": true,
+    "self_authored": false
+  },
+  "signals": {
+    "threads": "pass",
+    "review_decision": "none",
+    "mergeability": "pass"
+  },
+  "own_review": null,
+  "could_not_run": [],
+  "unresolved_threads": [],
+  "conversation": {
+    "path": "graphql",
+    "omitted": null,
+    "considered": 0,
+    "bot_considered": 0,
+    "counts": {},
+    "notes": []
+  },
+  "related": {
+    "status": "ok",
+    "open_unlinked": [],
+    "sidebar_not_read": false
+  }
+}

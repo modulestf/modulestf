@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "head_sha": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "signal": "pass",
+  "reads": "ok",
+  "own_check": null,
+  "own_check_dropped": 0,
+  "own_jobs_dropped": 0,
+  "own_jobs_unreadable": false,
+  "check_runs": [
+    {
+      "id": 1001,
+      "check_suite_id": 2002,
+      "app_slug": "github-actions",
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ],
+  "statuses": {
+    "state": "success",
+    "total_count": 1
+  }
+}

@@ -54,7 +54,7 @@ Covered means the changed address appears in an example the plan pass planned, w
 
 ## The Claims File
 
-The caller's model writes it, never the review, which stays read-only under Rule 1: in terraform-module-pr-review that is Step 5.4, after the classifier and before any level runs. It reads the title and the body items of origin `change-author` only, as untrusted data under Rule 3, and writes `claims.json` in the behaviour step's directory, never in the workspace:
+The caller's model writes it, never the review, which stays read-only under Rule 1: in terraform-module-pr-review that is Step 5.4, after the classifier and before any level runs, and no level's result changes it afterwards. It reads the title and the body items of origin `change-author` only, as untrusted data under Rule 3, and writes `claims.json` in the behaviour step's directory, never in the workspace:
 
 ```json
 {"schema_version": 1, "claims": [
@@ -67,6 +67,7 @@ The caller's model writes it, never the review, which stays read-only under Rule
 - `claim_id` is `C-` and a number, unique in the file. `text` is the statement, quoted short, at most 200 characters. It is a label for a person and evaluates nothing.
 - `params.node` is a trigger id from `behaviour.json`. The tool splices only that trigger's own expression into its templates, so no claim can carry code. The `inputs` of `expression-output-equals-for-inputs` reach a template as a `.tfvars.json` file, never spliced as text. `trigger_id`, when set, equals `params.node`; `file` and `line` are the trigger's.
 - `params.revision` is `base` for a claim about the problem the change fixes, and `head` for a claim about what the change does.
+- A claim is written only when its predicate's Levels share a level with its trigger's `levels` in `behaviour.json`. No level of that trigger could check any other claim, so it is not written and stays prose.
 
 | `predicate_type` | It claims that, at the revision | Other params | Levels |
 |------------------|---------------------------------|--------------|--------|
@@ -80,7 +81,7 @@ The caller's model writes it, never the review, which stays read-only under Rule
 
 Every `params` object is closed: a key not in its row discards the claim. A discarded claim is unverifiable.
 
-A scope, `cases_where`, limits a claim to the required cases whose inputs are all in the named states. It is a non-empty object of input name to state. An input name is a key of the trigger's `cases[].inputs`: a variable, or a contextual reference as written, such as `aws_subnet.this[*].id`. A state is `wholly_unknown`, `unknown_element`, `empty` (`[]`, `{}` or `""`), `known` (any other known value with no unknown element and not null), `single` and `multiple` (a known collection of exactly one, or of two or more, elements; `known` matches them too), `null` or `omitted`. An honest length claim scopes by element count, since the sweep holds lists of several elements. A malformed scope discards the claim; a scope that matches no case leaves it unverifiable.
+A scope, `cases_where`, limits a claim to the required cases whose inputs are all in the named states. It is a non-empty object of input name to state. An input name is a key of the trigger's `cases[].inputs`: a variable, or a contextual reference as written, such as `aws_subnet.this[*].id`. A state is `wholly_unknown`, `unknown_element`, `empty` (`[]`, `{}` or `""`), `known` (any other known value with no unknown element and not null), `single` and `multiple` (a known collection of exactly one, or of two or more, elements; `known` matches them too), `null` or `omitted`. An honest length claim scopes by element count, since the sweep holds lists of several elements. A claim covers only the cases its statement describes: every case input the statement does not name gets the state `known` in `cases_where`. A description takes the caller's other inputs as given values, so a claim without that scope would also cover the cases where they are wholly unknown, which the description never claimed, and a refutation there would blame the change for a claim its author did not make. A malformed scope discards the claim; a scope that matches no case leaves it unverifiable.
 
 For a change that removes a wrapper which made a list wholly unknown when one element was unknown, the description's "the base list is wholly unknown" is `expression-output-unknown` at `base`, "the head keeps the length" is `expression-output-length-known` at `head`, and "the plan shows the change as known after apply" is `plan-attribute-unknown` at `head` on the unknown propagation trigger.
 
