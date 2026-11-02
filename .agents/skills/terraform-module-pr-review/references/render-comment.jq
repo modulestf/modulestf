@@ -190,7 +190,8 @@ def depth_reasons: ["light-docs-only", "focused-within-limits", "focused-no-exam
   "deep-depends-on", "deep-new-type", "deep-block-removed-or-renamed", "deep-variable-contract",
   "deep-output-sensitive", "deep-lifecycle-moved-removed-import", "deep-count-for-each", "deep-provisioner",
   "deep-policy", "deep-module-source-version", "deep-dynamic-structure", "deep-wrappers", "deep-limits",
-  "deep-classifier-category", "deep-classifier-unavailable", "deep-affected-fallback", "deep-parse-failure",
+  "deep-classifier-category", "deep-classifier-unavailable", "deep-classifier-invalid", "deep-classifier-mismatch",
+  "deep-affected-fallback", "deep-affected-invalid", "deep-parse-failure",
   "deep-unwalked", "deep-unresolved-consumer", "deep-unresolved-file-dependency", "deep-path-unsafe",
   "deep-too-many-examples", "deep-too-many-files", "deep-test-or-mock", "deep-files-list-mismatch",
   "deep-non-terraform-change"];
