@@ -108,14 +108,23 @@ escalate() { # reason: depth.sh escalate, which rewrites depth.json to deep, bef
   [ ! -e "$RUN/handover" ] || stop "escalation after the handover"
   bash "$HERE/depth.sh" escalate "$RUN/depth.json" "$1" > /dev/null 2>&1 || stop "depth.sh escalate failed"
   pin_depth
+  # A light plan coverage says the pass was skipped at light; at deep the plan step runs again.
+  if [ -f "$RUN/coverage.json" ] && jq -e 'any(.unplanned[]; .reason == "plan pass skipped at light depth")' \
+      "$RUN/coverage.json" > /dev/null 2>&1; then rm -f "$RUN/coverage.json" "$RUN/state/plan"; fi
   echo "depth: escalated to $(depth) ($1)"
+  echo "next at deep: the steps not yet run of schema, verify, plan, skip-coverage, ladder; then handover"
 }
 # Before the handover or the render: every step the depth needs has its output.
 ready() {
   [ "$TRIAGE" = false ] || return 0
   [ -f "$RUN/verify.json" ] || fail "$1 needs verify first"
   [ -f "$RUN/coverage.json" ] && [ -f "$RUN/behaviour/record.txt" ] || fail "$1 needs plan and ladder first"
-  [ "$(depth)" != focused ] || [ "$(cat "$RUN/state/schema" 2> /dev/null)" = ok ] || fail "$1 at focused needs schema first"
+  # A run with no depth.json is the pipeline of before, with no schema step.
+  [ -f "$RUN/depth.json" ] || return 0
+  case "$(depth)" in
+    focused) [ "$(cat "$RUN/state/schema" 2> /dev/null)" = ok ] || fail "$1 at focused needs schema first" ;;
+    deep) [ -f "$RUN/state/schema" ] || fail "$1 at deep needs schema first" ;;
+  esac
 }
 base_git() {
   GIT_LFS_SKIP_SMUDGE=1 git -C "$RUN/base" -c core.hooksPath=/dev/null \
@@ -348,7 +357,7 @@ summary_lines() {
     "next: " + (if .triage then "handover, reviewer, render"
       elif .depth == "light" then "claims, verify, plan, ladder, handover, reviewer, render"
       elif .depth == "focused" then "claims, schema, verify, plan, skip-coverage, ladder, handover, reviewer, render"
-      else "claims, verify, plan, skip-coverage, ladder, handover, reviewer, render" end)' "$RUN/index.json"
+      else "claims, schema, verify, plan, skip-coverage, ladder, handover, reviewer, render" end)' "$RUN/index.json"
 }
 
 # --- evidence passes -----------------------------------------------------------------------
@@ -357,7 +366,8 @@ need_full() { [ "$TRIAGE" = false ] || fail "a triage run has no $1 step"; }
 
 cmd_schema() {
   need_full schema
-  [ "$(depth)" = focused ] || { echo "schema: not run at depth $(depth)"; return 0; }
+  local d; d="$(depth)"
+  [ "$d" != light ] || { echo "schema: not run at depth light"; return 0; }
   [ ! -e "$RUN/facts" ] || fail "schema already ran in this run"
   rm -rf "$RUN/schema-work" "$RUN/state/schema-sources.txt"
   local line rc r=""
@@ -380,8 +390,15 @@ cmd_schema() {
   rm -f "$RUN/state/schema-sources.tmp"
   [ -n "$r" ] || r="$(printf '%s' "$line" | sed -n 's/^schema pass: escalate \([a-z0-9-]\{1,56\}\)$/\1/p')"
   [ -n "$r" ] || r=failed
-  rm -rf "$RUN/facts"; note schema "escalated $r"
-  echo "schema: escalate $r"
+  rm -rf "$RUN/facts"
+  if [ "$d" = deep ]; then
+    # At deep there is nothing to raise: the reviewer reads pages as before.
+    note schema "failed $r"
+    echo "schema: no fact sheets at depth deep (reason $r); the reviewer reads provider pages"
+    return 0
+  fi
+  note schema "escalated $r"
+  echo "schema: escalated to deep (reason $r)"
   escalate "deep-schema-$r"
 }
 
@@ -460,6 +477,8 @@ cmd_plan() {
   [ "${src[0]}" = --no-plan ] || note plan ran
   bash "$HERE/verify-pass.sh" coverage "$RUN" --files "$RUN/host/files.json" --out "$RUN/coverage.json" \
     --prefix "$PREFIX" "${src[@]}" > /dev/null 2> "$RUN/state/coverage.err" || fail "verify-pass.sh coverage failed"
+  # At light the plan pass is out of scope, whether or not a profile was named.
+  [ "$(depth)" != light ] || missed="plan pass skipped at light depth"
   if [ -n "$missed" ]; then
     jq --arg r "$missed" '.unplanned |= map(if .reason == "no AWS profile named" then .reason = $r else . end)' \
       "$RUN/coverage.json" > "$RUN/coverage.tmp" && mv "$RUN/coverage.tmp" "$RUN/coverage.json" || fail "the coverage could not be rewritten"
@@ -597,6 +616,11 @@ cmd_handover() {
   n="$(grep -n -m1 '^The block below holds text quoted' "$t" | cut -d: -f1)"
   [[ "$n" =~ ^[0-9]+$ ]] || fail "task.md has no block preamble"
   if [ "$TRIAGE" = false ]; then record_lines > "$out/record.txt" || fail "the record could not be assembled"; fi
+  # The merge base the depth was bound to, for the reviewer's mtf-facts --merge-base-sha.
+  local mbl="$MB"
+  [ ! -f "$RUN/depth.json" ] || mbl="$(jq -r '.binding.merge_base' "$RUN/depth.json")"
+  [[ "$mbl" =~ $sha_re ]] || mbl=""
+  rm -rf "$RUN/review"; mkdir "$RUN/review"
   # The diff of the task, module-root-relative, as a file the reviewer's mtf-facts lint reads.
   awk 'p == 1 && $0 == f { exit } p == 1 { print; next } p == 2 { f = $0; sub(/diff$/, "", f); p = 1; next }
        /^The diff:$/ { p = 2 }' "$t" > "$out/change.diff"
@@ -605,15 +629,18 @@ cmd_handover() {
     head -n $((n - 1)) "$t"
     grep -qxF "$WRITE_SHORT" "$t" || printf '%s\n' "$WRITE_SHORT"
     [ ! -f "$RUN/depth.json" ] || [ "$TRIAGE" = true ] || printf 'Depth: %s\n' "$RUN/depth.json"
-    [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || printf 'Provider fact sheets: %s\n' "$RUN/facts"
+    [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || [ ! -d "$RUN/facts" ] || printf 'Provider fact sheets: %s\n' "$RUN/facts"
     printf 'Diff: %s\n' "$out/change.diff"
+    [ -z "$mbl" ] || printf 'Merge base: %s\n' "$mbl"
+    printf 'Output: write the findings list as JSON to %s, the summary line to %s and the facts comparison note to %s, and nothing else.\n' \
+      "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt"
     sed -n "$n,\$p" "$t" | sed '$d'
     [ "$TRIAGE" = true ] || { printf 'RECORD-%s\n' "$s"; cat "$out/record.txt"; }
     printf 'UNTRUSTED-%s END\n' "$s"
   } > "$out/task.md"
   [ ! -f "$RUN/depth.json" ] || cp "$RUN/state/depth.sha256" "$RUN/state/handover.sha256"
   echo "handover: $out/task.md ($(wc -l < "$out/task.md" | tr -d ' ') lines, record $( [ -f "$out/record.txt" ] && wc -l < "$out/record.txt" | tr -d ' ' || echo 0) lines)"
-  echo "reviewer: workspace $MROOT, task $out/task.md; ask for findings.json and the summary line only"
+  echo "reviewer: one read-only subagent, workspace $MROOT, task text $out/task.md, output in $RUN/review"
 }
 
 # --- render ----------------------------------------------------------------------------------
@@ -630,7 +657,10 @@ cmd_render() {
       *) die "unexpected argument" ;;
     esac
   done
-  [ -f "$findings" ] && [ ! -L "$findings" ] || die "--findings must be a regular file"
+  # The reviewer's output files of the handover, unless named; facts-comparison.txt is not read.
+  [ -n "$findings" ] || findings="$RUN/review/findings.json"
+  [ -n "$summary" ] || [ ! -f "$RUN/review/summary.txt" ] || summary="$RUN/review/summary.txt"
+  [ -f "$findings" ] && [ ! -L "$findings" ] || die "--findings must be a regular file (default <run>/review/findings.json)"
   [ -f "$assessment" ] || die "--assessment must be a file"
   ready render
   [ -f "$RUN/handover/task.md" ] || fail "render needs handover first"
