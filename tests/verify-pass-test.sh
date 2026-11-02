@@ -358,13 +358,16 @@ $BASE" --out "$R3/x.json")"
     'example: examples/newfail' 'plan: code-error' 'base: not available' 'example: examples/net' 'plan: forged class' \
     'plan summary: 5 examples, 1 planned, 0 exceptions, 4 other' > "$TMP/rec.txt"
   mkdir -p "$TMP/addr"
-  echo '{"addresses":["module.b.aws_s3_bucket.this","aws_x.y[\"secret\"]",7],"attributes":{"module.b.aws_s3_bucket.this":["bucket","Bad",1],"other":["x"]},"module_calls":{"b":"../../","out":"../../../x","reg":"terraform-aws-modules/x/aws"}}' > "$TMP/addr/addresses-1.json"
+  echo '{"addresses":["module.b.aws_s3_bucket.this","aws_x.y[\"secret\"]",7],"attributes":{"module.b.aws_s3_bucket.this":["bucket","Bad",1],"other":["x"]},"sensitive":{"module.b.aws_s3_bucket.this":["bucket"]},"head_sha":"0123456789abcdef0123456789abcdef01234567","module_calls":{"b":"../../","out":"../../../x","reg":"terraform-aws-modules/x/aws"}}' > "$TMP/addr/addresses-1.json"
   echo '{"addresses":["aws_y.z"]}' > "$TMP/addr/addresses-2.json"
   cov --plan "$TMP/rec.txt" --addresses "$TMP/addr"
   check "$sh: a laptop record: partial coverage" "$(q "$TMP/cov.json" '.class == "partial"')"
   check "$sh: a planned example carries its cleaned addresses, attributes and local module calls resolved inside the repository" \
     "$(q "$TMP/cov.json" '.examples[] | select(.dir == "examples/codeok") | .head == "planned" and .addresses == ["module.b.aws_s3_bucket.this"] and .attributes == {"module.b.aws_s3_bucket.this":["bucket"]}
       and .module_calls == {"b":"."}')"
+  # The ladder record takes these examples as they are, and its schema has no sensitive key
+  check "$sh: the sensitive names and head commit of an addresses file stay out of coverage; a file without them is read alike" \
+    "$(q "$TMP/cov.json" 'all(.examples[]; keys == ["addresses","attributes","base","dir","head","module_calls"])')"
   check "$sh: a code error classified at the base is covered, with no addresses" \
     "$(q "$TMP/cov.json" '(.examples[] | select(.dir == "examples/regress") | .head == "code-error" and .base == "reproduces at base" and .addresses == [])
       and ([.unplanned[].dir] | index("examples/regress") == null)')"

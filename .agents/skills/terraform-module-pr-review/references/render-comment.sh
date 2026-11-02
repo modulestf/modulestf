@@ -45,7 +45,18 @@
 #   The run file may carry two keys more: "examples": {"count": n, "validated": n}, the selected
 #   examples verified and how many passed `validate`, which COMPACT needs, and "plan_mode",
 #   "laptop" or "runner", the plan pass mode of the plan record; a gate hit is a cause COMPACT
-#   admits only after a laptop-mode pass. A host.json prose-truncated entry
+#   admits only after a laptop-mode pass. coverage may carry three keys more, all or none:
+#   "covered_skips", the "covered" list skip-coverage.sh prints, [{"dir", "gate": "G1|G2|G3",
+#   "path", "witnesses": [{"attribute", "example", "address"}]}] with an optional "downloaded":
+#   true when the covering hit is in a downloaded module (skip-coverage.md), and "skip_head_sha" and
+#   "skip_base_sha", its head_sha and base_sha, 40 lowercase hex. dir, path and example are
+#   relative paths in one spelling (no leading or trailing slash, no empty, "." or ".."
+#   segment), no dir twice, attribute matches ^[a-z0-9_]{1,128}$, and address is 1 to 300
+#   characters with no control character or backtick; any other shape is refused. The list takes
+#   the skipped examples off ladder rule 4 only when every condition of verdict.md, Covered
+#   safety-gate skips, holds for every one of them, skip_head_sha equal to --head, skip_base_sha
+#   to host.json's merge_base and at most 100 distinct witnesses among them; else it is ignored. A
+#   host.json prose-truncated entry
 #   may carry "item" (body, title or thread) and "omitted" (bytes); only a cut of the body, the
 #   description, is a cause COMPACT admits. The behaviour object's triggers may carry claims-eval's
 #   "complete", "outstanding" and "evidence_digest" (behaviour-pass.md, The Run Object); a trigger

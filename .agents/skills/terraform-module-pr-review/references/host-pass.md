@@ -36,6 +36,7 @@ The example selection and plan coverage change the files a host exchanges with t
 - The render's run file carries `coverage` ([render-comment.sh](render-comment.sh)); a run file without it is refused.
 - The run file may carry `examples`, `{"count": M, "validated": K}`: the examples of `verify.json` whose `reason` is `verified`, not `skipped-version-bump` or `skipped-symlink`, and how many of them passed `validate` at the head (`[.dirs[] | select(.reason == "verified")] | {count: length, validated: (map(select(.head.validate == 0)) | length)}`). A host that wants the COMPACT tier of [comment-format.md](comment-format.md) sends it; one that omits it is safe and always gets STANDARD.
 - The run file may carry `plan_mode`, `laptop` or `runner`: the plan pass mode of the plan record, `runner` for a hosted plan job. A gate hit is a cause the COMPACT tier admits only with `laptop`; with `runner` or no `plan_mode` it forces STANDARD.
+- The run file's `coverage` may carry `covered_skips`, `skip_head_sha` and `skip_base_sha`, together or not at all: the output of skip-coverage.sh. A host that does not run it leaves them out and gets today's verdict; one of the wrong shape is refused ([verdict.md](verdict.md#covered-safety-gate-skips)).
 ## Plan Record
 
 `plan-hosted.json` is the hosted plan job's record, described in [plan-pass.md](plan-pass.md#hosted-runner). It is accepted only when all of these hold, and otherwise refused with the reason in brackets:

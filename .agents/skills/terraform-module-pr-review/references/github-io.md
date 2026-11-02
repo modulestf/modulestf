@@ -39,7 +39,7 @@ Runs first, before any other network call or clone. Produces the login and the a
 gh api repos/<owner>/<repo>/pulls/<number>
 ```
 
-One REST read, which carries `number`, `title`, `body`, `user.login`, `user.id`, `state`, `merged`, `draft`, `mergeable`, `mergeable_state`, `labels`, `head.sha`, `head.repo.owner.login`, `base.ref`, `base.sha` and `base.repo.default_branch`.
+One REST read, which carries `number`, `title`, `body`, `user.login`, `user.id`, `state`, `merged`, `draft`, `mergeable`, `mergeable_state`, `labels`, `head.sha`, `head.repo.owner.login`, `base.ref`, `base.sha`, `base.repo.default_branch` and `changed_files`, the count [skip-coverage.md](skip-coverage.md#inputs) holds the files list to.
 
 `head.sha` is the pin, called `headRefOid` throughout this skill. Every later step reads the pull request at that SHA, and Step 12 re-reads it before writing. A pull request whose head repository owner differs from `<owner>` is a fork: it changes nothing here, because nothing from the head is ever executed.
 
