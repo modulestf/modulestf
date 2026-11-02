@@ -66,7 +66,10 @@ The tokens `mtf-facts depth` gives, in its order:
 - `deep-limits`
 - `deep-classifier-category`
 - `deep-classifier-unavailable`
+- `deep-classifier-invalid`
+- `deep-classifier-mismatch`
 - `deep-affected-fallback`
+- `deep-affected-invalid`
 - `deep-parse-failure`
 - `deep-unwalked`
 - `deep-unresolved-consumer`
@@ -102,7 +105,7 @@ Exit 1 aborts the run; exit 2 is a usage error or a refused input; neither write
 
 ## Rule 4 Per Depth
 
-A check or an example out of scope by the table above is not an unknown at rule 4 of [verdict.md](verdict.md#rule-4-per-depth): the render drops an example out of scope from the verification gaps and the examples not planned, and at light, where the plan pass is out of scope, every example not planned. Anything in scope that did not run stays an unknown. Deep leaves nothing out of scope, so it renders as a run with no depth does.
+A check or an example out of scope by the table above is not an unknown at rule 4 of [verdict.md](verdict.md#rule-4-per-depth): the render drops an example out of scope from the verification gaps and the examples not planned, and at light, where the plan pass is out of scope, every example not planned, whose reason the host writes as `plan pass skipped at light depth`. That reason at any other depth, or with no depth, is a refused input. Anything in scope that did not run stays an unknown. Deep leaves nothing out of scope, so it renders as a run with no depth does.
 
 ## Comment Lines
 
