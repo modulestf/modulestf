@@ -1971,8 +1971,38 @@ t_plan_failed; check "coverage: a plan pass that did not run though a profile wa
 render "$NONE" "" "" "$(runf pnr2 '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass did not run: refused"}]}')"
 check "coverage: a refused plan pass is its own reason" "$([ "$(rule)" = 4 ] && grep -qxF -- '- 1 example was not planned: plan pass did not run: refused.' "$O/comment.md"; echo $?)"
 refused "coverage: a plan pass reason outside the list" "$NONE" "" "" "$(runf pnr3 '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass did not run: oops"}]}')"
-mutate "a plan pass that did not run read as no profile" 's/"plan pass did not run: failed", "not reached/"no AWS profile named", "not reached/' t_plan_failed
+mutate "a plan pass that did not run read as no profile" 's/"plan pass did not run: failed", "plan pass skipped/"no AWS profile named", "plan pass skipped/' t_plan_failed
 mutate "the behaviour line one form dropped" 's/\(if \$n == 1 then "-one" else "-many" end\); \{count: \$n\}\);/"-many"; {count: \$n});/' t_one_change
+
+# --- At light the host writes "plan pass skipped at light depth": no unknown, no advice; at any
+# other depth, or with no depth, a refused input.
+SKIPL='.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/complete", reason: "plan pass skipped at light depth"}]}'
+t_skiplight() {
+  render "$NONE" "" "" "$(rund d-skl light . "$SKIPL")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 8 ] && [ "$(verdict)" = "approve APPROVE" ] && ! grep -qF 'not planned' "$O/comment.md" &&
+    ! grep -qF 'AWS profile' "$O/comment.md" && ! grep -qF 'To get a conclusive review' "$O/comment.md"
+}
+t_skiplight; check "light: plan pass skipped at light depth is no unknown and gives no advice (rule 8)" $?
+t_skipfoc() { render "$NONE" "" "" "$(rund d-skf focused . "$SKIPL")"; [ "$ST" = 2 ] && empty_out; }
+t_skipfoc; check "refused: plan pass skipped at light depth at focused" $?
+refused "plan pass skipped at light depth at deep" "$NONE" "" "" "$(rund d-skd deep . "$SKIPL")"
+refused "plan pass skipped at light depth with no depth" "$NONE" "" "" "$(runf d-skn "$SKIPL")"
+mutate "the light skip reason accepted at any depth" 's/\n  and \(\(any\(\.coverage\.unplanned\[\]\?; \.reason == "plan pass skipped at light depth"\) \| not\) or \.depth\.depth\? == "light"\)//' t_skipfoc
+
+# --- A gate in the body: section 5 names the gate class, a host token, and never the file; the
+# assessment rules say so, and give the words for a pass that planned some examples only.
+t_gate_words() {
+  awk '/^## Section Order$/ { on = 1; next } on && /^## / { exit } on' "$CF" > "$TMP/so.md"
+  grep -qF 'the other examples were not planned: the plan pass stopped at a gate' "$TMP/so.md" &&
+    grep -qF 'such as `plan gate G3`, which names the gate class, a host token, and never the file' "$TMP/so.md" &&
+    ! grep -qF 'Section 5 lists neither.' "$TMP/so.md"
+}
+t_gate_words; check "strings: section 1 gives the mixed plan pass words and lets section 5 name the gate class" $?
+t_gate_body() {
+  render "$NONE" "" "" "$(runf gb '.plan_ran = true | .plan_mode = "laptop" | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/s3-import", reason: "plan gate G3"}]}')"
+  [ "$ST" = 0 ] && grep -qxF -- '- 1 example was not planned: plan gate G3.' "$O/comment.md" && ! grep -qE '\.tf(:|`)' "$O/comment.md"
+}
+t_gate_body; check "section 5: a gate stop names the gate class and no file" $?
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi
