@@ -14,6 +14,9 @@
 # - SKILL.md's Reading by Depth makes a row hold when the mtf-facts report gives its rule a
 #   finding or candidate, and facts-engine.md pairs `row not applied` only with clean or
 #   not_applicable;
+# - the Budget's host fact sheets and run/facts.md's Fact Sheets name the deduplicated sheet
+#   (`same_as`, the `versions:` line) and the deep run's `missing.json`, and the index links the
+#   Budget;
 # - headings aside, SKILL.md with the references its text moved to (inputs.md, output.md,
 #   workflow.md), and each check file and engine file, hold the multiset of sentences of the
 #   base commit tests/reviewer-index-sentences.txt names, changed only by the "+" and "-"
@@ -140,6 +143,14 @@ index_check() {
   bash "$d/references/section.sh" references/facts-engine.md facts-comparison 2> /dev/null |
     grep -F -q '`row not applied` pairs only with a tool `clean` or `not_applicable`' ||
     printf 'facts rows\treferences/facts-engine.md#facts-comparison\t`row not applied` is not limited to clean and not_applicable\n'
+  bash "$d/references/section.sh" references/large-changes.md budget 2> /dev/null > "$TMP/ix-budget"
+  bash "$d/references/section.sh" references/run/facts.md fact-sheets 2> /dev/null > "$TMP/ix-sheets"
+  for w in '`same_as`' '`versions: <list>`' '`missing.json`'; do
+    grep -F -q "$w" "$TMP/ix-budget" || printf 'fact sheets\treferences/large-changes.md#budget\tthe host fact sheets do not name %s\n' "$w"
+  done
+  for w in '`same_as`' '`versions:`' '`missing.json`' '](../large-changes.md#budget)'; do
+    grep -F -q "$w" "$TMP/ix-sheets" || printf 'fact sheets\treferences/run/facts.md#fact-sheets\tdoes not hold %s\n' "$w"
+  done
   for pair in $CHECKS; do
     x="${pair%%:*}"; spec="${pair#*:}"; sum="references/run/check-$x.md"
     if [ ! -f "$d/$sum" ]; then printf 'summary\t%s\tmissing\n' "$sum"; continue; fi
@@ -378,6 +389,8 @@ a navigation line added to SKILL.md unrecorded~sentences~SKILL.md~s/ These headi
 Read First dropped~read first~references/run/check-a.md~/^When any row below applies: /d
 a facts-engine candidate no longer forcing its row~facts rows~SKILL.md~s/ A row whose rule the `mtf-facts` report of Step 1 gives a finding or candidate for, in any area, holds whatever its condition says: its sections are opened and the rule is judged\.//
 row not applied paired with a candidate again~facts rows~references/facts-engine.md~s/ so `row not applied` pairs only with a tool `clean` or `not_applicable`\./ so `row not applied` pairs with any tool result./
+the fact sheet index without same_as~fact sheets~references/run/facts.md~s/A `sheet` with `same_as` naming/A `sheet` naming/
+the Budget without missing.json~fact sheets~references/large-changes.md~s/also writes `missing.json` beside/also writes a list beside/
 section.sh past the next heading~section.sh~references/section.sh~s/if (on \&\& lvl <= on) on = 0/if (on \&\& lvl < on) on = 0/
 section.sh stopping at a deeper heading~section.sh~references/section.sh~s/if (on \&\& lvl <= on) on = 0/if (on) on = 0/
 section.sh reading fenced headings~section.sh fixture~references/section.sh~s/} else if (fence == 0 \&\& /} if (/

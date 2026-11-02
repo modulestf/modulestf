@@ -100,7 +100,7 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 +	SKILL.md	| [quoted-claims.md]() | By section, only when the task's untrusted block has a title, description or comment that makes a claim: [Marked Items]() first, then what a check's summary row links |
 +	SKILL.md	| [rule-facts.md]() | Not read: each summary row copies its columns |
 +	SKILL.md	| [run/]() `check-a.md` to `check-g.md` | Whole, for each check in scope, as [Reading by Depth]() says |
-+	SKILL.md	| [run/facts.md]() | Whole, only when Step 1 runs `mtf-facts`; it links the sections of [facts-engine.md]() to open |
++	SKILL.md	| [run/facts.md]() | [mtf-facts]() only when Step 1 runs `mtf-facts`; [Fact Sheets]() when the task names a fact sheets directory and a row that holds needs provider facts; each links the sections of [facts-engine.md]() or the [Budget]() to open |
 +	SKILL.md	| [run/output.md]() | Whole, before writing the findings; it links each section of [findings-schema.md]() and [output.md]() a finding needs |
 +	SKILL.md	| [section.sh]() | Run, never read: prints one section by anchor |
 +	SKILL.md	| [triage.md]() | Whole, only in a triage run |
