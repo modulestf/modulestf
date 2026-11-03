@@ -493,6 +493,20 @@ reset; trig3; run --schema "$TMP/bad-schema.json" > /dev/null
 check "a schema whose attribute type differs refuses the fixture" "$([ "$(r3 reason)" = "the fixture does not match the provider schema" ]; echo $?)"
 reset; trig3 "" ""; run --schema "$TMP/aws-schema.json" > /dev/null
 check "an added attribute has no control at L3" "$([ "$(r3 reason)" = "an added attribute has no control" ]; echo $?)"
+# An added attribute the classifier gives its null base (base_absent): the control is the
+# base null in the all-known case, and both sides are planned.
+reset; trig3 "" null; jq '.triggers[0].base_absent = true | .triggers[0].change_kind = "added"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"
+run --schema "$TMP/aws-schema.json" > /dev/null
+check "an added attribute with its null base runs at L1 on both sides" "$(q "$TMP/l.json" '.runs[0] | .level == "L1" and .state == "ran" and .control == "valid" and [.observations.base[].case] == ["typical","empty","known"] and [.observations.head[].case] == ["typical","empty","known"]')"
+check "the L1 base subject is the null" "$(grep -qx '  value = null' "$RUND/ladder/fixtures/T-001/base/subject.tf"; echo $?)"
+check "an added attribute with its null base has a control at L3" "$(q3 '.state == "ran" and .control == "valid" and .observations.fixture.control.case == "known" and [.observations.base[].case] == ["typical","empty"]')"
+check "the L3 base sets the target to the null, last in the resource" "$(tail -2 "$RUND/ladder/fixtures/T-001-L3/base/subject.tf" | head -1 | grep -qx '  vpc_security_group_ids = null'; echo $?)"
+# A data source is never planned at L3, with or without the schema and acquisition.
+for s in with without; do
+  reset; trig3; jq '.triggers[0].address = "data.aws_rds_cluster.this"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"
+  if [ "$s" = with ]; then run --schema "$TMP/aws-schema.json" > /dev/null; else run > /dev/null; fi
+  check "a data source is not planned at L3 ($s a schema), L1 still runs" "$([ "$(r3 reason)" = "a data source is not planned at L3" ] && q3 '.state == "unverifiable" and .observations == {base:[], head:[]}' | grep -qx 0 && q "$TMP/l.json" '.runs[0].state == "ran"' | grep -qx 0 && ! grep -q -- '-L3/' "$ST/log"; echo $?)"
+done
 reset; trig3 "$(printf '%s' "$CASES3" | jq -c '.[:2]')"; run --schema "$TMP/aws-schema.json" > /dev/null
 check "no all-known case leaves L3 without a control" "$([ "$(r3 reason)" = "no all-known case for the control" ]; echo $?)"
 reset; trig3; jq '.triggers[0].attribute = "tags"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run --schema "$TMP/aws-schema.json" > /dev/null
@@ -597,6 +611,24 @@ output "extra" {
         check "live end to end: claims-eval lists the L2 key changes, unexplained" "$(q "$E2/ce.json" '.triggers[0] | .state == "unverifiable" and ([.changes[] | select(.level == "L2" and .case == "typical" and .attribute == "value" and (.explained | not))] | length) == 1')"
       fi
     fi
+    # End to end: an attribute the change adds, which the classifier gives its null base when
+    # the schema marks it a plain attribute; L1 then evaluates both sides.
+    E3="$TMP/e3e"; mkdir -p "$E3/base" "$E3/head"
+    V='variable "vpc_security_group_ids" {\n  type    = list(string)\n  default = null\n}\n\n'
+    printf "$V"'resource "aws_rds_cluster" "this" {\n  engine = "aurora-postgresql"\n}\n' > "$E3/base/main.tf"
+    printf "$V"'resource "aws_rds_cluster" "this" {\n  engine                 = "aurora-postgresql"\n  vpc_security_group_ids = var.vpc_security_group_ids\n}\n' > "$E3/head/main.tf"
+    jq -n '{format_version:"1.0", provider_schemas:{"registry.terraform.io/hashicorp/aws":{resource_schemas:{aws_rds_cluster:{version:0, block:{attributes:{
+      engine:{type:"string", required:true}, vpc_security_group_ids:{type:["set","string"], optional:true, computed:true}}}}}}}}' > "$E3/schema.json"
+    if ! PATH="$ORIGPATH" mtf-facts behaviour "$E3/head" --base "$E3/base" --schema "$E3/schema.json" --json > "$E3/b.json" 2> /dev/null \
+      || ! jq -e 'any(.triggers[]; .category == "unknown-propagation-candidate" and .base_absent == true and .base_expr == "null")' "$E3/b.json" > /dev/null; then
+      live_skip "this mtf-facts gives an added attribute no null base"
+    else
+      jq '.triggers |= map(select(.category == "unknown-propagation-candidate")) | .triggers[0].id = "T-001" | .entries = []' "$E3/b.json" > "$E3/b1.json"
+      lp run "$LR" --behaviour "$E3/b1.json" --base "$BASE" --head "$HEAD" --out "$E3/l.json" > "$TMP/live-e3e.out" 2>&1
+      check "live end to end: an added attribute runs L1 on both sides, the base null in every case" "$(n=$(jq '.triggers[0].cases | length' "$E3/b1.json"); q "$E3/l.json" ".runs[0] | .level == \"L1\" and .state == \"ran\" and .control == \"valid\" and (.observations.base | length) == $n and (.observations.head | length) == $n and all(.observations.base[]; .known and .value == null)")"
+      PATH="$ORIGPATH" mtf-facts claims-eval --behaviour "$E3/b1.json" --ladder "$E3/l.json" --head-sha "$HEAD" --base-sha "$BASE" --json > "$E3/ce.json" 2> /dev/null
+      check "live end to end: the null case of the new input shows no difference, the typical case does" "$(q "$E3/ce.json" '.triggers[0] | ([.changes[] | select(.level == "L1" and .case == "null")] | length) == 0 and ([.changes[] | select(.level == "L1" and .case == "typical")] | length) > 0')"
+    fi
     # L3: the real hashicorp/aws 6.70.0 from the pin file. Acquisition downloads it once
     # (outside the sandbox, to its pinned host, the hash checked) into LADDER_LIVE_CACHE.
     if [ -z "${LADDER_LIVE_CACHE:-}" ] && [ "${LADDER_LIVE_REQUIRED:-0}" != 1 ]; then
@@ -616,6 +648,13 @@ output "extra" {
       lp run "$LR" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" --schema "$TMP/live-schema.json" > "$TMP/live3d.out" 2>&1
       check "live: aws_db_instance L3 ran with a valid control" "$(q3 '.state == "ran" and .control == "valid" and .observations.fixture.library == "aws_db_instance/aws-6.70.0"')"
       check "live: aws_db_instance at the base plans no change, at the head known after apply" "$(q3 '(.observations.base[] | select(.case == "empty") | .action == "no-op" and .unchanged_vs_prior == true) and (.observations.head[] | select(.case == "empty") | .action == "update" and .known == false)')"
+      # An added attribute with its null base: the base null keeps the prior value of an
+      # Optional and Computed attribute, so the control matches the baseline.
+      SG3='[{"text":"aws_security_group.this[*].id","kind":"resource","type":"string","multi":"count"}]' trig3 "" null
+      jq '.triggers[0].base_absent = true | .triggers[0].change_kind = "added"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"
+      lp run "$LR" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" --schema "$TMP/live-schema.json" > "$TMP/live3n.out" 2>&1
+      check "live: an added attribute with its null base has a valid control at L3" "$(q3 '.state == "ran" and .control == "valid" and .observations.fixture.control.baseline')"
+      check "live: the null base keeps the prior value, the head is known after apply" "$(q3 '(.observations.base[] | select(.case == "empty") | .action == "no-op" and .known and .unchanged_vs_prior == true) and (.observations.head[] | select(.case == "empty") | .action == "update" and .known == false)')"
       check "live: no provider process is left" "$(! ps -A -o comm= | grep -qF "$LR/ladder/providers/"; echo $?)"
     fi
   fi

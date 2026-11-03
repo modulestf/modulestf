@@ -58,4 +58,6 @@ A trigger carries `complete`, `outstanding` and `evidence_digest` when `claims-e
 
 ## Limits
 
+- A trigger the classifier marks `base_absent` or `head_absent` has the expression `null` at that revision: the provider attribute is absent there, and Terraform reads it as null. The ladder evaluates it like any other expression, and a base claim on it is valid. The flags cross to no record line and no run object.
+- A data source argument takes L1 only. A deferral of its read by `depends_on` or by a pending change of a dependency is not modelled, so no claim that a read is not deferred can verify.
 - The claims are the model's reading of the description. A claim the model leaves out is not evaluated, and its trigger then has no claim, which keeps it unverifiable unless it is inert or covered.

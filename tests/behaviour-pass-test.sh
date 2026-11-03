@@ -351,6 +351,10 @@ check "also_categories: copied from the classifier to the run trigger" "$(q '.tr
 refuse_b "an also_categories entry outside the list" '.triggers[0].also_categories = ["cosmetic"]'
 refuse_b "an also_categories entry twice" '.triggers[0].also_categories = ["default-change", "default-change"]'
 refuse_b "an empty also_categories" '.triggers[0].also_categories = []'
+setup
+jq '.triggers[1].base_expr = "null" | .triggers[1].base_absent = true | .triggers[1].change_kind = "added" | .triggers[0].head_absent = true' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
+classify; evalp --claims "$TMP/claims-556.json"
+check "base_absent and head_absent: a null side classifies and evaluates, and crosses to no run trigger or record line" "$([ -f "$O/behaviour.json" ] && q '.status == "ran" and all(.triggers[]; (has("base_absent") or has("head_absent")) | not)' | grep -qx 0 && ! grep -q absent "$O/record.txt"; echo $?)"
 
 # --- Usage: eval before classify, a relative path, an out directory holding outputs.
 setup; evalp; check "eval before classify is a usage error" "$([ $? = 2 ]; echo $?)"

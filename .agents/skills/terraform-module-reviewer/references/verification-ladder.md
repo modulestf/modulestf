@@ -7,7 +7,7 @@ A logic change is verified by escalating evidence, simplest first, until a test 
 
 ## Triggers
 
-`mtf-facts behaviour` reads the base and head trees and turns every changed tree entry into AST-level changes. Each one is a trigger with an id (`T-001` on), a file, a line and exactly one category. At most 40 triggers; the rest are counted in `capped` and are unverifiable. Triggers with the same file and line and identical base and head expressions, neither null, are one trigger: the first by id keeps its category and the others' go in `also_categories`, its levels and cases are the union of theirs under the same caps, and ids are numbered again in order. A change only to an enumerated documentation or metadata path that no HCL read site reaches is inert, with no trigger.
+`mtf-facts behaviour` reads the base and head trees and turns every changed tree entry into AST-level changes. Each one is a trigger with an id (`T-001` on), a file, a line and exactly one category. At most 40 triggers; the rest are counted in `capped` and are unverifiable. Triggers with the same file and line and identical base and head expressions, neither null nor the null of an absent attribute, are one trigger: the first by id keeps its category and the others' go in `also_categories`, its levels and cases are the union of theirs under the same caps, and ids are numbered again in order. A change only to an enumerated documentation or metadata path that no HCL read site reaches is inert, with no trigger.
 
 | Category | What changed |
 |----------|--------------|
@@ -43,12 +43,16 @@ At most two levels per trigger. The classifier picks them from the category:
 | `wrapper-change`, `locals-outputs-change`, `default-change`, `type-validation-change` | L1 |
 | `count-for_each-conditional-change` | L1; L1 and L2 when the attribute is the `count` or `for_each` of a resource, data or module block |
 | `dynamic-block-change` | L1 on its `for_each` when only the `for_each` changed, marked `for_each_only`; otherwise covered by a plan |
-| `unknown-propagation-candidate` | L1, then L3 with a curated fixture, or covered by a plan |
+| `unknown-propagation-candidate` | L1, then L3 with a curated fixture, or covered by a plan; L1 only for a data source argument |
 | `literal-argument-change`, `resource-added-or-removed`, `lifecycle-change`, `unclassified-change`, `non-hcl-dependency` | Covered by a plan |
 | `provider-version-floor-change` | The compatibility rules of [Check A](check-a-compatibility.md) |
 | `moved-or-renamed-address`, provisioners and `connection` blocks | None: unverifiable by design. A plan-only test has no prior state to move |
 
 A trigger the classifier marks `for_each_only`, a change only to a dynamic `for_each`, takes L1.
+
+An argument added to, or removed from, a resource or data source block present at both revisions reads as `null` at the revision without it, because Terraform reads an absent provider attribute as null. The classifier gives that side the expression `null` and marks the trigger `base_absent` or `head_absent` only when the provider schema of both revisions marks the name an attribute that is not write-only, reached through nested attribute types only. With no schema, a disagreement, a nested block on the path, a meta-argument or a block Terraform reads (`count`, `for_each`, `depends_on`, `provider`, `lifecycle`, `provisioner`, `connection`, `dynamic`, `moved`, `import`, `removed`, `check`), or an argument of a provider, module, output, locals, variable or terraform block, that side stays absent and the levels that need it stay unverifiable. The flags change no category and no level. L1 then compares the head value with the null, and L3 runs its control with the null base. A variable the change adds, whose default is a bare literal (a quoted string with no `${` or `%{`, `true`, `false` or `null`), gives the triggers that read it a `default` case: the value an existing caller gets.
+
+A data source is not planned at L3: a read with a known configuration needs the provider's API, and the sandbox denies the network. An unknown argument defers the read to apply, and every attribute of the data source is then unknown; L1 shows whether the argument is unknown. A deferral by `depends_on` or by a pending change of a dependency is not modelled, so no claim that a read is not deferred can verify.
 
 Covered means the changed address appears in an example the plan pass planned, with a nonempty instance list, and the changed attribute is present in its planned configuration.
 
