@@ -690,6 +690,46 @@ variable "region" {
 }'
 done
 printf '%s\n' 'data "aws_availability_zones" "z" {' '  region = local.region' '}' >> "$TMP/g3/rfree-az/mod/main.tf"
+# Final review cases: a local in a dot file, a local of the wrong directory for a call or a
+# data block, and skip_region_validation in a second provider block with a variable region
+g3w loc-dotfile ex/.x.tf 'locals {
+  r = "us-east-1"
+}'
+g3w loc-dotfile ex/main.tf 'data "aws_availability_zones" "z" {
+  region = local.r
+}'
+g3w loc-call-wrongdir ex/main.tf 'module "m" {
+  source = "../mod"
+  region = local.r
+}'
+g3w loc-call-wrongdir mod/main.tf 'data "aws_availability_zones" "z" {
+  region = var.region
+}'
+g3w loc-call-wrongdir mod/v.tf 'variable "region" {
+  default = null
+}
+
+locals {
+  r = "us-east-1"
+}'
+g3w loc-data-wrongdir ex/main.tf 'locals {
+  r = "us-east-1"
+}
+module "m" {
+  source = "../mod"
+}'
+g3w loc-data-wrongdir mod/main.tf 'data "aws_availability_zones" "z" {
+  region = local.r
+}'
+g3w prov-split ex/main.tf 'provider "aws" {
+  region = "us-east-1"
+}
+provider "aws" {
+  alias                  = "b"
+  region                 = var.r
+  skip_region_validation = true
+}
+variable "r" {}'
 # The file ban: each banned name in scope turns a passing case into a hit.
 for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
   for c in pol-plain prov-skip bus-defaults; do
@@ -874,6 +914,10 @@ for sh in bash zsh; do
   [ -z "$out" ] || printf '%s\n' "$out"
   check "$sh: aws_availability_zones with the same region is still a hit" \
     "$(g3 rfree-az | grep -x "G3 $R3/clone/g3/rfree-az/mod/main.tf:12" > /dev/null; echo $?)"
+  for c in loc-dotfile loc-call-wrongdir loc-data-wrongdir prov-split; do
+    check "$sh: laptop mode refuses $c" "$(g3 "$c" | grep '^class: plan gate G3 ' > /dev/null; echo $?)"
+  done
+  check "$sh: a dot file is not in the scope" "$(run scope "$R3" "$R3/clone/g3/loc-dotfile/ex" | grep -F '/.x.tf' > /dev/null; test $? -eq 1; echo $?)"
   for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
     for c in pol-plain prov-skip bus-defaults; do
       check "$sh: $b in scope turns off the relaxation for $c" \

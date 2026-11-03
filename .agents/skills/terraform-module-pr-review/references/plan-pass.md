@@ -18,7 +18,7 @@ The pass ships as one script file, [plan-pass.sh](plan-pass.sh), and this file i
 
 ## Definitions
 
-- **Clone scope** of an example: every `.tf` file in the example directory and, following each `source` that is a local path, every `.tf` file in each local module directory inside the clone it reaches, recursively.
+- **Clone scope** of an example: every `.tf` file in the example directory, other than one whose name starts with a dot, which Terraform ignores, and, following each `source` that is a local path, every `.tf` file in each local module directory inside the clone it reaches, recursively.
 - **Downloaded scope**: after the plan pass's own `init` in that example, the `.tf` files directly in each directory `modules.json` lists for a downloaded module: every entry but the root, whose directory lies under `TF_DATA_DIR/modules`. Those are exactly the module directories Terraform loads, and a local module call inside a downloaded module is an entry of its own. Other files of a downloaded package, such as a code generator in a subdirectory no entry names, are neither loaded nor read.
 - Gates read whole file text, where `\s` matches newlines, and fail closed: a file that cannot be read, or a pattern that cannot find what it needs, is a hit. Output extraction in [Classes](#classes) reads per line.
 - Before any brace is matched, the contents of every quoted string, backslash escapes honoured, are replaced by filler of the same length, so a brace or a comment marker inside a string cannot end a block or start a comment early. Line numbers and offsets stay the same.

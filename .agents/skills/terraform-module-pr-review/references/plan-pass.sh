@@ -282,6 +282,9 @@ unless ($run) {
     $dirs{$rd} = 1;
     my $m = $M{$f} = mask($raw);
     unless (defined $m) { $a3 = 0; $lbad{$rd} = 1; next }
+    # A dot file, which only the downloaded mode lists, is gated but never read for calls,
+    # variables or locals: Terraform ignores it
+    next if $f =~ m{(?:\A|/)\.[^/]*\z};
     # Locals: each name counted over every locals block of the directory
     while ($m =~ /\blocals\s*(?=\{)/g) {
       next unless $m =~ /\G$B/gc;
@@ -495,7 +498,8 @@ scope() { # absolute example directory
     while (defined(my $d = shift @q)) {
       next if $seen{$d}++;
       opendir(my $h, $d) or do { print "UNREADABLE\n"; next };
-      for my $n (sort grep { /\.tf\z/ } readdir $h) {
+      # Terraform ignores a file whose name starts with a dot, so the scope does too
+      for my $n (sort grep { /\.tf\z/ && !/\A\./ } readdir $h) {
         my $p = "$d/$n"; $f{$p} = 1;
         open(my $fh, "<", $p) or do { print "UNREADABLE\n"; next };
         local $/; my $t = <$fh>;
