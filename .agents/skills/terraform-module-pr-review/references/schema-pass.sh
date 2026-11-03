@@ -203,13 +203,13 @@ if [ -n "$SCHEMA_DEPTH" ]; then
 fi
 
 # 1. The gate's tokens, each checked again here. In a depth mode a dropped token fails;
-# focused mode reads no base token, so no old floor.
+# focused mode reads a base token only for the handoff's old floor, never an old floor sheet.
 : > "$WORK/ptok"
 : > "$WORK/unres"
 for t in $SCHEMA_PROVIDERS; do
   IFS=: read -r rev dir rest <<< "$t"
   [[ "$rev" =~ $rev_re ]] && dir_ok "$dir" || { refused_token; continue; }
-  [ "$MODE" != focused ] || [ "$rev" = head ] || continue
+  [ "$MODE" != focused ] || [ "$rev" = head ] || [ -n "$HANDOFF" ] || continue
   if [[ "$rest" =~ ^!(constraint_unparsable)$ ]]; then
     echo "$rev $dir ${BASH_REMATCH[1]}" >> "$WORK/unres"; continue
   fi
@@ -315,7 +315,7 @@ while read -r -u 3 prov; do
         freason=constraint_unparsable
       elif has_lower "$WORK/bcl"; then
         f="$(satisfying "$WORK/bcl" "$cand" | head -n 1 | cut -d ' ' -f 2)"
-        if [ -z "$f" ]; then freason=constraint_unsatisfiable; else hf="$f"; [ "$f" = "$min" ] || floor="$f"; fi
+        if [ -z "$f" ]; then freason=constraint_unsatisfiable; else hf="$f"; [ "$f" = "$min" ] || [ "$MODE" = focused ] || floor="$f"; fi
       fi
     fi
     [ "$freason" = - ] || note "$freason"

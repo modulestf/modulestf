@@ -49,7 +49,7 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 +	SKILL.md	In [output.md]().
 +	SKILL.md	In [workflow.md]().
 +	SKILL.md	In [workflow.md]().
-+	SKILL.md	It may also give `Diff: <path>` and `Merge base: <sha>` for `mtf-facts` ([run/facts.md]()) and `Output: ...` for where the result goes ([run/output.md]()).
++	SKILL.md	It may also give `Diff: <path>`, `Merge base: <sha>` and `Schema handoff: <path>` for `mtf-facts` ([run/facts.md]()) and `Output: ...` for where the result goes ([run/output.md]()).
 +	SKILL.md	It prints one section of a file of this skill, reads nothing else and writes only to its output.
 +	SKILL.md	No `Depth:` line, a file that cannot be read or parsed as JSON, a `format` other than `1`, or any other `depth` value is read as `deep` with nothing out of scope.
 +	SKILL.md	No other file is written for `--diff`.
@@ -60,7 +60,7 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 +	SKILL.md	Open each file named here only as far as the step says; [Read When]() gives the rest.
 +	SKILL.md	Provider schema facts come from MCP or from host fact sheets a trusted host step rendered from the provider's schema; never from memory.
 +	SKILL.md	Read the summary.
-+	SKILL.md	Read the task: the change, and the host's `Depth:`, `Diff:`, `Merge base:`, `Provider fact sheets:` and `Output:` lines, as [Reading by Depth]() says.
++	SKILL.md	Read the task: the change, and the host's `Depth:`, `Diff:`, `Merge base:`, `Provider fact sheets:`, `Schema handoff:` and `Output:` lines, as [Reading by Depth]() says.
 +	SKILL.md	Rule numbers refer to the [Mandatory Rules]() in SKILL.md.
 +	SKILL.md	Rules: [check-a-compatibility.md](), opened by section through its [run summary]() before running this check.
 +	SKILL.md	Rules: [check-b-coverage.md](), opened by section through its [run summary]() before running this check.

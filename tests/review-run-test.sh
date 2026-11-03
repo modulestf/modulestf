@@ -40,13 +40,17 @@ cp -R "$SKILL/references" "$SK"
 cat > "$SK/schema-pass.sh" <<'EOF'
 #!/bin/bash
 echo "schema $SCHEMA_DEPTH $*" >> "${STUB_LOG:?}"
+echo "schema-env $SCHEMA_HEAD $SCHEMA_MERGE_BASE $(tr "\n" " " <<< "$SCHEMA_INPUTS")" >> "$STUB_LOG"
 src="schema pass: source modulestf/terraform-schema-mirror hashicorp_aws-v6.1.0 $(printf 'ab%.0s' $(seq 32))"
 case "${SCHEMA_STUB:-overflow}" in
-  ok) mkdir -p "$1"; echo "$src"; echo "schema pass: focused, mirror stub, 1 sheets, 10 bytes"; exit 0 ;;
+  ok) mkdir -p "$1"; echo "$src"; [ -z "${3-}" ] || { mkdir -p "$3"; echo '{}' | gzip -n > "$3/schema-handoff.json.gz"
+      echo "schema pass: handoff written, 1 directories, 1 provider schemas"; }
+    echo "schema pass: focused, mirror stub, 1 sheets, 10 bytes"; exit 0 ;;
   deeppartial) mkdir -p "$1"; echo '{"format": 1, "reasons": ["page"], "missing": []}' > "$1/missing.json"; echo "$src"
     echo "schema pass: deep partial page, 1 sheets, 10 bytes, 1 types without a sheet"; exit 0 ;;
   badsource) mkdir -p "$1"; echo "$src"; echo "schema pass: source modulestf/m x \$(touch x)"; echo "schema pass: focused"; exit 0 ;;
 esac
+[ -z "${3-}" ] || { mkdir -p "$3"; echo '{}' | gzip -n > "$3/schema-handoff.json.gz"; }
 echo "schema pass: escalate overflow"; exit 3
 EOF
 cat > "$SK/plan-pass.sh" <<'EOF'
@@ -333,6 +337,14 @@ check "render at focused without schema is refused" "$(render_to "$TMP/render7";
 SCHEMA_STUB=ok run_rr schema "$RUN" > "$TMP/s.out"
 run_rr handover "$RUN" > /dev/null
 check "handover at focused after schema names the fact sheets" "$(grep -qx "Provider fact sheets: $RUN/facts" "$RUN/handover/task.md"; echo $?)"
+check "handover at focused after schema names the schema handoff" \
+  "$(grep -qx "Schema handoff: $RUN/schema-handoff/schema-handoff.json.gz" "$RUN/handover/task.md" && grep -qx 'schema: handoff written, 1 directories, 1 provider schemas' "$TMP/s.out"; echo $?)"
+check "schema: the handoff gets the head, the bound merge base and one token per .tf blob of each" \
+  "$(mb="$(jq -r .binding.merge_base "$RUN/depth.json")"; l="$(grep '^schema-env ' "$STUB_LOG" | tail -n 1)"
+     n=0; for c in "$(git -C "$RUN/clone" rev-parse HEAD)" "$mb"; do n=$((n + $(git -C "$RUN/clone" ls-tree -r --name-only "$c" | grep -c '\.tf$'))); done
+     set -- $l; [ "$2" = "$(git -C "$RUN/clone" rev-parse HEAD)" ] && [ "$3" = "$mb" ] && [ $(($# - 3)) = "$n" ] && [ "$n" -gt 0 ] &&
+     t="$4" && f="${t#*:*:}" && [ "${t%%:*}" = "$2" ] &&
+     [ "$(cut -d: -f2 <<< "$t")" = "$(git -C "$RUN/clone" cat-file blob "$2:$f" | shasum -a 256 | cut -d' ' -f1)" ]; echo $?)"
 check "schema: its source lines cross in the verification record, checked against their grammar" \
   "$(grep -qx "schema pass: source modulestf/terraform-schema-mirror hashicorp_aws-v6.1.0 $(printf 'ab%.0s' $(seq 32))" "$RUN/handover/record.txt" &&
      [ "$(grep -c '^schema pass: source ' "$RUN/handover/record.txt")" = 1 ]; echo $?)"
@@ -350,7 +362,8 @@ run_rr cleanup "$RUN" > /dev/null
 DEPTH_STUB=focused prep
 run_rr schema "$RUN" > "$TMP/s.out"
 check "schema: an escalation at focused sets depth deep with its reason" \
-  "$(grep -q '^depth: escalated to deep (deep-schema-overflow)$' "$TMP/s.out" && grep -q '^schema: escalated to deep (reason overflow)$' "$TMP/s.out" && grep -q "^schema $RUN/depth.json $RUN/facts $RUN/schema-work\$" "$STUB_LOG"; echo $?)"
+  "$(grep -q '^depth: escalated to deep (deep-schema-overflow)$' "$TMP/s.out" && grep -q '^schema: escalated to deep (reason overflow)$' "$TMP/s.out" && grep -q "^schema $RUN/depth.json $RUN/facts $RUN/schema-work $RUN/schema-handoff\$" "$STUB_LOG"; echo $?)"
+check "schema: an escalation removes the handoff with the fact sheets" "$([ ! -e "$RUN/schema-handoff" ] && [ ! -e "$RUN/facts" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=focused prep
@@ -375,6 +388,42 @@ SCHEMA_STUB=badsource run_rr schema "$RUN" > "$TMP/s.out"
 check "schema: a source line outside its grammar escalates and nothing of it is recorded" \
   "$(grep -q '^depth: escalated to deep (deep-schema-source-line)$' "$TMP/s.out" && [ ! -e "$RUN/state/schema-sources.txt" ] && [ ! -e "$RUN/facts" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
+
+# schema_inputs, taken from the script, on a tree with each case of the handoff's file set.
+SI="$TMP/si"; mkdir -p "$SI/state" "$SI/clone/a"
+(cd "$SI/clone" && git init -q && printf 'x\n' > a/main.tf && printf 'y\n' > run.tf && chmod 755 run.tf &&
+  ln -s a/main.tf link.tf && head -c 1048577 /dev/zero > big.tf && head -c 1048576 /dev/zero > max.tf &&
+  printf 'z\n' > notes.md && git add . && git -c user.name=t -c user.email=t@t commit -qm i)
+SIC="$(git -C "$SI/clone" rev-parse HEAD)"
+si_fn() { sed -n '/^clone_git() {/,/^}/p; /^schema_inputs() {/,/^}/p' "${1:-$RR}"; }
+si() { # [script] commit...: the tokens, then "status <n>"
+  local f="$RR"; [ -f "${1-}" ] && { f="$1"; shift; }
+  bash -c "set -uo pipefail; set -f; $(si_fn "$f")"'; RUN="$1"; shift; schema_inputs "$@"; echo "status $?"' _ "$SI" "$@"
+}
+sha_of() { git -C "$SI/clone" cat-file blob "$SIC:$1" | shasum -a 256 | cut -d' ' -f1; }
+check "schema_inputs: regular .tf blobs of at most 1 MiB, 100644 and 100755, no link, no larger blob, no other file" \
+  "$([ "$(si "$SIC")" = "$(printf '%s\n' "$SIC:$(sha_of a/main.tf):a/main.tf" "$SIC:$(sha_of max.tf):max.tf" "$SIC:$(sha_of run.tf):run.tf" 'status 0')" ]; echo $?)"
+(cd "$SI/clone" && printf 'h\n' > "$(printf 'x.tf\n%s:%s:y' "$SIC" "$(printf 'cd%.0s' $(seq 32))").tf" && git add -A && git -c user.name=t -c user.email=t@t commit -qm n)
+SIN="$(git -C "$SI/clone" rev-parse HEAD)"
+check "schema_inputs: a path with a newline forges no token and gives no inputs" "$([ "$(si "$SIN")" = 'status 1' ]; echo $?)"
+(cd "$SI/clone" && git reset -q --hard "$SIC" && printf 'h\n' > 'my file.tf' && git add -A && git -c user.name=t -c user.email=t@t commit -qm s)
+check "schema_inputs: a path with a space gives no inputs" "$([ "$(si "$(git -C "$SI/clone" rev-parse HEAD)")" = 'status 1' ]; echo $?)"
+(cd "$SI/clone" && git reset -q --hard "$SIC" && mkdir m && for i in $(seq 597); do printf '%s\n' "$i" > "m/f$i.tf"; done &&
+  git add -A && git -c user.name=t -c user.email=t@t commit -qm c)
+SIM="$(git -C "$SI/clone" rev-parse HEAD)"
+check "schema_inputs: 600 inputs pass, 603 across two commits give none" \
+  "$([ "$(si "$SIM" | tail -n 1)" = 'status 0' ] && [ "$(si "$SIM" | wc -l | tr -d ' ')" = 601 ] && [ "$(si "$SIM" "$SIC")" = 'status 1' ]; echo $?)"
+check "schema_inputs: a commit that is not in the clone gives no inputs" "$([ "$(si "$(printf 'ef%.0s' $(seq 20))")" = 'status 1' ]; echo $?)"
+# Negative self-check: each weakened copy must fail the case it weakens.
+si_mut() { # name, perl expression, commits as one word, expected output of the original
+  local m="$TMP/si-$1.sh"; perl -pe "$2" "$RR" > "$m"
+  if cmp -s "$RR" "$m"; then check "self-check: schema_inputs mutation $1 changes the script" 1; return; fi
+  check "self-check: schema_inputs mutation $1 is caught" "$([ "$(si "$m" $3)" != "$4" ]; echo $?)"
+}
+si_mut no-size 's/\]\] && \[ "\$s" -le 1048576 \] \|\| continue$/]] || continue/' "$SIC" "$(si "$SIC")"
+si_mut no-mode 's/\^100\(644\|755\)\$/^[0-9]+\$/' "$SIC" "$(si "$SIC")"
+si_mut no-charset 's/\[\[ "\$p" =~ \^\[A-Za-z0-9\._\/-\]\+\$ && /[[ /' "$SIN" 'status 1'
+si_mut no-cap 's/\[ "\$n" -le 600 \] && //' "$SIM $SIC" 'status 1'
 
 # The handover's depth.sh verify, and a mutation without it: a head moved after prepare is caught.
 DEPTH_STUB=focused prep
