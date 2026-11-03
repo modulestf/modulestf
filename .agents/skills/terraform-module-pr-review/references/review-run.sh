@@ -240,6 +240,7 @@ cmd_prepare() {
       "refs/pull/$pr/head" "$base" "$mb" 2> /dev/null
     # A branch that merged the base into older work: the cutoff drops the branch side of that merge
     # and the clone shows no merge base. Start the history a day before the oldest pull request commit.
+    # Only the first 100 commits are read; a longer branch that still shows no merge base ends in the refusal below.
     if [ "$(git -C "$RUN/clone" merge-base --all "$base" HEAD 2> /dev/null)" != "$mb" ]; then
       ts="$(gh api "repos/$repo/pulls/$pr/commits?per_page=100" \
         --jq '[.[].commit.committer.date | fromdateiso8601] | min' 2> /dev/null)"

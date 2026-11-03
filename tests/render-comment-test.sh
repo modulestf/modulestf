@@ -527,7 +527,7 @@ check "links: a path outside the allowed set stays a plain code span" "$(grep -q
 render "$(one structure.grouping LOW . null 'Summary.' 'Fix.')" "" "" "" "" --links
 check "links: the module root stays a plain code span" "$(grep -qF -- '- `structure.grouping` - `.` - Summary.' "$O/comment.md" && ! grep -qF -- 'blob/' "$O/comment.md"; echo $?)"
 render "$LINKF" "$(host badrepo '.repo = "a b/c"')" "" "" "" --links
-check "links: a repository outside owner/name is refused" "$([ "$ST" = 2 ]; echo $?)"
+check "links: a repository outside owner/name is refused by the host.json check" "$([ "$ST" = 2 ] && printf "%s" "$MSG" | grep -qF "host.json is not valid"; echo $?)"
 
 # --- Refused inputs: exit 2 and nothing written.
 
