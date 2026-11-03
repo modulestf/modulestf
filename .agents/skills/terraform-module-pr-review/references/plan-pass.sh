@@ -212,6 +212,8 @@ sub runner_file {
 # Laptop mode only (plan-pass.md, Data sources and provider flags): the relaxed data source
 # rules and provider skip flags, all off when a file BAN names is anywhere in scope.
 my %dfree = map { ($_ => 1) } qw(aws_arn aws_cloudwatch_log_data_protection_policy_document);
+# Data sources whose read makes no API call, so their region goes nowhere (plan-pass.md, Data source regions)
+my %rfree = map { ($_ => 1) } qw(aws_region aws_service_principal);
 my $BAN = qr{\A(?:override\.tf|.*_override\.tf|.*\.tfvars|.*\.tfvars\.json|.*\.auto\.tfvars.*|.*\.tf\.json)\z}s;
 my $ARNOK = qr{\Aarn:(?:aws(?:-[a-z]+)*|\$\{data\.aws_partition\.[A-Za-z_][\w-]*\.partition\}):iam::aws:policy/([A-Za-z0-9+=,.\@_-]+(?:/[A-Za-z0-9+=,.\@_-]+)*)\z};
 my $NAMEOK = qr{\A[A-Za-z0-9._-]{1,256}\z};
@@ -410,6 +412,7 @@ for (@F) {
   # The region argument of every data block (plan-pass.md, Data source regions)
   if (defined $M{$f}) {
     for my $b (blocks($M{$f}, $raw, "data")) {
+      next if @{ $b->[0] } == 2 && $rfree{$b->[0][0]};
       hit("G3", $f, $M{$f}, $b->[3]) unless region_ok($f, $M{$f}, $raw, $b->[1], $b->[2]);
     }
   } elsif ($raw =~ /\bdata\s+"/) { hit("G3", $f) }

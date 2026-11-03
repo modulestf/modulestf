@@ -178,6 +178,7 @@ So in laptop mode every `region` argument of a `data` block in scope must be abs
 - Any other expression is a hit: a `local.*` that does not resolve to a literal, an interpolation, `data.aws_region.current.region` and every function.
 - In downloaded mode it must be absent, `null`, a matching literal or a literal local of the same directory.
 - A file the lexer cannot read that holds a `data` block is a hit.
+- `aws_region` and `aws_service_principal` are exempt and take any `region` expression; every other G3 rule still applies to them. Neither makes an API call or a DNS lookup on read, checked in the provider source at v6.0.0, v6.70.0 and v6.71.0: each `Read` in `internal/service/meta/` (`region_data_source.go` and `service_principal_data_source.go`) matches the region against the SDK's static partition list and resolves the EC2 endpoint with the SDK's rule engine, which builds a URL and sends nothing, and the data source wrapper adds only the region attribute and the region in state, with no partition check, since both are declared `@Region(validateOverrideInPartition=false)`. A provider version outside that range is not covered by this check.
 
 Managed resources are out of scope: a fresh plan has no state, so it reads no managed resource and sends no request with a resource's `region`.
 

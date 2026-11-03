@@ -548,7 +548,7 @@ reg root-interp '  region = "${var.r}"'
 reg root-data '  region = data.aws_region.current.region'
 reg root-twice '  region = "eu-west-1"
   region = "eu-west-2"'
-REGM='data "aws_region" "current" {
+REGM='data "aws_availability_zones" "z" {
   region = var.region
 }'
 REGV='variable "region" {
@@ -564,12 +564,12 @@ $2
 }
 regm mod-default ''
 regm mod-call-literal '  region = "eu-west-1"'
-regm mod-literal '' 'data "aws_region" "current" {
+regm mod-literal '' 'data "aws_availability_zones" "z" {
   region = "us-east-1"
 }'
 regm mod-call-s3 '  region = "s3.us-east-1"'
 regm mod-call-local '  region = local.region'
-regm mod-local '' 'data "aws_region" "current" {
+regm mod-local '' 'data "aws_availability_zones" "z" {
   region = local.region
 }'
 g3w reg-mod-zero mod/main.tf "$REGM"; g3w reg-mod-zero mod/variables.tf "$REGV"
@@ -647,7 +647,7 @@ g3w loc-path ex/main.tf "locals {
 data \"aws_availability_zones\" \"z\" {
   region = local.region.name
 }"
-regm loc-other-dir '' 'data "aws_region" "current" {
+regm loc-other-dir '' 'data "aws_availability_zones" "z" {
   region = local.region
 }'
 printf '%s\n' 'locals {' '  region = "eu-west-1"' '}' >> "$TMP/g3/reg-loc-other-dir/ex/main.tf"
@@ -664,6 +664,32 @@ g3w loc-ban ex/main.tf "locals {
 }
 $AZL"
 : > "$TMP/g3/loc-ban/ex/x.tfvars"
+# aws_region and aws_service_principal take any region; the s3-bucket file-system pattern
+RFM='locals {
+  region = try(data.aws_region.current[0].region, "")
+}
+data "aws_region" "current" {
+  count  = var.create ? 1 : 0
+  region = var.region
+}
+data "aws_service_principal" "efs" {
+  service_name = "elasticfilesystem"
+  region       = local.region
+}'
+for c in rfree-pass rfree-az; do
+  g3w "$c" mod/main.tf "$RFM"; g3w "$c" mod/variables.tf "$VARS"
+  g3w "$c" root/main.tf 'module "fs" {
+  source = "../mod"
+  region = var.region
+}
+variable "region" {
+  default = null
+}'
+  g3w "$c" ex/main.tf 'module "m" {
+  source = "../root"
+}'
+done
+printf '%s\n' 'data "aws_availability_zones" "z" {' '  region = local.region' '}' >> "$TMP/g3/rfree-az/mod/main.tf"
 # The file ban: each banned name in scope turns a passing case into a hit.
 for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
   for c in pol-plain prov-skip bus-defaults; do
@@ -843,6 +869,11 @@ for sh in bash zsh; do
   done
   check "$sh: a local of another directory does not resolve" \
     "$(g3 reg-loc-other-dir | grep -x "G3 $R3/clone/g3/reg-loc-other-dir/mod/main.tf:1" > /dev/null; echo $?)"
+  out="$(g3 rfree-pass)"
+  check "$sh: aws_region and aws_service_principal take any region" "$(test -z "$out"; echo $?)"
+  [ -z "$out" ] || printf '%s\n' "$out"
+  check "$sh: aws_availability_zones with the same region is still a hit" \
+    "$(g3 rfree-az | grep -x "G3 $R3/clone/g3/rfree-az/mod/main.tf:12" > /dev/null; echo $?)"
   for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
     for c in pol-plain prov-skip bus-defaults; do
       check "$sh: $b in scope turns off the relaxation for $c" \
@@ -982,6 +1013,7 @@ mutate region-check 's/hit\("G3", \$f, \$M\{\$f\}, \$b->\[3\]\) unless region_ok
 mutate region-true 's/next if !\$ban && \$rlit && /next if !\$ban \&\& /' prov-region-true-s3 prov-region-true-var
 mutate every-mention 's/\$rel\{\$y\}\[1\] == \$seen\{\$y\}/1/' mention
 mutate local-once 's/\$v && \$v->\{n\} == 1 && lit/\$v \&\& lit/' loc-dup
+mutate region-free-all 's/&& \$rfree\{\$b->\[0\]\[0\]\}/\&\& 1/' rfree-az
 
 # plan-session.sh: one fixed reason on standard error per failure class, nothing on standard output.
 SESS="${PP%/*}/plan-session.sh"
