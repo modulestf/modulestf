@@ -76,6 +76,10 @@ sub hit { my ($g, $f, $t, $p) = @_; my $l = defined $p ? 1 + (substr($t, 0, $p) 
 sub canon { my $s = lc shift; $s = "registry.terraform.io/$s" if ($s =~ tr{/}{}) == 1; $s }
 sub pok { my $c = canon(shift); $run ? $c =~ m{\Aregistry\.terraform\.io/hashicorp/[a-z0-9-]+\z} : $pok{$c} }
 sub blank { my $t = shift; $t =~ s{"((?:[^"\\\n]|\\.)*)"}{"\"" . ($1 =~ tr/\n/x/cr) . "\""}ge; $t }
+# A keyword written right against its first label, `data"t""n"{`, is valid HCL that the label patterns below,
+# which want a space, would not see. It is a hit, and so is a carriage return, form feed or vertical tab,
+# which Terraform reads as line or space where the lexer and the patterns read text.
+my $ADJ = qr{\b(?:resource|data|provider|module|variable|output|locals|terraform|moved|removed|ephemeral|check|import|action|backend|cloud|provisioner|connection|lifecycle|dynamic|required_providers)"};
 my $KW = qr{\b(?:resource|data|provider|module|moved|removed|ephemeral|check|import|action|backend|cloud|provisioner|dynamic)\s+[A-Za-z_][\w-]*(?:\s*"[^"]*"|\s+[A-Za-z_][\w-]*)*\s*\{};
 # Runner mode only (plan-pass.md, Modes). One lexer masks strings, comments and heredocs with
 # spaces of the same length, newlines kept, so offsets in the mask are offsets in the raw text.
@@ -108,7 +112,10 @@ sub mask { # returns the mask, or undef when a string, comment or heredoc does n
     return undef if $s =~ /\G\/\*/gc;
     if ($s =~ /\G<<-?([A-Za-z_][\w-]*)[ \t]*\n/gc) {
       my $id = $1;
-      return undef unless $s =~ /\G.*?^[ \t]*\Q$id\E[ \t]*$/gcsm;
+      return undef unless $s =~ /\G(.*?)^[ \t]*\Q$id\E[ \t]*$/gcsm;
+      # Terraform ends a heredoc at a line equal to the marker once trimmed of any Unicode space;
+      # a body line that would be that, read with every space and non-ASCII byte dropped, fails.
+      for (split /\n/, $1) { (my $t = $_) =~ s/[\s\x80-\xff]//g; return undef if $t eq $id }
       $o .= "<<" . fill(substr($s, $p + 2, pos($s) - $p - 2)); next;
     }
     if (substr($s, $p, 1) eq "\"") {
@@ -134,6 +141,7 @@ sub runner_file {
   my ($f, $raw) = @_;
   my $m = mask($raw);
   unless (defined $m) { hit("G0", $f); return }
+  hit("G3", $f, $m, $-[0]) if $m =~ $ADJ;
   hit("G0", $f, $m, $-[0]) if $m =~ /[^\x00-\x7f]/;
   while ($m =~ /^[ \t]*[A-Za-z_][\w-]*((?:[ \t]+"[^"\n]*")+)[ \t]*\{/mg) {
     hit("G0", $f, $m, $-[1]) if substr($raw, $-[1], $+[1] - $-[1]) =~ /[^\x00-\x7f]/;
@@ -204,12 +212,14 @@ while (my $f = <STDIN>) {
   if ($f eq "UNREADABLE" or !open($fh, "<", $f)) { hit("G0", $f); next }
   my $raw = do { local $/; <$fh> }; close $fh;
   hit("G0", $f) if $f =~ m{(?:\A|/)(?:[^/]*_)?override\.tf\z};
+  hit("G0", $f, $raw, $-[0]) if $raw =~ /[\r\f\x0b]/;
   if ($run) { runner_file($f, $raw); next }
   (my $code = blank($raw)) =~ s{(?:#|//)[^\n]*}{}g;
   hit("G0", $f, $code, $-[0]) if $code =~ /[^\x00-\x7f]/;
   (my $lb = $raw) =~ s{(?:#|//)[^\n]*}{}g;
   while ($lb =~ /^[ \t]*[A-Za-z_][\w-]*((?:[ \t]+"[^"\n]*")+)[ \t]*\{/mg) { my ($at, $l) = ($-[1], $1); hit("G0", $f, $lb, $at) if $l =~ /[^\x00-\x7f]/ }
   hit("G0", $f, $code, $-[0]) if $code =~ m{/\*};
+  hit("G3", $f, $code, $-[0]) if $code =~ $ADJ;
   while ($code =~ /$KW/g) { hit("G3", $f, $code, $-[0]) }
   (my $nc = $raw) =~ s{(?:#|//)[^\n]*}{}g;
   for my $t ($raw, $nc) {

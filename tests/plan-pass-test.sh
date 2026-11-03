@@ -173,6 +173,63 @@ w unquoted-label 'provider aws {
     s3 = "http://127.0.0.1"
   }
 }'
+# A keyword right against its label is valid HCL; a carriage return or form feed ends a
+# heredoc for Terraform where the lexer would read on and hide what follows.
+w adj-data 'data"aws_ssm_parameter""x"{
+  name = "x"
+}'
+w adj-provider 'provider"aws"{
+  endpoints {
+    sts = "http://127.0.0.1"
+  }
+}'
+w adj-module 'module"m"{
+  source = "git::https://example.invalid/m"
+}'
+w cr-heredoc "locals {
+  a = <<EOT
+x
+EOT"$'\r'"
+}
+provider \"aws\" {
+  endpoints {
+    sts = \"http://127.0.0.1\"
+  }
+}
+locals {
+  b = <<EOT
+EOT
+}"
+w ff-heredoc "locals {
+  a = <<EOT
+x
+EOT"$'\f'"
+}
+provider \"aws\" {
+  endpoints {
+    sts = \"http://127.0.0.1\"
+  }
+}
+locals {
+  b = <<EOT
+EOT
+}"
+for u in nbsp:$'\xc2\xa0' ls:$'\xe2\x80\xa8'; do
+  w "${u%%:*}-heredoc" "locals {
+  a = <<EOT
+x
+EOT${u#*:}
+}
+provider \"aws\" {
+  endpoints {
+    sts = \"http://127.0.0.1\"
+  }
+}
+locals {
+  b = <<EOT
+EOT
+}"
+done
 w role-fixed 'provider "aws" {
   region = "us-east-1"
   assume_role {
@@ -441,7 +498,7 @@ for sh in bash zsh; do
   for t in endpoints comment-brace hash-in-string both-tricks renamed dynamic-role profile backend cloud \
     open-heredoc open-string lookalike git-source github-lookalike unquoted-label role-variable \
     role-interpolated role-extra role-and-endpoints role-twice docker-and-backend \
-    build-in-docker-and-backend; do
+    build-in-docker-and-backend adj-data adj-provider adj-module cr-heredoc ff-heredoc nbsp-heredoc ls-heredoc; do
     check "$sh: runner mode refuses $t" "$(gates runner "$t" | grep '^class: plan gate' > /dev/null; echo $?)"
   done
   out="$(gates runner ok)"
@@ -465,6 +522,9 @@ for sh in bash zsh; do
   done
   check "$sh: laptop mode records no build_in_docker exception" \
     "$(gates laptop build-in-docker | grep exception > /dev/null; test $? -eq 1; echo $?)"
+  for t in adj-data adj-provider adj-module cr-heredoc ff-heredoc; do
+    check "$sh: laptop mode refuses $t" "$(gates laptop "$t" | grep '^class: plan gate' > /dev/null; echo $?)"
+  done
   check "$sh: laptop mode refuses a fixed role" "$(gates laptop role-fixed | grep '^class: plan gate G3' > /dev/null; echo $?)"
   check "$sh: laptop mode refuses the Docker provider" "$(gates laptop docker | grep '^class: plan gate G1' > /dev/null; echo $?)"
   run g0 "$R" > /dev/null
