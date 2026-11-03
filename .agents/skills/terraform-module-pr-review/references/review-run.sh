@@ -365,17 +365,19 @@ summary_lines() {
 need_full() { [ "$TRIAGE" = false ] || fail "a triage run has no $1 step"; }
 
 # The schema handoff's inputs, as schema-pass.md, Schema Handoff, gives them: one
-# <commit>:<SHA-256>:<path> per regular .tf blob of at most 1 MiB in each commit's tree.
-# Status 1, so no inputs and no handoff, when a tree or blob cannot be read, a path is
-# outside the token charset, or the tokens pass 600 or 96000 bytes, which keeps them
-# under the environment's string limit.
+# <commit>:<SHA-256>:<path> per regular .tf blob of at most 1 MiB in each commit's tree,
+# with a module root prefix only the blobs under it, the path relative to it, as the facts
+# engine hashes the workspace it lints. Status 1, so no inputs and no handoff, when a tree
+# or blob cannot be read, a path is outside the token charset, or the tokens pass 600 or
+# 96000 bytes, which keeps them under the environment's string limit.
 schema_inputs() {
-  local c l m o s p h out="" n=0
+  local c l m o s p h out="" n=0 r="${PREFIX:+$PREFIX/}"
   for c in "$@"; do
     clone_git ls-tree -r -l -z "$c" > "$RUN/state/schema-tree" 2> /dev/null || return 1
     while IFS= read -r -d '' l; do
       read -r m _ o s <<< "${l%%$'\t'*}"; p="${l#*$'\t'}"
       [[ "$m" =~ ^100(644|755)$ && "$p" == *.tf && "$s" =~ ^[0-9]+$ ]] && [ "$s" -le 1048576 ] || continue
+      if [ -n "$r" ]; then [[ "$p" == "$r"* ]] || continue; p="${p#"$r"}"; fi
       [[ "$p" =~ ^[A-Za-z0-9._/-]+$ && "$o" =~ ^[0-9a-f]{40}$ ]] || return 1
       h="$(clone_git cat-file blob "$o" | shasum -a 256)" || return 1
       out+="$c:${h%% *}:$p"$'\n'; n=$((n + 1))
@@ -397,7 +399,7 @@ cmd_schema() {
   # read pass as "-", which it refuses as inputs.
   mbs="$(jq -r '.binding.merge_base // ""' "$RUN/depth.json" 2> /dev/null)"
   if [[ "$mbs" =~ $sha_re ]]; then ins="$(schema_inputs "$HEAD_SHA" "$mbs")" || ins=-; else mbs=""; fi
-  SCHEMA_DEPTH="$RUN/depth.json" SCHEMA_HEAD="$HEAD_SHA" SCHEMA_MERGE_BASE="$mbs" SCHEMA_INPUTS="$ins" \
+  SCHEMA_DEPTH="$RUN/depth.json" SCHEMA_HEAD="$HEAD_SHA" SCHEMA_MERGE_BASE="$mbs" SCHEMA_INPUTS="$ins" SCHEMA_ROOT="$PREFIX" \
     bash "$HERE/schema-pass.sh" "$RUN/facts" "$RUN/schema-work" "$RUN/schema-handoff" > "$RUN/state/schema.out" 2>&1
   rc=$?
   line="$(grep -v '^schema pass: source ' "$RUN/state/schema.out" | tail -n 1)"

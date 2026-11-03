@@ -117,12 +117,12 @@ mk() { # touched types, provider tokens, type tokens, lock tokens -> depth.json 
 }
 PROV="head:.:demo=example/demo:>=1.2"
 TOK=".:resource:demo_thing:example/demo .:resource:demo_a:example/demo .:data:demo_lookup:example/demo"
-run() { # name; env D (depth.json text), DP (its path instead), MIRROR, SPX (another script), HS (a commit: write a handoff)
+run() { # name; env D (depth.json text), DP (its path instead), MIRROR, SPX (another script), HS (a commit: write a handoff), HR (its module root)
   R="$TMP/run-$1"
   mkdir -p "$R.d" && printf '%s\n' "${D:-}" > "$R.d/depth.json"
   if [ -n "${MIRROR+x}" ]; then export MODULESTF_SCHEMA_MIRROR="$MIRROR"; else unset MODULESTF_SCHEMA_MIRROR; fi
   STUB_LOG="$R.log" SCHEMA_DEPTH="${DP:-$R.d/depth.json}" SCHEMA_PROVIDERS="head:.:demo=example/demo:>=1.0" \
-    SCHEMA_TYPES=".:resource:demo_b:example/demo" SCHEMA_HEAD="${HS-}" SCHEMA_MERGE_BASE="${HS-}" SCHEMA_INPUTS="${HS:+$HS:$(printf 'cd%.0s' $(seq 32)):main.tf}" \
+    SCHEMA_TYPES=".:resource:demo_b:example/demo" SCHEMA_HEAD="${HS-}" SCHEMA_MERGE_BASE="${HS-}" SCHEMA_INPUTS="${HS:+$HS:$(printf 'cd%.0s' $(seq 32)):main.tf}" SCHEMA_ROOT="${HR-}" \
     /bin/bash "${SPX:-$SP}" "$R/facts" "$R/work" ${HS:+"$R/handoff"} > "$R.out" 2>&1
   RC=$?
   : >> "$R.log"
@@ -317,6 +317,26 @@ check "script: no eval, source, exec, shell -c or terraform call" "$?"
 grep -qxF 'TRUSTED_MIRROR="modulestf/terraform-schema-mirror"' "$SP" && grep -qxF 'MAX_SHEETS=16' "$SP" && grep -qxF 'MAX_SHEET_BYTES=49152' "$SP" &&
   grep -qF '`modulestf/terraform-schema-mirror`' "$DOC" && grep -qF 'at most 16 sheets and 49152 bytes' "$DOC"
 check "doc: the trust anchor and the caps match the script" "$?"
+# A module root below the repository root: the handoff names each directory under it relative
+# to it, as the facts engine names its areas, and leaves out the rest; mx shares the root's
+# first letter only. The fact sheets keep the repository-relative directories.
+PROVR="head:m:demo=example/demo:>=1.2 head:m/a:demo=example/demo:>=1.2 head:mx:demo=example/demo:>=1.2"
+TOKR="m:resource:demo_thing:example/demo m/a:resource:demo_thing:example/demo mx:resource:demo_thing:example/demo"
+hdirs() { gzip -dc "$R/handoff/schema-handoff.json.gz" 2> /dev/null | jq -c '[.directories[].path]'; }
+HS="$(printf 'ab%.0s' $(seq 20))" D="$(mk demo_thing "$PROVR" "$TOKR" "")" run root-none
+[ "$RC" = 0 ] && [ "$(hdirs)" = '["m","m/a","mx"]' ]
+check "handoff: without a module root, the directories are relative to the repository root" "$?"
+HS="$(printf 'ab%.0s' $(seq 20))" HR=m D="$(mk demo_thing "$PROVR" "$TOKR" "")" run root-m
+[ "$RC" = 0 ] && grep -qx 'schema pass: handoff written, 2 directories, 0 provider schemas' "$R.out" && [ "$(hdirs)" = '[".","a"]' ] &&
+  [ "$(jq -c '.directories | keys' "$R/facts/versions.json")" = '["m","m/a","mx"]' ]
+check "handoff: with module root m, the directories are . and a, mx is left out, versions.json is unchanged" "$?"
+nbad=0
+for bad in . .. m/ /m m/../m 'm n'; do
+  HS="$(printf 'ab%.0s' $(seq 20))" HR="$bad" D="$(mk demo_thing "$PROVR" "$TOKR" "")" run "root-bad-$((++nbad))"
+  [ "$RC" = 0 ] && grep -qx 'schema pass: no handoff, inputs' "$R.out" && [ ! -e "$R/handoff" ] && [ -f "$R/facts/versions.json" ]
+  check "handoff: module root '$bad' gives no handoff, the fact sheets are written" "$?"
+done
+
 codes="$(sed -nE "s/^reason_re='\^\((.*)\)\\$'$/\1/p" "$SP" | tr '|' '\n'; grep -oE 'escalate [a-z_]+' "$SP" | cut -d ' ' -f 2)"
 miss=""
 for c in $codes; do grep -qF "\`${c//_/-}\`" "$DOC" || grep -qF "\`$c\`" "$DOC" || miss="$miss $c"; done
@@ -386,6 +406,14 @@ c_hfloor() { HS="$(printf 'ab%.0s' $(seq 20))" D="$(mk demo_thing "$PROV base:.:
 k_hfloor() { [ "$RC" = 0 ] && [ "$(gzip -dc "$R/handoff/schema-handoff.json.gz" | jq -r '.directories[0].providers[0].versions.old_floor')" = 1.0.0 ] &&
   [ "$(fetched 1.0.0)" = 0 ]; }
 mutant focused-handoff-no-base 's/ || \[ -n "\$HANDOFF" \] || continue$/ || continue/' c_hfloor k_hfloor
+c_root() { HS="$(printf 'ab%.0s' $(seq 20))" HR=m D="$(mk demo_thing "$PROVR" "$TOKR" "")" run m-root; }
+k_root() { [ "$RC" = 0 ] && [ "$(hdirs)" = '[".","a"]' ]; }
+c_rootbad() { HS="$(printf 'ab%.0s' $(seq 20))" HR=.. D="$(mk demo_thing "$PROVR" "$TOKR" "")" run m-rootbad; }
+k_rootbad() { [ "$RC" = 0 ] && grep -qx 'schema pass: no handoff, inputs' "$R.out" && [ ! -e "$R/handoff" ]; }
+mutant root-not-stripped 's/"\$SCHEMA_ROOT"\/\*) hd="\${dir#"\$SCHEMA_ROOT"\/}" ;;$/"$SCHEMA_ROOT"\/*) ;;/' c_root k_root
+mutant root-outside-kept 's/^        \*) continue ;;$/        *) ;;/' c_root k_root
+mutant root-root-not-dot 's/"\$SCHEMA_ROOT") hd=\. ;;$/"$SCHEMA_ROOT") ;;/' c_root k_root
+mutant root-unchecked 's/ || hwhy=inputs$//' c_rootbad k_rootbad
 mutant focused-floor-sheet 's/ || \[ "\$MODE" = focused \] || floor="\$f"; fi$/ || floor="$f"; fi/' c_hfloor k_hfloor
 
 if [ "$fails" = 0 ]; then echo "all passed"; else echo "$fails failed"; exit 1; fi
