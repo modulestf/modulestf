@@ -352,6 +352,392 @@ check "c" {
   }
 }')"
 
+# Laptop relaxations of G3 (plan-pass.md, Data sources and provider flags). One tree per case
+# under g3/<case>: ex is the example root, mod and mid are local modules.
+g3w() { mkdir -p "$TMP/g3/$1/${2%/*}"; printf '%s\n' "$3" > "$TMP/g3/$1/$2"; }
+POL='data "aws_iam_policy" "t" {
+  count = var.on ? 1 : 0
+  arn   = "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
+}'
+g3w pol-plain ex/main.tf "$POL"
+g3w pol-partition ex/main.tf 'data "aws_partition" "current" {}
+data "aws_iam_policy" "t" {
+  arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaENIManagementAccess"
+}'
+pol() { g3w "pol-$1" ex/main.tf "data \"aws_iam_policy\" \"t\" {
+$2
+}"; }
+pol account '  arn = "arn:aws:iam::123456789012:policy/x"'
+pol anchor '  arn = "arn:aws:iam::123456789012:policy/xarn:aws:iam::aws:policy/X"'
+pol var '  arn = var.arn'
+pol interp '  arn = "arn:aws:iam::aws:policy/${var.x}"'
+pol name '  name = "AWSXrayWriteOnlyAccess"'
+pol provider '  provider = aws.other
+  arn      = "arn:aws:iam::aws:policy/X"'
+pol region '  region = "us-east-1"
+  arn    = "arn:aws:iam::aws:policy/X"'
+pol for-each '  for_each = toset(["a"])
+  arn      = "arn:aws:iam::aws:policy/X"'
+pol heredoc '  arn = <<EOT
+arn:aws:iam::aws:policy/X
+EOT'
+pol multi-count '  count = (
+    1
+  )
+  arn = "arn:aws:iam::aws:policy/X"'
+pol dotdot '  arn = "arn:aws:iam::aws:policy/../X"'
+pol dot '  arn = "arn:aws:iam::aws:policy/a/./X"'
+pol brace '  arn = "arn:aws:iam::aws:policy/X}"'
+pol comment '  # arn = "arn:aws:iam::aws:policy/X"
+  arn = var.x'
+pol long "  arn = \"arn:aws:iam::aws:policy/$(head -c 513 /dev/zero | tr '\0' a)\""
+g3w free-arn ex/main.tf 'data "aws_arn" "a" {
+  arn = var.queue_arn
+}'
+g3w free-doc ex/main.tf 'data "aws_cloudwatch_log_data_protection_policy_document" "d" {
+  name = var.name
+  statement {
+    sid              = "Audit"
+    data_identifiers = ["arn:aws:dataprotection::aws:data-identifier/EmailAddress"]
+    operation {
+      audit {
+        findings_destination {}
+      }
+    }
+  }
+}'
+g3w free-unlexed ex/main.tf 'data "aws_arn" "a" {
+  arn = var.queue_arn
+}
+locals {
+  x = <<EOT
+  y
+}'
+g3w free-file ex/main.tf 'data "aws_arn" "a" {
+  arn = file("arn.txt")
+}'
+# The event bus: a module directory read through the calls of the example root.
+BUS='data "aws_cloudwatch_event_bus" "this" {
+  count  = var.create ? 0 : 1
+  name   = var.bus_name
+  region = var.region
+}'
+VARS='variable "create" {
+  default = false
+}
+variable "bus_name" {
+  type    = string
+  default = "default"
+}
+variable "region" {
+  type    = string
+  default = null
+}'
+bus() { # case, module call arguments, [variables]
+  g3w "$1" mod/main.tf "$BUS"; g3w "$1" mod/variables.tf "${3:-$VARS}"
+  g3w "$1" ex/main.tf "module \"m\" {
+  source = \"../mod\"
+$2
+}"
+}
+g3w bus-root ex/main.tf 'data "aws_cloudwatch_event_bus" "this" {
+  name   = "default"
+  region = "eu-west-1"
+}'
+g3w bus-root-var ex/main.tf 'data "aws_cloudwatch_event_bus" "this" {
+  name = var.bus_name
+}'
+bus bus-defaults ''
+bus bus-null-name '  bus_name = null'
+bus bus-null-region '  region = null'
+NNV='variable "bus_name" {
+  type     = string
+  nullable = false
+  default  = "%s"
+}
+variable "region" {
+  default = null
+}'
+bus bus-nn-safe '  bus_name = null' "$(printf "$NNV" default)"
+bus bus-nn-unsafe '  bus_name = null' "$(printf "$NNV" 'arn:aws:events:us-east-1:123456789012:event-bus/x')"
+bus bus-nn-var '  bus_name = null' "$(printf "$NNV" default | sed 's/nullable = false/nullable = var.n/')"
+bus bus-nonliteral '  bus_name = "${var.prefix}-bus"'
+bus bus-arn '  bus_name = "arn:aws:events:us-east-1:123456789012:event-bus/x"'
+bus bus-slash '  bus_name = "aws.partner/x"'
+bus bus-region-fake '  region = "zz-fake-9"'
+bus bus-region-host '  region = "eu-west-1.example.com"'
+bus bus-two-calls ''
+printf '%s\n' 'module "n" {
+  source   = "../mod"
+  bus_name = "a:b"
+}' >> "$TMP/g3/bus-two-calls/ex/main.tf"
+bus bus-unresolved ''
+printf '%s\n' 'module "x" {
+  source = "../nowhere"
+}' >> "$TMP/g3/bus-unresolved/ex/main.tf"
+g3w bus-zero mod/main.tf "$BUS"; g3w bus-zero mod/variables.tf "$VARS"
+g3w bus-zero ex/main.tf '# source = "../mod"'
+g3w bus-nested mod/main.tf "$BUS"; g3w bus-nested mod/variables.tf "$VARS"
+g3w bus-nested mid/main.tf 'module "m" {
+  source   = "../mod"
+  bus_name = "default"
+}'
+g3w bus-nested ex/main.tf 'module "mid" {
+  source = "../mid"
+}'
+bus bus-extra ''
+printf '%s\n' "$BUS" | sed '$d' > "$TMP/g3/bus-extra/mod/main.tf"
+printf '%s\n' '  depends_on = []' '}' >> "$TMP/g3/bus-extra/mod/main.tf"
+bus bus-dup-name ''
+printf '%s\n' "$BUS" | sed '$d' > "$TMP/g3/bus-dup-name/mod/main.tf"
+printf '%s\n' '  name = "x"' '}' >> "$TMP/g3/bus-dup-name/mod/main.tf"
+# Provider flags
+PROV='provider "aws" {
+  region = "eu-west-1"
+
+  # Make it faster by skipping something
+  skip_metadata_api_check     = true
+  skip_credentials_validation = false
+  // one more comment
+  skip_requesting_account_id  = true
+  skip_region_validation      = false
+}'
+g3w prov-skip ex/main.tf "$PROV"
+g3w prov-skip-var ex/main.tf 'provider "aws" {
+  skip_metadata_api_check = var.skip
+}'
+g3w prov-skip-unknown ex/main.tf 'provider "aws" {
+  skip_everything = true
+}'
+g3w prov-region-true ex/main.tf 'provider "aws" {
+  skip_region_validation = true
+}'
+g3w prov-endpoints ex/main.tf 'provider "aws" {
+  skip_metadata_api_check = true
+  endpoints {
+    sts = "http://127.0.0.1"
+  }
+}'
+# Data source regions, and skip_region_validation = true beside a literal region
+g3w prov-region-true-literal ex/main.tf 'provider "aws" {
+  region                 = "eu-west-1"
+  skip_region_validation = true
+}'
+g3w prov-region-true-var ex/main.tf 'provider "aws" {
+  region                 = var.region
+  skip_region_validation = true
+}'
+g3w prov-region-true-s3 ex/main.tf 'provider "aws" {
+  region                 = "s3.us-east-1"
+  skip_region_validation = true
+}'
+g3w prov-region-true-comment ex/main.tf 'provider "aws" {
+  region                 = "eu-west-1" # a trailing comment
+  skip_region_validation = true
+}'
+reg() { g3w "reg-$1" ex/main.tf "data \"aws_availability_zones\" \"z\" {
+$2
+}"; }
+reg root-literal '  region = "eu-west-1"'
+reg root-null '  region = null'
+reg root-absent '  state = "available"'
+reg root-var '  region = var.region'
+reg root-s3 '  region = "s3.us-east-1"'
+reg root-local '  region = local.region'
+reg root-interp '  region = "${var.r}"'
+reg root-data '  region = data.aws_region.current.region'
+reg root-twice '  region = "eu-west-1"
+  region = "eu-west-2"'
+REGM='data "aws_availability_zones" "z" {
+  region = var.region
+}'
+REGV='variable "region" {
+  type    = string
+  default = null
+}'
+regm() { # case, module call arguments, [module data block]
+  g3w "reg-$1" mod/main.tf "${3:-$REGM}"; g3w "reg-$1" mod/variables.tf "$REGV"
+  g3w "reg-$1" ex/main.tf "module \"m\" {
+  source = \"../mod\"
+$2
+}"
+}
+regm mod-default ''
+regm mod-call-literal '  region = "eu-west-1"'
+regm mod-literal '' 'data "aws_availability_zones" "z" {
+  region = "us-east-1"
+}'
+regm mod-call-s3 '  region = "s3.us-east-1"'
+regm mod-call-local '  region = local.region'
+regm mod-local '' 'data "aws_availability_zones" "z" {
+  region = local.region
+}'
+g3w reg-mod-zero mod/main.tf "$REGM"; g3w reg-mod-zero mod/variables.tf "$REGV"
+g3w reg-mod-zero ex/main.tf '# source = "../mod"'
+g3w reg-mod-nested mod/main.tf "$REGM"; g3w reg-mod-nested mod/variables.tf "$REGV"
+g3w reg-mod-nested mid/main.tf 'module "m" {
+  source = "../mod"
+  region = "eu-west-1"
+}'
+g3w reg-mod-nested ex/main.tf 'module "mid" {
+  source = "../mid"
+}'
+regm mod-ban ''
+: > "$TMP/g3/reg-mod-ban/mod/x.tfvars"
+g3w reg-unlexed ex/main.tf 'data "aws_availability_zones" "z" {}
+locals {
+  x = <<EOT
+  y
+}'
+# Review cases: a module call or argument hidden from the call enumeration by a CR or FF
+# after a heredoc end, or by a keyword against its label, and a mention outside a block.
+XV="$VARS
+variable \"x\" {
+  default = null
+}"
+for c in crlf-arg crlf-call ff-arg nospace-call; do g3w "$c" mod/main.tf "$BUS"; g3w "$c" mod/variables.tf "$XV"; mkdir -p "$TMP/g3/$c/ex"; done
+printf 'module "ok" {\n  source = "../mod"\n  x = <<EOT\ny\nEOT%b\n  bus_name = "arn:aws:events:us-east-1:123456789012:event-bus/x"\n  region   = "us-east-1.attacker.example"\n}\n\nlocals {\n  pad2 = <<EOT\nEOT\n}\n' '\r' > "$TMP/g3/crlf-arg/ex/main.tf"
+printf 'module "ok" {\n  source = "../mod"\n  x = <<EOT\ny\nEOT%b\n  bus_name = "arn:aws:events:us-east-1:123456789012:event-bus/x"\n  region   = "us-east-1.attacker.example"\n}\n\nlocals {\n  pad2 = <<EOT\nEOT\n}\n' '\f' > "$TMP/g3/ff-arg/ex/main.tf"
+printf 'module "ok" {\n  source = "../mod"\n}\n\nlocals {\n  pad = <<EOT\nx\nEOT%b\n}\n\nmodule "bad" {\n  source   = "../mod"\n  bus_name = "arn:aws:events:us-east-1:123456789012:event-bus/x"\n}\n\nlocals {\n  pad2 = <<EOT\nEOT\n}\n' '\r' > "$TMP/g3/crlf-call/ex/main.tf"
+g3w nospace-call ex/main.tf 'module "ok" {
+  source = "../mod"
+}
+module"bad"{
+  source   = "../mod"
+  bus_name = "arn:aws:events:us-east-1:123456789012:event-bus/x"
+}'
+g3w mention ex/main.tf "$POL
+# data \"aws_iam_policy\" \"x\" { name = \"y\" }"
+# Literal locals: resolved only from one single-line declaration in the same directory
+AZL='data "aws_availability_zones" "z" {
+  region = local.region
+}'
+g3w loc-root ex/main.tf "locals {
+  region = \"eu-west-1\"
+}
+$AZL"
+g3w loc-bus-root ex/main.tf 'locals {
+  bus = "default"
+}
+data "aws_cloudwatch_event_bus" "this" {
+  name = local.bus
+}'
+regm loc-call '  region = local.region'
+printf '%s\n' 'locals {' '  region = "eu-west-1"' '}' >> "$TMP/g3/reg-loc-call/ex/main.tf"
+g3w loc-dup ex/main.tf "locals {
+  region = \"eu-west-1\"
+}
+$AZL"
+g3w loc-dup ex/other.tf 'locals {
+  region = "eu-west-2"
+}'
+g3w loc-nonliteral ex/main.tf "locals {
+  region = var.region
+}
+$AZL"
+g3w loc-multiline ex/main.tf "locals {
+  region = (
+    \"eu-west-1\"
+  )
+}
+$AZL"
+g3w loc-path ex/main.tf "locals {
+  region = { name = \"eu-west-1\" }
+}
+data \"aws_availability_zones\" \"z\" {
+  region = local.region.name
+}"
+regm loc-other-dir '' 'data "aws_availability_zones" "z" {
+  region = local.region
+}'
+printf '%s\n' 'locals {' '  region = "eu-west-1"' '}' >> "$TMP/g3/reg-loc-other-dir/ex/main.tf"
+g3w loc-unlexed ex/main.tf "locals {
+  region = \"eu-west-1\"
+}
+$AZL"
+g3w loc-unlexed ex/broken.tf 'locals {
+  x = <<EOT
+  y
+}'
+g3w loc-ban ex/main.tf "locals {
+  region = \"eu-west-1\"
+}
+$AZL"
+: > "$TMP/g3/loc-ban/ex/x.tfvars"
+# aws_region and aws_service_principal take any region; the s3-bucket file-system pattern
+RFM='locals {
+  region = try(data.aws_region.current[0].region, "")
+}
+data "aws_region" "current" {
+  count  = var.create ? 1 : 0
+  region = var.region
+}
+data "aws_service_principal" "efs" {
+  service_name = "elasticfilesystem"
+  region       = local.region
+}'
+for c in rfree-pass rfree-az; do
+  g3w "$c" mod/main.tf "$RFM"; g3w "$c" mod/variables.tf "$VARS"
+  g3w "$c" root/main.tf 'module "fs" {
+  source = "../mod"
+  region = var.region
+}
+variable "region" {
+  default = null
+}'
+  g3w "$c" ex/main.tf 'module "m" {
+  source = "../root"
+}'
+done
+printf '%s\n' 'data "aws_availability_zones" "z" {' '  region = local.region' '}' >> "$TMP/g3/rfree-az/mod/main.tf"
+# Final review cases: a local in a dot file, a local of the wrong directory for a call or a
+# data block, and skip_region_validation in a second provider block with a variable region
+g3w loc-dotfile ex/.x.tf 'locals {
+  r = "us-east-1"
+}'
+g3w loc-dotfile ex/main.tf 'data "aws_availability_zones" "z" {
+  region = local.r
+}'
+g3w loc-call-wrongdir ex/main.tf 'module "m" {
+  source = "../mod"
+  region = local.r
+}'
+g3w loc-call-wrongdir mod/main.tf 'data "aws_availability_zones" "z" {
+  region = var.region
+}'
+g3w loc-call-wrongdir mod/v.tf 'variable "region" {
+  default = null
+}
+
+locals {
+  r = "us-east-1"
+}'
+g3w loc-data-wrongdir ex/main.tf 'locals {
+  r = "us-east-1"
+}
+module "m" {
+  source = "../mod"
+}'
+g3w loc-data-wrongdir mod/main.tf 'data "aws_availability_zones" "z" {
+  region = local.r
+}'
+g3w prov-split ex/main.tf 'provider "aws" {
+  region = "us-east-1"
+}
+provider "aws" {
+  alias                  = "b"
+  region                 = var.r
+  skip_region_validation = true
+}
+variable "r" {}'
+# The file ban: each banned name in scope turns a passing case into a hit.
+for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
+  for c in pol-plain prov-skip bus-defaults; do
+    cp -R "$TMP/g3/$c" "$TMP/g3/ban-$c-$b"
+    case "$c" in bus-*) : > "$TMP/g3/ban-$c-$b/mod/$b" ;; *) : > "$TMP/g3/ban-$c-$b/ex/$b" ;; esac
+  done
+done
+
 newrun() { # a run directory holding a clone of upstream
   R="$(mktemp -d "$TMP/pr-review.XXXXXX")"
   git clone -q "$up" "$R/clone"
@@ -458,6 +844,87 @@ for sh in bash zsh; do
   # A clone-wide G0 hit stops every example.
   R="$(newrun)"
   : > "$R/clone/terraform.tfvars"
+  # The laptop relaxations of G3, case by case: an empty output is a pass
+  R3="$(newrun)"; cp -R "$TMP/g3" "$R3/clone/g3"
+  g3() { # case, [mode]
+    if [ "${2:-clone}" = downloaded ]; then
+      find "$R3/clone/g3/$1/mod" -name '*.tf' | sort | PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" gates "$R3" laptop downloaded 2>&1
+    else
+      run scope "$R3" "$R3/clone/g3/$1/ex" | PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" gates "$R3" laptop clone "$R3/clone/g3/$1/ex" 2>&1
+    fi
+  }
+  for c in pol-plain pol-partition free-arn free-doc bus-root bus-defaults bus-null-region bus-nn-safe \
+    bus-region-fake prov-skip; do
+    out="$(g3 "$c")"
+    check "$sh: laptop mode admits $c" "$(test -z "$out"; echo $?)"
+    [ -z "$out" ] || printf '%s\n' "$out"
+  done
+  for c in pol-account pol-anchor pol-var pol-interp pol-name pol-provider pol-region pol-for-each \
+    pol-heredoc pol-multi-count pol-dotdot pol-dot pol-brace pol-comment pol-long free-file free-unlexed \
+    bus-root-var bus-null-name bus-nn-unsafe bus-nn-var bus-nonliteral bus-arn bus-slash \
+    bus-region-host bus-two-calls bus-unresolved bus-zero bus-nested bus-extra bus-dup-name \
+    prov-skip-var prov-skip-unknown prov-region-true prov-endpoints; do
+    check "$sh: laptop mode refuses $c" "$(g3 "$c" | grep '^class: plan gate G3 ' > /dev/null; echo $?)"
+  done
+  for c in bus-unresolved bus-two-calls bus-nested; do
+    check "$sh: $c is a hit at the event bus itself" "$(g3 "$c" | grep -x "G3 $R3/clone/g3/$c/mod/main.tf:1" > /dev/null; echo $?)"
+  done
+  check "$sh: the event bus is always a hit in downloaded mode" \
+    "$(g3 bus-defaults downloaded | grep -x "G3 $R3/clone/g3/bus-defaults/mod/main.tf:1" > /dev/null; echo $?)"
+  out="$(run scope "$R3" "$R3/clone/g3/bus-defaults/ex" | PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" gates "$R3" laptop clone 2>&1)"
+  check "$sh: without the example root the event bus is a hit" \
+    "$(has "$out" "G3 $R3/clone/g3/bus-defaults/mod/main.tf:1")"
+  for c in prov-region-true-literal reg-root-literal reg-root-null reg-root-absent reg-mod-default \
+    reg-mod-call-literal reg-mod-literal; do
+    out="$(g3 "$c")"
+    check "$sh: laptop mode admits $c" "$(test -z "$out"; echo $?)"
+    [ -z "$out" ] || printf '%s\n' "$out"
+  done
+  for c in prov-region-true-var prov-region-true-s3 prov-region-true-comment reg-root-var reg-root-s3 \
+    reg-root-local reg-root-interp reg-root-data reg-root-twice reg-mod-call-s3 reg-mod-call-local \
+    reg-mod-local reg-mod-zero reg-mod-nested reg-mod-ban reg-unlexed; do
+    check "$sh: laptop mode refuses $c" "$(g3 "$c" | grep '^class: plan gate G3 ' > /dev/null; echo $?)"
+  done
+  for c in reg-mod-zero reg-mod-nested reg-mod-ban reg-mod-call-s3; do
+    check "$sh: $c is a hit at the data block" "$(g3 "$c" | grep -x "G3 $R3/clone/g3/$c/mod/main.tf:1" > /dev/null; echo $?)"
+  done
+  check "$sh: a literal region passes in downloaded mode" "$(test -z "$(g3 reg-mod-literal downloaded)"; echo $?)"
+  check "$sh: var.region is a hit in downloaded mode" \
+    "$(g3 reg-mod-default downloaded | grep -x "G3 $R3/clone/g3/reg-mod-default/mod/main.tf:1" > /dev/null; echo $?)"
+  check "$sh: the file ban keeps skip_region_validation = true a hit" \
+    "$(cp -R "$R3/clone/g3/prov-region-true-literal" "$R3/clone/g3/ban-region-true" && : > "$R3/clone/g3/ban-region-true/ex/x.tfvars" && g3 ban-region-true | grep '^G3 ' > /dev/null; echo $?)"
+  for c in crlf-arg crlf-call ff-arg nospace-call mention; do
+    check "$sh: laptop mode refuses $c" "$(g3 "$c" | grep '^class: plan gate ' > /dev/null; echo $?)"
+  done
+  check "$sh: a call written against its label is still enumerated" \
+    "$(g3 nospace-call | grep -x "G3 $R3/clone/g3/nospace-call/mod/main.tf:1" > /dev/null; echo $?)"
+  for c in loc-root loc-bus-root reg-loc-call; do
+    out="$(g3 "$c")"
+    check "$sh: laptop mode admits $c" "$(test -z "$out"; echo $?)"
+    [ -z "$out" ] || printf '%s\n' "$out"
+  done
+  for c in loc-dup loc-nonliteral loc-multiline loc-path loc-unlexed loc-ban; do
+    check "$sh: laptop mode refuses $c" \
+      "$(g3 "$c" | grep -x "G3 $R3/clone/g3/$c/ex/main.tf:4" > /dev/null || g3 "$c" | grep -x "G3 $R3/clone/g3/$c/ex/main.tf:6" > /dev/null; echo $?)"
+  done
+  check "$sh: a local of another directory does not resolve" \
+    "$(g3 reg-loc-other-dir | grep -x "G3 $R3/clone/g3/reg-loc-other-dir/mod/main.tf:1" > /dev/null; echo $?)"
+  out="$(g3 rfree-pass)"
+  check "$sh: aws_region and aws_service_principal take any region" "$(test -z "$out"; echo $?)"
+  [ -z "$out" ] || printf '%s\n' "$out"
+  check "$sh: aws_availability_zones with the same region is still a hit" \
+    "$(g3 rfree-az | grep -x "G3 $R3/clone/g3/rfree-az/mod/main.tf:12" > /dev/null; echo $?)"
+  for c in loc-dotfile loc-call-wrongdir loc-data-wrongdir prov-split; do
+    check "$sh: laptop mode refuses $c" "$(g3 "$c" | grep '^class: plan gate G3 ' > /dev/null; echo $?)"
+  done
+  check "$sh: a dot file is not in the scope" "$(run scope "$R3" "$R3/clone/g3/loc-dotfile/ex" | grep -F '/.x.tf' > /dev/null; test $? -eq 1; echo $?)"
+  for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
+    for c in pol-plain prov-skip bus-defaults; do
+      check "$sh: $b in scope turns off the relaxation for $c" \
+        "$(g3 "ban-$c-$b" | grep '^G3 ' > /dev/null; echo $?)"
+    done
+  done
+
   run g0 "$R" > /dev/null
   out="$(run plan "$R" demo --role-arn "$ROLE" examples/ok)"
   check "$sh: a clone-wide G0 hit stops the example" \
@@ -566,6 +1033,31 @@ for sh in bash zsh; do
   out="$(run plan "$R" demo --role-arn "$ROLE" --mode runner --phase other examples/ok)"
   check "$sh: an unknown phase stops the pass" "$(has "$out" 'plan pass not run: phase unknown')"
 done
+
+# Negative self-check of the relaxations: each weakened copy of the script must let its case
+# through, and the real script must refuse it.
+mkdir -p "$TMP/mut"
+R3="$(newrun)"; cp -R "$TMP/g3" "$R3/clone/g3"
+mg() { # script, case
+  bash "$PP" scope "$R3" "$R3/clone/g3/$2/ex" | PATH="$TMP/bin:/usr/bin:/bin" bash "$1" gates "$R3" laptop clone "$R3/clone/g3/$2/ex" 2>&1
+}
+mutate() { # name, perl substitution, case...
+  local m="$TMP/mut/$1.sh" c
+  perl -pe "$2" "$PP" > "$m"
+  check "mutation $1 changes the script" "$(cmp -s "$PP" "$m"; test $? -eq 1; echo $?)"
+  for c in "${@:3}"; do
+    check "mutation $1 is caught by $c" "$([ -n "$(mg "$PP" "$c")" ] && [ -z "$(mg "$m" "$c")" ]; echo $?)"
+  done
+}
+mutate arn-anchor 's/qr\{\\Aarn:\(\?:aws/qr{arn:(?:aws/' pol-anchor
+mutate dot-segments 's/grep \{ \$_ eq "\." \|\| \$_ eq "\.\." \}/grep { 0 }/' pol-dotdot pol-dot
+mutate name-class 's/\$NAMEOK = qr\{\\A\[A-Za-z0-9\._-\]/\$NAMEOK = qr{\\A[A-Za-z0-9._:\/-]/' bus-arn bus-slash
+mutate region-check 's/hit\("G3", \$f, \$M\{\$f\}, \$b->\[3\]\) unless region_ok/hit("G3", \$f, \$M{\$f}, \$b->[3]) if 0 \&\& region_ok/' \
+  reg-root-s3 reg-root-local reg-mod-call-s3
+mutate region-true 's/next if !\$ban && \$rlit && /next if !\$ban \&\& /' prov-region-true-s3 prov-region-true-var
+mutate every-mention 's/\$rel\{\$y\}\[1\] == \$seen\{\$y\}/1/' mention
+mutate local-once 's/\$v && \$v->\{n\} == 1 && lit/\$v \&\& lit/' loc-dup
+mutate region-free-all 's/&& \$rfree\{\$b->\[0\]\[0\]\}/\&\& 1/' rfree-az
 
 # plan-session.sh: one fixed reason on standard error per failure class, nothing on standard output.
 SESS="${PP%/*}/plan-session.sh"

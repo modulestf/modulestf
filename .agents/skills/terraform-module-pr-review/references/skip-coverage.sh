@@ -89,7 +89,7 @@ record_gates() { # tree, sha: the record on standard output; non-zero when a ste
       case "$r" in "$t") echo "real ." ;; "$t"/*) echo "real ${r#"$t"/}" ;; *) echo "real $r" ;; esac
       s="$(bash "$PP" scope "$f" "$t/$d")" || return 1
       printf '%s\n' "$s" | awk -v r="$t/" 'NF { if (index($0, r) == 1) print "file " substr($0, length(r) + 1); else print "file " $0 }'
-      printf '%s\n' "$s" | bash "$PP" gates "$f" laptop clone | awk -v r="$t/" '/^G[0-3] / {
+      printf '%s\n' "$s" | bash "$PP" gates "$f" laptop clone "$t/$d" | awk -v r="$t/" '/^G[0-3] / {
           p = substr($0, 4); sub(/:[^:]*$/, "", p); if (index(p, r) == 1) p = substr(p, length(r) + 1)
           print "hit " substr($0, 1, 2) " " p }' | sort
     else
