@@ -352,6 +352,180 @@ check "c" {
   }
 }')"
 
+# Laptop relaxations of G3 (plan-pass.md, Data sources and provider flags). One tree per case
+# under g3/<case>: ex is the example root, mod and mid are local modules.
+g3w() { mkdir -p "$TMP/g3/$1/${2%/*}"; printf '%s\n' "$3" > "$TMP/g3/$1/$2"; }
+POL='data "aws_iam_policy" "t" {
+  count = var.on ? 1 : 0
+  arn   = "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
+}'
+g3w pol-plain ex/main.tf "$POL"
+g3w pol-partition ex/main.tf 'data "aws_partition" "current" {}
+data "aws_iam_policy" "t" {
+  arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaENIManagementAccess"
+}'
+pol() { g3w "pol-$1" ex/main.tf "data \"aws_iam_policy\" \"t\" {
+$2
+}"; }
+pol account '  arn = "arn:aws:iam::123456789012:policy/x"'
+pol anchor '  arn = "arn:aws:iam::123456789012:policy/xarn:aws:iam::aws:policy/X"'
+pol var '  arn = var.arn'
+pol interp '  arn = "arn:aws:iam::aws:policy/${var.x}"'
+pol name '  name = "AWSXrayWriteOnlyAccess"'
+pol provider '  provider = aws.other
+  arn      = "arn:aws:iam::aws:policy/X"'
+pol region '  region = "us-east-1"
+  arn    = "arn:aws:iam::aws:policy/X"'
+pol for-each '  for_each = toset(["a"])
+  arn      = "arn:aws:iam::aws:policy/X"'
+pol heredoc '  arn = <<EOT
+arn:aws:iam::aws:policy/X
+EOT'
+pol multi-count '  count = (
+    1
+  )
+  arn = "arn:aws:iam::aws:policy/X"'
+pol dotdot '  arn = "arn:aws:iam::aws:policy/../X"'
+pol dot '  arn = "arn:aws:iam::aws:policy/a/./X"'
+pol brace '  arn = "arn:aws:iam::aws:policy/X}"'
+pol comment '  # arn = "arn:aws:iam::aws:policy/X"
+  arn = var.x'
+pol long "  arn = \"arn:aws:iam::aws:policy/$(head -c 513 /dev/zero | tr '\0' a)\""
+g3w free-arn ex/main.tf 'data "aws_arn" "a" {
+  arn = var.queue_arn
+}'
+g3w free-doc ex/main.tf 'data "aws_cloudwatch_log_data_protection_policy_document" "d" {
+  name = var.name
+  statement {
+    sid              = "Audit"
+    data_identifiers = ["arn:aws:dataprotection::aws:data-identifier/EmailAddress"]
+    operation {
+      audit {
+        findings_destination {}
+      }
+    }
+  }
+}'
+g3w free-unlexed ex/main.tf 'data "aws_arn" "a" {
+  arn = var.queue_arn
+}
+locals {
+  x = <<EOT
+  y
+}'
+g3w free-file ex/main.tf 'data "aws_arn" "a" {
+  arn = file("arn.txt")
+}'
+# The event bus: a module directory read through the calls of the example root.
+BUS='data "aws_cloudwatch_event_bus" "this" {
+  count  = var.create ? 0 : 1
+  name   = var.bus_name
+  region = var.region
+}'
+VARS='variable "create" {
+  default = false
+}
+variable "bus_name" {
+  type    = string
+  default = "default"
+}
+variable "region" {
+  type    = string
+  default = null
+}'
+bus() { # case, module call arguments, [variables]
+  g3w "$1" mod/main.tf "$BUS"; g3w "$1" mod/variables.tf "${3:-$VARS}"
+  g3w "$1" ex/main.tf "module \"m\" {
+  source = \"../mod\"
+$2
+}"
+}
+g3w bus-root ex/main.tf 'data "aws_cloudwatch_event_bus" "this" {
+  name   = "default"
+  region = "eu-west-1"
+}'
+g3w bus-root-var ex/main.tf 'data "aws_cloudwatch_event_bus" "this" {
+  name = var.bus_name
+}'
+bus bus-defaults ''
+bus bus-null-name '  bus_name = null'
+bus bus-null-region '  region = null'
+NNV='variable "bus_name" {
+  type     = string
+  nullable = false
+  default  = "%s"
+}
+variable "region" {
+  default = null
+}'
+bus bus-nn-safe '  bus_name = null' "$(printf "$NNV" default)"
+bus bus-nn-unsafe '  bus_name = null' "$(printf "$NNV" 'arn:aws:events:us-east-1:123456789012:event-bus/x')"
+bus bus-nn-var '  bus_name = null' "$(printf "$NNV" default | sed 's/nullable = false/nullable = var.n/')"
+bus bus-nonliteral '  bus_name = "${var.prefix}-bus"'
+bus bus-arn '  bus_name = "arn:aws:events:us-east-1:123456789012:event-bus/x"'
+bus bus-slash '  bus_name = "aws.partner/x"'
+bus bus-region-fake '  region = "zz-fake-9"'
+bus bus-region-host '  region = "eu-west-1.example.com"'
+bus bus-two-calls ''
+printf '%s\n' 'module "n" {
+  source   = "../mod"
+  bus_name = "a:b"
+}' >> "$TMP/g3/bus-two-calls/ex/main.tf"
+bus bus-unresolved ''
+printf '%s\n' 'module "x" {
+  source = "../nowhere"
+}' >> "$TMP/g3/bus-unresolved/ex/main.tf"
+g3w bus-zero mod/main.tf "$BUS"; g3w bus-zero mod/variables.tf "$VARS"
+g3w bus-zero ex/main.tf '# source = "../mod"'
+g3w bus-nested mod/main.tf "$BUS"; g3w bus-nested mod/variables.tf "$VARS"
+g3w bus-nested mid/main.tf 'module "m" {
+  source   = "../mod"
+  bus_name = "default"
+}'
+g3w bus-nested ex/main.tf 'module "mid" {
+  source = "../mid"
+}'
+bus bus-extra ''
+printf '%s\n' "$BUS" | sed '$d' > "$TMP/g3/bus-extra/mod/main.tf"
+printf '%s\n' '  depends_on = []' '}' >> "$TMP/g3/bus-extra/mod/main.tf"
+bus bus-dup-name ''
+printf '%s\n' "$BUS" | sed '$d' > "$TMP/g3/bus-dup-name/mod/main.tf"
+printf '%s\n' '  name = "x"' '}' >> "$TMP/g3/bus-dup-name/mod/main.tf"
+# Provider flags
+PROV='provider "aws" {
+  region = "eu-west-1"
+
+  # Make it faster by skipping something
+  skip_metadata_api_check     = true
+  skip_credentials_validation = false
+  // one more comment
+  skip_requesting_account_id  = true
+  skip_region_validation      = false
+}'
+g3w prov-skip ex/main.tf "$PROV"
+g3w prov-skip-var ex/main.tf 'provider "aws" {
+  skip_metadata_api_check = var.skip
+}'
+g3w prov-skip-unknown ex/main.tf 'provider "aws" {
+  skip_everything = true
+}'
+g3w prov-region-true ex/main.tf 'provider "aws" {
+  skip_region_validation = true
+}'
+g3w prov-endpoints ex/main.tf 'provider "aws" {
+  skip_metadata_api_check = true
+  endpoints {
+    sts = "http://127.0.0.1"
+  }
+}'
+# The file ban: each banned name in scope turns a passing case into a hit.
+for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
+  for c in pol-plain prov-skip bus-defaults; do
+    cp -R "$TMP/g3/$c" "$TMP/g3/ban-$c-$b"
+    case "$c" in bus-*) : > "$TMP/g3/ban-$c-$b/mod/$b" ;; *) : > "$TMP/g3/ban-$c-$b/ex/$b" ;; esac
+  done
+done
+
 newrun() { # a run directory holding a clone of upstream
   R="$(mktemp -d "$TMP/pr-review.XXXXXX")"
   git clone -q "$up" "$R/clone"
@@ -458,6 +632,43 @@ for sh in bash zsh; do
   # A clone-wide G0 hit stops every example.
   R="$(newrun)"
   : > "$R/clone/terraform.tfvars"
+  # The laptop relaxations of G3, case by case: an empty output is a pass
+  R3="$(newrun)"; cp -R "$TMP/g3" "$R3/clone/g3"
+  g3() { # case, [mode]
+    if [ "${2:-clone}" = downloaded ]; then
+      find "$R3/clone/g3/$1/mod" -name '*.tf' | sort | PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" gates "$R3" laptop downloaded 2>&1
+    else
+      run scope "$R3" "$R3/clone/g3/$1/ex" | PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" gates "$R3" laptop clone "$R3/clone/g3/$1/ex" 2>&1
+    fi
+  }
+  for c in pol-plain pol-partition free-arn free-doc bus-root bus-defaults bus-null-region bus-nn-safe \
+    bus-region-fake prov-skip; do
+    out="$(g3 "$c")"
+    check "$sh: laptop mode admits $c" "$(test -z "$out"; echo $?)"
+    [ -z "$out" ] || printf '%s\n' "$out"
+  done
+  for c in pol-account pol-anchor pol-var pol-interp pol-name pol-provider pol-region pol-for-each \
+    pol-heredoc pol-multi-count pol-dotdot pol-dot pol-brace pol-comment pol-long free-file free-unlexed \
+    bus-root-var bus-null-name bus-nn-unsafe bus-nn-var bus-nonliteral bus-arn bus-slash \
+    bus-region-host bus-two-calls bus-unresolved bus-zero bus-nested bus-extra bus-dup-name \
+    prov-skip-var prov-skip-unknown prov-region-true prov-endpoints; do
+    check "$sh: laptop mode refuses $c" "$(g3 "$c" | grep '^class: plan gate G3 ' > /dev/null; echo $?)"
+  done
+  for c in bus-unresolved bus-two-calls bus-nested; do
+    check "$sh: $c is a hit at the event bus itself" "$(g3 "$c" | grep -x "G3 $R3/clone/g3/$c/mod/main.tf:1" > /dev/null; echo $?)"
+  done
+  check "$sh: the event bus is always a hit in downloaded mode" \
+    "$(g3 bus-defaults downloaded | grep -x "G3 $R3/clone/g3/bus-defaults/mod/main.tf:1" > /dev/null; echo $?)"
+  out="$(run scope "$R3" "$R3/clone/g3/bus-defaults/ex" | PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" gates "$R3" laptop clone 2>&1)"
+  check "$sh: without the example root the event bus is a hit" \
+    "$(has "$out" "G3 $R3/clone/g3/bus-defaults/mod/main.tf:1")"
+  for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
+    for c in pol-plain prov-skip bus-defaults; do
+      check "$sh: $b in scope turns off the relaxation for $c" \
+        "$(g3 "ban-$c-$b" | grep '^G3 ' > /dev/null; echo $?)"
+    done
+  done
+
   run g0 "$R" > /dev/null
   out="$(run plan "$R" demo --role-arn "$ROLE" examples/ok)"
   check "$sh: a clone-wide G0 hit stops the example" \
@@ -566,6 +777,25 @@ for sh in bash zsh; do
   out="$(run plan "$R" demo --role-arn "$ROLE" --mode runner --phase other examples/ok)"
   check "$sh: an unknown phase stops the pass" "$(has "$out" 'plan pass not run: phase unknown')"
 done
+
+# Negative self-check of the relaxations: each weakened copy of the script must let its case
+# through, and the real script must refuse it.
+mkdir -p "$TMP/mut"
+R3="$(newrun)"; cp -R "$TMP/g3" "$R3/clone/g3"
+mg() { # script, case
+  bash "$PP" scope "$R3" "$R3/clone/g3/$2/ex" | PATH="$TMP/bin:/usr/bin:/bin" bash "$1" gates "$R3" laptop clone "$R3/clone/g3/$2/ex" 2>&1
+}
+mutate() { # name, perl substitution, case...
+  local m="$TMP/mut/$1.sh" c
+  perl -pe "$2" "$PP" > "$m"
+  check "mutation $1 changes the script" "$(cmp -s "$PP" "$m"; test $? -eq 1; echo $?)"
+  for c in "${@:3}"; do
+    check "mutation $1 is caught by $c" "$([ -n "$(mg "$PP" "$c")" ] && [ -z "$(mg "$m" "$c")" ]; echo $?)"
+  done
+}
+mutate arn-anchor 's/qr\{\\Aarn:\(\?:aws/qr{arn:(?:aws/' pol-anchor
+mutate dot-segments 's/grep \{ \$_ eq "\." \|\| \$_ eq "\.\." \}/grep { 0 }/' pol-dotdot pol-dot
+mutate name-class 's/\$NAMEOK = qr\{\\A\[A-Za-z0-9\._-\]/\$NAMEOK = qr{\\A[A-Za-z0-9._:\/-]/' bus-arn bus-slash
 
 # plan-session.sh: one fixed reason on standard error per failure class, nothing on standard output.
 SESS="${PP%/*}/plan-session.sh"

@@ -29,9 +29,10 @@
 #       Laptop mode needs --role-arn: the plan credentials are a session on that review role,
 #       downscoped by plan-session-policy.json and issued by plan-session.sh, never the
 #       profile's own (plan-pass.md, Credentials). Runner mode gets its session from the runner.
-#   <bash|zsh> /abs/path/plan-pass.sh gates <run-dir> <laptop|runner> <clone|downloaded>
+#   <bash|zsh> /abs/path/plan-pass.sh gates <run-dir> <laptop|runner> <clone|downloaded> [<example-dir>]
 #       The per-file gates alone, over the absolute .tf paths on standard input. Read only,
-#       for the fixtures.
+#       for the fixtures and skip-coverage.sh. <example-dir>, absolute, is the example root
+#       the event bus rule needs; without it that rule never passes.
 #   <bash|zsh> /abs/path/plan-pass.sh scope <run-dir> <absolute directory>
 #       The clone scope of one example directory under the clone: its .tf files and those of
 #       the local module directories it reaches, one absolute path per line. Read only, for
@@ -65,7 +66,8 @@ g0() { names "$1"; links "$1"; }
 
 GATES_PL='
 use strict; use warnings; use Cwd qw(realpath);
-my ($mode, $root, $gm) = @ARGV; $root = realpath($root); my $run = ($gm // "") eq "runner";
+my ($mode, $root, $gm, $ex) = @ARGV; $root = realpath($root); my $run = ($gm // "") eq "runner";
+$ex = defined $ex && length $ex ? realpath($ex) : undef;
 my %pok = map { ("registry.terraform.io/hashicorp/$_" => 1) } qw(aws random time tls cloudinit);
 my @pre = qw(aws_ random_ time_ tls_ cloudinit_);
 my %dok = map { ($_ => 1) } qw(aws_caller_identity aws_canonical_user_id aws_partition aws_region aws_availability_zones aws_iam_policy_document aws_service_principal aws_default_tags tls_public_key cloudinit_config);
@@ -207,13 +209,167 @@ sub runner_file {
     }
   }
 }
+# Laptop mode only (plan-pass.md, Data sources and provider flags): the relaxed data source
+# rules and provider skip flags, all off when a file BAN names is anywhere in scope.
+my %dfree = map { ($_ => 1) } qw(aws_arn aws_cloudwatch_log_data_protection_policy_document);
+my $BAN = qr{\A(?:override\.tf|.*_override\.tf|.*\.tfvars|.*\.tfvars\.json|.*\.auto\.tfvars.*|.*\.tf\.json)\z}s;
+my $ARNOK = qr{\Aarn:(?:aws(?:-[a-z]+)*|\$\{data\.aws_partition\.[A-Za-z_][\w-]*\.partition\}):iam::aws:policy/([A-Za-z0-9+=,.\@_-]+(?:/[A-Za-z0-9+=,.\@_-]+)*)\z};
+my $NAMEOK = qr{\A[A-Za-z0-9._-]{1,256}\z};
+my $REGIONOK = qr{\A[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}\z};
+my $SKIPOK = qr{\A\s*(?:(?:#|//).*|(?:skip_metadata_api_check|skip_credentials_validation|skip_requesting_account_id)\s*=\s*(?:true|false)\s*|skip_region_validation\s*=\s*false\s*)\z};
+sub blocks { # masked and raw text, keyword: [[labels], body start, body end] per block
+  my ($m, $r, $kw) = @_; my @b;
+  while ($m =~ /\b\Q$kw\E((?:[ \t]+"[^"\n]*")+)[ \t]*(?=\{)/g) {
+    my @l = substr($r, $-[1], $+[1] - $-[1]) =~ /"([^"\n]*)"/g;
+    next unless $m =~ /\G$B/gc;
+    push @b, [\@l, $-[0] + 1, $+[0] - 1];
+  }
+  return @b;
+}
+sub tok { # masked and raw text, value start and end: [kind, value]
+  my ($m, $r, $s, $e) = @_;
+  return ["other"] unless substr($m, $s, $e - $s) =~ /\A[ \t]*(.*?)[ \t]*\z/;
+  my ($t, $o) = ($1, $s + $-[1]);
+  if ($t =~ /\A"( *)"\z/) { my $c = substr($r, $o + 1, length $1); return $c =~ /[\$%]\{/ ? ["other"] : ["str", $c] }
+  return ["null"] if $t eq "null";
+  return ["bool", $t] if $t eq "true" || $t eq "false";
+  return ["var", $1] if $t =~ /\Avar\.([A-Za-z_][A-Za-z0-9_-]*)\z/;
+  return ["other"];
+}
+sub lit { $_[0][0] =~ /\A(?:str|null|bool)\z/ }
+sub body_lines { # masked text, body start and end: [name, value start, value end] per line, or undef
+  my ($m, $s, $e) = @_; my @a; my $p = $s;
+  for my $l (split /\n/, substr($m, $s, $e - $s), -1) {
+    if ($l =~ /\S/) {
+      return undef unless $l =~ /\A[ \t]*([A-Za-z_][\w-]*)[ \t]*=[ \t]*(?=\S)/;
+      push @a, [$1, $p + $+[0], $p + length $l];
+    }
+    $p += length($l) + 1;
+  }
+  return \@a;
+}
+sub top_attrs { # masked and raw text, body start and end: (name => token, ...) and the names seen twice
+  my ($m, $r, $s, $e) = @_; my (%a, %dup);
+  (my $x = substr($m, $s, $e - $s)) =~ s/$B/fill($&)/ge;
+  my $p = $s;
+  for my $l (split /\n/, $x, -1) {
+    if ($l =~ /\A[ \t]*([A-Za-z_][\w-]*)[ \t]*=[ \t]*/) {
+      $dup{$1} = 1 if exists $a{$1};
+      $a{$1} = tok($m, $r, $p + $+[0], $p + length $l);
+    }
+    $p += length($l) + 1;
+  }
+  return (\%a, \%dup);
+}
+my @F; my %M; my (@calls, %vars, %dirs); my ($ban, $a3) = (0, 0);
 while (my $f = <STDIN>) {
-  chomp $f; my $fh;
-  if ($f eq "UNREADABLE" or !open($fh, "<", $f)) { hit("G0", $f); next }
-  my $raw = do { local $/; <$fh> }; close $fh;
+  chomp $f; my ($fh, $raw);
+  if ($f ne "UNREADABLE" and open($fh, "<", $f)) { $raw = do { local $/; <$fh> }; close $fh }
+  push @F, [$f, $raw];
+}
+unless ($run) {
+  $a3 = $mode eq "clone" && defined $ex;
+  for (@F) {
+    my ($f, $raw) = @$_;
+    unless (defined $raw) { $a3 = 0; next }
+    (my $d = $f) =~ s{/[^/]*\z}{}; my $rd = realpath($d);
+    unless (defined $rd) { $ban = 1; next }
+    $dirs{$rd} = 1;
+    my $m = $M{$f} = mask($raw);
+    unless (defined $m) { $a3 = 0; next }
+    for my $b (blocks($m, $raw, "module")) {
+      my ($a, $dup) = top_attrs($m, $raw, $b->[1], $b->[2]);
+      my $st = $a->{source} && !$dup->{source} ? $a->{source} : ["other"];
+      unless ($st->[0] eq "str") { $a3 = 0; next }
+      my $s = $st->[1];
+      if ($s =~ m{\A\.\.?/}) {
+        my $t = realpath("$rd/$s");
+        unless (defined $t && -d $t) { $a3 = 0; next }
+        $dirs{$t} = 1;
+        $a3 = 0 unless index("$t/", "$root/") == 0;
+        push @calls, [$rd, $t, $a, $dup];
+      } elsif ($s !~ $reg) { $a3 = 0 }
+    }
+    for my $b (blocks($m, $raw, "variable")) {
+      my ($a, $dup) = top_attrs($m, $raw, $b->[1], $b->[2]); my $n = $b->[0][0];
+      my $dv = exists $vars{$rd}{$n} || @{ $b->[0] } != 1 || $dup->{default} || $dup->{nullable};
+      $vars{$rd}{$n} = { default => $a->{default}, nullable => $a->{nullable}, dup => $dv };
+    }
+  }
+  for my $d (sort keys %dirs) {
+    my $h; unless (opendir($h, $d)) { $ban = 1; next }
+    $ban = 1 if grep { $_ =~ $BAN } readdir $h;
+    closedir $h;
+  }
+  $a3 = 0 if $ban;
+}
+sub policy_ok { # masked and raw text, body start and end
+  my ($m, $r, $s, $e) = @_; my %n;
+  my $al = body_lines($m, $s, $e) or return 0;
+  for (@$al) {
+    my ($k, $vs, $ve) = @$_; $n{$k}++; my $v = substr($m, $vs, $ve - $vs);
+    if ($k eq "count") { return 0 if $v =~ /<</; next }
+    return 0 unless $k eq "arn" && $v =~ /\A"( *)"[ \t]*\z/;
+    return 0 unless substr($r, $vs + 1, length $1) =~ $ARNOK;
+    my $p = $1;
+    return 0 if length($p) > 512 || grep { $_ eq "." || $_ eq ".." } split m{/}, $p, -1;
+  }
+  return ($n{arn} // 0) == 1 && ($n{count} // 0) <= 1;
+}
+sub eff { # token, module call, module directory: the value Terraform takes, or undef when unknown
+  my ($t, $c, $d) = @_;
+  return $t unless $t->[0] eq "var";
+  my $n = $t->[1]; my $v = $vars{$d}{$n};
+  return undef unless $v && !$v->{dup} && !$c->[3]{$n};
+  my ($nl, $df) = ($v->{nullable}, $v->{default});
+  return undef if $nl && $nl->[0] ne "bool";
+  my $dflt = $df && lit($df) ? $df : undef;
+  return $dflt unless exists $c->[2]{$n};
+  my $x = $c->[2]{$n};
+  return $x if $x->[0] eq "str" || $x->[0] eq "bool";
+  return $nl && $nl->[1] eq "false" ? $dflt : ["null"] if $x->[0] eq "null";
+  return undef;
+}
+sub bus_pass { # effective name and region
+  my ($nm, $rg) = @_;
+  return defined $nm && defined $rg && $nm->[0] eq "str" && $nm->[1] =~ $NAMEOK
+    && ($rg->[0] eq "null" || ($rg->[0] eq "str" && $rg->[1] =~ $REGIONOK));
+}
+sub bus_ok { # file, masked and raw text, body start and end
+  my ($f, $m, $r, $s, $e) = @_; my (%n, %t);
+  return 0 unless $a3;
+  my $al = body_lines($m, $s, $e) or return 0;
+  for (@$al) {
+    my ($k, $vs, $ve) = @$_; $n{$k}++;
+    return 0 unless $k =~ /\A(?:count|name|region)\z/;
+    if ($k eq "count") { return 0 if substr($m, $vs, $ve - $vs) =~ /<</; next }
+    $t{$k} = tok($m, $r, $vs, $ve);
+  }
+  return 0 unless ($n{name} // 0) == 1 && ($n{count} // 0) <= 1 && ($n{region} // 0) <= 1;
+  $t{region} //= ["null"];
+  (my $d = $f) =~ s{/[^/]*\z}{}; $d = realpath($d); return 0 unless defined $d;
+  return lit($t{name}) && lit($t{region}) && bus_pass($t{name}, $t{region}) if $d eq $ex;
+  for (values %t) { return 0 unless lit($_) || $_->[0] eq "var" }
+  my @c = grep { $_->[1] eq $d } @calls;
+  return 0 unless @c;
+  for my $c (@c) { return 0 unless $c->[0] eq $ex && bus_pass(eff($t{name}, $c, $d), eff($t{region}, $c, $d)) }
+  return 1;
+}
+for (@F) {
+  my ($f, $raw) = @$_;
+  unless (defined $raw) { hit("G0", $f); next }
   hit("G0", $f) if $f =~ m{(?:\A|/)(?:[^/]*_)?override\.tf\z};
   hit("G0", $f, $raw, $-[0]) if $raw =~ /[\r\f\x0b]/;
   if ($run) { runner_file($f, $raw); next }
+  my %rel; # a relaxed type: [every block of it passed, how many blocks]
+  if (!$ban && defined $M{$f}) {
+    for my $b (blocks($M{$f}, $raw, "data")) {
+      my $y = $b->[0][0] // ""; next unless @{ $b->[0] } == 2;
+      next unless $y eq "aws_iam_policy" || $y eq "aws_cloudwatch_event_bus";
+      my $ok = $y eq "aws_iam_policy" ? policy_ok($M{$f}, $raw, $b->[1], $b->[2]) : bus_ok($f, $M{$f}, $raw, $b->[1], $b->[2]);
+      $rel{$y}[0] = ($rel{$y}[0] // 1) && $ok; $rel{$y}[1]++;
+    }
+  }
   (my $code = blank($raw)) =~ s{(?:#|//)[^\n]*}{}g;
   hit("G0", $f, $code, $-[0]) if $code =~ /[^\x00-\x7f]/;
   (my $lb = $raw) =~ s{(?:#|//)[^\n]*}{}g;
@@ -227,10 +383,13 @@ while (my $f = <STDIN>) {
     while ($t =~ /(?:provisioner|\bfile\w*\s*\(|templatefile\s*\(|provider::|\bcloud\s*\{|backend\s+")/g) { hit("G3", $f, $t, $-[0]) }
     while ($t =~ /^([A-Za-z_][\w-]*)(?:\s+"[^"]*")*\s*\{/mg) { hit("G3", $f, $t, $-[0]) unless $top{$1} }
     while ($t =~ /^\s*(?:ephemeral|check|import|action)\b(?:\s+"[^"]*")*\s*\{/mg) { hit("G3", $f, $t, $-[0]) }
+    my %seen; while ($t =~ /\b(resource|data)\s+"([^"]*)"/g) { $seen{$2}++ if $1 eq "data" }
     while ($t =~ /\b(resource|data)\s+"([^"]*)"/g) {
       my ($k, $y, $at) = ($1, $2, $-[0]);
       my $ok = grep { index($y, $_) == 0 } @pre;
-      $ok = 0 if $k eq "data" && !$dok{$y};
+      # A relaxed type passes only when every mention of it is a block that passed its rule
+      my $rx = $rel{$y} && $rel{$y}[0] && $rel{$y}[1] == $seen{$y};
+      $ok = 0 if $k eq "data" && !$dok{$y} && !(!$ban && defined $M{$f} && $dfree{$y}) && !$rx;
       hit("G3", $f, $t, $at) unless $ok;
     }
     while ($bt =~ /\bprovider\s+"[^"]*"\s*/g) {
@@ -241,6 +400,7 @@ while (my $f = <STDIN>) {
         $body =~ s/\bdefault_tags\s*$B//g;
         for my $line (split /\n/, $body) {
           next unless $line =~ /\S/;
+          next if !$ban && $line =~ $SKIPOK;
           if ($line !~ /\A\s*(?:region|alias)\s*=/) { hit("G3", $f, $bt, $at); last }
         }
       } else { hit("G3", $f, $bt, $at) }
@@ -312,8 +472,8 @@ exc_or_gate() { # all hits as one argument: a gate hit wins; exceptions alone ar
 }
 if [ "${1:-}" = gates ]; then
   case "${3:-}/${4:-}" in laptop/clone|laptop/downloaded|runner/clone|runner/downloaded) ;;
-    *) echo "plan-pass.sh: gates <run-dir> <laptop|runner> <clone|downloaded>" >&2; exit 2 ;; esac
-  h="$(perl -e "$GATES_PL" "$4" "$CROOT" "$3")"
+    *) echo "plan-pass.sh: gates <run-dir> <laptop|runner> <clone|downloaded> [<example-dir>]" >&2; exit 2 ;; esac
+  h="$(perl -e "$GATES_PL" "$4" "$CROOT" "$3" "${5:-}")"
   [ -n "$h" ] && { printf '%s\n' "$h"; exc_or_gate "$h" > /dev/null; echo "class: $CLASS"; }
   exit 0
 fi
@@ -638,7 +798,7 @@ pe_init() { # absolute example directory, key, root (the clone or the base workt
   [ -e "$4" ] || { CLASS='plan gate G0 not evaluated'; return; }
   [ -s "$4" ] && { gate_class "$(cat "$4")"; return; }
   SCOPE="$(scope "$1" | sed 's|/[^/]*$||' | sort -u | rel | tr '\n' ' ')"
-  h="$(scope "$1" | perl -e "$GATES_PL" clone "$CROOT" "$GMODE"; committed_locks "$1")"
+  h="$(scope "$1" | perl -e "$GATES_PL" clone "$CROOT" "$GMODE" "$1"; committed_locks "$1")"
   [ -n "$h" ] && { exc_or_gate "$h"; return; }
   cd "$1" || { CLASS='plan gate G0 unreadable'; return; }
   INCD=1
