@@ -589,6 +589,25 @@ locals {
   x = <<EOT
   y
 }'
+# Review cases: a module call or argument hidden from the call enumeration by a CR or FF
+# after a heredoc end, or by a keyword against its label, and a mention outside a block.
+XV="$VARS
+variable \"x\" {
+  default = null
+}"
+for c in crlf-arg crlf-call ff-arg nospace-call; do g3w "$c" mod/main.tf "$BUS"; g3w "$c" mod/variables.tf "$XV"; mkdir -p "$TMP/g3/$c/ex"; done
+printf 'module "ok" {\n  source = "../mod"\n  x = <<EOT\ny\nEOT%b\n  bus_name = "arn:aws:events:us-east-1:123456789012:event-bus/x"\n  region   = "us-east-1.attacker.example"\n}\n\nlocals {\n  pad2 = <<EOT\nEOT\n}\n' '\r' > "$TMP/g3/crlf-arg/ex/main.tf"
+printf 'module "ok" {\n  source = "../mod"\n  x = <<EOT\ny\nEOT%b\n  bus_name = "arn:aws:events:us-east-1:123456789012:event-bus/x"\n  region   = "us-east-1.attacker.example"\n}\n\nlocals {\n  pad2 = <<EOT\nEOT\n}\n' '\f' > "$TMP/g3/ff-arg/ex/main.tf"
+printf 'module "ok" {\n  source = "../mod"\n}\n\nlocals {\n  pad = <<EOT\nx\nEOT%b\n}\n\nmodule "bad" {\n  source   = "../mod"\n  bus_name = "arn:aws:events:us-east-1:123456789012:event-bus/x"\n}\n\nlocals {\n  pad2 = <<EOT\nEOT\n}\n' '\r' > "$TMP/g3/crlf-call/ex/main.tf"
+g3w nospace-call ex/main.tf 'module "ok" {
+  source = "../mod"
+}
+module"bad"{
+  source   = "../mod"
+  bus_name = "arn:aws:events:us-east-1:123456789012:event-bus/x"
+}'
+g3w mention ex/main.tf "$POL
+# data \"aws_iam_policy\" \"x\" { name = \"y\" }"
 # The file ban: each banned name in scope turns a passing case into a hit.
 for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
   for c in pol-plain prov-skip bus-defaults; do
@@ -752,6 +771,11 @@ for sh in bash zsh; do
     "$(g3 reg-mod-default downloaded | grep -x "G3 $R3/clone/g3/reg-mod-default/mod/main.tf:1" > /dev/null; echo $?)"
   check "$sh: the file ban keeps skip_region_validation = true a hit" \
     "$(cp -R "$R3/clone/g3/prov-region-true-literal" "$R3/clone/g3/ban-region-true" && : > "$R3/clone/g3/ban-region-true/ex/x.tfvars" && g3 ban-region-true | grep '^G3 ' > /dev/null; echo $?)"
+  for c in crlf-arg crlf-call ff-arg nospace-call mention; do
+    check "$sh: laptop mode refuses $c" "$(g3 "$c" | grep '^class: plan gate ' > /dev/null; echo $?)"
+  done
+  check "$sh: a call written against its label is still enumerated" \
+    "$(g3 nospace-call | grep -x "G3 $R3/clone/g3/nospace-call/mod/main.tf:1" > /dev/null; echo $?)"
   for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
     for c in pol-plain prov-skip bus-defaults; do
       check "$sh: $b in scope turns off the relaxation for $c" \
@@ -889,6 +913,7 @@ mutate name-class 's/\$NAMEOK = qr\{\\A\[A-Za-z0-9\._-\]/\$NAMEOK = qr{\\A[A-Za-
 mutate region-check 's/hit\("G3", \$f, \$M\{\$f\}, \$b->\[3\]\) unless region_ok/hit("G3", \$f, \$M{\$f}, \$b->[3]) if 0 \&\& region_ok/' \
   reg-root-s3 reg-root-local reg-mod-call-s3
 mutate region-true 's/next if !\$ban && \$rlit && /next if !\$ban \&\& /' prov-region-true-s3 prov-region-true-var
+mutate every-mention 's/\$rel\{\$y\}\[1\] == \$seen\{\$y\}/1/' mention
 
 # plan-session.sh: one fixed reason on standard error per failure class, nothing on standard output.
 SESS="${PP%/*}/plan-session.sh"

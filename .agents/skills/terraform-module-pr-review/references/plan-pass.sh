@@ -219,7 +219,8 @@ my $REGIONOK = qr{\A[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}\z};
 my $SKIPOK = qr{\A\s*(?:(?:#|//).*|(?:skip_metadata_api_check|skip_credentials_validation|skip_requesting_account_id)\s*=\s*(?:true|false)\s*|skip_region_validation\s*=\s*false\s*)\z};
 sub blocks { # masked and raw text, keyword: [[labels], body start, body end, header start] per block
   my ($m, $r, $kw) = @_; my @b;
-  while ($m =~ /\b\Q$kw\E((?:[ \t]+"[^"\n]*")+)[ \t]*(?=\{)/g) {
+  # \s* as Terraform reads it, so a keyword against its label, which $ADJ also refuses, is still seen
+  while ($m =~ /\b\Q$kw\E((?:\s*"[^"\n]*")+)\s*(?=\{)/g) {
     my $h = $-[0];
     my @l = substr($r, $-[1], $+[1] - $-[1]) =~ /"([^"\n]*)"/g;
     next unless $m =~ /\G$B/gc;
