@@ -512,6 +512,23 @@ t_mention; check "at-mention: bare mentions wrapped, spans untouched" $?
 render "$(one structure.grouping LOW a.tf 1 'An odd ` backtick and @x.' "F.")"
 check "at-mention: a mention a wrap cannot neutralize blocks the render" "$([ "$ST" = 1 ] && empty_out; echo $?)"
 
+# --- Location links (comment-format.md, Location links): --links turns each location into a link to
+# the file at the head; without it the location stays a plain code span.
+
+LINKF="$(one structure.grouping LOW sub/a.tf 12 'Summary.' 'Fix.')"
+render "$LINKF"
+check "links: off by default, the location is a plain code span" "$(grep -qF -- '- `structure.grouping` - `sub/a.tf:12` - Summary.' "$O/comment.md"; echo $?)"
+render "$LINKF" "" "" "" "" --links
+check "links: --links links a location to the file and line at the head" "$([ "$ST" = 0 ] && grep -qF -- "[\`sub/a.tf:12\`](https://github.com/example/terraform-aws-thing/blob/$HEAD/sub/a.tf#L12)" "$O/comment.md"; echo $?)"
+render "$(one structure.grouping LOW sub/a.tf null 'Summary.' 'Fix.')" "" "" "" "" --links
+check "links: a finding with no line links to the file without a fragment" "$(grep -qF -- "[\`sub/a.tf\`](https://github.com/example/terraform-aws-thing/blob/$HEAD/sub/a.tf)" "$O/comment.md"; echo $?)"
+render "$(one structure.grouping LOW 'sub/a b.tf' 3 'Summary.' 'Fix.')" "" "" "" "" --links
+check "links: a path outside the allowed set stays a plain code span" "$(grep -qF -- '`sub/a b.tf:3`' "$O/comment.md" && ! grep -qF -- 'blob/' "$O/comment.md"; echo $?)"
+render "$(one structure.grouping LOW . null 'Summary.' 'Fix.')" "" "" "" "" --links
+check "links: the module root stays a plain code span" "$(grep -qF -- '- `structure.grouping` - `.` - Summary.' "$O/comment.md" && ! grep -qF -- 'blob/' "$O/comment.md"; echo $?)"
+render "$LINKF" "$(host badrepo '.repo = "a b/c"')" "" "" "" --links
+check "links: a repository outside owner/name is refused" "$([ "$ST" = 2 ]; echo $?)"
+
 # --- Refused inputs: exit 2 and nothing written.
 
 refused() { # name, render args...

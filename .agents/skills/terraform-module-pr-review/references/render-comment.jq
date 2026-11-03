@@ -303,7 +303,15 @@ def valid_assessment: type == "string" and length <= 4096
 def allowed: test("^[A-Za-z0-9._/-]+$");
 def repo_path($p): if $p == "" then . elif . == "." then $p else $p + "/" + . end;
 def trigger_at($p): {category, location: ((.file | repo_path($p)) + (if .line == null then "" else ":\(.line)" end))};
-def loc($p): "`" + (.file | repo_path($p)) + (if .line == null then "" else ":\(.line)" end) + "`";
+# A location is a code span; under --links (link_base set) a link to the file at the head when
+# the path is in the allowed set, and is not the module root `.`, so the URL holds no character the pull request could choose.
+def link_base: $ARGS.named.link_base // "";
+def loc_span($f): "`" + $f + (if .line == null then "" else ":\(.line)" end) + "`";
+def loc_at($f): loc_span($f) as $s
+  | if link_base != "" and $f != "." and ($f | test("^[A-Za-z0-9._/-]+$"))
+    then "[" + $s + "](" + link_base + "/" + $f + (if .line == null then "" else "#L\(.line)" end) + ")"
+    else $s end;
+def loc($p): loc_at(.file | repo_path($p));
 
 # --- The ladder (verdict.md). Input: {findings, signals: {checks, threads, review_decision,
 # mergeability}, unresolved, triage, gaps, refuted, unplanned, covered}. The disputed note is the
@@ -894,7 +902,7 @@ def compact_refusal($in):
 def name_list: sort | (.[:3] | map(if allowed then "`\(.)`" else tx("name-withheld") end))
   + (if length > 3 then [tx("evidence-more"; {count: (length - 3)})] else [] end) | join(", ");
 def safe_loc($p): (.file | repo_path($p)) as $f
-  | if $f | allowed then "`" + $f + (if .line == null then "" else ":\(.line)" end) + "`" else tx("name-withheld") end;
+  | if $f | allowed then loc_at($f) else tx("name-withheld") end;
 
 # The rule 4 action line: one clause per cause, in table order; none when a cause is outside the table.
 def action_line($c):

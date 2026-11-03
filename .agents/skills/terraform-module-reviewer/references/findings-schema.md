@@ -72,6 +72,8 @@ A code change is one change, with everything it needs to hold: a new variable to
 
 Never in a fix: a command to run, a hedge in place of a choice (`consider`, `you may want to`, `optionally`), a change the finding does not name, or text quoted from the change under review beyond identifiers and values. Keep it short: a code change is usually one or two sentences, and a `needs decision:` fix adds one sentence per option. Each option of a `needs decision:` fix names its own generated content, since the options can differ.
 
+**Code in backticks.** In `summary` and `suggested_fix`, every file path, block address, identifier, argument, attribute, expression and literal value sits in backticks, and the words around them stay outside, so a reader tells code from prose at a glance: In the `locals` block of `examples/regional-nat/main.tf`, set `region` to `"eu-west-1"`. A consumer renders both fields as markdown. A fix that names a block address writes it whole inside one pair of backticks, such as `resource "aws_eip" "regional_nat"`.
+
 Checks A to F each carry a Suggested Fixes table of their rules and the fix each one takes.
 
 ## `rule_id` Format
