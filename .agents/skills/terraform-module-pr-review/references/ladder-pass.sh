@@ -1130,6 +1130,10 @@ l3() { # trigger file, id
   local base="" head="" obsb="[]" obsh="[]" fx="" fixj fob n ci c out ctl
   LV=L3
   r3() { record "$id" unverifiable "$([ "$L3_OK" = 1 ] && echo "$1" || echo "$L3_WHY")" "${2:-}" "${3:-}" "${4:-$nob}"; }
+  # A data source is read during plan, which needs its API: L3 plans none, whatever else holds.
+  if jq -e '(.address // "") | startswith("data.")' "$tf" > /dev/null 2>&1; then
+    record "$id" unverifiable "a data source is not planned at L3" "" "" "$nob"; return
+  fi
   if [ "$L3_OK" != 1 ]; then record "$id" unverifiable "$L3_WHY" "" "" "{\"base\":[],\"head\":[],\"sandbox\":$L3SBXJ}"; return; fi
   left 1 > /dev/null || { r3 budget; return; }
   typ="$(jq -r '.address // "" | split(".") | if length == 2 then .[0] else "" end' "$tf")"
