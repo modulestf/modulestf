@@ -117,12 +117,13 @@ mk() { # touched types, provider tokens, type tokens, lock tokens -> depth.json 
 }
 PROV="head:.:demo=example/demo:>=1.2"
 TOK=".:resource:demo_thing:example/demo .:resource:demo_a:example/demo .:data:demo_lookup:example/demo"
-run() { # name; env D (depth.json text), DP (its path instead), MIRROR, SPX (another script)
+run() { # name; env D (depth.json text), DP (its path instead), MIRROR, SPX (another script), HS (a commit: write a handoff)
   R="$TMP/run-$1"
   mkdir -p "$R.d" && printf '%s\n' "${D:-}" > "$R.d/depth.json"
   if [ -n "${MIRROR+x}" ]; then export MODULESTF_SCHEMA_MIRROR="$MIRROR"; else unset MODULESTF_SCHEMA_MIRROR; fi
   STUB_LOG="$R.log" SCHEMA_DEPTH="${DP:-$R.d/depth.json}" SCHEMA_PROVIDERS="head:.:demo=example/demo:>=1.0" \
-    SCHEMA_TYPES=".:resource:demo_b:example/demo" /bin/bash "${SPX:-$SP}" "$R/facts" "$R/work" > "$R.out" 2>&1
+    SCHEMA_TYPES=".:resource:demo_b:example/demo" SCHEMA_HEAD="${HS-}" SCHEMA_MERGE_BASE="${HS-}" SCHEMA_INPUTS="${HS:+$HS:$(printf 'cd%.0s' $(seq 32)):main.tf}" \
+    /bin/bash "${SPX:-$SP}" "$R/facts" "$R/work" ${HS:+"$R/handoff"} > "$R.out" 2>&1
   RC=$?
   : >> "$R.log"
 }
@@ -148,6 +149,16 @@ check "versions: an untouched type token and the SCHEMA_TYPES env are not render
   (cd "$R/facts" && sha256 --strict -c files.sha256 > /dev/null)
 check "versions: versions.json and files.sha256 as in normal mode" "$?"
 ver_bytes="$(sed -n 's/^schema pass: focused, .*, 3 sheets, \([0-9]*\) bytes$/\1/p' "$R.out")"
+v_sheets="$(sheets)"
+HS="$(printf 'ab%.0s' $(seq 20))" D="$(mk demo_thing "$PROV base:.:demo=example/demo:>=1.0" "$TOK" ".:example/demo=1.2.5")" run versions-handoff
+h="$(gzip -dc "$R/handoff/schema-handoff.json.gz" 2> /dev/null)"
+[ "$RC" = 0 ] && grep -qx 'schema pass: handoff written, 1 directories, 0 provider schemas' "$R.out" &&
+  [ "$(jq -c '.directories[0].providers[0].versions' <<< "$h")" = '{"latest":"1.3.0","declared_minimum":"1.2.0","old_floor":"1.0.0"}' ]
+check "versions: with a handoff, focused reads the base token for the handoff's old floor (the fixture's malformed type leaves every version out)" "$?"
+[ "$(sheets)" = "$v_sheets" ] && [ "$(fetched 1.0.0)" = 0 ] &&
+  [ "$(jq -c '.directories["."]["example/demo"]' "$R/facts/versions.json")" = '{"latest":"1.3.0","minimum":"1.2.0"}' ]
+check "versions: with a handoff, focused still reads no old floor sheet" "$?"
+unset HS
 [ "$ver_bytes" = "$(cat "$R"/facts/example/demo/*/resources/*.facts | wc -c | tr -d ' ')" ]
 check "versions: the byte count is the sheets' total" "$?"
 src="$(sed -n 's/^schema pass: source //p' "$R.out" | LC_ALL=C sort)"
@@ -371,5 +382,10 @@ k_dlock() { [ "$RC" = 0 ] && [ "$(jq '.missing | length' "$R/facts/missing.json"
 mutant deep-escalates 's/elif \[ "\$MODE" = deep \]; then note "\$1"; fi; }/elif [ "$MODE" = deep ]; then escalate "$1"; fi; }/' c_deep k_deep
 mutant no-missing 's/^\[ "\$MODE" != deep \] || cp "\$WORK\/missing.json" "\$OUT\/missing.json" || exit 1$/:/' c_deep k_deep
 mutant lock-not-same-source 's/      if (s != "sheet" \&\& s != "absent") page = 1$/      s = s/' c_dlock k_dlock
+c_hfloor() { HS="$(printf 'ab%.0s' $(seq 20))" D="$(mk demo_thing "$PROV base:.:demo=example/demo:>=1.0" "$TOK" "")" run m-hfloor; }
+k_hfloor() { [ "$RC" = 0 ] && [ "$(gzip -dc "$R/handoff/schema-handoff.json.gz" | jq -r '.directories[0].providers[0].versions.old_floor')" = 1.0.0 ] &&
+  [ "$(fetched 1.0.0)" = 0 ]; }
+mutant focused-handoff-no-base 's/ || \[ -n "\$HANDOFF" \] || continue$/ || continue/' c_hfloor k_hfloor
+mutant focused-floor-sheet 's/ || \[ "\$MODE" = focused \] || floor="\$f"; fi$/ || floor="$f"; fi/' c_hfloor k_hfloor
 
 if [ "$fails" = 0 ]; then echo "all passed"; else echo "$fails failed"; exit 1; fi

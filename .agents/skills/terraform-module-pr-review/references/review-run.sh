@@ -364,14 +364,41 @@ summary_lines() {
 
 need_full() { [ "$TRIAGE" = false ] || fail "a triage run has no $1 step"; }
 
+# The schema handoff's inputs, as schema-pass.md, Schema Handoff, gives them: one
+# <commit>:<SHA-256>:<path> per regular .tf blob of at most 1 MiB in each commit's tree.
+# Status 1, so no inputs and no handoff, when a tree or blob cannot be read, a path is
+# outside the token charset, or the tokens pass 600 or 96000 bytes, which keeps them
+# under the environment's string limit.
+schema_inputs() {
+  local c l m o s p h out="" n=0
+  for c in "$@"; do
+    clone_git ls-tree -r -l -z "$c" > "$RUN/state/schema-tree" 2> /dev/null || return 1
+    while IFS= read -r -d '' l; do
+      read -r m _ o s <<< "${l%%$'\t'*}"; p="${l#*$'\t'}"
+      [[ "$m" =~ ^100(644|755)$ && "$p" == *.tf && "$s" =~ ^[0-9]+$ ]] && [ "$s" -le 1048576 ] || continue
+      [[ "$p" =~ ^[A-Za-z0-9._/-]+$ && "$o" =~ ^[0-9a-f]{40}$ ]] || return 1
+      h="$(clone_git cat-file blob "$o" | shasum -a 256)" || return 1
+      out+="$c:${h%% *}:$p"$'\n'; n=$((n + 1))
+      [ "$n" -le 600 ] && [ "${#out}" -le 96000 ] || return 1
+    done < "$RUN/state/schema-tree"
+  done
+  printf '%s' "$out"
+}
+
 cmd_schema() {
   need_full schema
   local d; d="$(depth)"
   [ "$d" != light ] || { echo "schema: not run at depth light"; return 0; }
   [ ! -e "$RUN/facts" ] || fail "schema already ran in this run"
-  rm -rf "$RUN/schema-work" "$RUN/state/schema-sources.txt"
-  local line rc r=""
-  SCHEMA_DEPTH="$RUN/depth.json" bash "$HERE/schema-pass.sh" "$RUN/facts" "$RUN/schema-work" > "$RUN/state/schema.out" 2>&1
+  rm -rf "$RUN/schema-work" "$RUN/schema-handoff" "$RUN/state/schema-sources.txt"
+  local line rc r="" mbs ins=""
+  # The handoff's commits and inputs: the head and the merge base the depth was bound to.
+  # Without both, schema-pass.sh gives no handoff and says why; inputs that could not be
+  # read pass as "-", which it refuses as inputs.
+  mbs="$(jq -r '.binding.merge_base // ""' "$RUN/depth.json" 2> /dev/null)"
+  if [[ "$mbs" =~ $sha_re ]]; then ins="$(schema_inputs "$HEAD_SHA" "$mbs")" || ins=-; else mbs=""; fi
+  SCHEMA_DEPTH="$RUN/depth.json" SCHEMA_HEAD="$HEAD_SHA" SCHEMA_MERGE_BASE="$mbs" SCHEMA_INPUTS="$ins" \
+    bash "$HERE/schema-pass.sh" "$RUN/facts" "$RUN/schema-work" "$RUN/schema-handoff" > "$RUN/state/schema.out" 2>&1
   rc=$?
   line="$(grep -v '^schema pass: source ' "$RUN/state/schema.out" | tail -n 1)"
   if [ "$rc" = 0 ] && [ -d "$RUN/facts" ]; then
@@ -382,6 +409,7 @@ cmd_schema() {
     else
       mv "$RUN/state/schema-sources.tmp" "$RUN/state/schema-sources.txt"
       note schema ok
+      grep -m 1 -E '^schema pass: (handoff written|no handoff)' "$RUN/state/schema.out" | sed 's/^schema pass: /schema: /'
       echo "schema: ${line:0:200}"
       echo "schema: $(grep -c . "$RUN/state/schema-sources.txt") source lines recorded"
       return 0
@@ -390,7 +418,7 @@ cmd_schema() {
   rm -f "$RUN/state/schema-sources.tmp"
   [ -n "$r" ] || r="$(printf '%s' "$line" | sed -n 's/^schema pass: escalate \([a-z0-9-]\{1,56\}\)$/\1/p')"
   [ -n "$r" ] || r=failed
-  rm -rf "$RUN/facts"
+  rm -rf "$RUN/facts" "$RUN/schema-handoff"
   if [ "$d" = deep ]; then
     # At deep there is nothing to raise: the reviewer reads pages as before.
     note schema "failed $r"
@@ -630,6 +658,8 @@ cmd_handover() {
     grep -qxF "$WRITE_SHORT" "$t" || printf '%s\n' "$WRITE_SHORT"
     [ ! -f "$RUN/depth.json" ] || [ "$TRIAGE" = true ] || printf 'Depth: %s\n' "$RUN/depth.json"
     [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || [ ! -d "$RUN/facts" ] || printf 'Provider fact sheets: %s\n' "$RUN/facts"
+    [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || [ ! -f "$RUN/schema-handoff/schema-handoff.json.gz" ] ||
+      printf 'Schema handoff: %s\n' "$RUN/schema-handoff/schema-handoff.json.gz"
     printf 'Diff: %s\n' "$out/change.diff"
     [ -z "$mbl" ] || printf 'Merge base: %s\n' "$mbl"
     printf 'Output: write the findings list as JSON to %s, the summary line to %s and the facts comparison note to %s, and nothing else.\n' \
