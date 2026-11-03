@@ -112,7 +112,10 @@ sub mask { # returns the mask, or undef when a string, comment or heredoc does n
     return undef if $s =~ /\G\/\*/gc;
     if ($s =~ /\G<<-?([A-Za-z_][\w-]*)[ \t]*\n/gc) {
       my $id = $1;
-      return undef unless $s =~ /\G.*?^[ \t]*\Q$id\E[ \t]*$/gcsm;
+      return undef unless $s =~ /\G(.*?)^[ \t]*\Q$id\E[ \t]*$/gcsm;
+      # Terraform ends a heredoc at a line equal to the marker once trimmed of any Unicode space;
+      # a body line that would be that, read with every space and non-ASCII byte dropped, fails.
+      for (split /\n/, $1) { (my $t = $_) =~ s/[\s\x80-\xff]//g; return undef if $t eq $id }
       $o .= "<<" . fill(substr($s, $p + 2, pos($s) - $p - 2)); next;
     }
     if (substr($s, $p, 1) eq "\"") {
