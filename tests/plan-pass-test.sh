@@ -608,6 +608,62 @@ module"bad"{
 }'
 g3w mention ex/main.tf "$POL
 # data \"aws_iam_policy\" \"x\" { name = \"y\" }"
+# Literal locals: resolved only from one single-line declaration in the same directory
+AZL='data "aws_availability_zones" "z" {
+  region = local.region
+}'
+g3w loc-root ex/main.tf "locals {
+  region = \"eu-west-1\"
+}
+$AZL"
+g3w loc-bus-root ex/main.tf 'locals {
+  bus = "default"
+}
+data "aws_cloudwatch_event_bus" "this" {
+  name = local.bus
+}'
+regm loc-call '  region = local.region'
+printf '%s\n' 'locals {' '  region = "eu-west-1"' '}' >> "$TMP/g3/reg-loc-call/ex/main.tf"
+g3w loc-dup ex/main.tf "locals {
+  region = \"eu-west-1\"
+}
+$AZL"
+g3w loc-dup ex/other.tf 'locals {
+  region = "eu-west-2"
+}'
+g3w loc-nonliteral ex/main.tf "locals {
+  region = var.region
+}
+$AZL"
+g3w loc-multiline ex/main.tf "locals {
+  region = (
+    \"eu-west-1\"
+  )
+}
+$AZL"
+g3w loc-path ex/main.tf "locals {
+  region = { name = \"eu-west-1\" }
+}
+data \"aws_availability_zones\" \"z\" {
+  region = local.region.name
+}"
+regm loc-other-dir '' 'data "aws_region" "current" {
+  region = local.region
+}'
+printf '%s\n' 'locals {' '  region = "eu-west-1"' '}' >> "$TMP/g3/reg-loc-other-dir/ex/main.tf"
+g3w loc-unlexed ex/main.tf "locals {
+  region = \"eu-west-1\"
+}
+$AZL"
+g3w loc-unlexed ex/broken.tf 'locals {
+  x = <<EOT
+  y
+}'
+g3w loc-ban ex/main.tf "locals {
+  region = \"eu-west-1\"
+}
+$AZL"
+: > "$TMP/g3/loc-ban/ex/x.tfvars"
 # The file ban: each banned name in scope turns a passing case into a hit.
 for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
   for c in pol-plain prov-skip bus-defaults; do
@@ -776,6 +832,17 @@ for sh in bash zsh; do
   done
   check "$sh: a call written against its label is still enumerated" \
     "$(g3 nospace-call | grep -x "G3 $R3/clone/g3/nospace-call/mod/main.tf:1" > /dev/null; echo $?)"
+  for c in loc-root loc-bus-root reg-loc-call; do
+    out="$(g3 "$c")"
+    check "$sh: laptop mode admits $c" "$(test -z "$out"; echo $?)"
+    [ -z "$out" ] || printf '%s\n' "$out"
+  done
+  for c in loc-dup loc-nonliteral loc-multiline loc-path loc-unlexed loc-ban; do
+    check "$sh: laptop mode refuses $c" \
+      "$(g3 "$c" | grep -x "G3 $R3/clone/g3/$c/ex/main.tf:4" > /dev/null || g3 "$c" | grep -x "G3 $R3/clone/g3/$c/ex/main.tf:6" > /dev/null; echo $?)"
+  done
+  check "$sh: a local of another directory does not resolve" \
+    "$(g3 reg-loc-other-dir | grep -x "G3 $R3/clone/g3/reg-loc-other-dir/mod/main.tf:1" > /dev/null; echo $?)"
   for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
     for c in pol-plain prov-skip bus-defaults; do
       check "$sh: $b in scope turns off the relaxation for $c" \
@@ -914,6 +981,7 @@ mutate region-check 's/hit\("G3", \$f, \$M\{\$f\}, \$b->\[3\]\) unless region_ok
   reg-root-s3 reg-root-local reg-mod-call-s3
 mutate region-true 's/next if !\$ban && \$rlit && /next if !\$ban \&\& /' prov-region-true-s3 prov-region-true-var
 mutate every-mention 's/\$rel\{\$y\}\[1\] == \$seen\{\$y\}/1/' mention
+mutate local-once 's/\$v && \$v->\{n\} == 1 && lit/\$v \&\& lit/' loc-dup
 
 # plan-session.sh: one fixed reason on standard error per failure class, nothing on standard output.
 SESS="${PP%/*}/plan-session.sh"

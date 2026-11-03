@@ -236,6 +236,7 @@ sub tok { # masked and raw text, value start and end: [kind, value]
   return ["null"] if $t eq "null";
   return ["bool", $t] if $t eq "true" || $t eq "false";
   return ["var", $1] if $t =~ /\Avar\.([A-Za-z_][A-Za-z0-9_-]*)\z/;
+  return ["local", $1] if $t =~ /\Alocal\.([A-Za-z_][A-Za-z0-9_-]*)\z/;
   return ["other"];
 }
 sub lit { $_[0][0] =~ /\A(?:str|null|bool)\z/ }
@@ -263,7 +264,7 @@ sub top_attrs { # masked and raw text, body start and end: (name => token, ...) 
   }
   return (\%a, \%dup);
 }
-my @F; my %M; my (@calls, %vars, %dirs); my ($ban, $a3) = (0, 0);
+my @F; my %M; my (@calls, %vars, %dirs, %loc, %lbad); my ($ban, $a3, $lall) = (0, 0, 0);
 while (my $f = <STDIN>) {
   chomp $f; my ($fh, $raw);
   if ($f ne "UNREADABLE" and open($fh, "<", $f)) { $raw = do { local $/; <$fh> }; close $fh }
@@ -273,12 +274,18 @@ unless ($run) {
   $a3 = $mode eq "clone" && defined $ex;
   for (@F) {
     my ($f, $raw) = @$_;
-    unless (defined $raw) { $a3 = 0; next }
     (my $d = $f) =~ s{/[^/]*\z}{}; my $rd = realpath($d);
+    unless (defined $raw) { $a3 = 0; if (defined $rd) { $lbad{$rd} = 1 } else { $lall = 1 } next }
     unless (defined $rd) { $ban = 1; next }
     $dirs{$rd} = 1;
     my $m = $M{$f} = mask($raw);
-    unless (defined $m) { $a3 = 0; next }
+    unless (defined $m) { $a3 = 0; $lbad{$rd} = 1; next }
+    # Locals: each name counted over every locals block of the directory
+    while ($m =~ /\blocals\s*(?=\{)/g) {
+      next unless $m =~ /\G$B/gc;
+      my ($a, $dup) = top_attrs($m, $raw, $-[0] + 1, $+[0] - 1);
+      for my $k (keys %$a) { $loc{$rd}{$k}{n} += $dup->{$k} ? 2 : 1; $loc{$rd}{$k}{t} = $a->{$k} }
+    }
     for my $b (blocks($m, $raw, "module")) {
       my ($a, $dup) = top_attrs($m, $raw, $b->[1], $b->[2]);
       my $st = $a->{source} && !$dup->{source} ? $a->{source} : ["other"];
@@ -318,6 +325,14 @@ sub policy_ok { # masked and raw text, body start and end
   }
   return ($n{arn} // 0) == 1 && ($n{count} // 0) <= 1;
 }
+sub rl { # token, directory: local.NAME as the bare literal it is declared once as, or undef
+  my ($t, $d) = @_;
+  return $t unless $t->[0] eq "local";
+  return undef if $ban || $lall || !defined $d || $lbad{$d};
+  my $v = $loc{$d}{$t->[1]};
+  return undef unless $v && $v->{n} == 1 && lit($v->{t});
+  return $v->{t};
+}
 sub eff { # token, module call, module directory: the value Terraform takes, or undef when unknown
   my ($t, $c, $d) = @_;
   return $t unless $t->[0] eq "var";
@@ -327,7 +342,8 @@ sub eff { # token, module call, module directory: the value Terraform takes, or 
   return undef if $nl && $nl->[0] ne "bool";
   my $dflt = $df && lit($df) ? $df : undef;
   return $dflt unless exists $c->[2]{$n};
-  my $x = $c->[2]{$n};
+  my $x = rl($c->[2]{$n}, $c->[0]);
+  return undef unless defined $x;
   return $x if $x->[0] eq "str" || $x->[0] eq "bool";
   return $nl && $nl->[1] eq "false" ? $dflt : ["null"] if $x->[0] eq "null";
   return undef;
@@ -343,11 +359,12 @@ sub region_ok { # file, masked and raw text, body start and end of a data block:
   my ($a, $dup) = top_attrs($m, $r, $s, $e);
   return 0 if $dup->{region};
   return 1 unless exists $a->{region};
-  my $t = $a->{region};
+  (my $d = $f) =~ s{/[^/]*\z}{}; $d = realpath($d);
+  my $t = rl($a->{region}, $d);
+  return 0 unless defined $t;
   return region_val($t) if lit($t);
   # var.NAME only in a module directory of the clone scope, resolved per call as the event bus is
   return 0 unless $a3 && $t->[0] eq "var";
-  (my $d = $f) =~ s{/[^/]*\z}{}; $d = realpath($d);
   return 0 unless defined $d && $d ne $ex;
   my @c = grep { $_->[1] eq $d } @calls;
   return 0 unless @c;
@@ -367,6 +384,7 @@ sub bus_ok { # file, masked and raw text, body start and end
   return 0 unless ($n{name} // 0) == 1 && ($n{count} // 0) <= 1 && ($n{region} // 0) <= 1;
   $t{region} //= ["null"];
   (my $d = $f) =~ s{/[^/]*\z}{}; $d = realpath($d); return 0 unless defined $d;
+  for my $k (keys %t) { $t{$k} = rl($t{$k}, $d); return 0 unless defined $t{$k} }
   return lit($t{name}) && lit($t{region}) && bus_pass($t{name}, $t{region}) if $d eq $ex;
   for (values %t) { return 0 unless lit($_) || $_->[0] eq "var" }
   my @c = grep { $_->[1] eq $d } @calls;

@@ -152,7 +152,7 @@ Laptop mode admits three more kinds of data source and three provider flags, eac
 
 **The file ban.** If any `override.tf`, `*_override.tf`, `*.tfvars`, `*.tfvars.json`, `*.auto.tfvars*` or `*.tf.json` file is in a directory of the scope, none of these relaxations apply and the grammar above decides. The directories are those of the gated `.tf` files and every local module directory a `module` block among them names. G0 already refuses most of these names, and the ban keeps an override or a variable file from changing an argument this section reads.
 
-The rules read a block's body through the lexer runner mode uses, which masks strings, comments and heredocs and keeps offsets; a file it cannot lex gets none of them, and a scope holding one gets no event bus rule. Literal and pattern checks run on the raw content of one string token, and a token holding `${` or `%{` fails them, except the one partition form below. A relaxed type passes in a file only when every mention of `data "<type>"` in it is a block that passed its rule, so a mention in a comment or a string is a hit. Definitions: a bare literal is a quoted string with no `${` or `%{`, or `true`, `false` or `null`; `var.NAME` is exactly `var\.[A-Za-z_][A-Za-z0-9_-]*`, nothing after it.
+The rules read a block's body through the lexer runner mode uses, which masks strings, comments and heredocs and keeps offsets; a file it cannot lex gets none of them, and a scope holding one gets no event bus rule. Literal and pattern checks run on the raw content of one string token, and a token holding `${` or `%{` fails them, except the one partition form below. A relaxed type passes in a file only when every mention of `data "<type>"` in it is a block that passed its rule, so a mention in a comment or a string is a hit. Definitions: a bare literal is a quoted string with no `${` or `%{`, or `true`, `false` or `null`; `var.NAME` is exactly `var\.[A-Za-z_][A-Za-z0-9_-]*`, nothing after it. Wherever the event bus and region rules take a bare literal, a data block's own argument or a module call's argument, they also take `local.NAME`, exactly `local\.[A-Za-z_][A-Za-z0-9_-]*` with nothing after it, as the literal it is declared as. It resolves only when NAME is declared exactly once, as a single-line `NAME = <bare literal>` in a `locals` block, in the same directory as the expression, which for a call argument is the caller's directory, the example root. Two declarations across the directory's files, a value that is not a bare literal or spans lines, a file of that directory the lexer cannot read, or the file ban make the local unknown, a hit.
 
 | Type | API at plan | Why no request reaches an attacker-observed resource | Argument grammar |
 |------|-------------|------------------------------------------------------|------------------|
@@ -173,10 +173,10 @@ A region string the head chooses can send a signed request to a host whose owner
 
 So in laptop mode every `region` argument of a `data` block in scope must be absent, null, or a string matching `\A[a-z]{2}(-[a-z]+)+-[0-9]{1,2}\z`; otherwise the block is a hit, whatever its type:
 
-- In the example root it must be a bare literal or `null`.
+- In the example root it must be a bare literal, `null`, or a literal `local.NAME` as [above](#data-sources-and-provider-flags).
 - In a module directory of the clone scope it may also be `var.NAME`, resolved per call by the rules of the event bus above: at least one call, every call in the example root, each call checked on its own, and none of it when the file ban applies or a module call cannot be resolved.
-- Any other expression is a hit: `local.*`, an interpolation, `data.aws_region.current.region` and every function.
-- In downloaded mode it must be absent, `null` or a matching literal.
+- Any other expression is a hit: a `local.*` that does not resolve to a literal, an interpolation, `data.aws_region.current.region` and every function.
+- In downloaded mode it must be absent, `null`, a matching literal or a literal local of the same directory.
 - A file the lexer cannot read that holds a `data` block is a hit.
 
 Managed resources are out of scope: a fresh plan has no state, so it reads no managed resource and sends no request with a resource's `region`.
