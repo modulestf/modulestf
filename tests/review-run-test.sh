@@ -41,6 +41,7 @@ cat > "$SK/schema-pass.sh" <<'EOF'
 #!/bin/bash
 echo "schema $SCHEMA_DEPTH $*" >> "${STUB_LOG:?}"
 echo "schema-env $SCHEMA_HEAD $SCHEMA_MERGE_BASE $(tr "\n" " " <<< "$SCHEMA_INPUTS")" >> "$STUB_LOG"
+echo "schema-root $SCHEMA_ROOT" >> "$STUB_LOG"
 src="schema pass: source modulestf/terraform-schema-mirror hashicorp_aws-v6.1.0 $(printf 'ab%.0s' $(seq 32))"
 case "${SCHEMA_STUB:-overflow}" in
   ok) mkdir -p "$1"; echo "$src"; [ -z "${3-}" ] || { mkdir -p "$3"; echo '{}' | gzip -n > "$3/schema-handoff.json.gz"
@@ -389,6 +390,27 @@ check "schema: a source line outside its grammar escalates and nothing of it is 
   "$(grep -q '^depth: escalated to deep (deep-schema-source-line)$' "$TMP/s.out" && [ ! -e "$RUN/state/schema-sources.txt" ] && [ ! -e "$RUN/facts" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 
+# A module root below the repository root: schema passes it as SCHEMA_ROOT and the inputs
+# relative to it, and a copy that does not pass it is caught.
+DEPTH_STUB=focused prep
+jq '.prefix = "examples"' "$RUN/host/host.json" > "$TMP/host-prefix.json" && cat "$TMP/host-prefix.json" > "$RUN/host/host.json"
+root_ok() { # the last schema call had root examples and one token per .tf blob under examples/, relative to it
+  local l mb n=0 c t; l="$(grep '^schema-env ' "$STUB_LOG" | tail -n 1)"; mb="$(jq -r .binding.merge_base "$RUN/depth.json")"
+  [ "$(grep '^schema-root ' "$STUB_LOG" | tail -n 1)" = 'schema-root examples' ] || return 1
+  for c in "$(git -C "$RUN/clone" rev-parse HEAD)" "$mb"; do n=$((n + $(git -C "$RUN/clone" ls-tree -r --name-only "$c" | grep -c '^examples/.*\.tf$'))); done
+  set -- $l; shift 3; [ "$#" = "$n" ] && [ "$n" -gt 0 ] || return 1
+  for t; do c="${t%%:*}"; f="${t#*:*:}"; [ "$(cut -d: -f2 <<< "$t")" = "$(git -C "$RUN/clone" cat-file blob "$c:examples/$f" | shasum -a 256 | cut -d' ' -f1)" ] || return 1; done
+}
+SCHEMA_STUB=ok run_rr schema "$RUN" > /dev/null
+check "schema: with module root examples, SCHEMA_ROOT names it and each input is relative to it" "$(root_ok; echo $?)"
+sed 's/ SCHEMA_ROOT="\$PREFIX" / /' "$RR" > "$SK/review-run-noroot.sh"
+check "self-check: the mutant passes no SCHEMA_ROOT" "$(cmp -s "$RR" "$SK/review-run-noroot.sh"; [ $? = 1 ]; echo $?)"
+rm -rf "$RUN/facts" "$RUN/state/schema"
+(cd "$TMP/cwd" && SCHEMA_STUB=ok "$SH" "$SK/review-run-noroot.sh" schema "$RUN") > /dev/null 2>&1
+check "self-check: without SCHEMA_ROOT the module root check fails" "$(root_ok; [ $? = 1 ]; echo $?)"
+rm -f "$SK/review-run-noroot.sh"
+run_rr cleanup "$RUN" > /dev/null
+
 # schema_inputs, taken from the script, on a tree with each case of the handoff's file set.
 SI="$TMP/si"; mkdir -p "$SI/state" "$SI/clone/a"
 (cd "$SI/clone" && git init -q && printf 'x\n' > a/main.tf && printf 'y\n' > run.tf && chmod 755 run.tf &&
@@ -414,6 +436,22 @@ SIM="$(git -C "$SI/clone" rev-parse HEAD)"
 check "schema_inputs: 600 inputs pass, 603 across two commits give none" \
   "$([ "$(si "$SIM" | tail -n 1)" = 'status 0' ] && [ "$(si "$SIM" | wc -l | tr -d ' ')" = 601 ] && [ "$(si "$SIM" "$SIC")" = 'status 1' ]; echo $?)"
 check "schema_inputs: a commit that is not in the clone gives no inputs" "$([ "$(si "$(printf 'ef%.0s' $(seq 20))")" = 'status 1' ]; echo $?)"
+# A module root below the repository root: only the blobs under it, each path relative to it,
+# as the facts engine hashes the workspace it lints; ab/ shares the root's first letter only.
+(cd "$SI/clone" && git reset -q --hard "$SIC" && mkdir -p a/b ab && printf 'b\n' > a/b/y.tf && printf 'c\n' > ab/x.tf &&
+  git add -A && git -c user.name=t -c user.email=t@t commit -qm r)
+SIR="$(git -C "$SI/clone" rev-parse HEAD)"
+sha_r() { git -C "$SI/clone" cat-file blob "$SIR:$1" | shasum -a 256 | cut -d' ' -f1; }
+check "schema_inputs: with module root a, the blobs under a/ only, relative to it" \
+  "$([ "$(PREFIX=a si "$SIR")" = "$(printf '%s\n' "$SIR:$(sha_r a/b/y.tf):b/y.tf" "$SIR:$(sha_r a/main.tf):main.tf" 'status 0')" ]; echo $?)"
+check "schema_inputs: with module root a/b, its one blob as y.tf" \
+  "$([ "$(PREFIX=a/b si "$SIR")" = "$(printf '%s\n' "$SIR:$(sha_r a/b/y.tf):y.tf" 'status 0')" ]; echo $?)"
+check "schema_inputs: a module root absent from a commit gives no token for it and status 0" \
+  "$([ "$(PREFIX=c si "$SIR")" = 'status 0' ]; echo $?)"
+check "schema_inputs: a bad path outside the module root is no input; one inside it gives none" \
+  "$([ "$(PREFIX=a si "$SIN")" = "$(printf '%s\n' "$SIN:$(sha_of a/main.tf):main.tf" 'status 0')" ] && [ "$(si "$SIN")" = 'status 1' ] &&
+     (cd "$SI/clone" && git reset -q --hard "$SIC" && printf 'h\n' > 'a/my file.tf' && git add -A && git -c user.name=t -c user.email=t@t commit -qm s) &&
+     [ "$(PREFIX=a si "$(git -C "$SI/clone" rev-parse HEAD)")" = 'status 1' ]; echo $?)"
 # Negative self-check: each weakened copy must fail the case it weakens.
 si_mut() { # name, perl expression, commits as one word, expected output of the original
   local m="$TMP/si-$1.sh"; perl -pe "$2" "$RR" > "$m"
@@ -423,6 +461,14 @@ si_mut() { # name, perl expression, commits as one word, expected output of the 
 si_mut no-size 's/\]\] && \[ "\$s" -le 1048576 \] \|\| continue$/]] || continue/' "$SIC" "$(si "$SIC")"
 si_mut no-mode 's/\^100\(644\|755\)\$/^[0-9]+\$/' "$SIC" "$(si "$SIC")"
 si_mut no-charset 's/\[\[ "\$p" =~ \^\[A-Za-z0-9\._\/-\]\+\$ && /[[ /' "$SIN" 'status 1'
+si_root_mut() { # name, perl expression: a weakened copy must change the module root a tokens
+  local m="$TMP/si-$1.sh"; perl -pe "$2" "$RR" > "$m"
+  if cmp -s "$RR" "$m"; then check "self-check: schema_inputs mutation $1 changes the script" 1; return; fi
+  check "self-check: schema_inputs mutation $1 is caught" "$([ "$(PREFIX=a si "$m" "$SIR")" != "$(PREFIX=a si "$SIR")" ]; echo $?)"
+}
+si_root_mut no-root-filter 's/\[\[ "\$p" == "\$r"\* \]\] \|\| continue; //'
+si_root_mut no-root-strip 's/; p="\$\{p#"\$r"\}"; fi$/; fi/'
+si_root_mut no-root-slash 's/r="\$\{PREFIX:\+\$PREFIX\/\}"/r="\${PREFIX:+\$PREFIX}"/'
 si_mut no-cap 's/\[ "\$n" -le 600 \] && //' "$SIM $SIC" 'status 1'
 
 # The handover's depth.sh verify, and a mutation without it: a head moved after prepare is caught.

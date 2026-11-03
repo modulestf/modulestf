@@ -3,7 +3,7 @@
 # fact sheets from a schema mirror. See schema-pass.md for the inputs, the layout and the
 # reason codes. Usage: schema-pass.sh <facts output directory> <work directory> [<handoff directory>]
 # Environment: SCHEMA_PROVIDERS, SCHEMA_TYPES (the gate's tokens), MODULESTF_SCHEMA_MIRROR,
-# and for the schema handoff SCHEMA_HEAD, SCHEMA_MERGE_BASE and SCHEMA_INPUTS.
+# and for the schema handoff SCHEMA_HEAD, SCHEMA_MERGE_BASE, SCHEMA_INPUTS and SCHEMA_ROOT.
 # SCHEMA_DEPTH, the path of a depth.json, selects its depth's mode: the tokens come from
 # it and the mirror is TRUSTED_MIRROR. At focused, any failure or overflow exits 3 with
 # "schema pass: escalate <reason>" and publishes nothing; at deep, it exits 0 with
@@ -20,7 +20,7 @@ FACTS_JQ="$HERE/schema-facts.jq"
 HANDOFF_JQ="$HERE/schema-handoff.jq"
 HANDOFF="${3:-}"
 : "${SCHEMA_PROVIDERS=}" "${SCHEMA_TYPES=}" "${MODULESTF_SCHEMA_MIRROR=}"
-: "${SCHEMA_HEAD=}" "${SCHEMA_MERGE_BASE=}" "${SCHEMA_INPUTS=}" "${SCHEMA_DEPTH=}"
+: "${SCHEMA_HEAD=}" "${SCHEMA_MERGE_BASE=}" "${SCHEMA_INPUTS=}" "${SCHEMA_DEPTH=}" "${SCHEMA_ROOT=}"
 MODE="" # empty: the gate's tokens; focused or deep: from depth.json
 
 # The trust anchor and the caps of the depth modes, from this checkout only, never from
@@ -235,10 +235,12 @@ sort -u -o "$WORK/types" "$WORK/types"
 
 # The handoff's inputs: the .tf files the gate read, as <commit>:<SHA-256>:<path>. Each
 # token must name the head or the merge base; another commit, a token outside the
-# pattern, or one path with two hashes in a revision means no handoff at all.
+# pattern, or one path with two hashes in a revision means no handoff at all. SCHEMA_ROOT,
+# a module root below the repository root, must be a plain directory other than ".".
 hwhy=""
 if [ -n "$HANDOFF" ]; then
   [[ "$SCHEMA_HEAD" =~ $sha_re && "$SCHEMA_MERGE_BASE" =~ $sha_re ]] || hwhy=no_commits
+  [ -n "$hwhy" ] || [ -z "$SCHEMA_ROOT" ] || { [ "$SCHEMA_ROOT" != . ] && dir_ok "$SCHEMA_ROOT"; } || hwhy=inputs
   : > "$WORK/in-head"
   : > "$WORK/in-base"
   for t in $SCHEMA_INPUTS; do
@@ -594,8 +596,18 @@ tree() { # "<path> <sha256>" lines sorted by path bytes -> {tree_hash, files}
     '{tree_hash: $h, files: (split("\n") | map(select(. != "") | split(" ") | {path: .[0], sha256: .[1]}))}' "$1"
 }
 if [ -n "$HANDOFF" ] && [ -z "$hwhy" ]; then
-  # One line per directory and local name: a reason, or - and the three versions.
+  # One line per directory and local name: a reason, or - and the three versions. With
+  # SCHEMA_ROOT, a directory relative to it, as the facts engine names its areas; one
+  # outside it is left out.
   while read -r dir prov st a b _ e hf; do
+    hd="$dir"
+    if [ -n "$SCHEMA_ROOT" ]; then
+      case "$dir" in
+        "$SCHEMA_ROOT") hd=. ;;
+        "$SCHEMA_ROOT"/*) hd="${dir#"$SCHEMA_ROOT"/}" ;;
+        *) continue ;;
+      esac
+    fi
     if [ "$st" != ok ]; then why="$a"
     elif [ "$b" = - ]; then why=no_lower_bound
     elif [ "$e" != - ]; then why="old_floor_$e"
@@ -603,7 +615,7 @@ if [ -n "$HANDOFF" ] && [ -z "$hwhy" ]; then
     else why=-; fi
     locs="$(awk -F'|' -v d="$dir" -v p="$prov" '$1 == "head" && $2 == d && $3 == p { print $5 }' "$WORK/ptok" | sort -u)"
     for l in ${locs:-${prov#*/}}; do
-      [[ "$l" =~ ^[a-z][a-z0-9_-]{0,63}$ ]] && echo "$dir $l $prov $why ${a:--} ${b:--} ${hf:-null}"
+      [[ "$l" =~ ^[a-z][a-z0-9_-]{0,63}$ ]] && echo "$hd $l $prov $why ${a:--} ${b:--} ${hf:-null}"
     done
   done < "$WORK/resolved" | LC_ALL=C sort -u > "$WORK/hdirs"
   jq -R -s -c 'split("\n") | map(select(. != "") | split(" ")) | group_by(.[0])
