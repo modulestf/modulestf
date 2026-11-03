@@ -217,12 +217,13 @@ my $ARNOK = qr{\Aarn:(?:aws(?:-[a-z]+)*|\$\{data\.aws_partition\.[A-Za-z_][\w-]*
 my $NAMEOK = qr{\A[A-Za-z0-9._-]{1,256}\z};
 my $REGIONOK = qr{\A[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}\z};
 my $SKIPOK = qr{\A\s*(?:(?:#|//).*|(?:skip_metadata_api_check|skip_credentials_validation|skip_requesting_account_id)\s*=\s*(?:true|false)\s*|skip_region_validation\s*=\s*false\s*)\z};
-sub blocks { # masked and raw text, keyword: [[labels], body start, body end] per block
+sub blocks { # masked and raw text, keyword: [[labels], body start, body end, header start] per block
   my ($m, $r, $kw) = @_; my @b;
   while ($m =~ /\b\Q$kw\E((?:[ \t]+"[^"\n]*")+)[ \t]*(?=\{)/g) {
+    my $h = $-[0];
     my @l = substr($r, $-[1], $+[1] - $-[1]) =~ /"([^"\n]*)"/g;
     next unless $m =~ /\G$B/gc;
-    push @b, [\@l, $-[0] + 1, $+[0] - 1];
+    push @b, [\@l, $-[0] + 1, $+[0] - 1, $h];
   }
   return @b;
 }
@@ -335,6 +336,23 @@ sub bus_pass { # effective name and region
   return defined $nm && defined $rg && $nm->[0] eq "str" && $nm->[1] =~ $NAMEOK
     && ($rg->[0] eq "null" || ($rg->[0] eq "str" && $rg->[1] =~ $REGIONOK));
 }
+sub region_val { my $t = shift; defined $t && ($t->[0] eq "null" || ($t->[0] eq "str" && $t->[1] =~ $REGIONOK)) }
+sub region_ok { # file, masked and raw text, body start and end of a data block: its region argument
+  my ($f, $m, $r, $s, $e) = @_;
+  my ($a, $dup) = top_attrs($m, $r, $s, $e);
+  return 0 if $dup->{region};
+  return 1 unless exists $a->{region};
+  my $t = $a->{region};
+  return region_val($t) if lit($t);
+  # var.NAME only in a module directory of the clone scope, resolved per call as the event bus is
+  return 0 unless $a3 && $t->[0] eq "var";
+  (my $d = $f) =~ s{/[^/]*\z}{}; $d = realpath($d);
+  return 0 unless defined $d && $d ne $ex;
+  my @c = grep { $_->[1] eq $d } @calls;
+  return 0 unless @c;
+  for my $c (@c) { return 0 unless $c->[0] eq $ex && region_val(eff($t, $c, $d)) }
+  return 1;
+}
 sub bus_ok { # file, masked and raw text, body start and end
   my ($f, $m, $r, $s, $e) = @_; my (%n, %t);
   return 0 unless $a3;
@@ -370,6 +388,12 @@ for (@F) {
       $rel{$y}[0] = ($rel{$y}[0] // 1) && $ok; $rel{$y}[1]++;
     }
   }
+  # The region argument of every data block (plan-pass.md, Data source regions)
+  if (defined $M{$f}) {
+    for my $b (blocks($M{$f}, $raw, "data")) {
+      hit("G3", $f, $M{$f}, $b->[3]) unless region_ok($f, $M{$f}, $raw, $b->[1], $b->[2]);
+    }
+  } elsif ($raw =~ /\bdata\s+"/) { hit("G3", $f) }
   (my $code = blank($raw)) =~ s{(?:#|//)[^\n]*}{}g;
   hit("G0", $f, $code, $-[0]) if $code =~ /[^\x00-\x7f]/;
   (my $lb = $raw) =~ s{(?:#|//)[^\n]*}{}g;
@@ -395,12 +419,19 @@ for (@F) {
     while ($bt =~ /\bprovider\s+"[^"]*"\s*/g) {
       my $at = $-[0];
       if ($bt =~ /\G$B/gc) {
-        my $body = substr($+{b}, 1, -1);
+        my $b0 = $-[0] + 1;
+        my $body = my $body0 = substr($+{b}, 1, -1);
         if ($body =~ /<</) { hit("G3", $f, $bt, $at); next }
         $body =~ s/\bdefault_tags\s*$B//g;
+        # skip_region_validation = true only beside one region set to a bare literal region name;
+        # the values are read from the text before strings were filled, at the same offsets
+        (my $bf = $body0) =~ s/\bdefault_tags\s*$B/fill($&)/ge;
+        my @rg; while ($bf =~ /^[ \t]*region[ \t]*=[ \t]*(.*?)[ \t]*$/mg) { push @rg, substr($t, $b0 + $-[1], $+[1] - $-[1]) }
+        my $rlit = @rg == 1 && $rg[0] =~ /\A"([^"]*)"\z/ && $1 =~ $REGIONOK;
         for my $line (split /\n/, $body) {
           next unless $line =~ /\S/;
           next if !$ban && $line =~ $SKIPOK;
+          next if !$ban && $rlit && $line =~ /\A\s*skip_region_validation\s*=\s*true\s*\z/;
           if ($line !~ /\A\s*(?:region|alias)\s*=/) { hit("G3", $f, $bt, $at); last }
         }
       } else { hit("G3", $f, $bt, $at) }

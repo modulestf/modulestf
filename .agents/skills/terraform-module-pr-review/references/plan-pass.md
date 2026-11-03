@@ -163,9 +163,24 @@ The rules read a block's body through the lexer runner mode uses, which masks st
 
 - **`aws_iam_policy`.** `<v>` matches `\Aarn:(?:aws(?:-[a-z]+)*|\$\{data\.aws_partition\.[A-Za-z_][\w-]*\.partition\}):iam::aws:policy/[A-Za-z0-9+=,.@_-]+(?:/[A-Za-z0-9+=,.@_-]+)*\z`, the policy path after `policy/` is at most 512 characters and none of its segments is `.` or `..`. A `count` holding a heredoc is a hit. The interpolation of `aws_partition` is the only one allowed.
 - **`aws_cloudwatch_event_bus`.** `count` is not evaluated. The effective name must be a string matching `\A[A-Za-z0-9._-]{1,256}\z`, and a null name is a hit. The effective region must be absent, null, or a string matching `\A[a-z]{2}(-[a-z]+)+-[0-9]{1,2}\z`; a well-formed region that does not exist passes, since it can only fail the plan. A block in the example root, the example directory the pass plans, takes bare literals only. A block in a module directory takes bare literals or `var.NAME`, and every module call in the scope whose source resolves to that directory is checked on its own: there must be at least one, each must be in the example root, and one failing call is a hit. Per call, `var.NAME` takes what Terraform takes: the call's argument, when present and a bare literal other than `null`; for a `null` argument, null, unless the variable declares the literal `nullable = false`, when it is the default; for an absent argument, the default. A present argument that is not a bare literal, a `nullable` that is not a literal bool, a variable declared twice, or a needed default that is absent or not a bare literal is unknown, a hit. Any module call in the scope whose source is not a bare string, or is a local path that does not resolve to a directory inside the clone, or neither a local path nor a terraform-aws-modules registry source, makes every event bus block in the scope a hit. In downloaded mode this type is always a hit. The gates take the example root as an argument; without it the rule never passes.
-- **Provider flags.** A provider block may also hold `skip_metadata_api_check`, `skip_credentials_validation` and `skip_requesting_account_id` set to the literal `true` or `false`, `skip_region_validation` set only to the literal `false`, and whole-line `#` or `//` comments. Each flag stands alone on its line, with no comment after it. `endpoints` and every other argument stay hits.
+- **Provider flags.** A provider block may also hold `skip_metadata_api_check`, `skip_credentials_validation` and `skip_requesting_account_id` set to the literal `true` or `false`, `skip_region_validation` set to the literal `false`, or to the literal `true` only when the same block has exactly one `region` and it is a bare literal matching the region pattern below, and whole-line `#` or `//` comments. Each flag stands alone on its line, with no comment after it. `endpoints` and every other argument stay hits.
 
 Still refused on a laptop: `aws_ssm_parameter`, `aws_lambda_function`, `aws_lambda_alias`, `tls_certificate`, `external` and every other type, because their arguments can name another account's resource, read a secret value or reach the network. Data sources that describe the reviewer's own account wait for a two-account CloudTrail trial.
+
+### Data source regions
+
+A region string the head chooses can send a signed request to a host whose owner sees it. Measured on the pinned provider, 6.70.0, and its SDK: the per-resource `region` argument of a data source has no validator in the provider, which only checks that the region's partition is the provider's and maps an unknown region to the `aws` partition. The SDK's host-label check on the region allows dots. So `region = "s3.us-east-1"` sends the request to `<service>.s3.us-east-1.amazonaws.com`, which is the virtual-hosted address of the S3 bucket named after the service, and that bucket's owner sees the request in its access log. Characters such as `#`, `/`, `@`, `?` and `:` are refused by the SDK, and every host ends in the partition's DNS suffix. The provider's own `region` is checked against the known regions unless `skip_region_validation` is `true`, which is why that flag needs a literal region beside it.
+
+So in laptop mode every `region` argument of a `data` block in scope must be absent, null, or a string matching `\A[a-z]{2}(-[a-z]+)+-[0-9]{1,2}\z`; otherwise the block is a hit, whatever its type:
+
+- In the example root it must be a bare literal or `null`.
+- In a module directory of the clone scope it may also be `var.NAME`, resolved per call by the rules of the event bus above: at least one call, every call in the example root, each call checked on its own, and none of it when the file ban applies or a module call cannot be resolved.
+- Any other expression is a hit: `local.*`, an interpolation, `data.aws_region.current.region` and every function.
+- In downloaded mode it must be absent, `null` or a matching literal.
+- A file the lexer cannot read that holds a `data` block is a hit.
+
+Managed resources are out of scope: a fresh plan has no state, so it reads no managed resource and sends no request with a resource's `region`.
+
 
 ## Modes
 

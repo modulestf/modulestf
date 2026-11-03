@@ -518,6 +518,77 @@ g3w prov-endpoints ex/main.tf 'provider "aws" {
     sts = "http://127.0.0.1"
   }
 }'
+# Data source regions, and skip_region_validation = true beside a literal region
+g3w prov-region-true-literal ex/main.tf 'provider "aws" {
+  region                 = "eu-west-1"
+  skip_region_validation = true
+}'
+g3w prov-region-true-var ex/main.tf 'provider "aws" {
+  region                 = var.region
+  skip_region_validation = true
+}'
+g3w prov-region-true-s3 ex/main.tf 'provider "aws" {
+  region                 = "s3.us-east-1"
+  skip_region_validation = true
+}'
+g3w prov-region-true-comment ex/main.tf 'provider "aws" {
+  region                 = "eu-west-1" # a trailing comment
+  skip_region_validation = true
+}'
+reg() { g3w "reg-$1" ex/main.tf "data \"aws_availability_zones\" \"z\" {
+$2
+}"; }
+reg root-literal '  region = "eu-west-1"'
+reg root-null '  region = null'
+reg root-absent '  state = "available"'
+reg root-var '  region = var.region'
+reg root-s3 '  region = "s3.us-east-1"'
+reg root-local '  region = local.region'
+reg root-interp '  region = "${var.r}"'
+reg root-data '  region = data.aws_region.current.region'
+reg root-twice '  region = "eu-west-1"
+  region = "eu-west-2"'
+REGM='data "aws_region" "current" {
+  region = var.region
+}'
+REGV='variable "region" {
+  type    = string
+  default = null
+}'
+regm() { # case, module call arguments, [module data block]
+  g3w "reg-$1" mod/main.tf "${3:-$REGM}"; g3w "reg-$1" mod/variables.tf "$REGV"
+  g3w "reg-$1" ex/main.tf "module \"m\" {
+  source = \"../mod\"
+$2
+}"
+}
+regm mod-default ''
+regm mod-call-literal '  region = "eu-west-1"'
+regm mod-literal '' 'data "aws_region" "current" {
+  region = "us-east-1"
+}'
+regm mod-call-s3 '  region = "s3.us-east-1"'
+regm mod-call-local '  region = local.region'
+regm mod-local '' 'data "aws_region" "current" {
+  region = local.region
+}'
+g3w reg-mod-zero mod/main.tf "$REGM"; g3w reg-mod-zero mod/variables.tf "$REGV"
+g3w reg-mod-zero ex/main.tf '# source = "../mod"'
+g3w reg-mod-nested mod/main.tf "$REGM"; g3w reg-mod-nested mod/variables.tf "$REGV"
+g3w reg-mod-nested mid/main.tf 'module "m" {
+  source = "../mod"
+  region = "eu-west-1"
+}'
+g3w reg-mod-nested ex/main.tf 'module "mid" {
+  source = "../mid"
+}'
+regm mod-ban ''
+: > "$TMP/g3/reg-mod-ban/mod/x.tfvars"
+g3w reg-unlexed ex/main.tf 'data "aws_availability_zones" "z" {}
+locals {
+  x = <<EOT
+  y
+}'
 # The file ban: each banned name in scope turns a passing case into a hit.
 for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
   for c in pol-plain prov-skip bus-defaults; do
@@ -662,6 +733,25 @@ for sh in bash zsh; do
   out="$(run scope "$R3" "$R3/clone/g3/bus-defaults/ex" | PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" gates "$R3" laptop clone 2>&1)"
   check "$sh: without the example root the event bus is a hit" \
     "$(has "$out" "G3 $R3/clone/g3/bus-defaults/mod/main.tf:1")"
+  for c in prov-region-true-literal reg-root-literal reg-root-null reg-root-absent reg-mod-default \
+    reg-mod-call-literal reg-mod-literal; do
+    out="$(g3 "$c")"
+    check "$sh: laptop mode admits $c" "$(test -z "$out"; echo $?)"
+    [ -z "$out" ] || printf '%s\n' "$out"
+  done
+  for c in prov-region-true-var prov-region-true-s3 prov-region-true-comment reg-root-var reg-root-s3 \
+    reg-root-local reg-root-interp reg-root-data reg-root-twice reg-mod-call-s3 reg-mod-call-local \
+    reg-mod-local reg-mod-zero reg-mod-nested reg-mod-ban reg-unlexed; do
+    check "$sh: laptop mode refuses $c" "$(g3 "$c" | grep '^class: plan gate G3 ' > /dev/null; echo $?)"
+  done
+  for c in reg-mod-zero reg-mod-nested reg-mod-ban reg-mod-call-s3; do
+    check "$sh: $c is a hit at the data block" "$(g3 "$c" | grep -x "G3 $R3/clone/g3/$c/mod/main.tf:1" > /dev/null; echo $?)"
+  done
+  check "$sh: a literal region passes in downloaded mode" "$(test -z "$(g3 reg-mod-literal downloaded)"; echo $?)"
+  check "$sh: var.region is a hit in downloaded mode" \
+    "$(g3 reg-mod-default downloaded | grep -x "G3 $R3/clone/g3/reg-mod-default/mod/main.tf:1" > /dev/null; echo $?)"
+  check "$sh: the file ban keeps skip_region_validation = true a hit" \
+    "$(cp -R "$R3/clone/g3/prov-region-true-literal" "$R3/clone/g3/ban-region-true" && : > "$R3/clone/g3/ban-region-true/ex/x.tfvars" && g3 ban-region-true | grep '^G3 ' > /dev/null; echo $?)"
   for b in override.tf x_override.tf x.tfvars x.tfvars.json x.auto.tfvars x.auto.tfvars.json.bak x.tf.json; do
     for c in pol-plain prov-skip bus-defaults; do
       check "$sh: $b in scope turns off the relaxation for $c" \
@@ -796,6 +886,9 @@ mutate() { # name, perl substitution, case...
 mutate arn-anchor 's/qr\{\\Aarn:\(\?:aws/qr{arn:(?:aws/' pol-anchor
 mutate dot-segments 's/grep \{ \$_ eq "\." \|\| \$_ eq "\.\." \}/grep { 0 }/' pol-dotdot pol-dot
 mutate name-class 's/\$NAMEOK = qr\{\\A\[A-Za-z0-9\._-\]/\$NAMEOK = qr{\\A[A-Za-z0-9._:\/-]/' bus-arn bus-slash
+mutate region-check 's/hit\("G3", \$f, \$M\{\$f\}, \$b->\[3\]\) unless region_ok/hit("G3", \$f, \$M{\$f}, \$b->[3]) if 0 \&\& region_ok/' \
+  reg-root-s3 reg-root-local reg-mod-call-s3
+mutate region-true 's/next if !\$ban && \$rlit && /next if !\$ban \&\& /' prov-region-true-s3 prov-region-true-var
 
 # plan-session.sh: one fixed reason on standard error per failure class, nothing on standard output.
 SESS="${PP%/*}/plan-session.sh"
