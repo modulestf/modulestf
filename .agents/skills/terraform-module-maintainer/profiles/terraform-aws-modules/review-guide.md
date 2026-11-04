@@ -176,8 +176,8 @@ For any other `resource` type a change adds, fit is decided per directory, from 
 
 IDs: `scope.boundary`, `scope.new-submodule`, `scope.composition`.
 
-Source: [scope.md#adjunct-types](scope.md#adjunct-types) `b73e5a8f3b44`
-Source: [scope.md#ambient-data-sources](scope.md#ambient-data-sources) `abb674d7e8f1`
+Source: [SCOPE.md#adjunct-types](SCOPE.md#adjunct-types) `b73e5a8f3b44`
+Source: [SCOPE.md#ambient-data-sources](SCOPE.md#ambient-data-sources) `abb674d7e8f1`
 Source: [module-scope.md#the-boundary-of-a-directory](../../references/module-scope.md#the-boundary-of-a-directory) `94a5360dd3db`
 Source: [module-scope.md#reference-edges](../../references/module-scope.md#reference-edges) `c72310bf7d19`
 
@@ -196,7 +196,7 @@ Whether a profile file matches the family's template byte for byte needs the tem
 
 IDs: `scope.profile-file`, `scope.pre-commit-hook`, `scope.tooling`, `scope.tests`, `scope.layout`, `scope.readme-banner`.
 
-Source: [scope.md#repository-files-and-tooling](scope.md#repository-files-and-tooling) `548cda8f264c`
+Source: [SCOPE.md#repository-files-and-tooling](SCOPE.md#repository-files-and-tooling) `548cda8f264c`
 Source: [templates-map.md#static-files-copy-verbatim](templates-map.md#static-files-copy-verbatim) `55b509cfad03`
 Source: [templates-map.md#pre-commit-config-copy-then-update](templates-map.md#pre-commit-config-copy-then-update) `a58a407924a1`
 
@@ -206,14 +206,14 @@ Every level-2 section of the profile files this guide draws on is either a sourc
 
 | Profile section | Why it is not in this guide | Hash |
 |-----------------|-----------------------------|------|
-| [What this profile defines](PROFILE.md#what-this-profile-defines) | An index of the profile, no rule | `f653ad6f68b2` |
-| [Profile constants](PROFILE.md#profile-constants) | Values restated for tools from the rules above, no rule of its own | `f514f3200e9e` |
+| [What this profile defines](PROFILE.md#what-this-profile-defines) | An index of the profile, no rule | `c5143087ef65` |
+| [Profile constants](PROFILE.md#profile-constants) | Values restated for tools from the rules above, no rule of its own | `08d1397dd08f` |
 | [What stays out of a profile](PROFILE.md#what-stays-out-of-a-profile) | About the profile itself, no rule | `4f65d3a61af9` |
 | [Adding another profile](PROFILE.md#adding-another-profile) | About the profile itself, no rule | `9f3a0f232873` |
 | [Documentation regeneration in an untrusted workspace](PROFILE.md#documentation-regeneration-in-an-untrusted-workspace) | Constants the maintainer uses to regenerate a documentation region in an untrusted workspace, no review rule | `930e64126f30` |
-| [Not a ban here](scope.md#not-a-ban-here-a-literal-only-one-caller-wants) | Points at rules above and at provider schema coverage, which needs the Terraform MCP tools | `27f0054a37bb` |
-| [Worked cases](scope.md#worked-cases) | Examples of the rules above, not rules | `049348f99abe` |
-| [Open questions](scope.md#open-questions) | Undecided, no rule | `d1ff50cd5d62` |
+| [Not a ban here](SCOPE.md#not-a-ban-here-a-literal-only-one-caller-wants) | Points at rules above and at provider schema coverage, which needs the Terraform MCP tools | `27f0054a37bb` |
+| [Worked cases](SCOPE.md#worked-cases) | Examples of the rules above, not rules | `049348f99abe` |
+| [Open questions](SCOPE.md#open-questions) | Undecided, no rule | `d1ff50cd5d62` |
 | [Template location](templates-map.md#template-location) | How a maintainer creates a module, not a review rule | `4444750ebf98` |
 | [Skeletal templates](templates-map.md#skeletal-templates-copy-then-customize) | How a maintainer creates a module, not a review rule | `9f6624fbb89a` |
 | [Schema-driven files](templates-map.md#schema-driven-files-do-not-copy-templates) | Generated from the provider schema through the Terraform MCP tools | `974ade9bd07d` |

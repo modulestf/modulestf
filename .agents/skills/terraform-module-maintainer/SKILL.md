@@ -32,7 +32,7 @@ Create and maintain production-ready Terraform modules for any provider with com
 | Resolve feedback | A set of review feedback items on a change: decide each, fix, draft replies | [resolve-feedback.md](references/resolve-feedback.md) |
 | Provider upgrade | Provider major version bump | Provider Upgrade Workflow below |
 
-Before editing in Full create, Targeted change or Resolve feedback mode, apply [change-scope](../change-scope/SKILL.md) through [module-scope.md](references/module-scope.md) and the profile's [scope file](profiles/terraform-aws-modules/scope.md): refuse or redirect a misfit to one destination from [Where a misfit goes](../change-scope/references/principles.md#where-a-misfit-goes), and keep a fix inside its finding.
+Before editing in Full create, Targeted change or Resolve feedback mode, apply [change-scope](../change-scope/SKILL.md) through [module-scope.md](references/module-scope.md) and the profile's [scope file](profiles/terraform-aws-modules/SCOPE.md): refuse or redirect a misfit to one destination from [Where a misfit goes](../change-scope/references/principles.md#where-a-misfit-goes), and keep a fix inside its finding.
 
 ## Profiles
 

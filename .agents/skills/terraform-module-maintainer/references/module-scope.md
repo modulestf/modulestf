@@ -5,7 +5,7 @@
 > generic concept in [change-scope](../../change-scope/SKILL.md), whose
 > [principles](../../change-scope/references/principles.md) this file does not repeat. A
 > profile supplies the provider-specific lists and the repository-file rules: for the default
-> profile, [terraform-aws-modules scope](../profiles/terraform-aws-modules/scope.md). The
+> profile, [terraform-aws-modules scope](../profiles/terraform-aws-modules/SCOPE.md). The
 > reviewer's [Check F](../../terraform-module-reviewer/references/check-f-scope.md) enforces
 > these rules and gives each its rule_id.
 

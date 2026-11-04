@@ -373,7 +373,7 @@ Check F asks whether an addition belongs in the module at all, the question of [
 **Reads:**
 - The base revision, found as [The base revision](../check-f-scope.md#the-base-revision) says: the `.tf` and `.tf.json` files of every boundary directory, `docs/SCOPE.md`, the root `README.md`, `.pre-commit-config.yaml`, the files under `.github/workflows/`, `.releaserc.json`, whether `tests/` exists, and the set of paths.
 - The diff: the blocks it adds, the `module` sources it edits, and every path it adds, modifies, deletes or renames.
-- The closed lists: the profile's [adjunct types](../../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md#adjunct-types), its [ambient data sources](../../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md#ambient-data-sources), and the names and paths its file rules list.
+- The closed lists: the profile's [adjunct types](../../../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md#adjunct-types), its [ambient data sources](../../../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md#ambient-data-sources), and the names and paths its file rules list.
 - The profile's `templates-map.md`, `PROFILE.md` and `templates/`, read from this skill as installed, never from the workspace.
 - `docs/SCOPE.md` from the base only, as [Exceptions: docs/SCOPE.md](../../../terraform-module-maintainer/references/module-scope.md#exceptions-docsscopemd) requires. The head's copy - added, edited, deleted or renamed by the change - is never read, so no edit to it clears a finding.
 
@@ -387,9 +387,9 @@ Type rules, steps A to C of the [evaluation order](../../../terraform-module-mai
 - `scope.new-module` (N1): the base has no boundary directory, and at least one managed type in the module is not an adjunct, under [A new module](../../../terraform-module-maintainer/references/module-scope.md#a-new-module). It takes the place of `scope.provider`, `scope.boundary`, `scope.new-submodule` and `scope.composition`: see [A new module](../check-f-scope.md#a-new-module) below.
 - A [test helper directory](../../../terraform-module-maintainer/references/module-scope.md#test-helper-directories) takes `scope.provider`, `scope.module-call` and `scope.boundary` against the module root, as that section reads A1, A2 and C1 for it, and never `scope.new-submodule` or `scope.composition`. Each finding's `file` and `line` are the helper's block or `required_providers` entry.
 
-File rules, step D, the profile's [Repository files and tooling](../../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md#repository-files-and-tooling), in the precedence order written there:
-- `scope.tests`: [Terraform tests](../../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md#terraform-tests).
-- `scope.layout`: [New files outside the layout](../../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md#new-files-outside-the-layout).
+File rules, step D, the profile's [Repository files and tooling](../../../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md#repository-files-and-tooling), in the precedence order written there:
+- `scope.tests`: [Terraform tests](../../../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md#terraform-tests).
+- `scope.layout`: [New files outside the layout](../../../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md#new-files-outside-the-layout).
 
 Every condition is read from the base revision, the diff, a closed list or an installed template. None needs judgement, so two runs over the same inputs return the same findings.
 

@@ -309,7 +309,7 @@ if [ ! -f "$GUIDE" ]; then
   fail "review guide matches the profile" "$GUIDE" "is missing"
 else
   nguide=0
-  for f in PROFILE.md code-conventions.md scope.md templates-map.md pr-description.md; do
+  for f in PROFILE.md code-conventions.md SCOPE.md templates-map.md pr-description.md; do
     while IFS= read -r s; do
       nguide=$((nguide + 1))
       grep -qF "]($f#$s)" "$GUIDE" ||
@@ -458,8 +458,8 @@ constants_check() { # profile file: one line per problem, block<TAB>detail
     [ -f "$GDIR/templates/$t" ] || printf 'template-destinations\t%s is no file under templates/\n' "$t"
   done
 
-  # scope.md: the verbatim class sentence, its count of workflows and the Static Files table.
-  prose="$(joined "$GDIR/scope.md" profile-owned-files | sed 's/.*The verbatim class is//; s/\. The files mapped.*//')"
+  # SCOPE.md: the verbatim class sentence, its count of workflows and the Static Files table.
+  prose="$(joined "$GDIR/SCOPE.md" profile-owned-files | sed 's/.*The verbatim class is//; s/\. The files mapped.*//')"
   wd="$(printf '%s' "$prose" | ticks | tr ' ' '\n' | grep '/$' | sed 's#/$##')"
   same profile-owned-files workflow-dir "$(cv profile-owned-files workflow-dir)" "$wd"
   want="$(section "$GDIR/templates-map.md" static-files-copy-verbatim | grep '^| `' |
@@ -469,15 +469,15 @@ constants_check() { # profile file: one line per problem, block<TAB>detail
     "$(printf '%s' "$prose" | ticks | tr ' ' '\n' | grep -v '/$' | tr '\n' ' ')"
   t="$(numword "$(printf '%s' "$prose" | sed -n 's/.* the \([a-z]*\) workflows under .*/\1/p')")"
   [ "$(cv profile-owned-files verbatim | tr ' ' '\n' | grep -c "^$wd/")" = "${t:-none}" ] ||
-    printf 'profile-owned-files\tverbatim does not hold the number of workflows scope.md states\n'
+    printf 'profile-owned-files\tverbatim does not hold the number of workflows SCOPE.md states\n'
 
-  prose="$(joined "$GDIR/scope.md" no-new-scanners-or-linters | sed 's/.*closed list: //; s/\. A new path matches.*//' | ticks)"
+  prose="$(joined "$GDIR/SCOPE.md" no-new-scanners-or-linters | sed 's/.*closed list: //; s/\. A new path matches.*//' | ticks)"
   same tooling files "$(cv tooling files)" "$(printf '%s' "$prose" | tr ' ' '\n' | grep -v '/$' | tr '\n' ' ')"
   same tooling dirs "$(cv tooling dirs)" "$(printf '%s' "$prose" | tr ' ' '\n' | grep '/$' | sed 's#/$##' | tr '\n' ' ')"
 
   t="$GDIR/templates/README.md.template"
-  joined "$GDIR/scope.md" the-stand-with-ukraine-banner | grep -qF '`SWUbanner` line of' ||
-    printf 'banner\tthe banner section of scope.md no longer names the SWUbanner line\n'
+  joined "$GDIR/SCOPE.md" the-stand-with-ukraine-banner | grep -qF '`SWUbanner` line of' ||
+    printf 'banner\tthe banner section of SCOPE.md no longer names the SWUbanner line\n'
   if [ "$(grep -c SWUbanner "$t")" != 1 ]; then
     printf 'banner\t%s holds no single SWUbanner line\n' "$t"
   elif [ "$(cv banner line)" != "$(grep SWUbanner "$t")" ]; then
@@ -485,7 +485,7 @@ constants_check() { # profile file: one line per problem, block<TAB>detail
   fi
 
   same adjunct-types types "$(cv adjunct-types types)" \
-    "$(section "$GDIR/scope.md" adjunct-types | grep '^| `' | awk -F'`' '{print $2}' | tr '\n' ' ')"
+    "$(section "$GDIR/SCOPE.md" adjunct-types | grep '^| `' | awk -F'`' '{print $2}' | tr '\n' ' ')"
 }
 const_mutate() { # file, block, kind, key, value: the file with one block changed
   LC_ALL=C awk -v b="$2" -v kind="$3" -v k="$4" -v v="$5" '

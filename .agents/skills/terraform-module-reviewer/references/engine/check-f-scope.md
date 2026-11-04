@@ -106,7 +106,7 @@ Engine: `candidate`
 ### Rule text: `scope.profile-file`
 
 **Fails when:**
-- `scope.profile-file`: [Profile-owned files](../../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md#profile-owned-files).
+- `scope.profile-file`: [Profile-owned files](../../../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md#profile-owned-files).
 
 Copied from the check file's outcome table, which also covers `llm` rules:
 
@@ -137,7 +137,7 @@ Engine: `candidate`
 ### Rule text: `scope.pre-commit-hook`
 
 **Fails when:**
-- `scope.pre-commit-hook`: [Pre-commit hooks](../../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md#pre-commit-hooks).
+- `scope.pre-commit-hook`: [Pre-commit hooks](../../../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md#pre-commit-hooks).
 
 Copied from the check file's outcome table, which also covers `llm` rules:
 
@@ -166,7 +166,7 @@ Engine: `candidate`
 ### Rule text: `scope.tooling`
 
 **Fails when:**
-- `scope.tooling`: [No new scanners or linters](../../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md#no-new-scanners-or-linters).
+- `scope.tooling`: [No new scanners or linters](../../../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md#no-new-scanners-or-linters).
 
 Copied from the check file's outcome table, which also covers `llm` rules:
 
@@ -195,7 +195,7 @@ Engine: `candidate`
 ### Rule text: `scope.readme-banner`
 
 **Fails when:**
-- `scope.readme-banner`: [The Stand With Ukraine banner](../../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md#the-stand-with-ukraine-banner).
+- `scope.readme-banner`: [The Stand With Ukraine banner](../../../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md#the-stand-with-ukraine-banner).
 
 Copied from the check file's outcome table, which also covers `llm` rules:
 

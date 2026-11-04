@@ -8,7 +8,7 @@
 # so terraform-module-reviewer/references/x.md works from the skills directory and x.md
 # from references/.
 # It must resolve inside the skills directory that holds this skill, so a link to a sibling
-# skill, such as ../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md,
+# skill, such as ../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md,
 # works and nothing outside that directory does. A link in a run summary, ../x.md#y, is
 # references/x.md and y; a link in a reference file resolves from that file's directory.
 # ANCHOR is the slug of the heading, with or without its leading #, by the rule
