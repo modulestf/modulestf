@@ -1,3 +1,12 @@
+## [0.1.1](https://github.com/modulestf/modulestf/compare/v0.1.0...v0.1.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **pr-review:** count many unverified behaviour changes per category in section 5 ([#104](https://github.com/modulestf/modulestf/issues/104)) ([a874f41](https://github.com/modulestf/modulestf/commit/a874f41434c409b31d52e264e8fd55792911ec59))
+
+
+
 # [0.1.0](https://github.com/modulestf/modulestf/compare/v0.1.0-rc.5...v0.1.0) (2026-11-04)
 
 
