@@ -1067,6 +1067,16 @@ EOF
     | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' | cmp -s "$TMP/want-b5" -
 }
 t_bgold; check "behaviour: section 5 byte for byte, paths repository-relative" $?
+# More than five unverified triggers: one line counting them per category, most first, no locations.
+t_bgroups() {
+  render "$NONE" "" "" "$(brun grp "[$(bt T-001 non-hcl-dependency unverifiable), $(bt T-002 wrapper-change unverifiable), \
+$(bt T-003 non-hcl-dependency unverifiable), $(bt T-004 literal-argument-change unverifiable), \
+$(bt T-005 non-hcl-dependency unverifiable), $(bt T-006 literal-argument-change unverifiable)]" '[]' 3)"
+  grep -qxF -- '- 6 behaviour changes not verified: 3 non-hcl-dependency, 2 literal-argument-change, 1 wrapper-change.' "$O/comment.md" \
+    && grep -qxF -- '- 3 more behaviour changes over the classifier cap: not verified.' "$O/comment.md" \
+    && ! grep -q '^- Behaviour change at ' "$O/comment.md"
+}
+t_bgroups; check "behaviour: over five unverified triggers render one line per category count" $?
 refused "a behaviour trigger state outside the five" "$G" "" "" "$(brun bs "[$(bt T-001 wrapper-change maybe)]" '[]')"
 refused "a behaviour category outside the list" "$G" "" "" "$(brun bc "[$(bt T-001 cosmetic verified)]" '[]')"
 refused "a claim state inert" "$G" "" "" "$(brun bk '[]' '[{claim_id: "C-1", state: "inert"}]')"
