@@ -1,3 +1,12 @@
+## [0.1.2](https://github.com/modulestf/modulestf/compare/v0.1.1...v0.1.2) (2026-11-04)
+
+
+### Bug Fixes
+
+* **pr-review:** review an empty-base pull request as a new module; clamp own pull request to COMMENT ([#106](https://github.com/modulestf/modulestf/issues/106)) ([07037f8](https://github.com/modulestf/modulestf/commit/07037f85791d9b5aee9378686bb1562c484e3fc5))
+
+
+
 ## [0.1.1](https://github.com/modulestf/modulestf/compare/v0.1.0...v0.1.1) (2026-11-04)
 
 
