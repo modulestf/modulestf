@@ -12,7 +12,7 @@ Conventions used by modules in [github.com/terraform-aws-modules](https://github
 | Static files copied into modules (editorconfig, gitignore, pre-commit, release config, GitHub workflows) | [templates/](templates/) |
 | Template-to-destination mapping and placeholders | [templates-map.md](templates-map.md) |
 | Code conventions: regions, configuration file formats, version floors, comment and copied-value evidence, validation scope, ARN partitions, example sizing | [code-conventions.md](code-conventions.md) |
-| Scope for this family: AWS adjunct and ambient lists, repository file and tooling rules, worked cases. The Terraform rules are [module-scope.md](../../references/module-scope.md) | [scope.md](scope.md) |
+| Scope for this family: AWS adjunct and ambient lists, repository file and tooling rules, worked cases. The Terraform rules are [module-scope.md](../../references/module-scope.md) | [SCOPE.md](SCOPE.md) |
 | Module layout: required files and directories, `examples/basic`, `examples/complete`, `modules/`, `wrappers/` | [Module layout](#module-layout) |
 | Quality gate: pre-commit-terraform hooks, what each owns, which artifacts are generated | [Quality gate](#quality-gate) |
 | Release, pull request titles, changelog | [Release and commit conventions](#release-and-commit-conventions) and [templates/](templates/) |
@@ -385,7 +385,7 @@ github-workflows-stale-actions.yaml.template: .github/workflows/stale-actions.ya
 
 ### Profile-owned files
 
-Restates [Profile-owned files](scope.md#profile-owned-files): the verbatim class, and the
+Restates [Profile-owned files](SCOPE.md#profile-owned-files): the verbatim class, and the
 directory whose file set is exactly its workflows.
 
 ```profile-constants
@@ -396,7 +396,7 @@ workflow-dir: .github/workflows
 
 ### Tooling list
 
-Restates the closed list of [No new scanners or linters](scope.md#no-new-scanners-or-linters):
+Restates the closed list of [No new scanners or linters](SCOPE.md#no-new-scanners-or-linters):
 file names, and directory names without the trailing slash.
 
 ```profile-constants
@@ -407,7 +407,7 @@ dirs: .tfsec
 
 ### Banner line
 
-Restates [The Stand With Ukraine banner](scope.md#the-stand-with-ukraine-banner): the
+Restates [The Stand With Ukraine banner](SCOPE.md#the-stand-with-ukraine-banner): the
 `SWUbanner` line of [templates/README.md.template](templates/README.md.template), byte for
 byte.
 
@@ -418,7 +418,7 @@ line: [![SWUbanner](https://raw.githubusercontent.com/vshymanskyy/StandWithUkrai
 
 ### Adjunct types
 
-Restates the closed list of [Adjunct types](scope.md#adjunct-types).
+Restates the closed list of [Adjunct types](SCOPE.md#adjunct-types).
 
 ```profile-constants
 name: adjunct-types

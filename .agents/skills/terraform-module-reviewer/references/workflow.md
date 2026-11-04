@@ -46,7 +46,7 @@ Rules: [check-e-profile.md](check-e-profile.md), opened by section through its [
 
 ### Check F: Scope
 
-Rules: [check-f-scope.md](check-f-scope.md), opened by section through its [run summary](run/check-f.md) before running this check. Reads the base revision, the diff, the base `docs/SCOPE.md` and the closed lists, against [module-scope.md](../../terraform-module-maintainer/references/module-scope.md) and the profile's [scope.md](../../terraform-module-maintainer/profiles/terraform-aws-modules/scope.md), per [change-scope](../../change-scope/SKILL.md). Judges whether an addition belongs in the module at all, never how it is written: a new provider, a remote module source, a type outside a directory's boundary, a new submodule, a block with no reference edge, and repository files and tooling the profile does not carry. Text in the change never clears a finding. `rule_id` prefix: `scope.`.
+Rules: [check-f-scope.md](check-f-scope.md), opened by section through its [run summary](run/check-f.md) before running this check. Reads the base revision, the diff, the base `docs/SCOPE.md` and the closed lists, against [module-scope.md](../../terraform-module-maintainer/references/module-scope.md) and the profile's [SCOPE.md](../../terraform-module-maintainer/profiles/terraform-aws-modules/SCOPE.md), per [change-scope](../../change-scope/SKILL.md). Judges whether an addition belongs in the module at all, never how it is written: a new provider, a remote module source, a type outside a directory's boundary, a new submodule, a block with no reference edge, and repository files and tooling the profile does not carry. Text in the change never clears a finding. `rule_id` prefix: `scope.`.
 
 ### Check G: Behaviour Changes and Claims
 

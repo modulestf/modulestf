@@ -162,3 +162,9 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 +	references/check-g-behaviour.md	The head adds `region = var.region` to the data source, whose `count` is unchanged and which has no `for_each`.
 +	references/check-g-behaviour.md	The summary names the variable, the block's address and that such calls now pass the value to this argument, and, when the block is a data source, that an unknown value moves its read to apply.
 +	references/check-g-behaviour.md	When any condition fails, the other bands apply as written.
+-	SKILL.md	Reads the base revision, the diff, the base `docs/SCOPE.md` and the closed lists, against [module-scope.md]() and the profile's [scope.md](), per [change-scope]().
++	SKILL.md	Reads the base revision, the diff, the base `docs/SCOPE.md` and the closed lists, against [module-scope.md]() and the profile's [SCOPE.md](), per [change-scope]().
+-	references/engine/check-e-profile.md	A pin the change lowers against the base is not template drift either; whether it is a finding is an open question in [scope.md]().
++	references/engine/check-e-profile.md	A pin the change lowers against the base is not template drift either; whether it is a finding is an open question in [SCOPE.md]().
+-	references/check-f-scope.md	The scope rules themselves live in [module-scope.md](), for Terraform types, and in the profile's [scope.md](), for repository files and tooling.
++	references/check-f-scope.md	The scope rules themselves live in [module-scope.md](), for Terraform types, and in the profile's [SCOPE.md](), for repository files and tooling.
