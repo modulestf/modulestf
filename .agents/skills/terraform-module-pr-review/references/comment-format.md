@@ -411,7 +411,7 @@ A finding summary is the reviewer's own words about the code and never reproduce
 
 ## Location Links
 
-A finding location renders as a code span of the path and line, such as `main.tf:12`. A render run with `--links` ([render-comment.sh](render-comment.sh)), which [review-run.sh](review-run.sh) always passes, renders each location in the Findings, What to do and COMPACT lists as a link whose text is that code span and whose target is `https://github.com/<repo>/blob/<head>/<path>#L<line>`: `<repo>` is the `repo` of `host.json`, `<head>` the head the review ran on, and the fragment is left out when the finding has no line. Only a path of the characters `A-Za-z0-9._/-` is linked, so the URL holds nothing the pull request chose beyond a path; any other path, and the module root `.`, stays a code span. A `repo` that is not `owner/name` is refused. Without `--links` the worked examples below are byte for byte what the render writes.
+A finding location renders as a code span of the path and line, such as `main.tf:12`. A render run with `--links` ([render-comment.sh](render-comment.sh)), which [review-run.sh](review-run.sh) always passes, renders each location in the Findings, What to do, COMPACT, behaviour change and thread lists as a link whose text is that code span and whose target is `https://github.com/<repo>/blob/<head>/<path>#L<line>`: `<repo>` is the `repo` of `host.json`, `<head>` the head the review ran on, and the fragment is left out when the finding has no line. Only a path of the characters `A-Za-z0-9._/-` is linked, so the URL holds nothing the pull request chose beyond a path; any other path, and the module root `.`, stays a code span. A `repo` that is not `owner/name` is refused. Without `--links` the worked examples below are byte for byte what the render writes.
 
 ## Leak Scan
 
@@ -495,12 +495,12 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `unplanned-covered-downloaded` | - Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it). |
 | `unplanned-covered-by` | - Covered by: `{attribute}` planned in {example} as {address} at {head}. |
 | `behaviour-not-run` | - Behaviour check: {reason}, so no change was classified or verified. |
-| `behaviour-trigger` | - Behaviour change at `{location}` ({category}): not verified. |
+| `behaviour-trigger` | - Behaviour change at {location} ({category}): not verified. |
 | `behaviour-capped` | - {count} more behaviour changes over the classifier cap: not verified. |
 | `behaviour-claim` | - Claim {claim_id} from the description: not verified. |
 | `behaviour-evidence` | Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified. |
-| `thread-match` | - `{location}`: this review has a finding at the same path and line. |
-| `thread-no-match` | - `{location}`: this review has no finding at the same path and line. |
+| `thread-match` | - {location}: this review has a finding at the same path and line. |
+| `thread-no-match` | - {location}: this review has no finding at the same path and line. |
 | `todo-lead-block` | To make this mergeable, resolve each checklist item below and push. |
 | `todo-lead-4` | This review is incomplete, so a later run may add items. The items below are known. |
 | `todo-lead-7` | Nothing blocks merge. The items below are optional. |
@@ -519,7 +519,7 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `todo-optional-one` | Optional: `{rule_id}` at {locations}. |
 | `todo-optional-many` | Optional: `{rule_id}` ({count}) at {locations}. |
 | `todo-more` | , and {count} more |
-| `todo-refuted` | Behaviour change at `{location}` ({category}): the evidence refutes it. Fix the change or correct the description. |
+| `todo-refuted` | Behaviour change at {location} ({category}): the evidence refutes it. Fix the change or correct the description. |
 | `todo-generated` | Documentation tables are generated. After the edits above, run `pre-commit run -a` and commit the result. Do not edit them by hand. |
 | `todo-triage` | This was a triage run. The full review has not run. |
 | `todo-checks-unknown` | Check results could not be read or are still running. |

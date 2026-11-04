@@ -302,7 +302,6 @@ def valid_assessment: type == "string" and length <= 4096
 # A name the pull request controls renders in a code span only when every character is in this set.
 def allowed: test("^[A-Za-z0-9._/-]+$");
 def repo_path($p): if $p == "" then . elif . == "." then $p else $p + "/" + . end;
-def trigger_at($p): {category, location: ((.file | repo_path($p)) + (if .line == null then "" else ":\(.line)" end))};
 # A location is a code span; under --links (link_base set) a link to the file at the head when
 # the path is in the allowed set, and is not the module root `.`, so the URL holds no character the pull request could choose.
 def link_base: $ARGS.named.link_base // "";
@@ -312,6 +311,7 @@ def loc_at($f): loc_span($f) as $s
     then "[" + $s + "](" + link_base + "/" + $f + (if .line == null then "" else "#L\(.line)" end) + ")"
     else $s end;
 def loc($p): loc_at(.file | repo_path($p));
+def trigger_at($p): {category, location: loc_at(.file | repo_path($p))};
 
 # --- The ladder (verdict.md). Input: {findings, signals: {checks, threads, review_decision,
 # mergeability}, unresolved, triage, gaps, refuted, unplanned, covered}. The disputed note is the
@@ -410,12 +410,12 @@ def texts: {
   "unplanned-covered-downloaded": "- Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it).",
   "unplanned-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
-  "behaviour-trigger": "- Behaviour change at `{location}` ({category}): not verified.",
+  "behaviour-trigger": "- Behaviour change at {location} ({category}): not verified.",
   "behaviour-capped": "- {count} more behaviour changes over the classifier cap: not verified.",
   "behaviour-claim": "- Claim {claim_id} from the description: not verified.",
   "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
-  "thread-match": "- `{location}`: this review has a finding at the same path and line.",
-  "thread-no-match": "- `{location}`: this review has no finding at the same path and line.",
+  "thread-match": "- {location}: this review has a finding at the same path and line.",
+  "thread-no-match": "- {location}: this review has no finding at the same path and line.",
   "todo-lead-block": "To make this mergeable, resolve each checklist item below and push.",
   "todo-lead-4": "This review is incomplete, so a later run may add items. The items below are known.",
   "todo-lead-7": "Nothing blocks merge. The items below are optional.",
@@ -434,7 +434,7 @@ def texts: {
   "todo-optional-one": "Optional: `{rule_id}` at {locations}.",
   "todo-optional-many": "Optional: `{rule_id}` ({count}) at {locations}.",
   "todo-more": ", and {count} more",
-  "todo-refuted": "Behaviour change at `{location}` ({category}): the evidence refutes it. Fix the change or correct the description.",
+  "todo-refuted": "Behaviour change at {location} ({category}): the evidence refutes it. Fix the change or correct the description.",
   "todo-generated": "Documentation tables are generated. After the edits above, run `pre-commit run -a` and commit the result. Do not edit them by hand.",
   "todo-triage": "This was a triage run. The full review has not run.",
   "todo-checks-unknown": "Check results could not be read or are still running.",
@@ -780,7 +780,7 @@ def thread_lines($h; $f; $p):
   [ $h.unresolved_threads[] as $t
     | tx(if any($f[]; (.file | repo_path($p)) == $t.path and .line == $t.line)
          then "thread-match" else "thread-no-match" end;
-         {location: ($t.path + (if $t.line == null then "" else ":\($t.line)" end))}) ];
+         {location: ($t | loc_at($t.path))}) ];
 
 def omission_keys: ["over-size", "over-budget", "over-quota", "minimized-excluded", "bot-over-size",
   "bot-over-budget", "bot-over-quota", "bot-minimized-excluded"];

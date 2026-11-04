@@ -1102,6 +1102,19 @@ grep -qxF 'The behaviour evidence refutes a change or a claim of the description
 check "behaviour: the rationale names the refuted evidence" $?
 todo | grep -qxF -- '- [ ] Behaviour change at `main.tf:2` (wrapper-change): the evidence refutes it. Fix the change or correct the description.'
 check "behaviour: an unreported refuted trigger is a checklist item" $?
+# --links also links the behaviour change, refuted and thread locations, which are not findings.
+LB="https://github.com/example/terraform-aws-thing/blob/$HEAD"
+render "$LOWF" "" "" "$BUV" "" --links
+grep -qxF -- "- Behaviour change at [\`main.tf:2\`]($LB/main.tf#L2) (wrapper-change): not verified." "$O/comment.md"
+check "links: a behaviour change location links to the file and line at the head" $?
+render "$LOWF" "" "" "$BREF" "" --links
+todo | grep -qxF -- "- [ ] Behaviour change at [\`main.tf:2\`]($LB/main.tf#L2) (wrapper-change): the evidence refutes it. Fix the change or correct the description."
+check "links: a refuted behaviour change in What to do links to the file and line" $?
+render "$(one structure.grouping LOW a.tf 1 "S." "F.")" "$(host utl '.unresolved_threads = [{path: "a.tf", line: 1}, {path: "b.tf", line: null}]')" "" "" "" --links
+grep -qxF -- "- [\`a.tf:1\`]($LB/a.tf#L1): this review has a finding at the same path and line." "$O/comment.md" \
+  && grep -qxF -- "- [\`b.tf\`]($LB/b.tf): this review has no finding at the same path and line." "$O/comment.md"
+check "links: an unresolved thread location links to the file, with a fragment only for a line" $?
+
 ladder "a refuted state with only a LOW claim finding" "block REQUEST_CHANGES" 2 "$(one claim.refuted LOW main.tf 2 "S." "F.")" "" "" "$BREF"
 ladder "a refuted state with its claim finding" "block REQUEST_CHANGES" 2 "$(one claim.refuted HIGH main.tf 2 "S." "F.")" "" "" "$BREF"
 ! todo | grep -qF 'the evidence refutes it'; check "behaviour: a reported refutation is worded by its finding alone" $?
