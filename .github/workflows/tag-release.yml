@@ -1,0 +1,95 @@
+name: tag-release
+
+# Tags the merged "chore(release): vX.Y.Z" commit with the version in
+# version.json and publishes the GitHub release, with that version's section of
+# CHANGELOG.md as its notes. It never commits, so it cannot start another
+# release. RELEASE_TOKEN pushes the tag, so the tag is made by a person's
+# token, not by GITHUB_TOKEN.
+
+on:
+  push:
+    branches: [master]
+
+permissions: {}
+
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ startsWith(github.event.head_commit.message, 'chore(release):') }}
+    # RELEASE_TOKEN lives in this environment, which only master may use.
+    environment: release-automation
+    steps:
+      - name: Check the token
+        id: token
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::notice::RELEASE_TOKEN is not set; tag this release by hand."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.present == 'true'
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Tag and publish
+        if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version version.json)
+          tag="v${version}"
+          if ! [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::version.json holds '${version}', not a version"; exit 1
+          fi
+          subject=$(git log -1 --pretty=%s)
+          if [[ $subject != *"$tag"* ]]; then
+            echo "::error::release commit '${subject}' does not name ${tag}"; exit 1
+          fi
+          if existing=$(git rev-parse -q --verify "refs/tags/${tag}^{commit}"); then
+            if [ "$existing" != "$GITHUB_SHA" ]; then
+              echo "::error::${tag} already points to ${existing}"; exit 1
+            fi
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git tag -a "$tag" -m "$tag" "$GITHUB_SHA"
+            git push origin "refs/tags/${tag}"
+          fi
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "${tag} is already published."; exit 0
+          fi
+          awk -v v="$version" '
+            /^#+ \[?[0-9]/ { if (found) exit; if (index($0, "[" v "]") || $2 == v) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          notes=(--generate-notes)
+          if grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then notes=(--notes-file "$RUNNER_TEMP/notes.md"); fi
+          prerelease=()
+          if [[ $tag == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$tag" --verify-tag --title "$tag" "${notes[@]}" "${prerelease[@]}"
+
+      # Asks antonbabenko/agent-plugins to pin the new release now, not at its
+      # daily run. AGENT_PLUGINS_DISPATCH_TOKEN may run workflows in that
+      # repository only; without it this step does nothing.
+      - name: Update the agent-plugins pin
+        if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_PLUGINS_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::AGENT_PLUGINS_DISPATCH_TOKEN is not set; agent-plugins pins the release on its schedule."
+            exit 0
+          fi
+          gh workflow run update-external-plugins.yml -R antonbabenko/agent-plugins

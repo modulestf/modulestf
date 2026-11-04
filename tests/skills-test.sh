@@ -44,7 +44,7 @@ git ls-files --cached --others --exclude-standard > "$TMP/all"
 
 files=()
 while IFS= read -r f; do files+=("$f"); done < <(
-  grep -E '\.(md|template)$|^\.agents/skills/.*\.sh$' "$TMP/all"
+  grep -E '\.(md|template)$|^\.agents/skills/.*\.sh$' "$TMP/all" | grep -vx "CHANGELOG.md"
 )
 if [ "${#files[@]}" -eq 0 ]; then
   echo "FAIL corpus: no markdown or template files found; is this a git checkout?"

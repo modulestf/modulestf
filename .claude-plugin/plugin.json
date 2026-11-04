@@ -1,0 +1,20 @@
+{
+  "name": "modulestf",
+  "description": "Review and maintain reusable Terraform modules against a written profile of the module family's rules: pull request review with one verdict, findings-only review of a local change, and a maintainer skill that makes the change.",
+  "author": {
+    "name": "Anton Babenko",
+    "url": "https://github.com/antonbabenko"
+  },
+  "homepage": "https://modules.tf",
+  "repository": "https://github.com/modulestf/modulestf",
+  "license": "Apache-2.0",
+  "keywords": [
+    "terraform",
+    "terraform-modules",
+    "terraform-aws-modules",
+    "code-review",
+    "pull-request-review",
+    "iac"
+  ],
+  "skills": "./.agents/skills/"
+}

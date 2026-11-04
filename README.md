@@ -25,7 +25,18 @@ The pull request review calls the reviewer, and both call `change-scope`. The ru
 
 ## Quick start
 
-1. Install the skills. Copy or symlink all four directories under `.agents/skills/` side by side into your agent's skills directory: `~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex. The three Terraform skills link into each other, so keep them together. `change-scope` also works alone.
+1. Install the skills as the `modulestf` plugin from the [antonbabenko/agent-plugins](https://github.com/antonbabenko/agent-plugins) marketplace. It holds all four skills; the three Terraform skills link into each other, so they ship together.
+
+   ```text
+   # Claude Code
+   /plugin marketplace add antonbabenko/agent-plugins
+   /plugin install modulestf@antonbabenko
+
+   # Codex: add the marketplace, then install modulestf from /plugins
+   codex plugin marketplace add antonbabenko/agent-plugins
+   ```
+
+   Or copy or symlink all four directories under `.agents/skills/` side by side into your agent's skills directory: `~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex. `change-scope` also works alone.
 
    ```bash
    git clone https://github.com/modulestf/modulestf.git
@@ -39,8 +50,10 @@ The pull request review calls the reviewer, and both call `change-scope`. The ru
 3. Log in to GitHub with `gh auth login` as yourself, and install `terraform`, `git`, `jq`, `perl` and [`mtf-facts`](#mtf-facts). A pull request review needs `mtf-facts` for a conclusive verdict.
 
    ```bash
-   go install github.com/modulestf/facts/cmd/mtf-facts@latest
+   brew install modulestf/tap/mtf-facts
    ```
+
+   Without Homebrew: `go install github.com/modulestf/facts/cmd/mtf-facts@latest`.
 
 4. Ask your agent:
 
