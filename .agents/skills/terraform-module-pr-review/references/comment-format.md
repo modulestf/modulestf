@@ -409,6 +409,10 @@ Apply these rules to the assessment, the verdict line and the rationale before t
 
 A finding summary is the reviewer's own words about the code and never reproduces text quoted from the pull request, so a summary that quotes discussion is a defect in the finding, not something to render.
 
+## Location Links
+
+A finding location renders as a code span of the path and line, such as `main.tf:12`. A render run with `--links` ([render-comment.sh](render-comment.sh)), which [review-run.sh](review-run.sh) always passes, renders each location in the Findings, What to do and COMPACT lists as a link whose text is that code span and whose target is `https://github.com/<repo>/blob/<head>/<path>#L<line>`: `<repo>` is the `repo` of `host.json`, `<head>` the head the review ran on, and the fragment is left out when the finding has no line. Only a path of the characters `A-Za-z0-9._/-` is linked, so the URL holds nothing the pull request chose beyond a path; any other path, and the module root `.`, stays a code span. A `repo` that is not `owner/name` is refused. Without `--links` the worked examples below are byte for byte what the render writes.
+
 ## Leak Scan
 
 Run this over the body **before it is shown**, not merely before it is posted. Once a path is on the screen it is one copy and paste from being public. A match blocks both: the body is not shown and not sent.

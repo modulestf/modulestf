@@ -6,7 +6,7 @@
 # head or the workspace.
 #
 #   render-comment.sh --head <sha> --findings <file> --host <host.json> --checks <dir>
-#       --run <file> --assessment <file> --run-dir <dir> --out <dir> [--standard]
+#       --run <file> --assessment <file> --run-dir <dir> --out <dir> [--standard] [--links]
 #
 #   --findings    the merged findings, modulestf/facts schema/merged-findings.schema.json, with
 #                 paths relative to the module root
@@ -47,6 +47,9 @@
 #   --out         an existing directory holding none of the files written
 #   --standard    render the STANDARD tier even when every COMPACT condition holds
 #                 (comment-format.md, Tiers); nothing forces COMPACT
+#   --links       render each finding location as a link to the file at --head in the
+#                 repository host.json names (comment-format.md, Location links); without it the
+#                 location is a plain code span
 #
 #   The run file may carry two keys more: "examples": {"count": n, "validated": n}, the selected
 #   examples verified and how many passed `validate`, which COMPACT needs, and "plan_mode",
@@ -90,10 +93,11 @@ sha_re='^[0-9a-f]{40}$'
 die() { echo "render-comment.sh: $1" >&2; exit 2; }
 stop() { echo "render-comment.sh: $1" >&2; exit 1; }
 
-head="" findings="" host="" checks="" run="" assessment="" rundir="" out="" standard=false
+head="" findings="" host="" checks="" run="" assessment="" rundir="" out="" standard=false links=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --standard) standard=true; shift ;;
+    --links) links=true; shift ;;
     --head) head="${2-}"; shift 2 || die "--head needs a value" ;;
     --findings) findings="${2-}"; shift 2 || die "--findings needs a value" ;;
     --host) host="${2-}"; shift 2 || die "--host needs a value" ;;
@@ -153,6 +157,13 @@ else
   cj='{"accepted": false, "signal": "unknown"}'
 fi
 
+link_base=""
+if [ "$links" = true ]; then
+  repo="$(jq -r '.repo' "$host")"
+  [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "--links needs a repository of the form owner/name in host.json"
+  link_base="https://github.com/$repo/blob/$head"
+fi
+
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/render-comment.XXXXXX")" || die "no temporary directory"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -167,7 +178,7 @@ lits="$(jq -n --arg run "$RUN" --arg home "${HOME-}" --arg pwd "${PWD-}" --arg t
       | {name: "the value of \(.key)", v: .value} ]')" || die "the leak scan set cannot be built"
 
 RJ -n --slurpfile f "$findings" --slurpfile h "$host" --slurpfile r "$run" --rawfile a "$assessment" \
-  --argjson c "$cj" --argjson lits "$lits" --argjson std "$standard" '
+  --argjson c "$cj" --argjson lits "$lits" --argjson std "$standard" --arg link_base "$link_base" '
   include "render-comment";
   ($a | sub("\n+$"; "")) as $text
   | render({findings: $f[0], host: $h[0], checks: $c, run: $r[0], assessment: $text, standard: $std}) as $o

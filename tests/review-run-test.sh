@@ -104,6 +104,7 @@ case "$ep" in
   repos/*/pulls/*/files) f=files ;;
   repos/*/pulls/*/reviews) f=reviews ;;
   repos/*/pulls/*/comments) f=empty ;;
+  repos/*/pulls/*/commits) f=prcommits ;;
   repos/*/pulls/*) f=meta ;;
   repos/*/compare/*) f=compare ;;
   repos/*/git/trees/*) f="tree-${ep##*/}" ;;
@@ -636,6 +637,43 @@ if { [ -n "${MTF_FACTS_BIN:-}" ] && [ -x "$MTF_FACTS_BIN" ] && cp "$MTF_FACTS_BI
 else
   echo "skip end to end: no MTF_FACTS_BIN, and no Go toolchain or no facts checkout at $FACTS_SRC (set MTF_FACTS_SRC)"
 fi
+
+# --- 5c. A branch that merged the base into work older than the merge base ----------------------------
+# The history cutoff a day before the merge base drops the branch side of the merge, so the clone shows
+# no merge base until prepare starts the history at the oldest pull request commit.
+mkmerge() { # name -> a bare repository whose head merges main into a branch forked months before; sets HEADC BASEC
+  local w="$TMP/work-$1" b="$TMP/remote/example-org/$1.git" d
+  rm -rf "$w" "$b"; mkdir -p "$w"; git init -q -b main "$w"
+  cm() { GIT_AUTHOR_DATE="$1" GIT_COMMITTER_DATE="$1" git -C "$w" -c user.name=t -c user.email=t@t commit -q -m "$2"; }
+  (cd "$w" && mkdir -p examples/one examples/two && printf 'resource "x" "y" {}\n' > main.tf &&
+    printf 'module "m" { source = "../.." }\n' > examples/two/main.tf && : > variables.tf && printf 'terraform {}\n' > versions.tf &&
+    printf 'module "m" { source = "../.." }\n' > examples/one/main.tf && printf '# w\n' > README.md && git add -A)
+  cm 2026-01-01T00:00:00Z base
+  git -C "$w" checkout -q -b feat; printf '# w\nmore\n' > "$w/README.md"; git -C "$w" add -A; cm 2026-01-02T00:00:00Z early
+  git -C "$w" checkout -q main; printf 'l\n' > "$w/LICENSE"; git -C "$w" add -A; cm 2026-06-01T00:00:00Z tip
+  BASEC="$(git -C "$w" rev-parse HEAD)"
+  git -C "$w" checkout -q feat
+  GIT_AUTHOR_DATE=2026-06-10T00:00:00Z GIT_COMMITTER_DATE=2026-06-10T00:00:00Z git -C "$w" -c user.name=t -c user.email=t@t merge -q --no-ff -m merge main
+  mkdir -p "$w/docs"; printf 'x\n' > "$w/docs/a;b.md"; printf 'y\n' > "$w/\$(touch x).md"; git -C "$w" add -A; cm 2026-06-11T00:00:00Z head
+  HEADC="$(git -C "$w" rev-parse HEAD)"
+  git clone -q --bare "$w" "$b"; git -C "$b" update-ref refs/pull/7/head "$HEADC"
+  git -C "$b" config uploadpack.allowAnySHA1InWant true
+  tree "$HEADC" > "$GHD/tree-$HEADC"; tree "$BASEC" > "$GHD/tree-$BASEC"
+  jq -n '[{commit: {committer: {date: "2026-01-02T00:00:00Z"}}}, {commit: {committer: {date: "2026-06-11T00:00:00Z"}}}]' > "$GHD/prcommits"
+}
+mkmerge oldfeat; ghfiles open false APPROVED
+run_rr prepare --repo example-org/oldfeat --pr 7 > "$TMP/p7.out" 2>&1
+RUN="$(sed -n 's/^RUN=//p' "$TMP/p7.out")"
+check "history: a branch that merged the base into older work is prepared, not refused" \
+  "$([ -d "$RUN" ] && grep -q '^next: ' "$TMP/p7.out" && ! grep -q 'prepare refused' "$TMP/p7.out"; echo $?)"
+check "history: git merge-base --all of the base and the head is the merge base alone" \
+  "$([ "$(git -C "$RUN/clone" merge-base --all "$BASEC" HEAD)" = "$BASEC" ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null 2>&1
+rm -f "$GHD/prcommits"
+run_rr prepare --repo example-org/oldfeat --pr 7 > "$TMP/p8.out" 2>&1
+check "history: with no pull request commit list the run is refused, never prepared on a short history" \
+  "$(grep -q '^prepare refused: depth-aborted' "$TMP/p8.out"; echo $?)"
+run_rr cleanup "$(sed -n 's/^RUN=//p' "$TMP/p8.out")" > /dev/null 2>&1
 
 # --- 6. The SKILL.md move: SKILL.md, references/workflow.md and references/inputs.md hold the pinned
 # sentence multiset; the router's own text is headings, tables and block quotes only.

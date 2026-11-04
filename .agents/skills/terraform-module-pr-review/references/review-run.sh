@@ -238,6 +238,15 @@ cmd_prepare() {
     ts="$(git -C "$RUN/clone" log --no-walk --format=%ct "$mb" "$base" 2> /dev/null | sort -n | head -n 1)"
     [[ "$ts" =~ ^[0-9]+$ ]] && clone_git fetch -q --shallow-since="$((ts - 86400)) +0000" origin \
       "refs/pull/$pr/head" "$base" "$mb" 2> /dev/null
+    # A branch that merged the base into older work: the cutoff drops the branch side of that merge
+    # and the clone shows no merge base. Start the history a day before the oldest pull request commit.
+    # Only the first 100 commits are read; a longer branch that still shows no merge base ends in the refusal below.
+    if [ "$(git -C "$RUN/clone" merge-base --all "$base" HEAD 2> /dev/null)" != "$mb" ]; then
+      ts="$(gh api "repos/$repo/pulls/$pr/commits?per_page=100" \
+        --jq '[.[].commit.committer.date | fromdateiso8601] | min' 2> /dev/null)"
+      [[ "$ts" =~ ^[0-9]+$ ]] && clone_git fetch -q --shallow-since="$((ts - 86400)) +0000" origin \
+        "refs/pull/$pr/head" "$base" "$mb" 2> /dev/null
+    fi
     # The merge base tree as a checkout of its own, with a .git directory: a worktree's .git is a
     # file, which mtf-facts depth reads as a changed path of the tree.
     git init -q --template= "$RUN/base" && git -C "$RUN/base" remote add origin "https://github.com/$repo.git" &&
@@ -724,7 +733,7 @@ cmd_render() {
   local line rc
   line="$(bash "$HERE/render-comment.sh" --head "$HEAD_SHA" --findings "$r/findings.json" --host "$RUN/host/host.json" \
     --checks "$RUN/checks" --run "$r/run-file.json" --assessment "$assessment" --run-dir "$RUN" --out "$out" \
-    ${std[@]+"${std[@]}"} 2>&1)"
+    --links ${std[@]+"${std[@]}"} 2>&1)"
   rc=$?
   printf '%s\n' "$line" | head -n 20
   [ "$rc" = 0 ] || exit 1
