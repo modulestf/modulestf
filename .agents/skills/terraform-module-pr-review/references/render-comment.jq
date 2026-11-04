@@ -411,6 +411,7 @@ def texts: {
   "unplanned-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
   "behaviour-trigger": "- Behaviour change at {location} ({category}): not verified.",
+  "behaviour-trigger-groups": "- {count} behaviour changes not verified: {categories}.",
   "behaviour-capped": "- {count} more behaviour changes over the classifier cap: not verified.",
   "behaviour-claim": "- Claim {claim_id} from the description: not verified.",
   "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
@@ -724,7 +725,11 @@ def gap_lines($h; $run; $b; $p; $cov):
      + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end) end)
   + ($b | if . == null then []
      elif .status == "not-run" then [tx("behaviour-not-run"; {reason})]
-     else [ (.triggers[] | select(.state == "unverifiable") | tx("behaviour-trigger"; trigger_at($p))),
+     else [ ([.triggers[] | select(.state == "unverifiable")]
+             | if length <= 5 then .[] | tx("behaviour-trigger"; trigger_at($p))
+               # More than five: one line counting them per category; the locations are noise.
+               else tx("behaviour-trigger-groups"; {count: length, categories: (group_by(.category)
+                      | sort_by(-length, .[0].category) | map("\(length) \(.[0].category)") | join(", "))}) end),
             (.capped | select(. > 0) | tx("behaviour-capped"; {count: .})),
             (.claims[] | select(.state == "unverifiable") | tx("behaviour-claim"; {claim_id})) ] end);
 
