@@ -254,6 +254,11 @@ cmd_prepare() {
       [ "$(git -C "$RUN/base" rev-parse HEAD)" = "$mb" ] && base_tree=true
   fi
   [ "$(git -C "$RUN/clone" rev-parse HEAD)" = "$head" ] || refuse head-moved "the clone left the head"
+  # A merge base with no file under the module root: the handover states the reviewer's new
+  # module shape (github-io.md, Handover). A tree that cannot be read is no empty base.
+  local new_module=false t
+  if [ "$base_tree" = true ] && t="$(git -C "$RUN/base" ls-tree -r --name-only HEAD -- "${prefix:-.}" 2> /dev/null)" &&
+    [ -z "$t" ]; then new_module=true; fi
 
   # G0 and the plan pass mode, only when the user named a profile (plan-pass.md).
   local mode=none
@@ -326,7 +331,7 @@ cmd_prepare() {
   bash "$HERE/verify-pass.sh" select "$RUN" --files "$RUN/host/files.json" --prefix "$prefix" \
     > "$RUN/selection.json" 2> /dev/null || echo '{"selection": null, "dirs": []}' > "$RUN/selection.json"
 
-  write_index "$checks_file" "$changed" "$behaviour" "$mode"
+  write_index "$checks_file" "$changed" "$behaviour" "$mode" "$new_module"
   local login_shown="${login:-none}"
   echo "RUN=$RUN"
   echo "identity: $login_shown, posting $posting$( [ "$render_only" = false ] || echo ", render-only")"
@@ -334,15 +339,15 @@ cmd_prepare() {
 }
 
 # index.json: enumerated fields and validated paths only, never prose, a title or a branch.
-write_index() { # checks file, changed files, behaviour, mode
-  jq -n --arg cf "$1" --arg changed "$2" --arg beh "$3" --arg mode "$4" --arg pre "$path_re" \
+write_index() { # checks file, changed files, behaviour, mode, new module
+  jq -n --arg cf "$1" --arg changed "$2" --arg beh "$3" --arg mode "$4" --arg nm "$5" --arg pre "$path_re" \
     --slurpfile h "$RUN/host/host.json" --slurpfile a "$RUN/state/args.json" --slurpfile s "$RUN/selection.json" \
     --slurpfile f "$RUN/host/files.json" --slurpfile d "$( [ -f "$RUN/depth.json" ] && echo "$RUN/depth.json" || echo /dev/null)" '
     def paths: [.[]? | select(type == "string" and length <= 300 and test($pre))];
     ($h[0]) as $h | ($a[0]) as $a | ($d[0] // null) as $d
     | {format: 1, status: "ok", head: $h.head_sha, base: $h.base_sha, merge_base: $h.merge_base,
        prefix: (if $h.prefix | test($pre) then $h.prefix else "" end),
-       triage: $a.triage, render_only: $a.render_only, posting: $a.posting,
+       triage: $a.triage, render_only: $a.render_only, posting: $a.posting, new_module: ($nm == "true"),
        plan: (if $a.profile == "" then "no-profile" else $mode end),
        depth: (if $a.triage then "triage" else ($d.depth // "deep") end),
        reasons: ($d.reasons // [] | paths),
@@ -363,6 +368,7 @@ summary_lines() {
     "depth: \(.depth)" + (if .reasons != [] then " (" + (.reasons[:6] | join(", ")) + ")" else "" end),
     "out of scope: checks \(.checks_out_of_scope | join(",") | if . == "" then "none" else . end), examples \(.examples_out_of_scope | length)",
     "behaviour: \(.behaviour), plan: \(.plan)",
+    (if .new_module then "base: no file under the module root, reviewed as a new module" else empty end),
     "next: " + (if .triage then "handover, reviewer, render"
       elif .depth == "light" then "claims, verify, plan, ladder, handover, reviewer, render"
       elif .depth == "focused" then "claims, schema, verify, plan, skip-coverage, ladder, handover, reviewer, render"
@@ -656,22 +662,33 @@ cmd_handover() {
   [[ "$n" =~ ^[0-9]+$ ]] || fail "task.md has no block preamble"
   if [ "$TRIAGE" = false ]; then record_lines > "$out/record.txt" || fail "the record could not be assembled"; fi
   # The merge base the depth was bound to, for the reviewer's mtf-facts --merge-base-sha.
-  local mbl="$MB"
+  local mbl="$MB" nm=false
   [ ! -f "$RUN/depth.json" ] || mbl="$(jq -r '.binding.merge_base' "$RUN/depth.json")"
   [[ "$mbl" =~ $sha_re ]] || mbl=""
+  # An empty base: the task states the new module shape and names no diff, since the reviewer
+  # ignores that statement beside a diff, and mtf-facts then runs without --base and --diff.
+  jq -e '.new_module == true' "$RUN/index.json" > /dev/null 2>&1 && nm=true && mbl=""
   rm -rf "$RUN/review"; mkdir "$RUN/review"
   # The diff of the task, module-root-relative, as a file the reviewer's mtf-facts lint reads.
   awk 'p == 1 && $0 == f { exit } p == 1 { print; next } p == 2 { f = $0; sub(/diff$/, "", f); p = 1; next }
        /^The diff:$/ { p = 2 }' "$t" > "$out/change.diff"
   {
     printf 'Workspace: %s\n' "$MROOT"
-    head -n $((n - 1)) "$t"
+    head -n $((n - 1)) "$t" | awk -v nm="$nm" '
+      nm == "true" && p == 0 && $0 == "Changed paths:" {
+        print "New module: the workspace holds a whole module with no base. Its merge base holds no file under the module root, so every file in the workspace, .git/ excluded, is added."
+        p = 1; next }
+      p == 1 && $0 == "The diff:" { p = 2; next }
+      p == 2 { f = $0; sub(/diff$/, "", f); p = 3; next }
+      p == 3 { if ($0 == f) p = 4; next }
+      p == 1 { next }
+      { print }'
     grep -qxF "$WRITE_SHORT" "$t" || printf '%s\n' "$WRITE_SHORT"
     [ ! -f "$RUN/depth.json" ] || [ "$TRIAGE" = true ] || printf 'Depth: %s\n' "$RUN/depth.json"
     [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || [ ! -d "$RUN/facts" ] || printf 'Provider fact sheets: %s\n' "$RUN/facts"
     [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || [ ! -f "$RUN/schema-handoff/schema-handoff.json.gz" ] ||
       printf 'Schema handoff: %s\n' "$RUN/schema-handoff/schema-handoff.json.gz"
-    printf 'Diff: %s\n' "$out/change.diff"
+    [ "$nm" = true ] || printf 'Diff: %s\n' "$out/change.diff"
     [ -z "$mbl" ] || printf 'Merge base: %s\n' "$mbl"
     printf 'Output: write the findings list as JSON to %s, the summary line to %s and the facts comparison note to %s, and nothing else.\n' \
       "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt"
@@ -737,6 +754,11 @@ cmd_render() {
   rc=$?
   printf '%s\n' "$line" | head -n 20
   [ "$rc" = 0 ] || exit 1
+  # verdict.md, Clamps: the self-authored row is this run's own, so it is applied here and not in
+  # result.json, whose proposed_event is data for an adapter (render-output.md).
+  jq -r --slurpfile h "$RUN/host/host.json" --slurpfile a "$RUN/state/args.json" '
+    select($h[0].state.self_authored and .proposed_event != "COMMENT" and ($a[0].render_only | not) and $a[0].posting == "enabled")
+    | "clamp: own pull request, propose COMMENT in place of \(.proposed_event)"' "$out/result.json"
   echo "body: $out/comment.md"
   jq -r '"identity: \(.login | if . == "" then "none" else . end), posting \(.posting)" + (if .render_only then ", render-only" else "" end)' "$RUN/state/args.json"
 }

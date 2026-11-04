@@ -675,6 +675,63 @@ check "history: with no pull request commit list the run is refused, never prepa
   "$(grep -q '^prepare refused: depth-aborted' "$TMP/p8.out"; echo $?)"
 run_rr cleanup "$(sed -n 's/^RUN=//p' "$TMP/p8.out")" > /dev/null 2>&1
 
+# --- 5b. An empty base: the new module handover; the self-authored clamp ---------------------------
+# The base commit holds no file, the head adds a whole module: the task states the reviewer's new
+# module shape and names no diff. The posting login is the author, so a block is clamped to COMMENT.
+mkempty() { # name -> bare repo whose base commit has an empty tree; sets HEADC BASEC
+  local w="$TMP/work-$1" b="$TMP/remote/example-org/$1.git"
+  rm -rf "$w" "$b"; mkdir -p "$w"; git init -q "$w"
+  git -C "$w" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
+  BASEC="$(git -C "$w" rev-parse HEAD)"
+  (cd "$w" && mkdir -p examples/one && printf 'resource "x" "y" {}\n' > main.tf && : > variables.tf &&
+    printf 'terraform {}\n' > versions.tf && printf 'module "m" { source = "../.." }\n' > examples/one/main.tf &&
+    printf '# w\n' > README.md && git add -A && git -c user.name=t -c user.email=t@t commit -q -m head)
+  HEADC="$(git -C "$w" rev-parse HEAD)"
+  git clone -q --bare "$w" "$b"; git -C "$b" update-ref refs/pull/7/head "$HEADC"
+  git -C "$b" config uploadpack.allowAnySHA1InWant true
+  git -C "$w" ls-tree -r -l "$HEADC" | awk -v OFS='\t' '{print $1, $2, $3, $4, substr($0, index($0, "\t") + 1)}' |
+    jq -R -s '{truncated: false, tree: [split("\n")[] | select(. != "") | split("\t") | {mode: .[0], type: .[1], sha: .[2], size: (.[3] | tonumber), path: .[4]}]}' \
+    > "$GHD/tree-$HEADC"
+  echo '{"truncated": false, "tree": []}' > "$GHD/tree-$BASEC"
+}
+mkempty fresh; ghfiles open false APPROVED
+jq '.changed_files = 5' "$GHD/meta" > "$TMP/meta" && cp "$TMP/meta" "$GHD/meta"
+jq -n '[("main.tf", "variables.tf", "versions.tf", "examples/one/main.tf", "README.md")
+  | {filename: ., status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+x"}]' > "$GHD/files"
+echo '{"login": "author1", "type": "User"}' > "$GHD/user"
+run_rr prepare --repo example-org/fresh --pr 7 > "$TMP/p9.out" 2>&1
+RUN="$(sed -n 's/^RUN=//p' "$TMP/p9.out")"
+check "empty base: prepare records a new module and says so" \
+  "$(q "$RUN/index.json" '.status == "ok" and .new_module == true' | grep -qx 0 &&
+     grep -qx 'base: no file under the module root, reviewed as a new module' "$TMP/p9.out" && lines_ok "$TMP/p9.out" | grep -qx 0; echo $?)"
+full; run_rr handover "$RUN" > /dev/null
+T="$RUN/handover/task.md"
+check "empty base: the task states the new module shape and names no diff, changed paths or merge base" \
+  "$(grep -qx 'New module: the workspace holds a whole module with no base. Its merge base holds no file under the module root, so every file in the workspace, .git/ excluded, is added.' "$T" &&
+     ! grep -q '^Changed paths:$\|^The diff:$\|^```diff$\|^Diff: \|^Merge base: \|^+++ b/' "$T" &&
+     grep -qx "Head revision: $HEADC" "$T" && grep -q '^Write short: ' "$T" &&
+     awk '/^New module: /{m=NR} /^Write short: /{w=NR} /^UNTRUSTED-[0-9a-f]{12} BEGIN$/{b=NR} END{exit !(m && m < w && w < b)}' "$T"; echo $?)"
+printf '[{"id": "F-001", "rule_id": "profile.owner-identifier", "severity": "MEDIUM", "file": "versions.tf", "line": null, "summary": "The owner is not the family organization.", "suggested_fix": "Name terraform-aws-modules as the owner."}]\n' > "$TMP/f9.json"
+run_rr render "$RUN" --findings "$TMP/f9.json" --assessment "$TMP/a0.txt" --out "$TMP/render9" > "$TMP/re9.out" 2>&1
+check "own pull request: a block is clamped to COMMENT beside the render line, result.json keeps the event" \
+  "$(grep -q '^rendered block (ladder rule 6), proposed event REQUEST_CHANGES, ' "$TMP/re9.out" &&
+     grep -qx 'clamp: own pull request, propose COMMENT in place of REQUEST_CHANGES' "$TMP/re9.out" &&
+     q "$TMP/render9/result.json" '.proposed_event == "REQUEST_CHANGES"' | grep -qx 0; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+# The same pull request with another login: no clamp line; a base holding a file: no new module.
+echo '{"login": "octo-reviewer", "type": "User"}' > "$GHD/user"
+prep_fresh() { run_rr prepare --repo example-org/fresh --pr 7 > "$TMP/p9.out" 2>&1; RUN="$(sed -n 's/^RUN=//p' "$TMP/p9.out")"; }
+prep_fresh; full; run_rr handover "$RUN" > /dev/null
+run_rr render "$RUN" --findings "$TMP/f9.json" --assessment "$TMP/a0.txt" --out "$TMP/render10" > "$TMP/re10.out" 2>&1
+check "another login: no clamp line" "$(grep -q 'proposed event REQUEST_CHANGES' "$TMP/re10.out" && ! grep -q '^clamp:' "$TMP/re10.out"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+mkrepo widget; ghfiles open false APPROVED
+prep; full; run_rr handover "$RUN" > /dev/null
+check "a base holding the module: no new module, the diff and the merge base cross" \
+  "$(q "$RUN/index.json" '.new_module == false' | grep -qx 0 && ! grep -q '^New module: ' "$RUN/handover/task.md" &&
+     grep -q '^Diff: ' "$RUN/handover/task.md" && grep -q '^Merge base: ' "$RUN/handover/task.md" && ! grep -q '^base: ' "$TMP/p.out"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
 # --- 6. The SKILL.md move: SKILL.md, references/workflow.md and references/inputs.md hold the pinned
 # sentence multiset; the router's own text is headings, tables and block quotes only.
 # Sentences: the text of both files with fenced blocks, headings, table rows and block quotes
