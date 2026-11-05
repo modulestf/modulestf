@@ -609,7 +609,7 @@ registry_check() { # file
 if [ ! -f "$RF" ]; then
   fail "rule facts table" "$RF" "is missing"
 else
-  grep -hoE "$ID_RE" "$RSK/SKILL.md" $(find "$RSK/references" -name '*.md' ! -name fixtures.md ! -name rule-facts.md | sort) |
+  grep -hoE "$ID_RE" "$RSK/SKILL.md" $(find "$RSK/references" -name '*.md' ! -name fixtures.md ! -name rule-facts.md ! -name rule-summaries.md | sort) |
     tr -d '`' | sort -u > "$TMP/rule-ids"
   grep -oE "^\| $ID_RE \|" "$RF" | grep -oE "$ID_RE" | tr -d '`' | sort > "$TMP/rule-rows"
   nrf=0
@@ -621,6 +621,23 @@ else
     grep -qxF "$id" "$TMP/rule-ids" || fail "rule facts table" "$RF" "$id has a row but the skill names no such rule"
   done < "$TMP/rule-rows"
   grep -qxF "rule facts table" "$TMP/failed" || echo "ok   rule facts table ($nrf rules)"
+
+  # The rule summaries the modules.tf rules page is built from: one row with a summary for
+  # every registry row, and no other row.
+  RS="$RSK/references/rule-summaries.md"
+  if [ ! -f "$RS" ]; then
+    fail "rule summaries" "$RS" "is missing"
+  else
+    grep -oE "^\| $ID_RE \|" "$RS" | grep -oE "$ID_RE" | tr -d '`' | sort > "$TMP/summary-rows"
+    while IFS= read -r id; do
+      [ "$(grep -cxF "$id" "$TMP/summary-rows")" = 1 ] || fail "rule summaries" "$RS" "$id has no row, or more than one"
+    done < "$TMP/rule-rows"
+    while IFS= read -r id; do
+      grep -qxF "$id" "$TMP/rule-rows" || fail "rule summaries" "$RS" "$id has a row but rule-facts.md has no such rule"
+    done < "$TMP/summary-rows"
+    while IFS= read -r l; do fail "rule summaries" "$RS" "empty summary: $l"; done < <(grep -nE "^\| $ID_RE \| *\|" "$RS")
+    grep -qxF "rule summaries" "$TMP/failed" || echo "ok   rule summaries ($(wc -l < "$TMP/summary-rows" | tr -d ' ') rules)"
+  fi
 
   # The carry column: exactly one value, file or never, in the Carry cell of each row, and
   # one audit line in the Carry Audit section for each file row and for no other rule.
