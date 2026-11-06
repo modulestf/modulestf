@@ -51,7 +51,7 @@ What each step produces, and what happens when it fails. Mechanics: [github-io.m
 
 ## Step 7
 
-- **Step 7 - Check runs.** Both `commits/<headRefOid>/check-runs` and `commits/<headRefOid>/status`, pinned to the head SHA rather than to the pull request, so the verdict is reproducible and a legacy commit status is not missed. Queued or in progress is unknown, never pass; a read that fails on transport is read once more before it is unknown ([github-io.md](github-io.md#check-runs)). On a hosted run the task text names a directory the host wrote before the model started, with the head's check runs and commit status read, its own check and jobs dropped and the signal set; Step 7 then calls neither API and takes the signal from the file after `host-pass.sh check` accepts it, and a rejected file is unknown ([host-pass.md](host-pass.md#check-runs-file)).
+- **Step 7 - Check runs.** Both `commits/<headRefOid>/check-runs` and `commits/<headRefOid>/status`, and the job-less workflow runs of `actions/runs?head_sha=<headRefOid>` ([github-io.md](github-io.md#check-runs)), pinned to the head SHA rather than to the pull request, so the verdict is reproducible and a legacy commit status is not missed. Queued or in progress is unknown, never pass; a read that fails on transport is read once more before it is unknown ([github-io.md](github-io.md#check-runs)). On a hosted run the task text names a directory the host wrote before the model started, with the head's check runs and commit status read, its own check and jobs dropped and the signal set; Step 7 then calls neither API and takes the signal from the file after `host-pass.sh check` accepts it, and a rejected file is unknown ([host-pass.md](host-pass.md#check-runs-file)).
 
 ## Step 7.5
 

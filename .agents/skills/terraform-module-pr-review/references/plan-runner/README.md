@@ -11,6 +11,9 @@ otherwise ([Runner or laptop](../plan-pass.md#runner-or-laptop)). The hosted rev
 plan job runs `run-pass.sh` on a GitHub-hosted runner for a maintainer's `@modulestf plan` request,
 and `hosted-record.sh` reduces its record to `plan-hosted.json`, classes and counts only
 ([Hosted runner](../plan-pass.md#hosted-runner)). Nothing calls `run-plan.sh` but the smoke test.
+`run-tests.sh` runs the test pass, a directory's Python unit tests, on the same images behind
+a third proxy configuration that passes the Python package index alone
+([The test pass in the runner](#the-test-pass-in-the-runner), [test-pass.md](../test-pass.md)).
 
 ## Stated limits
 
@@ -94,9 +97,10 @@ and `hosted-record.sh` reduces its record to `plan-hosted.json`, classes and cou
   module call with the literal `build_in_docker = true`, whose packaging calls Docker at
   plan. A `build_in_docker` set from a variable is not detected, so such an example ends in
   a `code-error`.
-- **Direct Debian packages are version-pinned**. The eight direct apt install entries
+- **Direct Debian packages are version-pinned**. The nine direct apt install entries
   in `Dockerfile.runner` use explicit versions, checked against signed metadata from
-  the digest-pinned base image's apt sources for amd64 and arm64 on 2026-10-04.
+  the digest-pinned base image's apt sources for amd64 and arm64 on 2026-11-05, and
+  `pipenv`, an `all` package, on 2026-11-06.
   Transitive dependencies still follow those sources at build time. This is not a
   frozen archive or a byte-reproducible image. Removed package versions fail the
   build; there is no unpinned fallback. To refresh, run `apt-get update` and
@@ -129,9 +133,10 @@ and `hosted-record.sh` reduces its record to `plan-hosted.json`, classes and cou
 | File | What it is |
 |------|------------|
 | `Dockerfile.runner` | Runner image: Debian slim pinned by digest, terraform 1.16.4 and AWS CLI 2.37.1 pinned by version and SHA-256, plus git, jq, bash, perl, curl, python3 and python3.12, which the lambda module's packaging script needs at plan. Runs as uid 10001 |
-| `Dockerfile.proxy` | Egress proxy image: Alpine pinned by digest, tinyproxy 1.11.2-r0, with one configuration per phase. Runs as `nobody` |
+| `Dockerfile.proxy` | Egress proxy image: Alpine pinned by digest, tinyproxy 1.11.2-r0, with one configuration per phase and one for the test pass. Runs as `nobody` |
 | `tinyproxy.conf` | Proxy configuration: default deny, filter on the whole request target, `CONNECT` to port 443 only, every connection and refusal logged |
 | `allowlist-init` | Init phase: `registry.terraform.io`, `releases.hashicorp.com`, `github.com`, `codeload.github.com`, `objects.githubusercontent.com`. No AWS |
+| `allowlist-test` | Test pass: `pypi.org` and `files.pythonhosted.org`, nothing else |
 | `allowlist-plan` | Plan phase: named AWS service endpoints, in their global and regional forms, and nothing else. A host a legitimate example needs shows in `plan-refused-hosts.txt`, and its service is added here; `kinesis` came from the lambda event source mapping example. EC2 public DNS names, load balancer and API Gateway hosts, S3 website hosts and S3 bucket virtual hosts do not match |
 | `entry.sh` | Runner entrypoint, one phase per container: `init` copies the read-only clone to `/work` and runs `init` with no credentials; `plan` runs `plan` in the same copy |
 | `egress-probe.sh` | Probe run inside the runner on the internal network. `init` and `plan`, for the smoke test after a phase: direct connections, name resolution, plain HTTP, and one line per host through the proxy, always exiting 0. `check`, for `run-pass.sh` behind each proxy before its first session: fails closed, exiting 1 on any open path or fault, from two positive controls, the interfaces and routes, name resolution, refused `CONNECT`s and direct connections to the host addresses it is passed |
@@ -140,7 +145,9 @@ and `hosted-record.sh` reduces its record to `plan-hosted.json`, classes and cou
 | `record-scan.sh` | Host-side leak scan over a finished record: exact values and the plan pass's evidence patterns, each matching line replaced by a marker |
 | `image-tag.sh` | Prints the image tag: `PLAN_RUNNER_TAG`, or one derived from the files the images are built from |
 | `run-plan.sh` | Host side of the bare runner: builds or reuses the images, creates the networks and the work volume, runs the two phases each behind its own proxy, exports the record as regular files only and removes everything |
-| `smoke.sh`, `smoke/example/`, `smoke/attack/` | Smoke test: a one-data-source example with made-up credentials, and an example whose code plants symlinks in the output directory |
+| `run-tests.sh` | Host side of the test pass: the networks, the test proxy, the network check, one test container fed the archive on standard input, the result line, cleanup |
+| `test-entry.sh` | Test container entrypoint: unpacks the archive, `pipenv install --dev` or `pip install -r requirements-dev.txt`, `python -m pytest`, prints one result line |
+| `smoke.sh`, `smoke/example/`, `smoke/attack/`, `smoke/tests-pass/`, `smoke/tests-fail/` | Smoke test: a one-data-source example with made-up credentials, an example whose code plants symlinks in the output directory, and a passing Pipfile project and a failing `requirements-dev.txt` one for the test pass |
 
 ## How a run is isolated
 
@@ -302,6 +309,25 @@ The record directory must not exist yet, and receives regular files only:
 - `runner.log`: the containers' error output;
 - `run-id.txt`: the id every Docker object of the run carries.
 
+## The test pass in the runner
+
+```bash
+./run-tests.sh --build --archive <tar> --kind pipenv|requirements --python python3|python3.12 --record <dir> [--tmp <dir>]
+```
+
+The pull request skill's `tests` command calls it with a `git archive` of the tested directory
+at the head and the kind and Python it read from the merge base ([test-pass.md](../test-pass.md)).
+It creates two networks, a volume and the proxy with `test.conf`, every name `test-<role>-<id>`,
+runs `egress-probe.sh check` behind that proxy with `pypi.org` as the allowed host and GitHub
+and STS as refused ones, then one runner container with `test-entry.sh`, the archive on its
+standard input, no credential and a fresh work volume. The container keeps a budget of
+`--budget-minutes`, 10 by default, and the host stops it a minute after. Only the last
+`tests: ` line of its output, held to the result grammar, is kept. The record holds
+`run-id.txt`, `network-check-test.txt`, `proxy-test.log` and `tests.txt`, whose one line is
+`passed <n>`, `failed <n>` or `error <class>`; the install and test output stay in the
+container. The images are the plan pass's: `pipenv` is a pinned Debian package, the Pythons
+are the image's two, and `test-entry.sh` and `allowlist-test` are in the image tag.
+
 ## Extending the plan allowlist
 
 `allowlist-plan` names the AWS services a plan may reach, and it grows only from evidence.
@@ -352,7 +378,8 @@ thirteen, one past the laptop's cap. The made-up credentials fail the plan pass'
 check, so that pass ends at credentials after the init phase. It also runs
 `record-scan.sh` on a crafted record, and `run-pass.sh` three more times with a Docker wrapper
 that fakes a fault for the network check: IPv6 on, the probe's gateway pointed at the proxy,
-which listens, and a plan-phase positive control its proxy refuses. Its checks cover:
+which listens, and a plan-phase positive control its proxy refuses. Last, it runs
+`run-tests.sh` on `smoke/tests-pass` and `smoke/tests-fail`. Its checks cover:
 
 - each phase reaches only its own hosts;
 - during plan, the registry, GitHub, an EC2 public DNS name and S3 bucket hosts are refused;
@@ -380,6 +407,10 @@ which listens, and a plan-phase positive control its proxy refuses. Its checks c
   value and a key id each split across two lines, and keeps the ordinary lines around them;
 - `run-pass.sh --tmp`: nothing is left under it after a run, and one that cannot be
   written to stops the run before any Docker object is made;
+- `run-tests.sh`: the passing project is `passed 2` and the failing one `failed 1`, the
+  network check behind the test proxy passes `pypi.org` and refuses GitHub and STS, the
+  install reached only the package index hosts, the record holds its four files and no test
+  output, and the script passes no credential;
 - `image-tag.sh` gives `src-` and 12 hex digits, the same on every call, takes
   `PLAN_RUNNER_TAG` over it, and refuses an invalid one;
 - no container, network or volume of the smoke test's own runs is left behind, checked by

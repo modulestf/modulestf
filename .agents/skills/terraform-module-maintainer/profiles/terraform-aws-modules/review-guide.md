@@ -158,6 +158,20 @@ No ID.
 
 Source: [code-conventions.md#example-sizing](code-conventions.md#example-sizing) `e52ceaf94b5d`
 
+### Embedded code
+
+Code the module packages or reads that is not Terraform - a Lambda source under `functions/` or `src/`, a test beside it, a `templatefile` input - is reviewed when the change edits it. Read only the embedded files the change edits, whole, and run nothing.
+
+- A line the change adds or edits that raises, gives the wrong output or opens a security hole for an input the code handles is a defect.
+- A fix that leaves the same pattern unfixed elsewhere in a file it edits, such as one field cleaned before it is wrapped in a code span while the fields beside it are wrapped without it, is a nit, never a block. Name each line, and say a follow-up is fine.
+- A changed line with a variant that loses less of its input, such as replacing a character instead of deleting it, is a nit too.
+
+Naming, formatting and the idiom of the embedded language are not judged.
+
+ID: `structure.embedded-code-defect`.
+
+Source: [code-conventions.md#embedded-code](code-conventions.md#embedded-code) `7c57609f4f12`
+
 ### One AWS service per module
 
 Two closed lists never count against scope:
@@ -208,6 +222,7 @@ Every level-2 section of the profile files this guide draws on is either a sourc
 |-----------------|-----------------------------|------|
 | [What this profile defines](PROFILE.md#what-this-profile-defines) | An index of the profile, no rule | `c5143087ef65` |
 | [Profile constants](PROFILE.md#profile-constants) | Values restated for tools from the rules above, no rule of its own | `08d1397dd08f` |
+| [Plan providers](PROFILE.md#plan-providers) | Providers the review's plan pass admits in runner mode, no review rule | `ff3b742aade6` |
 | [What stays out of a profile](PROFILE.md#what-stays-out-of-a-profile) | About the profile itself, no rule | `4f65d3a61af9` |
 | [Adding another profile](PROFILE.md#adding-another-profile) | About the profile itself, no rule | `9f3a0f232873` |
 | [Documentation regeneration in an untrusted workspace](PROFILE.md#documentation-regeneration-in-an-untrusted-workspace) | Constants the maintainer uses to regenerate a documentation region in an untrusted workspace, no review rule | `930e64126f30` |

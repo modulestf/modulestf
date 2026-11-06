@@ -644,7 +644,7 @@ verify() { # tree root, module root, example directory: sets SIDEJ to one side o
     return
   fi
   if [ "$(left)" -le 0 ]; then SIDEJ="$(side 0 "" not-run-budget "")"; return; fi
-  tf 60 "$1/$3" validate -no-color
+  tf 180 "$1/$3" validate -no-color
   VALID=$?
   if [ "$VALID" -eq 124 ] && [ -e "$W/out.txt.cap" ]; then SIDEJ="$(side 0 "" "$(limited)" "")"; return; fi
   [ "$VALID" -eq 0 ] && { SIDEJ="$(side 0 0 code-result "")"; return; }

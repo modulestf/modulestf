@@ -107,7 +107,8 @@ drops_of() {
   case "$1" in
     a-compatibility) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:No base" ;;
     b-coverage) echo "u:Reads|h:Which blocks|h:Documented omissions|h:Suggested Fixes" ;;
-    c-structure|e-profile) echo "u:Reads, Fails When and Severity|h:Suggested Fixes" ;;
+    c-structure) echo "u:Reads, Fails When and Severity|h:Embedded Code|h:Suggested Fixes" ;;
+    e-profile) echo "u:Reads, Fails When and Severity|h:Suggested Fixes" ;;
     d-examples) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:Plan evidence" ;;
     f-scope) echo "u:Reads, Fails When and Severity|h:The suggested fix|h:Suggested Fixes|h:The base revision|h:A new module|h:Renamed files|h:Not evaluated|h:Where Check F yields|h:Decisions|h:Worked Cases" ;;
   esac

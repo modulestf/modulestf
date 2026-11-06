@@ -147,7 +147,7 @@ jq -n --arg h "$HEAD" --arg b "$BASE" '{format: 1, repo: "example/terraform-aws-
   related: {status: "not-applicable", open_unlinked: [], sidebar_not_read: false}}' > "$TMP/host.json"
 mkdir -p "$TMP/checks" "$TMP/rundir" "$TMP/render"
 jq -n --arg h "$HEAD" '{format: 1, head_sha: $h, signal: "pass", reads: "ok", own_check: null, own_check_dropped: 0,
-  own_jobs_dropped: 0, own_jobs_unreadable: false, check_runs: [], statuses: {state: "success", total_count: 0}}' > "$TMP/checks/checks.json"
+  own_jobs_dropped: 0, own_jobs_unreadable: false, check_runs: [], jobless: [], statuses: {state: "success", total_count: 0}}' > "$TMP/checks/checks.json"
 jq -n --slurpfile b "$O/run-behaviour.json" '{format: 1, triage: false, plan_ran: false, verify_gaps: [], behaviour: $b[0],
   coverage: {class: "complete", inert: false, unplanned: []},
   counts: {"instruction-like-text-from-others": 0, "conversation-claims-unread": 0, "review.quoted-claim-unverifiable": 0}}' > "$TMP/run.json"

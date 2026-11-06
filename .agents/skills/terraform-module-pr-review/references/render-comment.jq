@@ -127,14 +127,35 @@ def behaviour_of($run):
 
 # The behaviour gaps: each unverified trigger and claim, each trigger over the cap, and a
 # behaviour step that did not run. A refuted state is no gap: it blocks at rule 2.
+# A file outside HCL that HCL reads, such as a Lambda's source, has no level that can verify it;
+# the repository's own tests are its evidence, read through the Checks signal, so it is no gap.
+# Only when the head has a check run or a commit status: no checks at all is no evidence.
+def ci_gated: .ci == true;
+def mark_ci($checks): if . == null or .status != "ran" or (($checks.runs // 0) == 0) then .
+  else .triggers |= map(if .category == "non-hcl-dependency" and .state == "unverifiable" then . + {ci: true} else . end) end;
 def behaviour_gaps: if . == null then 0 elif .status == "not-run" then 1
-  else ([.triggers[], .claims[] | select(.state == "unverifiable")] | length) + .capped end;
+  else ([(.triggers[] | select(ci_gated | not)), .claims[] | select(.state == "unverifiable")] | length) + .capped end;
 def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select(.state == "refuted")] | length end;
 
 # A claim.* finding words a refuted state; one with no refuted state in the behaviour object is
 # refused.
 def claims_consistent($findings; $run):
   (any($findings[]; .rule_id | startswith("claim.")) | not) or (behaviour_of($run) | behaviour_refuted > 0);
+
+# The test pass (test-pass.md): a second source of evidence for the non-hcl-dependency triggers,
+# beside the Checks signal of mark_ci. A Python trigger in the tested directory, not verified, becomes
+# tested on "passed <n>", no gap, and refuted on "failed <n>", a block at rule 2; error and not
+# run leave it as it was.
+def tests_result_re: "^((passed|failed) [0-9]{1,6}|error [a-z-]{1,32}|not run: [a-z ]{1,32})$";
+def valid_tests: type == "object" and keys == ["dir", "result"]
+  and (.dir == null or (.dir | plain_path)) and (.result | type == "string" and test(tests_result_re));
+def in_tested_dir($t): .category == "non-hcl-dependency" and (.file | endswith(".py"))
+  and (.file | split("/") | .[:-1] | join("/") | if . == "" then "." else . end) == $t.dir;
+def tested_by($t): .state == "unverifiable" and in_tested_dir($t);
+def mark_tests($t):
+  if . == null or .status != "ran" or $t == null or ($t.result | test("^(passed|failed) [1-9]") | not) then .
+  else ($t.result | startswith("passed ")) as $ok
+    | .triggers |= map(if tested_by($t) then .state = (if $ok then "tested" else "refuted" end) else . end) end;
 
 # compat.claim-contradicts-analysis sits one band below the highest compat.* code finding that
 # refutes its claim, compat.break-unexplained aside, and never fires without one (quoted-claims.md).
@@ -258,7 +279,8 @@ def depth_bound($h): .binding.head_sha == $h.head_sha and $h.merge_base != null 
 
 def valid_run:
   type == "object"
-  and ((keys - ["behaviour", "depth", "examples", "plan_mode"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((keys - ["behaviour", "depth", "examples", "plan_mode", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((has("tests") | not) or (.tests | valid_tests))
   and ((has("behaviour") | not) or (.behaviour | valid_behaviour))
   and ((has("depth") | not) or (.depth | valid_depth))
   # The host writes "plan pass skipped at light depth" at light only, where the plan pass is out of scope.
@@ -366,6 +388,7 @@ def texts: {
   "rationale-3-many": "Failing host signals: {signals}. A failing host signal blocks merge (ladder rule 3).",
   "rationale-4-triage": "A triage run leaves its deferred checks unknown. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-checks": "The check results could not be read, so a failing check may exist. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-checks-jobless": "A workflow ended without starting a job, so the repository's CI did not run. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-threads": "Review thread resolution could not be read, so an open objection may exist. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-review-decision": "The reviews could not be read, so a request for changes may exist. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-mergeability": "Mergeability could not be read, so a merge conflict may exist. Any unknown makes the review inconclusive (ladder rule 4).",
@@ -439,6 +462,8 @@ def texts: {
   "todo-generated": "Documentation tables are generated. After the edits above, run `pre-commit run -a` and commit the result. Do not edit them by hand.",
   "todo-triage": "This was a triage run. The full review has not run.",
   "todo-checks-unknown": "Check results could not be read or are still running.",
+  "todo-checks-jobless-one": "Maintainer: approve or re-run the workflow that never started a job: {workflows}.",
+  "todo-checks-jobless-many": "Maintainer: approve or re-run the workflows that never started a job: {workflows}.",
   "todo-threads-unknown": "Review thread resolution could not be read.",
   "todo-review-decision-unknown": "The reviews could not be read.",
   "todo-mergeability-unknown": "Mergeability could not be read.",
@@ -446,6 +471,7 @@ def texts: {
   "todo-gaps-many": "{count} checks could not run; see Checks that could not run.",
   "refuse-band": "a `compat.claim-contradicts-analysis` finding is rated above the band of the `compat.*` code finding that refutes it, or has none; send it back to the reviewer",
   "fix-fold": "Fix for each location ({count})",
+  "behaviour-evidence-tested": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {tested} tested by the unit tests, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "behaviour-evidence-reported": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "compact-validate-all": "`validate` passed in all {count} examples; {planned} were planned.",
   "compact-validate-some": "`validate` passed in {validated} of {count} examples; {planned} were planned.",
@@ -479,6 +505,8 @@ def texts: {
   "evidence-more": "+{count}",
   "name-withheld": "name withheld",
   "clamp-closed": "Comment only: this verdict describes a pull request that is no longer open.",
+  "reopen-hint": "Maintainer: closed as stale with no review from anyone with write access; reopen to merge.",
+  "reopen-hint-date": "Maintainer: closed as stale with no review from anyone with write access; reopen to merge. The author last commented on {date}.",
   "depth-line": "Review depth: {depth}. Reasons: {reasons}.",
   "depth-out-of-scope": "Out of scope at this depth, so not unknowns: {items}.",
   "depth-more": ", and {count} more",
@@ -492,7 +520,9 @@ def texts: {
   "behaviour-changes-one": "1 change",
   "behaviour-changes-many": "{count} changes",
   "behaviour-claims-one": "1 claim",
-  "behaviour-claims-many": "{count} claims"
+  "behaviour-claims-many": "{count} claims",
+  "tests-passed": "Unit tests of {dir} in the isolated runner: passed {count}; changes outside Terraform they cover: {changes}.",
+  "tests-failed": "Unit tests of {dir} in the isolated runner: failed {count}; changes outside Terraform they refute: {changes}."
 };
 
 def tx($k; $v): texts[$k] | gsub("\\{(?<n>[a-z_]+)\\}"; $v[.n] | tostring);
@@ -516,6 +546,7 @@ def rationale($in):
       | tx(if ($n | length) > 1 then "rationale-3-many" else "rationale-3-one" end; {signals: ($n | and_join)})
     elif $r == 4 then
       tx(if $in.triage then "rationale-4-triage"
+         elif $g.checks == "unknown" and $in.jobless != [] then "rationale-4-checks-jobless"
          elif $g.checks == "unknown" then "rationale-4-checks"
          elif $g.threads == "unknown" then "rationale-4-threads"
          elif $g.review_decision == "unknown" then "rationale-4-review-decision"
@@ -606,11 +637,15 @@ def stale_live: # a "Generated content made stale:" whose rest does not start " 
   | any(range(1; $s | length); $s[.:] | join($m) | test("^ none(\\.|,|\\z)") | not);
 
 def loc_list($p): # the first eight locations, then the count of the rest
-  map(loc($p)) as $l
+  # two findings at one place name it once
+  (map(loc($p)) | reduce .[] as $x ([]; if index([$x]) then . else . + [$x] end)) as $l
   | ($l[:8] | join(", ")) + (if ($l | length) > 8 then tx("todo-more"; {count: (($l | length) - 8)}) else "" end);
 
 # $gaps: the section 5 entries less the thread resolution one, which has its own item.
 # The optional items and the gaps line are quiet: a rule 4 list of quiet items alone does not render.
+# A job-less run's workflow file, in a code span, or (unnamed) when the host had none in its grammar.
+def workflow_name: if .workflow == null then "(unnamed)" else "`\(.workflow)`" end;
+
 def todo_items($l; $rule; $p; $gaps):
   ($l.findings | map(select(.rule_id != "review.tool-disputed"))) as $f
   | $l.signals as $g
@@ -623,6 +658,9 @@ def todo_items($l; $rule; $p; $gaps):
   | ($gaps + ($f | map(select(.rule_id | startswith("review."))) | length)) as $gaps
   | ([ ("checks", "mergeability", "review-decision") as $s
        | select($g[$s | gsub("-"; "_")] == "fail") | {box: true, t: tx("todo-" + $s)} ]
+     + ($l.jobless | if . == [] then [] else
+          [{box: true, t: tx(if length == 1 then "todo-checks-jobless-one" else "todo-checks-jobless-many" end;
+             {workflows: (map(workflow_name) | join(", "))})}] end)
      + (if $l.unresolved == 1 then [{box: true, t: tx("todo-threads-one")}]
         elif $l.unresolved > 1 then [{box: true, t: tx("todo-threads-many"; {count: $l.unresolved})}] else [] end)
      + [ $gs[] | select(.sev != "LOW")
@@ -635,7 +673,7 @@ def todo_items($l; $rule; $p; $gaps):
      + (if any($l.findings[]; .suggested_fix | stale_live) then [{box: any($abc[]; .box), t: tx("todo-generated")}] else [] end)
      + (if $rule != 4 then [] else
           [ (select($l.triage) | "todo-triage"),
-            (select($g.checks == "unknown") | "todo-checks-unknown"),
+            (select($g.checks == "unknown" and $l.jobless == []) | "todo-checks-unknown"),
             (select($g.threads == "unknown") | "todo-threads-unknown"),
             (select($g.review_decision == "unknown") | "todo-review-decision-unknown"),
             (select($g.mergeability == "unknown") | "todo-mergeability-unknown")
@@ -725,7 +763,7 @@ def gap_lines($h; $run; $b; $p; $cov):
      + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end) end)
   + ($b | if . == null then []
      elif .status == "not-run" then [tx("behaviour-not-run"; {reason})]
-     else [ ([.triggers[] | select(.state == "unverifiable")]
+     else [ ([.triggers[] | select(.state == "unverifiable" and (ci_gated | not))]
              | if length <= 5 then .[] | tx("behaviour-trigger"; trigger_at($p))
                # More than five: one line counting them per category; the locations are noise.
                else tx("behaviour-trigger-groups"; {count: length, categories: (group_by(.category)
@@ -741,19 +779,37 @@ def evidence_lines($b):
          and all($b.claims[]; .state == "verified")) then []
   else
     def n($xs; $s): [$xs[] | select(.state == $s)] | length;
-    [tx(if n($b.triggers; "reported") > 0 then "behaviour-evidence-reported" else "behaviour-evidence" end;
+    [tx(if n($b.triggers; "tested") > 0 then "behaviour-evidence-tested"
+        elif n($b.triggers; "reported") > 0 then "behaviour-evidence-reported" else "behaviour-evidence" end;
        def one_many($k; $n): tx($k + (if $n == 1 then "-one" else "-many" end); {count: $n});
        {changes: one_many("behaviour-changes"; ($b.triggers | length) + $b.capped),
        claim_count: one_many("behaviour-claims"; $b.claims | length), reported: n($b.triggers; "reported"),
+       tested: n($b.triggers; "tested"),
        verified: n($b.triggers; "verified"), covered: n($b.triggers; "covered"), inert: n($b.triggers; "inert"),
        refuted: n($b.triggers; "refuted"), unverifiable: (n($b.triggers; "unverifiable") + $b.capped),
        claims_verified: n($b.claims; "verified"),
        claims_refuted: n($b.claims; "refuted"), claims_unverifiable: n($b.claims; "unverifiable")})]
+    + ([$b.triggers[] | select(ci_gated)] | length
+       | if . > 0 then ["Changes outside Terraform left to the repository's own tests, which the Checks signal reads: \(.)."] else [] end)
   end;
+
+# The test pass's line under the evidence line, when it marked a trigger tested or refuted.
+def tests_lines($t; $b):
+  if $t == null or $b == null or $b.status != "ran" then [] else
+    ($t.result | split(" ")) as [$word, $count]
+    | ([$b.triggers[] | select(in_tested_dir($t) and .state == (if $word == "passed" then "tested" else "refuted" end))] | length) as $k
+    | if $k == 0 or ($word | IN("passed", "failed") | not) then []
+      else [tx("tests-" + $word; {dir: ($t.dir | nm(allowed)), count: $count, changes: $k})] end end;
 
 # A merged or closed pull request has no mergeability: host.json says not-applicable, which is no
 # unknown. On an open pull request the word proves nothing, so it reads as unknown.
 def is_closed($h): $h.state.state == "closed" or $h.state.merged;
+# A closed, unmerged pull request the host saw closed as stale with no review from anyone with
+# write access (host-pass.md, Host Facts): one maintainer line, the date only in its grammar.
+def reopen_line($h):
+  if ($h | has("reopen")) | not then []
+  elif $h.reopen.last_author_comment == null then [tx("reopen-hint")]
+  else [tx("reopen-hint-date"; {date: $h.reopen.last_author_comment})] end;
 def signals_of($h): $h.signals
   | if .mergeability == "not-applicable" and (is_closed($h) | not) then .mergeability = "unknown" else . end;
 
@@ -777,6 +833,7 @@ def state_lines($h; $c):
        (if $c.own_check_dropped > 0 then ["Checks: the host's own check `\($c.own_check)` excluded."] else [] end)
        + (if $c.own_jobs_dropped > 0 then ["Checks: the jobs of the host's own workflow runs excluded."] else [] end)
        + (if $c.own_jobs_unreadable then ["Checks: the host's own jobs could not be read."] else [] end)
+       + [($c.jobless // [])[] | "Checks: workflow \(workflow_name) ended `\(.conclusion)` without starting a job, so its tests never ran and say nothing about this change."]
      end);
 
 # A thread's path comes from the host already repository-relative (GitHub's own path), so only
@@ -935,7 +992,7 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
         | if . == [] then [] else ["- " + join(" ")] end)
      + [$o[] | select(routed) | tx("evidence-predates"; {rule_id, location: safe_loc($p), summary})]
      + [(depth_lines($run)[], state_lines($h; $in.checks)[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
-  | {body: ([$in.assessment, $verdict] + (if is_closed($h) then [tx("clamp-closed")] else [] end) + $action + (if $bullets == [] then [] else [$bullets | join("\n")] end)
+  | {body: ([$in.assessment, $verdict] + (if is_closed($h) then [tx("clamp-closed")] else [] end) + reopen_line($h) + $action + (if $bullets == [] then [] else [$bullets | join("\n")] end)
             + (if $notes == [] then [] else ["<details><summary>\(tx("evidence-summary"))</summary>\n\n" + ($notes | join("\n")) + "\n</details>"] end)
             | join("\n\n") + "\n"),
      findings: ([$o[] | select(routed | not)] + [$o[] | select(routed)] | seven($p))};
@@ -970,9 +1027,10 @@ def covered_of($in; $l; $b):
 def render($in):
   ($in | .run |= scoped_run) as $in
   | $in.host as $h | $in.host.prefix as $p
-  | (behaviour_of($in.run) | with_reported($in.findings)) as $b
+  | (behaviour_of($in.run) | with_reported($in.findings) | mark_tests($in.run.tests) | mark_ci($in.checks)) as $b
   | {findings: $in.findings, signals: (signals_of($h) + {checks: $in.checks.signal}),
      unresolved: ($h.unresolved_threads | length), triage: $in.run.triage, refuted: ($b | behaviour_refuted),
+     jobless: (if $in.checks.accepted then $in.checks.jobless // [] else [] end),
      # A refuted trigger no blocking claim.* finding words is its own checklist item.
      refuted_todo: (if any($in.findings[]; (.rule_id | startswith("claim.")) and (.severity | IN("CRITICAL", "HIGH"))) then []
                     else [($b // {triggers: []}).triggers[] | select(.state == "refuted")] end),
@@ -991,10 +1049,12 @@ def render($in):
   | ($v.rule == 4 and all($items[]; .quiet)) as $quiet
   | ([$in.assessment, "**\($v.verdict | verdict_line)**"]
      + (if is_closed($h) then [tx("clamp-closed")] else [] end)
+     + reopen_line($h)
      + (if $in.run.triage then ["Triage only: the full review of this change has not run yet."] else [] end)
      + (if $quiet then action_line($c) else [] end)
      + [$why]
      + evidence_lines($b)
+     + tests_lines($in.run.tests; $b)
      # Rule 7 reached by covered skips alone has no optional item to list.
      + (if $v.rule == 8 or $quiet or ($cov != [] and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items)] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)

@@ -24,7 +24,7 @@ pins() {
       }
     }
     END {
-      n=split("bash ca-certificates curl git jq perl python3 unzip", wanted, " ")
+      n=split("bash ca-certificates curl git jq perl pipenv python3 unzip", wanted, " ")
       for (i=1; i<=n; i++) if (seen[wanted[i]] != 1) bad=1
       count=0; for (p in seen) count++
       exit !(blocks == 1 && install == 1 && all_installs == 1 && count == n && !bad && !active)

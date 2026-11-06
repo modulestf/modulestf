@@ -1,0 +1,4 @@
+# Provider sources the plan pass admits in runner mode, beyond its default eight
+# (plan-pass.md, Runner providers). One <namespace>/* or <namespace>/<name> per line.
+hashicorp/*
+compliancetf/*

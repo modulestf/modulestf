@@ -51,7 +51,26 @@
 - MEDIUM when a copied constant carries no source URL and date (`structure.copied-content-unattributed`), or a `validation` block reaches past its own variable (`structure.validation-overreaching`).
 - LOW when a should-pass convention is missed: grouping, section headers, argument order inside a touched resource block, naming consistency, an error message that tells the consumer neither the bound nor the value received.
 
-`rule_id` prefix: `structure.`, for example `structure.create-flag-ignored`, `structure.output-no-try`, `structure.variable-untyped`, `structure.missing-description`, `structure.schema-shape-flattened`, `structure.sibling-block-asymmetry`, `structure.insecure-default`, `structure.wrong-file`, `structure.grouping`, `structure.flag-polarity`, `structure.argument-order`, `structure.multi-provider`, `structure.validation-message-uninformative`, `structure.suppression-unexplained`, `structure.input-ignored-in-branch`, `structure.sibling-argument-omitted`, `structure.docs-contradict-code`, `structure.validation-missing`, `structure.feature-above-version-floor`, `structure.version-floor-understated`, `structure.comment-redundant`, `structure.comment-unsourced`, `structure.copied-content-unattributed`, `structure.validation-overreaching`, `structure.arn-partition-hardcoded`, `structure.passthrough-field-drift`, `structure.passthrough-default-drift`.
+`rule_id` prefix: `structure.`, for example `structure.create-flag-ignored`, `structure.output-no-try`, `structure.variable-untyped`, `structure.missing-description`, `structure.schema-shape-flattened`, `structure.sibling-block-asymmetry`, `structure.insecure-default`, `structure.wrong-file`, `structure.grouping`, `structure.flag-polarity`, `structure.argument-order`, `structure.multi-provider`, `structure.validation-message-uninformative`, `structure.suppression-unexplained`, `structure.input-ignored-in-branch`, `structure.sibling-argument-omitted`, `structure.docs-contradict-code`, `structure.validation-missing`, `structure.feature-above-version-floor`, `structure.version-floor-understated`, `structure.comment-redundant`, `structure.comment-unsourced`, `structure.copied-content-unattributed`, `structure.validation-overreaching`, `structure.arn-partition-hardcoded`, `structure.passthrough-field-drift`, `structure.passthrough-default-drift`, `structure.embedded-code-defect`.
+
+## Embedded Code
+
+**Reads:** the embedded files the change edits, whole, at the base and the head: each file that is not Terraform configuration and that a `.tf` file of the module packages or reads, as [Embedded code](../../terraform-module-maintainer/profiles/terraform-aws-modules/code-conventions.md#embedded-code) defines it, such as a Lambda source under `functions/` or `src/` or a `templatefile` input. Nothing in them is run (Rule 1), and an embedded file the change does not edit is not read.
+
+**Provider facts:** none.
+
+**Fails when:** `structure.embedded-code-defect`, one finding per pattern, naming each of its lines:
+
+- A line the change adds or edits fails, on reading, for an input the code handles: it raises, returns or renders the wrong output, or opens a security hole.
+- The change fixes a pattern in one place and leaves the same pattern, unfixed, in code it does not touch in a file it edits, such as a value cleaned before it is wrapped in a code span while the fields beside it are wrapped the same way without the cleaning.
+- A changed line has a variant that does the same job and loses less of its input, such as replacing a character instead of deleting it.
+
+Naming, formatting and the idiom of the embedded language are not judged.
+
+**Severity:**
+
+- HIGH when a changed line raises or gives the wrong output for an input the code handles, the feature that does not work of [Severity Levels](output.md#severity-levels); CRITICAL when it opens a security hole that an input of the module or the event the code handles can reach.
+- LOW for the other two cases: the fix is correct and stops short, or a variant would serve better. They help the author and never block, and a follow-up is an acceptable answer.
 
 ## Suggested Fixes
 
@@ -86,3 +105,4 @@ Each row gives the fix a finding of that rule carries, in the forms of the [Sugg
 | `structure.arn-partition-hardcoded` | code change | Replace `arn:aws:` with `arn:${local.partition}:`, and a literal account or region with the module's local or input for it, adding the data sources and locals of the [Locals Pattern](../../terraform-module-maintainer/references/module-structure.md#locals-pattern) when they are absent, per [ARNs and partitions](../../terraform-module-maintainer/profiles/terraform-aws-modules/code-conventions.md#arns-and-partitions). |
 | `structure.passthrough-field-drift` | code change | At the declaring line: add the attribute the root type lacks, with the submodule's type and default, or remove the attribute the submodule lacks. |
 | `structure.passthrough-default-drift` | code change | At the declaring line, set the root side's unset value to the submodule's, named. |
+| `structure.embedded-code-defect` | code change | At each named line, the corrected code: the same cleaning applied where the pattern stays, or the variant named, such as a backtick replaced with `'` in place of deleted. A LOW finding says a follow-up is an acceptable answer. |

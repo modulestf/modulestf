@@ -76,7 +76,8 @@ my $reg = qr{\A(?:registry\.terraform\.io/)?terraform-aws-modules/[a-z0-9-]+/aws
 my $B = qr{(?<b>\{(?:[^{}]++|(?&b))*\})};
 sub hit { my ($g, $f, $t, $p) = @_; my $l = defined $p ? 1 + (substr($t, 0, $p) =~ tr/\n//) : 0; print "$g $f:$l\n" }
 sub canon { my $s = lc shift; $s = "registry.terraform.io/$s" if ($s =~ tr{/}{}) == 1; $s }
-sub pok { my $c = canon(shift); $run ? $c =~ m{\Aregistry\.terraform\.io/hashicorp/[a-z0-9-]+\z} : $pok{$c} }
+my $rre = qr{\A(?:${\ ($ENV{PLAN_PROV_RE} // "(?!)")})\z};
+sub pok { my $c = canon(shift); $run ? $c =~ $rre : $pok{$c} }
 sub blank { my $t = shift; $t =~ s{"((?:[^"\\\n]|\\.)*)"}{"\"" . ($1 =~ tr/\n/x/cr) . "\""}ge; $t }
 # A keyword written right against its first label, `data"t""n"{`, is valid HCL that the label patterns below,
 # which want a space, would not see. It is a hit, and so is a carriage return, form feed or vertical tab,
@@ -527,6 +528,21 @@ exc_or_gate() { # all hits as one argument: a gate hit wins; exceptions alone ar
     *) CLASS='exception: needs a Docker daemon' ;;
   esac
 }
+PHERE="$(cd "$(dirname "$0")" && pwd -P)"
+# Runner mode: the eight named providers, plus the profile's lines (plan-pass.md, Runner providers)
+RPROV='hashicorp/(aws|random|time|tls|cloudinit|null|local|external)'
+# The file is mounted beside this script in the runner, and read from the profile in a checkout
+PFILE="$PHERE/plan-providers.txt"
+[ -f "$PFILE" ] || PFILE="$PHERE/../../terraform-module-maintainer/profiles/terraform-aws-modules/plan-providers.txt"
+if [ -f "$PFILE" ]; then
+  while IFS= read -r l || [ -n "$l" ]; do
+    case "$l" in ''|'#'*) continue ;; esac
+    printf '%s\n' "$l" | grep -Eqx '[a-z0-9-]+/(\*|[a-z0-9-]+)' ||
+      { echo "plan pass not run: profile provider line refused"; exit 0; }
+    RPROV="$RPROV|$(printf '%s' "$l" | sed 's/\*$/[a-z0-9-]+/')"
+  done < "$PFILE"
+fi
+export PLAN_PROV_RE="registry\\.terraform\\.io/($RPROV)"
 if [ "${1:-}" = gates ]; then
   case "${3:-}/${4:-}" in laptop/clone|laptop/downloaded|runner/clone|runner/downloaded) ;;
     *) echo "plan-pass.sh: gates <run-dir> <laptop|runner> <clone|downloaded> [<example-dir>]" >&2; exit 2 ;; esac
@@ -613,7 +629,7 @@ if [ "$GMODE" = runner ]; then
   unset PLAN_PASS_AWS_ACCESS_KEY_ID PLAN_PASS_AWS_SECRET_ACCESS_KEY PLAN_PASS_AWS_SESSION_TOKEN
 fi
 case "$PHASE" in ''|init) echo "plan pass mode: $GMODE${PHASE:+, phase $PHASE}" ;; esac
-if [ "$GMODE" = runner ]; then PROV_RE='registry\.terraform\.io/hashicorp/[a-z0-9-]+'
+if [ "$GMODE" = runner ]; then PROV_RE=$PLAN_PROV_RE
 else PROV_RE='registry\.terraform\.io/hashicorp/(aws|random|time|tls|cloudinit)'; fi
 
 PLAN="$RUN/plan"

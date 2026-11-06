@@ -10,8 +10,8 @@ if [ -n "${PLAN_RUNNER_TAG:-}" ]; then
 else
   sum() { if command -v sha256sum > /dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }
   tag="src-$(
-    for f in Dockerfile.runner Dockerfile.proxy entry.sh egress-probe.sh tinyproxy.conf \
-      allowlist-init allowlist-plan; do
+    for f in Dockerfile.runner Dockerfile.proxy entry.sh egress-probe.sh test-entry.sh tinyproxy.conf \
+      allowlist-init allowlist-plan allowlist-test; do
       printf '%s %s\n' "$f" "$(wc -c < "$here/$f" | tr -d ' ')"
       cat "$here/$f"
     done | sum | cut -c1-12

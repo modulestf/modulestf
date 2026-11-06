@@ -11,8 +11,8 @@
 #       --schema-out <schema.json>
 #       Acquisition: fetches each pinned provider zip from its pinned host, checks its
 #       sha256, builds the run's read-only mirror, then runs terraform init and
-#       providers schema -json in the sandbox with the network denied. Exit 0 with the
-#       schema written, 1 with "acquisition failed: <reason>", 2 a usage error.
+#       providers schema -json in the sandbox with the network denied, or reuses the schema the
+#       cache holds for the same pins and terraform binary. Exit 0 with the schema written, 1 with "acquisition failed: <reason>", 2 a usage error.
 #   bash /abs/path/ladder-pass.sh run <run-dir> --behaviour <behaviour.json> --base <sha> \
 #       --head <sha> --out <ladder.json> [--coverage <coverage.json>] [--schema <schema.json>]
 #       L1: one fixture pair per trigger that asks for L1, checked by mtf-facts
@@ -572,10 +572,20 @@ if [ "$CMD" = acquire ]; then
   prov_config "$L/pins.jsonl" "$PLAT" || fail "no single provider binary per pin"
   prov_ok full || fail "provider tree"
   prove provider || fail "provider sandbox: $SBX_WHY"
-  MEM_KB=6291456 sbx provider "$A" 300 $((64 * MIB)) "$L/out/schema.json" "$TF" providers schema -json \
-    || fail "providers schema: $(firstline "$L/out/schema.json.err")"
-  jq -e --slurpfile p "$L/pins.jsonl" '.format_version != null and (.provider_schemas | keys) == ([$p[].source] | sort)' \
-    "$L/out/schema.json" > /dev/null 2>&1 || fail "the schema does not name exactly the pinned providers"
+  schema_ok() { [ -f "$1" ] && [ ! -L "$1" ] && [ "$(wc -c < "$1")" -le $((64 * MIB)) ] &&
+    jq -e --slurpfile p "$L/pins.jsonl" '.format_version != null and (.provider_schemas | keys) == ([$p[].source] | sort)' \
+      "$1" > /dev/null 2>&1; }
+  # The schema is reused across runs from the cache, keyed by the pins' hashes for this platform
+  # and the terraform binary's hash, and checked as a new one is before it is used.
+  key="$( { cat "$L/pins.jsonl"; sha256 "$TF"; } | perl -MDigest::SHA=sha256_hex -e 'local $/; print sha256_hex(<STDIN>)')"
+  if schema_ok "$CACHE/schema-$key.json"; then cp -- "$CACHE/schema-$key.json" "$L/out/schema.json" || fail "cannot read the cached schema"
+  else
+    MEM_KB=6291456 sbx provider "$A" 300 $((64 * MIB)) "$L/out/schema.json" "$TF" providers schema -json \
+      || fail "providers schema: $(firstline "$L/out/schema.json.err")"
+    schema_ok "$L/out/schema.json" || fail "the schema does not name exactly the pinned providers"
+    cp -- "$L/out/schema.json" "$CACHE/schema-$key.json.$$" && mv -- "$CACHE/schema-$key.json.$$" "$CACHE/schema-$key.json" ||
+      rm -f -- "$CACHE/schema-$key.json.$$"
+  fi
   cp -- "$L/out/schema.json" "$SCHEMA_OUT.tmp" && mv -- "$SCHEMA_OUT.tmp" "$SCHEMA_OUT" || fail "cannot write $SCHEMA_OUT"
   exit 0
 fi

@@ -440,7 +440,16 @@ pins "$SUM" evil.example.com
 check "a URL on a host outside the pin list is refused" "$([ "$(acq)" = 2 ]; echo $?)"
 pins "$SUM"; chmod 755 "$TMP/cache"
 check "a cache that is not mode 0700 is refused" "$([ "$(acq)" = 1 ]; echo $?)"
-chmod 700 "$TMP/cache"; echo '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/other":{}}}' > "$ST/schema.json"
+chmod 700 "$TMP/cache"
+check "the schema is cached across runs, keyed by the pins and the terraform binary" \
+  "$(n="$(compgen -G "$TMP/cache/schema-*.json" | wc -l | tr -d ' ')"; [ "$n" = 1 ] && q "$(compgen -G "$TMP/cache/schema-*.json")" '.provider_schemas | has("registry.terraform.io/hashicorp/random")' | grep -qx 0; echo $?)"
+echo '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/other":{}}}' > "$ST/schema.json"
+check "a later acquisition reads the cached schema in place of the schema step" \
+  "$([ "$(acq)" = 0 ] && q "$TMP/schema.json" '.provider_schemas | has("registry.terraform.io/hashicorp/random")' | grep -qx 0; echo $?)"
+cp "$ST/schema.json" "$(compgen -G "$TMP/cache/schema-*.json")"
+check "a cached schema that fails the check is not read; the schema step runs and fails it" \
+  "$([ "$(acq)" = 1 ] && grep -q 'exactly the pinned' "$TMP/acq.out"; echo $?)"
+rm -f "$TMP/cache"/schema-*.json
 check "a schema that does not name exactly the pinned providers fails" "$([ "$(acq)" = 1 ] && grep -q 'exactly the pinned' "$TMP/acq.out"; echo $?)"
 
 # --- L3 with a stubbed aws provider: the curated aws_rds_cluster fixture
