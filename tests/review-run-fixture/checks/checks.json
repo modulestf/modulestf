@@ -19,5 +19,6 @@
   "statuses": {
     "state": "success",
     "total_count": 1
-  }
+  },
+  "jobless": []
 }

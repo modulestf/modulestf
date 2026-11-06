@@ -1,9 +1,9 @@
 # Code Conventions
 
 > **Part of:** [terraform-module-maintainer](../../SKILL.md)
-> **Status:** The conventions that govern the code inside a module's `.tf` files.
-> [PROFILE.md](PROFILE.md) owns the file set, the quality gate and the release
-> process; this file owns what goes in the files.
+> **Status:** The conventions that govern the code inside a module's `.tf` files,
+> and the code they package or read. [PROFILE.md](PROFILE.md) owns the file set,
+> the quality gate and the release process; this file owns what goes in the files.
 
 ## What this file is, and what it is not
 
@@ -342,6 +342,39 @@ large size, not against a large size.
 The cost of getting this wrong lands on two people who did not choose it: the
 reader who applies the example to understand the module, and the module's own CI,
 which pays it on every run.
+
+## Embedded code
+
+Some modules carry code that is not Terraform: the Lambda function source of
+`terraform-aws-notify-slack` under `functions/`, a `templatefile` input, a
+script a packaging step runs. That code is part of the module, and a change to
+it is reviewed for what the code does, as a change to a `.tf` file is.
+
+A file is embedded code when a `.tf` file of the module packages or reads it: a
+read site such as `file`, `templatefile`, `filebase64` or `fileset` names it, or
+it sits under a path that an `archive_file` or a packaging argument such as
+`source_path`, `source_dir` or `filename` names. A test beside it that exercises
+it counts too.
+
+Only the embedded files the change edits are read, whole, at the base and the
+head, and nothing in them is run. Three outcomes:
+
+- A line the change adds or edits fails for an input the code handles: it
+  raises, returns or renders the wrong output, or opens a security hole. That is
+  a defect of the change, rated as any other defect is.
+- The change fixes a pattern in one place and leaves the same pattern elsewhere
+  in a file it edits. `terraform-aws-notify-slack` pull request 283 strips
+  backticks from the CloudWatch `AlarmDescription` before wrapping it in a Slack
+  code span, while `AlarmName` and `NewStateReason`, and fields of the other
+  formatters in the same file, are wrapped the same way without it. The fix is
+  correct and stops short. It is a nit for the author, never a block, and a
+  follow-up is an acceptable answer.
+- A changed line has a variant that does the same job and loses less of its
+  input, such as replacing a backtick with `'` instead of deleting it. That is a
+  nit too.
+
+Naming, formatting and the idiom of the embedded language are not judged here,
+and neither is an embedded file the change does not edit.
 
 ## Pull request title and the reason for a break
 

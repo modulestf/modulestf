@@ -241,11 +241,33 @@ def sha: type == "string" and test("^[0-9a-f]{40}$");
 def omission_keys: ["over-size", "over-budget", "over-quota", "minimized-excluded", "bot-over-size",
   "bot-over-budget", "bot-over-quota", "bot-minimized-excluded"];
 
+# The reopen fact (host-pass.md, Host Facts), from the metadata, the issue's closer type, the
+# reviews and the comments as read: null unless the pull request is closed and unmerged, was
+# closed by a Bot or carries a label named stale, and every review was read and none is from an
+# OWNER, MEMBER or COLLABORATOR other than the author. Its one value is the date of the author's
+# last conversation comment, only when the timestamp is in GitHub's own grammar, else null.
+def reopen_fact($m; $closer; $reviews; $comments):
+  ($m.user | {typename: .type, id, login}) as $author
+  | if $m.state != "closed" or $m.merged == true or ($reviews | type) != "array" then null
+    elif ($closer | type == "object" and .type == "Bot" | not)
+         and (any($m.labels[]?; (.name // "") | ascii_downcase == "stale") | not) then null
+    elif any($reviews[]; .user.id != $m.user.id and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))) then null
+    else {last_author_comment: (if ($comments | type) == "array"
+        then [$comments[] | select(origin($author) == "change-author") | .created
+              | select(type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))]
+             | max | if . == null then null else .[:10] end
+        else null end)} end;
+
 def valid_host($head):
   type == "object"
-  and keys == (["format", "repo", "number", "head_sha", "base_sha", "merge_base", "prefix", "state",
+  and (keys - ["reopen"]) == (["format", "repo", "number", "head_sha", "base_sha", "merge_base", "prefix", "state",
                 "signals", "own_review", "could_not_run", "unresolved_threads", "conversation",
                 "related"] | sort)
+  # Only a closed, unmerged pull request has the reopen fact, and its one value is a date or null.
+  and ((has("reopen") | not) or (.state.state == "closed" and (.state.merged | not)
+       and (.reopen | type == "object" and keys == ["last_author_comment"]
+            and (.last_author_comment == null
+                 or (.last_author_comment | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}\\z"))))))
   and .format == 1
   and (.repo | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$"))
   and (.number | nat and . > 0)

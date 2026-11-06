@@ -188,6 +188,9 @@ proxy_env=(-e HTTPS_PROXY=http://proxy:8888 -e HTTP_PROXY=http://proxy:8888
   -e https_proxy=http://proxy:8888 -e http_proxy=http://proxy:8888 -e NO_PROXY= -e no_proxy=)
 common=("${hardening[@]}" --user 10001:10001 --memory 4g --tmpfs "/tmp:rw,size=64m"
   -v "$pass":/opt/plan-pass/plan-pass.sh:ro)
+# The profile's extra plan providers, read by plan-pass.sh in runner mode; absent, the default eight
+providers="$(cd "$here/../../.." && pwd)/terraform-module-maintainer/profiles/terraform-aws-modules/plan-providers.txt"
+[ ! -f "$providers" ] || common+=(-v "$providers":/opt/plan-pass/plan-providers.txt:ro)
 
 start_proxy() { # name, config
   docker run -d --name "$1" --network "$net_ext" "${hardening[@]}" \

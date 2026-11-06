@@ -17,6 +17,8 @@
 #   controls held, and stops the run before any session when IPv6 is on, a path is open or a
 #   control fails;
 # - no credential value is in the configuration of a plan container (docker inspect);
+# - the test pass runs a project's unit tests behind the test proxy, which passes the package
+#   index and refuses GitHub and AWS, and records passed or failed with no test output;
 # - the image tag is derived from the image files unless PLAN_RUNNER_TAG sets it;
 # - no container, network or volume of these runs is left behind.
 set -uo pipefail
@@ -262,6 +264,42 @@ check "scan: the line after a split secret stays" grep -qx 'scope: examples/sts'
 check "scan: the ordinary line stays" grep -qx 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.' "$s/plan-pass.txt"
 check "scan: no crafted secret is left" test -z "$(grep -E 'AKIA|GHIJKLMNOP|eyJ|BEGIN|Signature|Authorization|c21va2|exact-value|smoke-test-exa|ct-value' "$s/plan-pass.txt")"
 
+# The test pass (../test-pass.md): a passing Pipfile project and a failing requirements-dev.txt
+# one, each a git archive as review-run.sh makes it, behind the test proxy, with no credential.
+trepo="$rec/tests-repo"
+mkdir -p "$trepo"
+cp -R "$here/smoke/tests-pass" "$here/smoke/tests-fail" "$trepo/"
+git -C "$trepo" init -q
+git -C "$trepo" add -A
+git -C "$trepo" -c user.name=smoke -c user.email=smoke@example.com commit -q -m tests
+git -C "$trepo" archive --format=tar -o "$rec/tests-pass.tar" HEAD:tests-pass
+git -C "$trepo" archive --format=tar -o "$rec/tests-fail.tar" HEAD:tests-fail
+"$here/run-tests.sh" --archive "$rec/tests-pass.tar" --kind pipenv --python python3 --record "$rec/tp" \
+  --tmp "$rec/pass-tmp" > "$rec/tp.out" 2>&1
+"$here/run-tests.sh" --archive "$rec/tests-fail.tar" --kind requirements --python python3.12 --record "$rec/tf" \
+  --budget-minutes 5 > "$rec/tf.out" 2>&1
+t="$rec/tp" tnc="$rec/tp/network-check-test.txt"
+# Only the package index hosts had a connection established through the test proxy.
+index_only() { # proxy log
+  local hosts
+  hosts="$(tr 'A-Z' 'a-z' < "$1" | sed -nE 's/.*established connection to host "([^"]*)".*/\1/p' | sort -u)" || return 1
+  [ -n "$hosts" ] && [ -z "$(printf '%s\n' "$hosts" | grep -vxE 'pypi\.org|files\.pythonhosted\.org')" ]
+}
+check "tests: a passing Pipfile project is passed 2" grep -qx 'passed 2' "$t/tests.txt"
+check "tests: the script prints the result" grep -qx 'passed 2' "$rec/tp.out"
+check "tests: a failing test under requirements-dev.txt and Python 3.12 is failed 1" grep -qx 'failed 1' "$rec/tf/tests.txt"
+check "tests: the network check found every path closed and both controls held" \
+  test "$(tail -n 1 "$tnc")" = "end network check" -a "$(grep -vcE '^(closed|ok) ' "$tnc")" -eq 1 -a "$(grep -c '^ok control ' "$tnc")" -eq 2
+check "tests: the test proxy passes the package index" grep -qx 'ok control proxy CONNECT pypi.org:443' "$tnc"
+check "tests: the test proxy refuses GitHub" grep -qx 'closed proxy CONNECT github.com:443' "$tnc"
+check "tests: the test proxy refuses AWS" grep -qx 'closed proxy CONNECT sts.us-east-1.amazonaws.com:443' "$tnc"
+check "tests: the install reached files.pythonhosted.org through the proxy" grep -q 'Established connection to host "files.pythonhosted.org"' "$t/proxy-test.log"
+check "tests: no host beyond the package index was reached" index_only "$t/proxy-test.log"
+check "tests: the record holds its four files, regular, and no test output" \
+  test "$(cd "$t" && find . -type f | LC_ALL=C sort | tr '\n' ' ')" = "./network-check-test.txt ./proxy-test.log ./run-id.txt ./tests.txt " -a -z "$(find "$t" -mindepth 1 ! -type f -print -quit)"
+check "tests: run-tests.sh passes no credential to a container" test -z "$(grep -nE -- '--env-file|AWS_|creds' "$here/run-tests.sh")"
+check "tests: nothing is left under --tmp" test -z "$(find "$rec/pass-tmp" -mindepth 1 -print -quit)"
+
 # The image tag: derived from the image files unless PLAN_RUNNER_TAG is set, and refused
 # when it is not a valid tag.
 tag1="$(env -u PLAN_RUNNER_TAG "$here/image-tag.sh")"
@@ -285,12 +323,20 @@ leftover() { # ids...: prints each of those runs' containers, networks and volum
     done
     docker volume inspect "plan-work-$id" > /dev/null 2>&1 && echo "volume plan-work-$id"
     docker volume inspect "plan-saved-$id" > /dev/null 2>&1 && echo "volume plan-saved-$id"
+    for n in "test-runner-$id" "test-proxy-$id"; do
+      docker container inspect "$n" > /dev/null 2>&1 && echo "container $n"
+    done
+    for n in "test-int-$id" "test-ext-$id"; do
+      docker network inspect "$n" > /dev/null 2>&1 && echo "network $n"
+    done
+    docker volume inspect "test-work-$id" > /dev/null 2>&1 && echo "volume test-work-$id"
   done
   return 0
 }
 ids="$(cat "$r/run-id.txt" "$a/run-id.txt" "$rec/static/run-id.txt" "$p/run-id.txt" \
-  "$rec/net-ipv6/run-id.txt" "$rec/net-open-path/run-id.txt" "$rec/net-plan-control/run-id.txt" 2>/dev/null)"
-check "every run recorded its id" test "$(printf '%s\n' "$ids" | grep -c .)" -eq 7
+  "$rec/net-ipv6/run-id.txt" "$rec/net-open-path/run-id.txt" "$rec/net-plan-control/run-id.txt" \
+  "$rec/tp/run-id.txt" "$rec/tf/run-id.txt" 2>/dev/null)"
+check "every run recorded its id" test "$(printf '%s\n' "$ids" | grep -c .)" -eq 9
 # shellcheck disable=SC2086 # one id per word
 check "no container, network or volume of these runs left behind" test -z "$(leftover $ids)"
 

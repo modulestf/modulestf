@@ -56,7 +56,8 @@ die() { echo "host-pass.sh: $1" >&2; exit 2; }
 # The signal, from the file's own fields, so the writer and the checker agree on it. Any
 # failure fails; else anything unknown is unknown; else it passes. Absent statuses
 # (total_count 0) contribute nothing. When the own job check runs could not be read, any
-# run may be one of them, so the check runs are unknown, never a pass or a failure.
+# run may be one of them, so the check runs are unknown, never a pass or a failure. A
+# job-less workflow run is CI that never ran, so it is unknown, never a failure.
 JQ_DEFS='
 def run_signal:
   if .status != "completed" then "unknown"
@@ -71,6 +72,7 @@ def status_signal:
 def signal:
   [ (if .reads == "failed" then "unknown" else empty end),
     (if .own_jobs_unreadable then "unknown" else (.check_runs[] | run_signal) end),
+    (if .jobless != [] then "unknown" else empty end),
     (.statuses | status_signal) ]
   | if any(. == "fail") then "fail" elif any(. == "unknown") then "unknown" else "pass" end;
 def nat: type == "number" and . >= 0 and . == floor;
@@ -78,7 +80,7 @@ def pos: nat and . > 0;
 def valid($head):
   type == "object"
   and (keys == (["format", "head_sha", "signal", "reads", "own_check", "own_check_dropped",
-                 "own_jobs_dropped", "own_jobs_unreadable", "check_runs", "statuses"] | sort))
+                 "own_jobs_dropped", "own_jobs_unreadable", "check_runs", "jobless", "statuses"] | sort))
   and .format == 1
   and (.head_sha | type == "string" and test("^[0-9a-f]{40}$")) and .head_sha == $head
   and (.signal | IN("pass", "fail", "unknown"))
@@ -94,11 +96,18 @@ def valid($head):
         and (.status | IN("queued", "in_progress", "completed", "waiting", "requested", "pending"))
         and (.conclusion == null or (.conclusion | IN("success", "failure", "neutral", "cancelled",
              "skipped", "timed_out", "action_required", "stale")))))
+  and (.jobless | type == "array" and length <= 10 and all(.[];
+        type == "object" and keys == ["conclusion", "workflow"]
+        and (.workflow == null or (.workflow | type == "string" and test("^[A-Za-z0-9._-]{1,64}\\.ya?ml\\z")))
+        and (.conclusion | IN("failure", "cancelled", "timed_out", "action_required", "stale"))))
   and (.statuses == null or (.statuses | type == "object" and keys == ["state", "total_count"]
         and (.total_count | nat) and (.state | IN("success", "failure", "error", "pending"))))
   and (.reads == "failed" or .statuses != null)
   and .signal == signal;
 '
+
+# A job-less run that ended without passing: jobless, never one of the check runs.
+WF_JOBLESS='def jobless: .status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not);'
 
 check_dir() { # dir, head -> prints the verdict, returns 0 when accepted
   local dir="$1" head="$2" names
@@ -157,12 +166,37 @@ cmd_checks() {
     jq -s '.' "$work/runs" > "$work/runs.json" 2> /dev/null || { reads=failed; echo '[]' > "$work/runs.json"; }
   read_twice "$work/status" "repos/$repo/commits/$head/status?per_page=1" --jq '{total_count, state}' &&
     jq -e 'if type == "object" then . else error("not an object") end' "$work/status" > "$work/status.json" 2> /dev/null || { reads=failed; echo null > "$work/status.json"; }
+  # A workflow run that never started a job, a startup failure or a run awaiting approval, has
+  # no check run, so the read above cannot see it. Of the latest run of each workflow on the head
+  # whose check suite holds no check run, an ended one that did not pass goes to jobless, which
+  # makes the signal unknown; any other joins the runs as one, under the workflow's name
+  # (host-pass.md, Check Runs File).
+  echo '[]' > "$work/jobless.json"
+  read_twice "$work/wf" --paginate "repos/$repo/actions/runs?head_sha=$head&per_page=100" \
+    --jq '.workflow_runs[] | {id, check_suite_id, workflow_id, name: ("workflow " + .name),
+          path: (.path // ""), status, conclusion, created_at}' &&
+    jq -s --slurpfile runs "$work/runs.json" '
+      ([$runs[0][].check_suite_id]) as $suites
+      | group_by(.workflow_id) | map(max_by([.created_at, .id]))
+      | map(select(.check_suite_id | IN($suites[]) | not)
+            | .conclusion |= (if . == "startup_failure" then "failure" else . end))' "$work/wf" > "$work/wf.json" 2> /dev/null &&
+    jq --slurpfile wf "$work/wf.json" "$WF_JOBLESS"'. + ($wf[0] | map(select(jobless | not) | {id, check_suite_id, name, app_id: 0,
+        app_slug: "github-actions", status, conclusion, started_at: .created_at}))' \
+      "$work/runs.json" > "$work/runs2.json" 2> /dev/null &&
+    mv "$work/runs2.json" "$work/runs.json" &&
+    # The failing ones, named by the workflow file only: a fork's head chooses the workflow name,
+    # and a file name in a fixed grammar is the one name that cannot carry prose.
+    jq "$WF_JOBLESS"'[.[] | select(jobless)
+         | {workflow: ((.path | split("/") | last) // ""
+                       | if test("^[A-Za-z0-9._-]{1,64}\\.ya?ml$") then . else null end),
+            conclusion}] | .[:10]' "$work/wf.json" > "$work/jobless.json" 2> /dev/null || reads=failed
 
   mkdir -p "$out" || die "cannot create the output directory"
   # The drops, then the latest run of each check by name and app id: the latest
   # started_at, a null started_at counting as later than any, a tie to the higher id.
   jq -n --slurpfile runs "$work/runs.json" --slurpfile statuses "$work/status.json" \
     --arg head "$head" --arg reads "$reads" --arg pairs "$pairs" \
+    --slurpfile jobless "$work/jobless.json" \
     --arg own "$own" --arg app "$app" --argjson unreadable "$unreadable" "$JQ_DEFS"'
     ($pairs | split(" ") | map(select(. != ""))) as $own_pairs
     | $runs[0] as $all
@@ -177,7 +211,7 @@ cmd_checks() {
         own_check_dropped: ($own_checks | length), own_jobs_dropped: ($own_jobs | length),
         own_jobs_unreadable: $unreadable,
         check_runs: map({id, check_suite_id, app_slug, status, conclusion}),
-        statuses: $statuses[0] }
+        jobless: $jobless[0], statuses: $statuses[0] }
     | .signal = signal' > "$out/checks.json" 2> /dev/null
   # Anything outside the grammar - an odd slug, a status GitHub added - gives a file that
   # says the reads failed, never a file the checker would refuse.
@@ -185,7 +219,7 @@ cmd_checks() {
     jq -n --arg head "$head" --arg own "$own" --argjson unreadable "$unreadable" '
       { format: 1, head_sha: $head, signal: "unknown", reads: "failed",
         own_check: (if $own == "" then null else $own end), own_check_dropped: 0,
-        own_jobs_dropped: 0, own_jobs_unreadable: $unreadable, check_runs: [], statuses: null }' \
+        own_jobs_dropped: 0, own_jobs_unreadable: $unreadable, check_runs: [], jobless: [], statuses: null }' \
       > "$out/checks.json"
   fi
   check_dir "$out" "$head" > /dev/null || die "the checks file did not pass its own check"
@@ -478,6 +512,7 @@ cmd_run() {
       "$w/rv.json" > "$w/decision.json"
   else
     echo '{"review_decision": "unknown", "own_review": null}' > "$w/decision.json"
+    echo null > "$w/rv.json"
   fi
   read_threads "$w" "$owner" "$name" "$pr"
   path="$(jq -r '.path' "$w/threads.json")"
@@ -485,6 +520,15 @@ cmd_run() {
 
   # Step 7.5.
   read_related "$w" "$path" "$repo" "$pr"
+
+  # The reopen fact: who closed a closed, unmerged pull request, by account type only. A read
+  # that failed leaves it null, so no reopen line renders (host-pass.md, Host Facts).
+  echo null > "$w/closer.json"
+  if jq -e '.state == "closed" and .merged != true' "$w/meta" > /dev/null 2>&1; then
+    read_twice "$w/issue" "repos/$repo/issues/$pr" --jq '{type: (.closed_by.type // null)}' &&
+      jq -c 'if type == "object" then . else null end' "$w/issue" > "$w/closer.json" 2> /dev/null ||
+      echo null > "$w/closer.json"
+  fi
 
   # host.json and task.md, written to a staging directory and moved into place whole.
   local s stage="$w/out"
@@ -505,9 +549,10 @@ cmd_run() {
     --arg prefix "$prefix" --argjson m "$m" --arg login "$login" \
     --slurpfile meta "$w/meta" --slurpfile files "$w/classified.json" --slurpfile d "$w/decision.json" \
     --slurpfile t "$w/threads.json" --slurpfile c "$w/comments.json" --slurpfile r "$w/related.json" \
-    --slurpfile b "$w/block.json" '
+    --slurpfile b "$w/block.json" --slurpfile closer "$w/closer.json" --slurpfile rv "$w/rv.json" '
     include "host-records";
     ($meta[0]) as $meta | ($meta.user | {typename: .type, id, login}) as $author
+    | reopen_fact($meta; $closer[0]; $rv[0]; $c[0]) as $reopen
     | ($t[0].items | length) as $nthreads
     | {format: 1, repo: $repo, number: $pr, head_sha: $head, base_sha: $base,
        merge_base: (if $mb == "" then null else $mb end), prefix: $prefix,
@@ -528,7 +573,8 @@ cmd_run() {
                | {path: $t[0].path, omitted: null, considered, bot_considered, counts, notes})
          else {path: $t[0].path, omitted: $c[0].omitted, considered: 0, bot_considered: 0, counts: {},
                notes: []} end),
-       related: $r[0]}' > "$stage/host.json"
+       related: $r[0]}
+    + (if $reopen == null then {} else {reopen: $reopen} end)' > "$stage/host.json"
   {
     echo "Review this change with the terraform-module-reviewer skill. Paths are relative to the module root."
     echo "Head revision: $head"

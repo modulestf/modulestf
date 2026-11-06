@@ -1,7 +1,8 @@
-# Runner image for the isolated plan pass. See README.md in this directory.
+# Runner image for the isolated plan pass and test pass. See README.md in this directory.
 # The base is pinned by digest. Tool archives are pinned by version and SHA-256.
 # Direct Debian package versions were checked against signed apt metadata for amd64
-# and arm64 on 2026-10-04. Dependencies still follow the archive; see README.md.
+# and arm64 on 2026-11-05, pipenv on 2026-11-06. Dependencies still follow the archive;
+# see README.md.
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 
 ARG TARGETARCH
@@ -18,11 +19,12 @@ ARG AWSCLI_SHA256_arm64=30642dc4840012614229feb68314637d024500f565d92f513a422bdd
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bash=5.2.15-2+b13 \
-      ca-certificates=20250419~deb12u1 \
+      ca-certificates=20250419~deb12u2 \
       curl=7.88.1-10+deb12u15 \
       git=1:2.39.5-0+deb12u3 \
-      jq=1.6-2.1+deb12u2 \
-      perl=5.36.0-7+deb12u3 \
+      jq=1.6-2.1+deb12u3 \
+      perl=5.36.0-7+deb12u4 \
+      pipenv=2022.12.19+ds-1 \
       python3=3.11.2-1+b1 \
       unzip=6.0-28+deb12u1 \
  && rm -rf /var/lib/apt/lists/*
@@ -73,7 +75,8 @@ RUN useradd --uid 10001 --user-group --home-dir /work --no-create-home runner \
 
 COPY entry.sh /usr/local/bin/plan-entry
 COPY egress-probe.sh /usr/local/bin/egress-probe
-RUN chmod 0555 /usr/local/bin/plan-entry /usr/local/bin/egress-probe
+COPY test-entry.sh /usr/local/bin/test-entry
+RUN chmod 0555 /usr/local/bin/plan-entry /usr/local/bin/egress-probe /usr/local/bin/test-entry
 
 USER 10001:10001
 WORKDIR /work

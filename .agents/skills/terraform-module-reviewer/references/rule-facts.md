@@ -102,6 +102,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `structure.copied-content-unattributed` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
 | `structure.create-flag-ignored` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | interface-diff | HIGH | - | - |
 | `structure.docs-contradict-code` | page | data source behaviour | A changed block, output, local or documentation line depends on what a data source of the type does with its inputs. | never | llm | config-semantic | touched-block | no | root, submodule, example | interface-diff | HIGH | - | - |
+| `structure.embedded-code-defect` | none | - | - | never | llm | path | touched-block | no | root, submodule | none | CRITICAL, HIGH, LOW | - | - |
 | `structure.feature-above-version-floor` | none | - | - | never | candidate | config-semantic | touched-expression | no | root, submodule | candidates | HIGH | lead | lead |
 | `structure.flag-polarity` | none | - | - | file | llm | config-semantic | newly-introduced | no | root, submodule | interface-diff | MEDIUM | - | - |
 | `structure.grouping` | none | - | - | never | llm | config-semantic | touched-block | no | root, submodule | none | LOW | - | - |

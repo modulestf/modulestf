@@ -37,6 +37,7 @@ lines_ok() { [ "$(wc -l < "$1" | tr -d ' ')" -le 30 ]; echo $?; }
 SK="$TMP/skill/references"
 mkdir -p "$TMP/skill"
 cp -R "$SKILL/references" "$SK"
+cp -R "$SRC/.agents/skills/terraform-module-reviewer" "$TMP/terraform-module-reviewer" # the bundle's sections
 cat > "$SK/schema-pass.sh" <<'EOF'
 #!/bin/bash
 echo "schema $SCHEMA_DEPTH $*" >> "${STUB_LOG:?}"
@@ -65,6 +66,7 @@ cat > "$SK/ladder-pass.sh" <<'EOF'
 #!/bin/bash
 echo "ladder $*" >> "${STUB_LOG:?}"
 [ "$1" = acquire ] && { echo "acquisition failed: stub"; exit 1; }
+[ "$1" != run ] || [ -z "${EV_MARK:-}" ] || touch "$EV_MARK"
 exit 0
 EOF
 cat > "$SK/behaviour-pass.sh" <<'EOF'
@@ -111,6 +113,7 @@ case "$ep" in
   repos/*/issues/*/timeline) f=empty ;;
   repos/*/commits/*/check-runs) f=runs ;;
   repos/*/commits/*/status) f=status ;;
+  repos/*/actions/runs) f=wfruns ;;
   *) exit 1 ;;
 esac
 [ -f "$GHD/$f" ] || exit 1
@@ -122,7 +125,13 @@ cat > "$TMP/bin/terraform" <<'EOF'
 case "$1" in
   version) echo '{"terraform_version":"1.9.8","platform":"darwin_arm64"}' ;;
   init) exit 0 ;;
-  validate) [ ! -f validate.fail ] || { echo "Error: stub failure"; exit 1; } ;;
+  validate)
+    # EV_MARK: wait up to EV_TRIES tenths of a second for the ladder stub's marker, and record seeing it
+    if [ -n "${EV_MARK:-}" ]; then
+      i=0; while [ ! -e "$EV_MARK" ] && [ "$i" -lt "${EV_TRIES:-100}" ]; do sleep 0.1; i=$((i + 1)); done
+      [ ! -e "$EV_MARK" ] || touch "$EV_MARK.seen"
+    fi
+    [ ! -f validate.fail ] || { echo "Error: stub failure"; exit 1; } ;;
 esac
 EOF
 # mtf-facts: `depth` prints the depth DEPTH_STUB names for the real depth.sh, `affected` a document
@@ -145,13 +154,13 @@ printf '#!/bin/sh\nexit 1\n' > "$TMP/bin/docker"
 chmod +x "$TMP/bin/"*
 
 # The remote: a bare repository the clone reaches through a url rewrite set in the environment.
-mkrepo() { # name, extra files... -> bare repo with base and head commits; sets HEADC BASEC
+mkrepo() { # name [, directory copied into the base] -> bare repo with base and head commits; sets HEADC BASEC
   local w="$TMP/work-$1" b="$TMP/remote/example-org/$1.git"
   rm -rf "$w" "$b"; mkdir -p "$w"; git init -q "$w"
   (cd "$w" && mkdir -p examples/one examples/two && printf 'resource "x" "y" {}\n' > main.tf &&
     printf 'module "m" { source = "../.." }\n' > examples/two/main.tf &&
     : > variables.tf && printf 'terraform {}\n' > versions.tf && printf 'module "m" { source = "../.." }\n' > examples/one/main.tf &&
-    printf '# w\n' > README.md && git add -A && git -c user.name=t -c user.email=t@t commit -q -m base)
+    printf '# w\n' > README.md && { [ -z "${2-}" ] || cp -R "$2/." .; } && git add -A && git -c user.name=t -c user.email=t@t commit -q -m base)
   BASEC="$(git -C "$w" rev-parse HEAD)"
   (cd "$w" && printf '# w\nmore\n' > README.md && mkdir -p docs && printf 'x\n' > 'docs/a;b.md' && printf 'y\n' > '$(touch x).md' &&
     git add -A && git -c user.name=t -c user.email=t@t commit -q -m head)
@@ -181,6 +190,7 @@ ghfiles() { # state, merged, own review state
   echo '{"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"pageInfo": {"hasNextPage": false}, "nodes": []}}}}}' > "$GHD/closing"
   echo '[]' > "$GHD/empty"
   echo '{"check_runs": [{"id": 1, "check_suite": {"id": 2}, "name": "ci", "app": {"id": 3, "slug": "github-actions"}, "status": "completed", "conclusion": "success"}]}' > "$GHD/runs"
+  echo '{"workflow_runs": []}' > "$GHD/wfruns"
   echo '{"total_count": 1, "state": "success"}' > "$GHD/status"
 }
 
@@ -202,6 +212,16 @@ sed -e "s#$FR/#RUN/#g" "$FR/handover/task.md" > "$TMP/task.norm"
 check "acceptance: handover reproduces the hand-assembled task byte for byte" "$(cmp -s "$TMP/task.norm" "$FX/expected/task.md"; echo $?)"
 check "acceptance: handover reproduces the hand-assembled verification record" "$(cmp -s "$FR/handover/record.txt" "$FX/expected/record.txt"; echo $?)"
 check "acceptance: handover prints at most 30 lines" "$(lines_ok "$TMP/h.out")"
+B="$FR/handover/reviewer-references.md"
+blist() { sed -n '2,/^BUNDLE-SECTION /p' "$1" | grep -v '^BUNDLE-SECTION ' | tr '\n' ' '; }
+check "bundle: a .tf change at deep carries every run summary, run/facts.md and Check A's Read First" \
+  "$(l="$(blist "$B")"; for e in run/check-a.md run/check-b.md run/check-d.md run/check-g.md run/facts.md check-a-compatibility.md#reads-fails-when-and-severity; do
+     case "$l" in *"references/$e "*) ;; *) exit 1 ;; esac; done; echo 0)"
+check "bundle: the cap holds, and a section is section.sh's bytes" \
+  "$([ "$(sed -n '/^BUNDLE-SECTION /,$p' "$B" | wc -c)" -le 100000 ] &&
+     awk '/^BUNDLE-SECTION references\/inputs.md#inputs$/{p=1; next} /^BUNDLE-SECTION /{p=0} p' "$B" |
+     cmp -s - <(bash "$SRC/.agents/skills/terraform-module-reviewer/references/section.sh" references/inputs.md inputs); echo $?)"
+check "bundle: handover names the bundle and what the cap left out" "$(grep -q '^references: .* sections left out)$' "$TMP/h.out"; echo $?)"
 check "acceptance: the Diff file is the task's diff, module-root-relative" \
   "$(awk '/^```diff$/{p=1; next} p && /^```$/{exit} p' "$FX/expected/task.md" | cmp -s - "$FR/handover/change.diff"; echo $?)"
 run_rr render "$FR" --findings "$FX/reviewer/findings.json" --assessment "$FX/reviewer/assessment.txt" \
@@ -228,6 +248,13 @@ prep() { # extra env as words before; sets RUN
   RUN="$(sed -n 's/^RUN=//p' "$TMP/p.out")"
 }
 full() { run_rr verify "$RUN" > "$TMP/v.out"; run_rr plan "$RUN" > "$TMP/pl.out"; run_rr ladder "$RUN" > "$TMP/l.out"; }
+with_tf() { # command...: run with a .tf file in the run's files list, then the list put back; schema skips a change with none
+  local f="$RUN/host/files.json" rc
+  cp "$f" "$TMP/files-keep.json"
+  jq '. + [{filename: "main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"}]' "$TMP/files-keep.json" > "$f"
+  "$@"; rc=$?
+  cp "$TMP/files-keep.json" "$f"; return "$rc"
+}
 echo '[]' > "$TMP/f0.json"; echo 'Docs only.' > "$TMP/a0.txt"
 render_to() { run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$1" > "$TMP/re.out" 2>&1; }
 prep --render-only
@@ -270,6 +297,13 @@ check "handover: the merge base line names the bound merge base, the output line
   "$(grep -qx "Merge base: $(jq -r .binding.merge_base "$RUN/depth.json")" "$T" &&
      grep -qx "Output: write the findings list as JSON to $RUN/review/findings.json, the summary line to $RUN/review/summary.txt and the facts comparison note to $RUN/review/facts-comparison.txt, and nothing else." "$T" &&
      [ -d "$RUN/review" ]; echo $?)"
+check "bundle: a docs-only change at light carries C, E, F and G's summaries and C, E, F's Read First only" \
+  "$(grep -qx "References: $RUN/handover/reviewer-references.md" "$T" &&
+     [ "$(blist "$RUN/handover/reviewer-references.md")" = "$(printf 'references/%s ' inputs.md#inputs workflow.md#step-1-establish-scope \
+       git-safety.md#the-form large-changes.md#classify-every-changed-path large-changes.md#review-order run/output.md \
+       workflow.md#final-step-assemble-the-findings run/check-c.md run/check-e.md run/check-f.md run/check-g.md \
+       check-c-structure.md#reads-fails-when-and-severity check-e-profile.md#reads-fails-when-and-severity \
+       check-f-scope.md#reads-fails-when-and-severity check-f-scope.md#the-base-revision)" ]; echo $?)"
 check "handover: the title's text stays inside the block" \
   "$(awk '/^UNTRUSTED-[0-9a-f]{12} BEGIN$/{exit} /title|body/{f=1} END{exit f}' "$T"; echo $?)"
 render_to "$TMP/render-light"
@@ -309,7 +343,7 @@ check "verify: prints at most 30 lines" "$(lines_ok "$TMP/v.out")"
 run_rr plan "$RUN" > /dev/null; run_rr ladder "$RUN" > /dev/null
 run_rr handover "$RUN" > "$TMP/ho.out" 2>&1
 check "handover at deep without schema is refused" "$([ $? = 1 ] && grep -q 'at deep needs schema first' "$TMP/ho.out"; echo $?)"
-run_rr schema "$RUN" > "$TMP/s.out"
+with_tf run_rr schema "$RUN" > "$TMP/s.out"
 check "schema at deep: a failure leaves no sheets and no escalation" \
   "$(grep -q '^schema: no fact sheets at depth deep (reason overflow)' "$TMP/s.out" && ! grep -q escalated "$TMP/s.out"; echo $?)"
 run_rr handover "$RUN" > /dev/null
@@ -336,11 +370,11 @@ full
 run_rr handover "$RUN" > "$TMP/ho.out" 2>&1
 check "handover at focused without schema is refused" "$([ $? = 1 ] && grep -q 'needs schema first' "$TMP/ho.out" && [ ! -e "$RUN/handover" ]; echo $?)"
 check "render at focused without schema is refused" "$(render_to "$TMP/render7"; [ $? = 1 ] && [ ! -e "$TMP/render7/comment.md" ]; echo $?)"
-SCHEMA_STUB=ok run_rr schema "$RUN" > "$TMP/s.out"
+SCHEMA_STUB=ok with_tf run_rr schema "$RUN" > "$TMP/s.out"
 run_rr handover "$RUN" > /dev/null
 check "handover at focused after schema names the fact sheets" "$(grep -qx "Provider fact sheets: $RUN/facts" "$RUN/handover/task.md"; echo $?)"
 check "handover at focused after schema names the schema handoff" \
-  "$(grep -qx "Schema handoff: $RUN/schema-handoff/schema-handoff.json.gz" "$RUN/handover/task.md" && grep -qx 'schema: handoff written, 1 directories, 1 provider schemas' "$TMP/s.out"; echo $?)"
+  "$(grep -qx "Schema handoff: $RUN/schema-handoff/schema-handoff.json.gz" "$RUN/handover/task.md" && grep -qE '^schema: handoff written, 1 directories, 1 provider schemas \([0-9]+s\)$' "$TMP/s.out"; echo $?)"
 check "schema: the handoff gets the head, the bound merge base and one token per .tf blob of each" \
   "$(mb="$(jq -r .binding.merge_base "$RUN/depth.json")"; l="$(grep '^schema-env ' "$STUB_LOG" | tail -n 1)"
      n=0; for c in "$(git -C "$RUN/clone" rev-parse HEAD)" "$mb"; do n=$((n + $(git -C "$RUN/clone" ls-tree -r --name-only "$c" | grep -c '\.tf$'))); done
@@ -356,20 +390,20 @@ check "render focused: the real render-comment.sh states the depth and the out-o
      grep -qF 'Out of scope at this depth, so not unknowns: Check B, ' "$TMP/render-focused/comment.md" &&
      grep -q 'examples/two' "$TMP/render-focused/comment.md"; echo $?)"
 rm -rf "$RUN/facts"
-SCHEMA_STUB=overflow run_rr schema "$RUN" > "$TMP/s.out" 2>&1
+SCHEMA_STUB=overflow with_tf run_rr schema "$RUN" > "$TMP/s.out" 2>&1
 check "an escalation after the handover is refused and stops the run" \
   "$([ $? = 1 ] && grep -q 'escalation after the handover' "$RUN/state/stop" && [ "$(jq -r .depth "$RUN/depth.json")" = focused ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=focused prep
-run_rr schema "$RUN" > "$TMP/s.out"
+with_tf run_rr schema "$RUN" > "$TMP/s.out"
 check "schema: an escalation at focused sets depth deep with its reason" \
-  "$(grep -q '^depth: escalated to deep (deep-schema-overflow)$' "$TMP/s.out" && grep -q '^schema: escalated to deep (reason overflow)$' "$TMP/s.out" && grep -q "^schema $RUN/depth.json $RUN/facts $RUN/schema-work $RUN/schema-handoff\$" "$STUB_LOG"; echo $?)"
+  "$(grep -q '^depth: escalated to deep (deep-schema-overflow)$' "$TMP/s.out" && grep -qE '^schema: escalated to deep \(reason overflow\) \([0-9]+s\)$' "$TMP/s.out" && grep -q "^schema $RUN/depth.json $RUN/facts $RUN/schema-work $RUN/schema-handoff\$" "$STUB_LOG"; echo $?)"
 check "schema: an escalation removes the handoff with the fact sheets" "$([ ! -e "$RUN/schema-handoff" ] && [ ! -e "$RUN/facts" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=focused prep
-SCHEMA_STUB=ok run_rr schema "$RUN" > /dev/null
+SCHEMA_STUB=ok with_tf run_rr schema "$RUN" > /dev/null
 touch "$RUN/clone/examples/two/validate.fail"
 run_rr verify "$RUN" > "$TMP/v.out"
 check "verify: a new validate failure in an out-of-scope example escalates a focused run" \
@@ -377,7 +411,7 @@ check "verify: a new validate failure in an out-of-scope example escalates a foc
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=deep prep
-SCHEMA_STUB=deeppartial run_rr schema "$RUN" > "$TMP/s.out"
+SCHEMA_STUB=deeppartial with_tf run_rr schema "$RUN" > "$TMP/s.out"
 check "schema at deep: a deep partial line is a success, its source lines recorded" \
   "$(grep -q '^schema: schema pass: deep partial page' "$TMP/s.out" && [ "$(cat "$RUN/state/schema")" = ok ] && [ -f "$RUN/facts/missing.json" ] &&
      [ "$(grep -c . "$RUN/state/schema-sources.txt")" = 1 ]; echo $?)"
@@ -386,7 +420,7 @@ check "schema at deep: partial sheets are named in the handover" "$(grep -qx "Pr
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=focused prep
-SCHEMA_STUB=badsource run_rr schema "$RUN" > "$TMP/s.out"
+SCHEMA_STUB=badsource with_tf run_rr schema "$RUN" > "$TMP/s.out"
 check "schema: a source line outside its grammar escalates and nothing of it is recorded" \
   "$(grep -q '^depth: escalated to deep (deep-schema-source-line)$' "$TMP/s.out" && [ ! -e "$RUN/state/schema-sources.txt" ] && [ ! -e "$RUN/facts" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
@@ -402,12 +436,12 @@ root_ok() { # the last schema call had root examples and one token per .tf blob 
   set -- $l; shift 3; [ "$#" = "$n" ] && [ "$n" -gt 0 ] || return 1
   for t; do c="${t%%:*}"; f="${t#*:*:}"; [ "$(cut -d: -f2 <<< "$t")" = "$(git -C "$RUN/clone" cat-file blob "$c:examples/$f" | shasum -a 256 | cut -d' ' -f1)" ] || return 1; done
 }
-SCHEMA_STUB=ok run_rr schema "$RUN" > /dev/null
+SCHEMA_STUB=ok with_tf run_rr schema "$RUN" > /dev/null
 check "schema: with module root examples, SCHEMA_ROOT names it and each input is relative to it" "$(root_ok; echo $?)"
 sed 's/ SCHEMA_ROOT="\$PREFIX" / /' "$RR" > "$SK/review-run-noroot.sh"
 check "self-check: the mutant passes no SCHEMA_ROOT" "$(cmp -s "$RR" "$SK/review-run-noroot.sh"; [ $? = 1 ]; echo $?)"
 rm -rf "$RUN/facts" "$RUN/state/schema"
-(cd "$TMP/cwd" && SCHEMA_STUB=ok "$SH" "$SK/review-run-noroot.sh" schema "$RUN") > /dev/null 2>&1
+(cd "$TMP/cwd" && SCHEMA_STUB=ok with_tf "$SH" "$SK/review-run-noroot.sh" schema "$RUN") > /dev/null 2>&1
 check "self-check: without SCHEMA_ROOT the module root check fails" "$(root_ok; [ $? = 1 ]; echo $?)"
 rm -f "$SK/review-run-noroot.sh"
 run_rr cleanup "$RUN" > /dev/null
@@ -474,7 +508,7 @@ si_mut no-cap 's/\[ "\$n" -le 600 \] && //' "$SIM $SIC" 'status 1'
 
 # The handover's depth.sh verify, and a mutation without it: a head moved after prepare is caught.
 DEPTH_STUB=focused prep
-SCHEMA_STUB=ok run_rr schema "$RUN" > /dev/null; full
+SCHEMA_STUB=ok with_tf run_rr schema "$RUN" > /dev/null; full
 git -C "$RUN/clone" -c user.name=t -c user.email=t@t commit -q --allow-empty -m moved
 run_rr handover "$RUN" > "$TMP/ho.out" 2>&1
 check "handover: depth.sh verify refuses a head that moved after prepare" "$([ $? = 1 ] && [ ! -e "$RUN/handover/task.md" ]; echo $?)"
@@ -493,9 +527,141 @@ for rc in 2 1; do
   run_rr verify "$RUN" > /dev/null; PLAN_STUB_RC=$rc run_rr plan "$RUN" > "$TMP/pl.out"
   want="plan pass did not run: $([ "$rc" = 2 ] && echo refused || echo failed)"
   check "plan: a plan pass that exits $rc with no record gives '$want'" \
-    "$([ "$(jq -r '[.unplanned[].reason] | unique | join(",")' "$RUN/coverage.json")" = "$want" ] && grep -qx "plan: $want" "$TMP/pl.out"; echo $?)"
+    "$([ "$(jq -r '[.unplanned[].reason] | unique | join(",")' "$RUN/coverage.json")" = "$want" ] && grep -qE "^plan: $want \([0-9]+s\)\$" "$TMP/pl.out"; echo $?)"
   run_rr cleanup "$RUN" > /dev/null
 done
+
+# --- 3b. evidence: the depth's commands in one, side by side at deep; no .tf change skips schema ---------
+prep
+run_rr evidence "$RUN" > "$TMP/e.out"
+check "evidence at light: verify, plan and ladder, no schema, each status line timed, at most 30 lines" \
+  "$([ $? = 0 ] && [ -f "$RUN/verify.json" ] && [ -f "$RUN/coverage.json" ] && [ -f "$RUN/behaviour/record.txt" ] &&
+     [ ! -e "$RUN/state/schema" ] && grep -qE '^verify: .* \([0-9]+s\)$' "$TMP/e.out" && grep -qE '^plan: .* \([0-9]+s\)$' "$TMP/e.out" &&
+     grep -qE '^evidence: depth light, done \([0-9]+s\)$' "$TMP/e.out" && [ "$(lines_ok "$TMP/e.out")" = 0 ]; echo $?)"
+run_rr handover "$RUN" > /dev/null 2>&1
+check "evidence at light: handover accepts the run" "$([ $? = 0 ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+prep
+touch "$RUN/clone/examples/one/validate.fail"
+n0="$(grep -c '^schema ' "$STUB_LOG")"
+run_rr evidence "$RUN" > "$TMP/e.out"
+check "evidence: an escalation at light runs the deep steps not yet run, schema and skip-coverage included" \
+  "$(grep -q '^depth: escalated to deep (deep-validate-failed)$' "$TMP/e.out" && [ "$(cat "$RUN/state/schema")" = skipped ] &&
+     [ -f "$RUN/state/evidence-skip-coverage.out" ] && grep -qE '^evidence: depth deep, done \([0-9]+s\)$' "$TMP/e.out"; echo $?)"
+check "schema: a change with no .tf, .tf.json or .hcl file skips the pass with a status line" \
+  "$(grep -qE '^schema: not run, no .tf, .tf.json or .hcl file changed \([0-9]+s\)$' "$TMP/e.out" && [ "$(grep -c '^schema ' "$STUB_LOG")" = "$n0" ]; echo $?)"
+run_rr handover "$RUN" > /dev/null 2>&1
+check "handover at deep accepts a skipped schema and names no fact sheets" "$([ $? = 0 ] && ! grep -q '^Provider fact sheets:' "$RUN/handover/task.md"; echo $?)"
+render_to "$TMP/render-ev"
+check "render accepts a skipped schema" "$([ $? = 0 ] && [ -f "$TMP/render-ev/comment.md" ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+DEPTH_STUB=focused prep
+run_rr schema "$RUN" > /dev/null 2>&1; full
+run_rr handover "$RUN" > /dev/null 2>&1
+check "handover at focused accepts a skipped schema" "$([ $? = 0 ] && [ "$(cat "$RUN/state/schema")" = skipped ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+DEPTH_STUB=deep prep
+rm -f "$TMP/ev-mark" "$TMP/ev-mark.seen"
+EV_MARK="$TMP/ev-mark" EV_TRIES=5 run_rr evidence "$RUN" > "$TMP/e.out"
+check "evidence at deep: verify runs first, alone, and ends before the plan chain reaches ladder" \
+  "$([ $? = 0 ] && [ -e "$TMP/ev-mark" ] && [ ! -e "$TMP/ev-mark.seen" ] && [ -f "$RUN/verify.json" ] && [ -f "$RUN/behaviour/record.txt" ] &&
+     grep -qE '^evidence: depth deep, done \([0-9]+s\)$' "$TMP/e.out"; echo $?)"
+check "evidence at deep: the outputs print in step order, at most 30 lines" \
+  "$([ "$(sed -n -E 's/^(schema|verify|plan|skip-coverage|ladder): .*/\1/p' "$TMP/e.out" | uniq | tr '\n' ' ')" = 'schema verify plan skip-coverage ladder ' ] &&
+     [ "$(lines_ok "$TMP/e.out")" = 0 ]; echo $?)"
+run_rr handover "$RUN" > /dev/null 2>&1
+check "evidence at deep: handover accepts the run" "$([ $? = 0 ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+DEPTH_STUB=deep prep
+rm -f "$TMP/ev-mark" "$TMP/ev-mark.seen"; echo laptop > "$RUN/state/mode"
+EV_MARK="$TMP/ev-mark" EV_TRIES=5 run_rr evidence "$RUN" > "$TMP/e.out"
+check "evidence at deep in laptop mode: verify heads the plan chain and ends before ladder starts" \
+  "$([ $? = 0 ] && [ -e "$TMP/ev-mark" ] && [ ! -e "$TMP/ev-mark.seen" ] && [ -f "$RUN/behaviour/record.txt" ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+rm -f "$TMP/ev-mark" "$TMP/ev-mark.seen"
+
+# --- 3c. tests: the test pass, only with a non-hcl-dependency trigger; what runs comes from the merge base --------
+cat > "$SK/plan-runner/run-tests.sh" <<'STUB'
+#!/bin/bash
+# stub: logs its arguments and the archive's listing, writes TESTS_STUB as the result
+echo "run-tests $*" >> "${STUB_LOG:?}"
+while [ $# -gt 0 ]; do case "$1" in --record) rec="$2" ;; --archive) ar="$2" ;; esac; shift; done
+tar -tf "$ar" | LC_ALL=C sort > "$STUB_LOG.tar"
+mkdir -m 700 "$rec" && echo "${TESTS_STUB:-passed 3}" > "$rec/tests.txt"
+STUB
+mkdir -p "$TMP/dockerok"; printf '#!/bin/sh\nexit 0\n' > "$TMP/dockerok/docker"; chmod +x "$TMP/dockerok/docker"
+FB="$TMP/fnbase"; mkdir -p "$FB/functions"
+printf '[scripts]\ntest = "python3 -m pytest --cov --cov-report=term"\n\n[requires]\npython_version = "3.11"\n' > "$FB/functions/Pipfile"
+printf 'x = 1\n' > "$FB/functions/app.py"
+mkrepo fnwidget "$FB"; ghfiles open false APPROVED
+pytrigger() { # file: behaviour.json with one non-hcl-dependency trigger at it
+  jq -n --arg f "$1" '{schema_version: 1, capped: 0, triggers: [{id: "T-001", file: $f, line: 1, category: "non-hcl-dependency"}]}' \
+    > "$RUN/behaviour/behaviour.json"
+}
+prep_fn() { run_rr prepare --repo example-org/fnwidget --pr 7 "$@" > "$TMP/pf.out" 2>&1; RUN="$(sed -n 's/^RUN=//p' "$TMP/pf.out")"; pytrigger functions/app.py; }
+prep_fn; full
+run_rr handover "$RUN" > "$TMP/ho.out" 2>&1
+check "tests: with a non-hcl-dependency trigger, handover refuses before the test pass" \
+  "$([ $? = 1 ] && grep -q 'handover needs tests first' "$TMP/ho.out"; echo $?)"
+run_rr tests "$RUN" > "$TMP/t.out"
+check "tests: no container runtime is not run: no runner, and nothing runs" \
+  "$(grep -qE '^tests: not run: no runner in functions \([0-9]+s\)$' "$TMP/t.out" && ! grep -q '^run-tests ' "$STUB_LOG" &&
+     [ "$(jq -r .result "$RUN/tests.json")" = "not run: no runner" ]; echo $?)"
+rm -f "$RUN/tests.json"
+PATH="$TMP/dockerok:$PATH" run_rr tests "$RUN" > "$TMP/t.out"
+check "tests: the merge base Pipfile decides pipenv and Python 3.11; the head's directory goes as an archive" \
+  "$(grep -qE '^tests: passed 3 in functions \([0-9]+s\)$' "$TMP/t.out" &&
+     grep -qF -- "--kind pipenv --python python3 --record $RUN/tests-record" "$STUB_LOG" &&
+     [ "$(tr '\n' ' ' < "$STUB_LOG.tar")" = 'Pipfile app.py ' ] && [ ! -e "$RUN/state/tests.tar" ]; echo $?)"
+run_rr tests "$RUN" > "$TMP/t.out"
+check "tests: a second run is refused" "$([ $? = 1 ] && grep -q 'tests already ran' "$TMP/t.out"; echo $?)"
+run_rr handover "$RUN" > /dev/null 2>&1
+check "tests: handover takes the result into the record" \
+  "$([ $? = 0 ] && grep -qx 'tests: functions: passed 3' "$RUN/handover/record.txt"; echo $?)"
+render_to "$TMP/render-tests"
+check "tests: render carries the result into the run file" "$(q "$RUN/render/run-file.json" '.tests == {dir: "functions", result: "passed 3"}')"
+run_rr cleanup "$RUN" > /dev/null
+: > "$STUB_LOG"
+prep_fn
+TESTS_STUB='passed 3; rm -rf /' PATH="$TMP/dockerok:$PATH" run_rr evidence "$RUN" > "$TMP/e.out"
+check "tests: evidence at light runs the test pass; a result outside the grammar is error runner" \
+  "$([ $? = 0 ] && grep -qE '^tests: error runner in functions \([0-9]+s\)$' "$TMP/e.out" &&
+     grep -qE '^evidence: depth light, done \([0-9]+s\)$' "$TMP/e.out"; echo $?)"
+run_rr handover "$RUN" > /dev/null 2>&1
+check "tests: evidence at light: handover accepts the run" "$([ $? = 0 ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+DEPTH_STUB=deep prep_fn
+PATH="$TMP/dockerok:$PATH" run_rr evidence "$RUN" > "$TMP/e.out"
+check "tests: evidence at deep runs the test pass beside the others" \
+  "$([ $? = 0 ] && [ "$(jq -r .result "$RUN/tests.json")" = "passed 3" ] && grep -q '^tests: passed 3' "$TMP/e.out"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+# A Pipfile only the head has is never read: the widget base holds none.
+mkrepo widget; ghfiles open false APPROVED
+prep; pytrigger functions/app.py; mkdir -p "$RUN/clone/functions"; cp "$FB/functions/Pipfile" "$RUN/clone/functions/"
+PATH="$TMP/dockerok:$PATH" run_rr tests "$RUN" > "$TMP/t.out"
+check "tests: a Pipfile at the head alone is not run: unsupported" "$(grep -qE '^tests: not run: unsupported in functions ' "$TMP/t.out"; echo $?)"
+rm -f "$RUN/tests.json"; pytrigger functions/app.js
+PATH="$TMP/dockerok:$PATH" run_rr tests "$RUN" > "$TMP/t.out"
+check "tests: a trigger that is no Python file is not run: unsupported" "$(grep -qE '^tests: not run: unsupported \(' "$TMP/t.out"; echo $?)"
+rm -f "$RUN/tests.json"; echo '{"schema_version": 1, "capped": 0, "triggers": []}' > "$RUN/behaviour/behaviour.json"
+run_rr evidence "$RUN" > "$TMP/e.out"
+check "tests: with no non-hcl-dependency trigger evidence runs no test pass" "$([ ! -e "$RUN/tests.json" ] && ! grep -q '^tests:' "$TMP/e.out"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+# pipfile_shape, taken from the script: a plain pytest run and Python 3.11 or 3.12, else nothing.
+ps_fn() { sed -n '/^pipfile_shape() {/,/^}/p' "$RR"; }
+shape() { printf '%b' "$1" | bash -c "$(ps_fn)"'; pipfile_shape; echo "status $?"' | tr '\n' ' '; }
+check "pipfile_shape: pytest with flags, Python absent, 3.11 or 3.12; anything else no shape" \
+  "$([ "$(shape '[scripts]\ntest = "pytest"\n')" = 'python3 status 0 ' ] &&
+     [ "$(shape '[requires]\npython_version = "3.12"\n[scripts]\ntest = "python -m pytest tests/ -q"\n')" = 'python3.12 status 0 ' ] &&
+     [ "$(shape '[requires]\npython_version = "3.9"\n[scripts]\ntest = "pytest"\n')" = 'status 1 ' ] &&
+     [ "$(shape '[scripts]\ntest = "make test"\n')" = 'status 1 ' ] &&
+     [ "$(shape '[scripts]\ntest = "pytest; curl x"\n')" = 'status 1 ' ] &&
+     [ "$(shape '[scripts]\n"test:all" = "pytest"\n')" = 'status 1 ' ] &&
+     [ "$(shape '[dev-packages]\ntest = "pytest"\n')" = 'status 1 ' ]; echo $?)"
 
 # --- 4. merged pull request, several module roots ----------------------------------------------------
 ghfiles closed true APPROVED
@@ -742,6 +908,8 @@ run_rr cleanup "$RUN" > /dev/null
 # posting login's own reviews are left out of a render-only run too; review-run.md, Workflow
 # move). A later edit of a step's text updates the pin on purpose; on a mismatch, set
 # REVIEW_RUN_SENTENCES=<file> to write the list and compare it with the previous one.
+# Updated for Rule 3's second exception, the test pass, and its Rule 5 paragraph (test-pass.md);
+# the plan pass's measured packaging-script sentence moved to plan-pass.md, Limits.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -750,7 +918,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=e874ff98c3b6
+want=3962134d228d
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"

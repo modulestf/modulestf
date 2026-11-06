@@ -19,6 +19,9 @@
 #                                        plan coverage at every depth
 #   review-run.sh skip-coverage <run>   skip-coverage.sh after a laptop pass with gate skips
 #   review-run.sh ladder <run>          ladder-pass.sh run (not at light), then behaviour-pass.sh eval
+#   review-run.sh tests <run>           the test pass (test-pass.md) in the runner, with a
+#                                        non-hcl-dependency trigger
+#   review-run.sh evidence <run>        the commands above the depth needs, side by side at deep
 #   review-run.sh handover <run>        <run>/handover/task.md and record.txt for the reviewer
 #   review-run.sh render <run> --findings <file> --assessment <file> --out <dir>
 #       [--summary <file>] [--standard]
@@ -119,10 +122,11 @@ ready() {
   [ "$TRIAGE" = false ] || return 0
   [ -f "$RUN/verify.json" ] || fail "$1 needs verify first"
   [ -f "$RUN/coverage.json" ] && [ -f "$RUN/behaviour/record.txt" ] || fail "$1 needs plan and ladder first"
+  ! needs_tests || [ -f "$RUN/tests.json" ] || fail "$1 needs tests first"
   # A run with no depth.json is the pipeline of before, with no schema step.
   [ -f "$RUN/depth.json" ] || return 0
   case "$(depth)" in
-    focused) [ "$(cat "$RUN/state/schema" 2> /dev/null)" = ok ] || fail "$1 at focused needs schema first" ;;
+    focused) case "$(cat "$RUN/state/schema" 2> /dev/null)" in ok | skipped) ;; *) fail "$1 at focused needs schema first" ;; esac ;;
     deep) [ -f "$RUN/state/schema" ] || fail "$1 at deep needs schema first" ;;
   esac
 }
@@ -370,9 +374,7 @@ summary_lines() {
     "behaviour: \(.behaviour), plan: \(.plan)",
     (if .new_module then "base: no file under the module root, reviewed as a new module" else empty end),
     "next: " + (if .triage then "handover, reviewer, render"
-      elif .depth == "light" then "claims, verify, plan, ladder, handover, reviewer, render"
-      elif .depth == "focused" then "claims, schema, verify, plan, skip-coverage, ladder, handover, reviewer, render"
-      else "claims, schema, verify, plan, skip-coverage, ladder, handover, reviewer, render" end)' "$RUN/index.json"
+      else "claims, evidence, handover, reviewer, render" end)' "$RUN/index.json"
 }
 
 # --- evidence passes -----------------------------------------------------------------------
@@ -407,6 +409,12 @@ cmd_schema() {
   local d; d="$(depth)"
   [ "$d" != light ] || { echo "schema: not run at depth light"; return 0; }
   [ ! -e "$RUN/facts" ] || fail "schema already ran in this run"
+  # No .tf, .tf.json or .hcl file changed, old path included: no provider facts to read. A list
+  # that cannot be read runs the pass.
+  if jq -e 'all(.[]; [.filename, (.previous_filename // empty)] | all(test("[.](tf|tf[.]json|hcl)$") | not))' \
+      "$RUN/host/files.json" > /dev/null 2>&1; then
+    note schema skipped; echo "schema: not run, no .tf, .tf.json or .hcl file changed"; return 0
+  fi
   rm -rf "$RUN/schema-work" "$RUN/schema-handoff" "$RUN/state/schema-sources.txt"
   local line rc r="" mbs ins=""
   # The handoff's commits and inputs: the head and the merge base the depth was bound to.
@@ -587,6 +595,104 @@ cmd_ladder() {
   head -n 1 "$RUN/behaviour/record.txt" 2> /dev/null | cut -c1-200
 }
 
+# --- the test pass (test-pass.md) ------------------------------------------------------------
+
+needs_tests() { # a non-hcl-dependency trigger, outside a triage run
+  [ "$TRIAGE" = false ] && jq -e 'any(.triggers[]?; .category == "non-hcl-dependency")' \
+    "$RUN/behaviour/behaviour.json" > /dev/null 2>&1
+}
+# A merge base Pipfile on stdin: prints python3 or python3.12 when its test script is a plain
+# pytest run and its Python is absent, 3.11 or 3.12; else status 1. Read as data, never run.
+pipfile_shape() {
+  awk '
+    /^[[:space:]]*\[[^]]*\][[:space:]]*$/ { sec = $0; gsub(/[][:space:][]/, "", sec); next }
+    sec == "scripts" && /^[[:space:]]*test[[:space:]]*=/ { v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); t = v }
+    sec == "requires" && /^[[:space:]]*python_version[[:space:]]*=/ { v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); p = v }
+    END {
+      if (t !~ /^"(python3? -m )?pytest( [-A-Za-z0-9_=.\/:]+)*"[[:space:]]*$/) exit 1
+      if (p == "" || p ~ /^"3\.11"[[:space:]]*$/) print "python3"
+      else if (p ~ /^"3\.12"[[:space:]]*$/) print "python3.12"
+      else exit 1
+    }'
+}
+tests_done() { # dir or empty, result: tests.json and the status line
+  jq -n --arg d "$1" --arg r "$2" '{dir: (if $d == "" then null else $d end), result: $r}' > "$RUN/tests.json"
+  echo "tests: $2${1:+ in $1}"
+}
+cmd_tests() {
+  need_full tests
+  [ ! -e "$RUN/tests.json" ] || fail "tests already ran in this run"
+  needs_tests || { tests_done "" "not run: no trigger"; return 0; }
+  local py_files dirs dir rp pf py="" kind="" size
+  py_files="$(jq -r '.triggers[] | select(.category == "non-hcl-dependency") | .file | select(endswith(".py"))' \
+    "$RUN/behaviour/behaviour.json")"
+  dirs="$(printf '%s\n' "$py_files" | awk 'NF { if (!sub(/\/[^\/]*$/, "")) $0 = "."; print }' | sort -u)"
+  # One directory of changed Python files, a plain path; anything else is out of this pass's scope.
+  [ "$(printf '%s\n' "$dirs" | grep -c .)" = 1 ] && plain_ok "$dirs" || { tests_done "" "not run: unsupported"; return 0; }
+  dir="$dirs"
+  [ -n "$MB" ] && [ -d "$RUN/base" ] || { tests_done "$dir" "not run: no merge base"; return 0; }
+  # What to run comes from the merge base alone: its Pipfile, or its requirements-dev.txt naming pytest.
+  if [ "$dir" = . ]; then rp="$PREFIX"; else rp="${PREFIX:+$PREFIX/}$dir"; fi
+  if pf="$(base_git show "$MB:${rp:+$rp/}Pipfile" 2> /dev/null | head -c 65536)" && [ -n "$pf" ]; then
+    py="$(printf '%s\n' "$pf" | pipfile_shape)" && kind=pipenv
+  elif base_git show "$MB:${rp:+$rp/}requirements-dev.txt" 2> /dev/null | head -c 65536 |
+      grep -Eq '^pytest([^A-Za-z0-9_.-]|$)'; then
+    kind=requirements py=python3
+  fi
+  [ -n "$kind" ] || { tests_done "$dir" "not run: unsupported"; return 0; }
+  limit 30 docker info > /dev/null 2>&1 || { tests_done "$dir" "not run: no runner"; return 0; }
+  # The head's files of that directory as a tar from the clone's objects; no host path is mounted.
+  clone_git archive --format=tar -o "$RUN/state/tests.tar" "HEAD:$rp" 2> /dev/null &&
+    size="$(wc -c < "$RUN/state/tests.tar" | tr -d ' ')" && [ "$size" -le 67108864 ] ||
+    { rm -f "$RUN/state/tests.tar"; tests_done "$dir" "error archive"; return 0; }
+  bash "$HERE/plan-runner/run-tests.sh" --build --archive "$RUN/state/tests.tar" --kind "$kind" --python "$py" \
+    --record "$RUN/tests-record" --tmp "$RUN" > "$RUN/state/tests.out" 2> "$RUN/state/tests.err"
+  rm -f "$RUN/state/tests.tar"
+  local r; r="$(head -n 1 "$RUN/tests-record/tests.txt" 2> /dev/null)"
+  [[ "$r" =~ ^(passed|failed)\ [0-9]{1,6}$|^error\ [a-z-]{1,32}$ ]] || r="error runner"
+  tests_done "$dir" "$r"
+}
+
+# The evidence commands of the depth, each a review-run.sh process of its own whose output goes to
+# state/evidence-<step>.out; every step writes only its own state and output files. At deep, where
+# no step escalates, schema, verify and the chain plan, skip-coverage, ladder run side by side; in
+# laptop mode verify heads the chain, since the plan pass removes the .terraform/ and lock files
+# verify leaves in the same clone. At light and focused one at a time, the depth read again after
+# each step, since an escalation adds the deep steps not yet run.
+EV_STEPS="schema verify plan skip-coverage ladder tests"
+ev_step() { bash "$HERE/review-run.sh" "$1" "$RUN" > "$RUN/state/evidence-$1.out" 2>&1; }
+ev_next() { # the steps this invocation ran: the next step the depth needs, or nothing
+  local s
+  for s in $EV_STEPS; do
+    case " $1 " in *" $s "*) continue ;; esac
+    [ "$s" != tests ] || needs_tests || continue
+    [ "$(depth)" != light ] || [ "$s" = verify ] || [ "$s" = plan ] || [ "$s" = ladder ] || [ "$s" = tests ] || continue
+    echo "$s"; return 0
+  done
+}
+cmd_evidence() {
+  need_full evidence
+  local t0=$SECONDS rc=0 s ran="" p pids=() chain="plan skip-coverage ladder"
+  for s in $EV_STEPS; do rm -f "$RUN/state/evidence-$s.out"; done
+  if [ "$(depth)" = deep ]; then
+    ev_step schema & pids+=($!)
+    # verify first, alone: its init has a fixed time limit that the plan's and the test pass's
+    # downloads would eat; in laptop mode the plan pass also removes what verify writes.
+    ev_step verify || rc=1
+    ! needs_tests || { ev_step tests & pids+=($!); }
+    ( for s in $chain; do ev_step "$s" || exit 1; done ) & pids+=($!)
+    for p in "${pids[@]}"; do wait "$p" || rc=1; done
+  else
+    while s="$(ev_next "$ran")" && [ -n "$s" ]; do
+      ran="$ran $s"; ev_step "$s" || { rc=1; break; }
+      [ ! -e "$RUN/state/stop" ] || { rc=1; break; }
+    done
+  fi
+  { for s in $EV_STEPS; do [ ! -f "$RUN/state/evidence-$s.out" ] || cat "$RUN/state/evidence-$s.out"; done; } | head -n 29
+  echo "evidence: depth $(depth), $( [ "$rc" = 0 ] && echo done || echo 'a step failed') ($((SECONDS - t0))s)"
+  return "$rc"
+}
+
 # --- handover --------------------------------------------------------------------------------
 
 # The verification record, in github-io.md Handover order, from the pass outputs.
@@ -645,6 +751,66 @@ record_lines() {
   jq -r '"plan coverage: \(.class)", (.unplanned[] | "not planned: \(.dir): \(.reason)")' "$RUN/coverage.json"
   [ ! -f "$RUN/state/schema-sources.txt" ] || cat "$RUN/state/schema-sources.txt"
   cat "$RUN/behaviour/record.txt"
+  [ ! -f "$RUN/tests.json" ] || jq -r '"tests: " + (if .dir then .dir + ": " else "" end) + .result' "$RUN/tests.json"
+}
+
+# The reviewer's reference bundle (github-io.md#reference-bundle): the sections its run reads
+# whatever it finds, chosen by the depth and by whether a Terraform file changed.
+BUNDLE_CAP=100000
+bundle_entries() { # <depth> <checks out of scope, space separated> <hcl true|false> <sheets true|false>
+  local d="$1" o=" $2 " hcl="$3" c l allow=""
+  case "$d" in light) allow=" A B D G-ladder " ;; focused) allow=" B " ;; esac
+  out_of() { case "$o" in *" $1 "*) case "$allow" in *" $1 "*) return 0 ;; esac ;; esac; return 1; }
+  printf '%s\n' inputs.md#inputs workflow.md#step-1-establish-scope git-safety.md#the-form \
+    large-changes.md#classify-every-changed-path large-changes.md#review-order run/output.md \
+    workflow.md#final-step-assemble-the-findings
+  for c in A B C D E F G; do out_of "$c" || echo "run/check-$(echo "$c" | tr A-G a-g).md"; done
+  [ "$hcl" = false ] || echo run/facts.md
+  [ "$4" = false ] || echo large-changes.md#budget
+  for c in A B C D E F G; do
+    out_of "$c" && continue
+    [ "$c" != G ] || ! out_of G-ladder || continue
+    case "$c$hcl" in Afalse | Bfalse | Dfalse | Gfalse) continue ;; esac
+    case "$c" in
+      A) l=check-a-compatibility.md#reads-fails-when-and-severity ;;
+      B) l="check-b-coverage.md#reads check-b-coverage.md#which-blocks check-b-coverage.md#rules" ;;
+      C) l=check-c-structure.md#reads-fails-when-and-severity ;;
+      D) l=check-d-examples.md#reads-fails-when-and-severity ;;
+      E) l=check-e-profile.md#reads-fails-when-and-severity ;;
+      F) l="check-f-scope.md#reads-fails-when-and-severity check-f-scope.md#the-base-revision" ;;
+      G) l=check-g-behaviour.md#reads-fails-when-and-severity ;;
+    esac
+    printf '%s\n' $l
+  done
+}
+
+# Writes <file> from the entries on stdin, each as section.sh prints it or the whole file; an
+# entry that would take it past BUNDLE_CAP, or that section.sh refuses, is left out and read as
+# before. Prints the number of entries left out.
+write_bundle() { # <file>
+  local r="$HERE/../../terraform-module-reviewer/references" e n skip=0 size=0
+  [ -f "$r/section.sh" ] || { echo 0; return; }
+  : > "$1.body"; : > "$1.list"
+  while IFS= read -r e; do
+    { echo "BUNDLE-SECTION references/$e"
+      case "$e" in
+        *'#'*) bash "$r/section.sh" "$r/${e%%#*}" "${e#*#}" 2> /dev/null ;;
+        *) [ ! -L "$r/$e" ] && cat "$r/$e" ;;
+      esac; } > "$1.e" || { skip=$((skip + 1)); continue; }
+    n=$(wc -c < "$1.e" | tr -d ' ')
+    if [ $((size + n)) -gt "$BUNDLE_CAP" ]; then skip=$((skip + 1)); continue; fi
+    size=$((size + n))
+    cat "$1.e" >> "$1.body"
+    echo "references/$e" >> "$1.list"
+  done
+  [ ! -s "$1.list" ] || {
+    echo "Reference bundle of terraform-module-reviewer, written by the host from its own skills checkout. Each section below starts with a line BUNDLE-SECTION <file>#<anchor>, or BUNDLE-SECTION <file> for a whole file, followed by that section's text as section.sh prints it, or the whole file. Sections in this file:"
+    cat "$1.list"
+    cat "$1.body"
+  } > "$1"
+  [ -s "$1.list" ] || rm -f "$1"
+  rm -f "$1.e" "$1.body" "$1.list"
+  echo "$skip"
 }
 
 cmd_handover() {
@@ -669,6 +835,21 @@ cmd_handover() {
   # ignores that statement beside a diff, and mtf-facts then runs without --base and --diff.
   jq -e '.new_module == true' "$RUN/index.json" > /dev/null 2>&1 && nm=true && mbl=""
   rm -rf "$RUN/review"; mkdir "$RUN/review"
+  # The reference bundle, outside a triage run: depth.json as the reviewer reads it, and
+  # whether a Terraform file changed (a new module, or files.json that cannot be read, counts).
+  local left="" dp=deep oos="" hcl=true sheets=false
+  if [ "$TRIAGE" = false ]; then
+    if [ -f "$RUN/depth.json" ]; then
+      dp="$(jq -r 'if .format == 1 and (.depth == "light" or .depth == "focused") then .depth else "deep" end' "$RUN/depth.json")"
+      oos="$(jq -r '[(.checks_out_of_scope // [])[] | strings] | join(" ")' "$RUN/depth.json")"
+    fi
+    if [ "$nm" = false ] && [ -f "$RUN/host/files.json" ]; then
+      jq -e 'any(.[]; (.filename // "") | test("\\.(tf|tofu|hcl)(\\.json)?$"))' "$RUN/host/files.json" > /dev/null 2>&1
+      [ $? != 1 ] || hcl=false
+    fi
+    [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || [ ! -d "$RUN/facts" ] || sheets=true
+    left="$(bundle_entries "$dp" "$oos" "$hcl" "$sheets" | write_bundle "$out/reviewer-references.md")"
+  fi
   # The diff of the task, module-root-relative, as a file the reviewer's mtf-facts lint reads.
   awk 'p == 1 && $0 == f { exit } p == 1 { print; next } p == 2 { f = $0; sub(/diff$/, "", f); p = 1; next }
        /^The diff:$/ { p = 2 }' "$t" > "$out/change.diff"
@@ -692,12 +873,15 @@ cmd_handover() {
     [ -z "$mbl" ] || printf 'Merge base: %s\n' "$mbl"
     printf 'Output: write the findings list as JSON to %s, the summary line to %s and the facts comparison note to %s, and nothing else.\n' \
       "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt"
+    [ ! -f "$out/reviewer-references.md" ] || printf 'References: %s\n' "$out/reviewer-references.md"
     sed -n "$n,\$p" "$t" | sed '$d'
     [ "$TRIAGE" = true ] || { printf 'RECORD-%s\n' "$s"; cat "$out/record.txt"; }
     printf 'UNTRUSTED-%s END\n' "$s"
   } > "$out/task.md"
   [ ! -f "$RUN/depth.json" ] || cp "$RUN/state/depth.sha256" "$RUN/state/handover.sha256"
   echo "handover: $out/task.md ($(wc -l < "$out/task.md" | tr -d ' ') lines, record $( [ -f "$out/record.txt" ] && wc -l < "$out/record.txt" | tr -d ' ' || echo 0) lines)"
+  [ ! -f "$out/reviewer-references.md" ] ||
+    echo "references: $out/reviewer-references.md ($(wc -c < "$out/reviewer-references.md" | tr -d ' ') bytes, ${left:-0} sections left out)"
   echo "reviewer: one read-only subagent, workspace $MROOT, task text $out/task.md, output in $RUN/review"
 }
 
@@ -764,16 +948,17 @@ cmd_render() {
 }
 
 build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
-  local triage beh='null' ver='null' cov='null' skip='null' dj='null' mode
+  local triage beh='null' ver='null' cov='null' skip='null' dj='null' tj='null' mode
   triage="$TRIAGE"
   [ "$TRIAGE" = true ] || [ ! -f "$RUN/behaviour/run-behaviour.json" ] || beh="$(cat "$RUN/behaviour/run-behaviour.json")"
   [ ! -f "$RUN/verify.json" ] || ver="$(cat "$RUN/verify.json")"
   [ ! -f "$RUN/coverage.json" ] || cov="$(cat "$RUN/coverage.json")"
   [ ! -f "$RUN/skip-check.json" ] || skip="$(cat "$RUN/skip-check.json")"
   [ ! -f "$RUN/depth.json" ] || dj="$(cat "$RUN/depth.json")"
+  [ "$TRIAGE" = true ] || [ ! -f "$RUN/tests.json" ] || tj="$(cat "$RUN/tests.json")"
   mode="$(plan_mode)"
   jq -n --argjson triage "$triage" --argjson counts "$1" --argjson beh "$beh" --argjson ver "$ver" \
-    --argjson cov "$cov" --argjson skip "$skip" --argjson depth "$dj" --arg mode "$mode" \
+    --argjson cov "$cov" --argjson skip "$skip" --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" \
     --argjson planned "$( [ -f "$RUN/state/plan" ] && echo true || echo false)" \
     --slurpfile sel "$RUN/selection.json" "
     {format: 1, triage: \$triage, plan_ran: \$planned,
@@ -790,7 +975,8 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
     + (if \$ver != null then {examples: (\$ver | [.dirs[] | select(.reason == \"verified\")]
          | {count: length, validated: (map(select(.head.validate == 0)) | length)})} else {} end)
     + (if \$mode != \"\" then {plan_mode: \$mode} else {} end)
-    + (if \$depth != null then {depth: \$depth} else {} end)"
+    + (if \$depth != null then {depth: \$depth} else {} end)
+    + (if \$tests != null then {tests: \$tests} else {} end)"
 }
 
 # --- cleanup ---------------------------------------------------------------------------------
@@ -804,6 +990,13 @@ cmd_cleanup() { # github-io.md, Cleanup; the runner's Docker objects first when 
        docker volume rm "plan-work-$rid" "plan-saved-$rid" > /dev/null 2>&1
        docker network rm "plan-int-$rid" "plan-ext-$rid" > /dev/null 2>&1 ;;
   esac
+  rid="$(cat "$RUN/tests-record/run-id.txt" 2> /dev/null)"
+  case "$rid" in
+    '' | *[!a-z0-9]*) ;;
+    *) docker rm -f "test-runner-$rid" "test-proxy-$rid" > /dev/null 2>&1
+       docker volume rm "test-work-$rid" > /dev/null 2>&1
+       docker network rm "test-int-$rid" "test-ext-$rid" > /dev/null 2>&1 ;;
+  esac
   case "$RUN" in
     "$ROOT"/pr-review.??????) find "$RUN" -type d -exec chmod u+w {} + ; rm -rf -- "$RUN" ;;
     *) fail "refusing to delete: $RUN" ;;
@@ -811,20 +1004,29 @@ cmd_cleanup() { # github-io.md, Cleanup; the runner's Docker objects first when 
   echo "cleanup: run directory deleted"
 }
 
+timed() { # command...: its output with the seconds it took after the first line, its exit status
+  local t=$SECONDS out rc
+  out="$("$@")"; rc=$?
+  [ -z "$out" ] || printf '%s\n' "$out" | awk -v s="$((SECONDS - t))" 'NR == 1 { $0 = $0 " (" s "s)" } { print }'
+  return "$rc"
+}
+
 # --- main ------------------------------------------------------------------------------------
 
-cmd="${1-}"; CMD="$cmd"; shift || die "usage: review-run.sh <prepare|schema|verify|plan|skip-coverage|ladder|handover|render|cleanup> ..."
+cmd="${1-}"; CMD="$cmd"; shift || die "usage: review-run.sh <prepare|schema|verify|plan|skip-coverage|ladder|tests|evidence|handover|render|cleanup> ..."
 case "$cmd" in
   prepare) cmd_prepare "$@" ;;
-  schema | verify | plan | skip-coverage | ladder | handover | render | cleanup)
+  schema | verify | plan | skip-coverage | ladder | tests | evidence | handover | render | cleanup)
     run_dir="${1-}"; shift || die "$cmd needs the run directory"
     RUN=""; open_run "$run_dir"
     case "$cmd" in
-      schema) cmd_schema ;;
-      verify) cmd_verify "$@" ;;
-      plan) cmd_plan ;;
-      skip-coverage) cmd_skip_coverage ;;
-      ladder) cmd_ladder ;;
+      schema) timed cmd_schema ;;
+      verify) timed cmd_verify "$@" ;;
+      plan) timed cmd_plan ;;
+      skip-coverage) timed cmd_skip_coverage ;;
+      ladder) timed cmd_ladder ;;
+      tests) timed cmd_tests ;;
+      evidence) cmd_evidence ;;
       handover) cmd_handover ;;
       render) cmd_render "$@" ;;
       cleanup) cmd_cleanup ;;

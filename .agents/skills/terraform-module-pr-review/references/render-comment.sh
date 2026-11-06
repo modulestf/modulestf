@@ -151,7 +151,8 @@ RJ -e -R --slurp 'include "render-comment"; valid_assessment' "$assessment" > /d
 
 # The Checks signal: the checks file when host-pass.sh accepts it, else unknown (host-pass.md).
 if [ "$(bash "$HERE/host-pass.sh" check "$checks" --head "$head" 2> /dev/null)" = "checks accepted" ]; then
-  cj="$(jq -c '{accepted: true, signal, own_check, own_check_dropped, own_jobs_dropped, own_jobs_unreadable}' \
+  cj="$(jq -c '{accepted: true, signal, own_check, own_check_dropped, own_jobs_dropped, own_jobs_unreadable, jobless,
+    runs: ((.check_runs | length) + (.statuses.total_count // 0))}' \
     "$checks/checks.json")" || die "the checks file cannot be read"
 else
   cj='{"accepted": false, "signal": "unknown"}'

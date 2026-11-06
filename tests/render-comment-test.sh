@@ -59,7 +59,7 @@ checks() { # name, pass|fail|unknown [, jq update] -> checks directory
   esac
   mkdir -p "$d"
   jq -n --arg h "$HEAD" --arg s "$2" --argjson runs "$runs" '{format: 1, head_sha: $h, signal: $s, reads: "ok",
-    own_check: null, own_check_dropped: 0, own_jobs_dropped: 0, own_jobs_unreadable: false,
+    own_check: null, own_check_dropped: 0, own_jobs_dropped: 0, own_jobs_unreadable: false, jobless: [],
     check_runs: $runs, statuses: {state: "success", total_count: 0}} | '"${3-.}" > "$d/checks.json"
   echo "$d"
 }
@@ -757,6 +757,9 @@ render "$({ f structure.grouping LOW a.tf 1 "S." "F."; f structure.argument-orde
   f structure.argument-order LOW c.tf 3 "U." "H."; } | list wt-r7)"
 todo_is "rule 7, LOW only, a null line and one and two findings" '### What to do' '' "$LEAD_7" '' \
   '- Optional: `structure.grouping` at `a.tf:1`.' '- Optional: `structure.argument-order` (2) at `b.tf`, `c.tf:3`.'
+render "$({ f structure.grouping LOW a.tf 4 "S." "F."; f structure.grouping LOW a.tf 4 "T." "G."; } | list wt-r7d)"
+todo_is "rule 7, two findings at one location name it once" '### What to do' '' "$LEAD_7" '' \
+  '- Optional: `structure.grouping` (2) at `a.tf:4`.'
 R0="$({ f compat.output-removed CRITICAL a.tf 1 "S." "F. Generated content made stale: the terraform-docs region of README.md."
   f compat.output-removed CRITICAL b.tf 2 "T." "G."; f compat.variable-removed HIGH c.tf null "U." "H."
   f structure.grouping LOW d.tf 4 "V." "I."; } | list wt-r0)"
@@ -1069,14 +1072,101 @@ EOF
 t_bgold; check "behaviour: section 5 byte for byte, paths repository-relative" $?
 # More than five unverified triggers: one line counting them per category, most first, no locations.
 t_bgroups() {
-  render "$NONE" "" "" "$(brun grp "[$(bt T-001 non-hcl-dependency unverifiable), $(bt T-002 wrapper-change unverifiable), \
-$(bt T-003 non-hcl-dependency unverifiable), $(bt T-004 literal-argument-change unverifiable), \
-$(bt T-005 non-hcl-dependency unverifiable), $(bt T-006 literal-argument-change unverifiable)]" '[]' 3)"
-  grep -qxF -- '- 6 behaviour changes not verified: 3 non-hcl-dependency, 2 literal-argument-change, 1 wrapper-change.' "$O/comment.md" \
+  render "$NONE" "" "" "$(brun grp "[$(bt T-001 lifecycle-change unverifiable), $(bt T-002 wrapper-change unverifiable), \
+$(bt T-003 lifecycle-change unverifiable), $(bt T-004 literal-argument-change unverifiable), \
+$(bt T-005 lifecycle-change unverifiable), $(bt T-006 literal-argument-change unverifiable)]" '[]' 3)"
+  grep -qxF -- '- 6 behaviour changes not verified: 3 lifecycle-change, 2 literal-argument-change, 1 wrapper-change.' "$O/comment.md" \
     && grep -qxF -- '- 3 more behaviour changes over the classifier cap: not verified.' "$O/comment.md" \
     && ! grep -q '^- Behaviour change at ' "$O/comment.md"
 }
 t_bgroups; check "behaviour: over five unverified triggers render one line per category count" $?
+# A file outside HCL that no level verifies is left to the repository's tests: no section 5 row,
+# no rule 4 gap, one note line after the evidence paragraph.
+RUN1='.check_runs = [{app_slug: "ci", check_suite_id: 2, conclusion: "success", id: 1, status: "completed"}]'
+t_cigated() {
+  render "$NONE" "" "$(checks cig pass "$RUN1")" "$(brun cig "[$(bt T-001 non-hcl-dependency unverifiable), $(bt T-002 non-hcl-dependency unverifiable)]" '[]')"
+  grep -qxF "Changes outside Terraform left to the repository's own tests, which the Checks signal reads: 2." "$O/comment.md" \
+    && ! grep -q '^- Behaviour change at ' "$O/comment.md" && ! grep -q 'ladder rule 4' "$O/comment.md"
+}
+t_cigated; check "behaviour: non-hcl-dependency triggers are left to the repository's tests" $?
+# With no check run and no status on the head there is no test evidence: the trigger stays a gap.
+t_cinone() {
+  render "$NONE" "" "$(checks cin pass)" "$(brun cin "[$(bt T-001 non-hcl-dependency unverifiable)]" '[]')"
+  grep -q '^- Behaviour change at ' "$O/comment.md" && grep -q 'ladder rule 4' "$O/comment.md" \
+    && ! grep -q "left to the repository's own tests" "$O/comment.md"
+}
+t_cinone; check "behaviour: with no check on the head, non-hcl-dependency triggers stay gaps" $?
+# The test pass (test-pass.md): its result marks the Python non-hcl-dependency triggers of the tested
+# directory; a trigger elsewhere keeps its state.
+pyt() { jq -nc --arg i "$1" --arg f "$2" '{id: $i, file: $f, line: 1, category: "non-hcl-dependency", state: "unverifiable"}'; }
+trun() { # name, tests json -> run file with two Python triggers in functions/ and one in other/
+  runf "t-$1" ".behaviour = {status: \"ran\", reason: null, claims: [], capped: 0,
+    triggers: [$(pyt T-001 functions/app.py), $(pyt T-002 functions/util.py), $(pyt T-003 other/x.py)]} | .tests = $2
+    | if .tests == null then del(.tests) else . end"
+}
+t_tests_pass() {
+  render "$NONE" "" "$(checks tp pass)" "$(trun pass '{dir: "functions", result: "passed 10"}')"
+  grep -qxF 'Unit tests of `functions` in the isolated runner: passed 10; changes outside Terraform they cover: 2.' "$O/comment.md" \
+    && grep -qF 'other/x.py' "$O/comment.md" && ! grep -qF 'functions/app.py' "$O/comment.md" && [ "$(rule)" = 4 ]
+}
+t_tests_pass; check "tests: passed marks the tested directory's triggers, no gap; another directory stays a gap" $?
+grep -qF ', 2 tested by the unit tests, 0 reported in a finding, ' "$O/comment.md"
+check "tests: the evidence line counts the tested triggers" $?
+t_tests_all() {
+  render "$NONE" "" "$(checks ta pass)" "$(runf t-all '.behaviour = {status: "ran", reason: null, claims: [], capped: 0,
+    triggers: ['"$(pyt T-001 app.py)"']} | .tests = {dir: ".", result: "passed 3"}')"
+  [ "$(verdict)" = "approve APPROVE" ] && grep -qxF 'Unit tests of `.` in the isolated runner: passed 3; changes outside Terraform they cover: 1.' "$O/comment.md"
+}
+t_tests_all; check "tests: passed at the module root with no other gap approves" $?
+t_tests_fail() {
+  render "$NONE" "" "$(checks tf pass)" "$(trun fail '{dir: "functions", result: "failed 2"}')"
+  [ "$(rule)" = 2 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ] \
+    && grep -qxF 'Unit tests of `functions` in the isolated runner: failed 2; changes outside Terraform they refute: 2.' "$O/comment.md" \
+    && grep -qF -- '- [ ] Behaviour change at `functions/app.py:1` (non-hcl-dependency): the evidence refutes it.' "$O/comment.md"
+}
+t_tests_fail; check "tests: failed refutes the tested directory's triggers, a block at rule 2" $?
+t_tests_error() {
+  render "$NONE" "" "$(checks te pass)" "$(trun err '{dir: "functions", result: "error install"}')"
+  cp "$O/comment.md" "$TMP/te.md"
+  render "$NONE" "" "$(checks te pass)" "$(trun none null)"
+  [ "$(rule)" = 4 ] && cmp -s "$TMP/te.md" "$O/comment.md" && ! grep -q 'Unit tests of' "$O/comment.md"
+}
+t_tests_error; check "tests: an error result renders as no test pass at all" $?
+t_tests_ci() {
+  render "$NONE" "" "$(checks tc pass "$RUN1")" "$(trun ci '{dir: "functions", result: "passed 4"}')"
+  grep -qxF "Changes outside Terraform left to the repository's own tests, which the Checks signal reads: 1." "$O/comment.md" \
+    && grep -qF 'they cover: 2.' "$O/comment.md"
+}
+t_tests_ci; check "tests: beside a check run, the untested trigger is left to the Checks signal" $?
+refused "a tests result outside the grammar" "$NONE" "" "" "$(trun bad '{dir: "functions", result: "passed: all"}')"
+refused "a tests key with another field" "$NONE" "" "" "$(trun badk '{dir: "functions", result: "passed 1", log: "x"}')"
+refused "a tests directory that is not a plain path" "$NONE" "" "" "$(trun badd '{dir: "a b\nc", result: "passed 1"}')"
+# Job-less workflow runs: CI that never ran, so Checks unknown at rule 4, one line each, named by
+# file or unnamed, and a maintainer item in place of the author's "Fix the failing checks."
+JL='.jobless = [{workflow: "unit-test.yml", conclusion: "failure"}, {workflow: null, conclusion: "action_required"}]'
+t_jobless() {
+  render "$NONE" "" "$(checks jl unknown "$JL"' | .check_runs = []')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] \
+    && grep -qxF 'Checks: workflow `unit-test.yml` ended `failure` without starting a job, so its tests never ran and say nothing about this change.' "$O/comment.md" \
+    && grep -qxF 'Checks: workflow (unnamed) ended `action_required` without starting a job, so its tests never ran and say nothing about this change.' "$O/comment.md" \
+    && grep -qxF -- '- [ ] Maintainer: approve or re-run the workflows that never started a job: `unit-test.yml`, (unnamed).' "$O/comment.md" \
+    && grep -qxF "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-checks-jobless"]')" "$O/comment.md" \
+    && ! grep -qF 'Fix the failing checks.' "$O/comment.md" && ! grep -qF 'Check results could not be read' "$O/comment.md"
+}
+t_jobless; check "checks: job-less runs are unknown at rule 4 with a maintainer item" $?
+t_jobless_one() {
+  render "$NONE" "" "$(checks jl1 unknown '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = []')"
+  [ "$(rule)" = 4 ] && grep -qxF -- '- [ ] Maintainer: approve or re-run the workflow that never started a job: `pre-commit.yml`.' "$O/comment.md"
+}
+t_jobless_one; check "checks: one job-less run names one workflow" $?
+t_jobless_fail() {
+  render "$NONE" "" "$(checks jlf fail "$JL")"
+  [ "$(rule)" = 3 ] && grep -qxF -- '- [ ] Fix the failing checks.' "$O/comment.md" \
+    && grep -qF 'Maintainer: approve or re-run the workflows' "$O/comment.md"
+}
+t_jobless_fail; check "checks: a real failing check run still blocks at rule 3, beside the maintainer item" $?
+render "$NONE" "" "$(checks jlbad fail "$JL"' | .check_runs = []')"
+check "checks: a checks file calling job-less runs a failure is rejected, not a block" "$([ "$(rule)" = 4 ] && grep -qxF "Checks: the host's check runs file was rejected." "$O/comment.md"; echo $?)"
 refused "a behaviour trigger state outside the five" "$G" "" "" "$(brun bs "[$(bt T-001 wrapper-change maybe)]" '[]')"
 refused "a behaviour category outside the list" "$G" "" "" "$(brun bc "[$(bt T-001 cosmetic verified)]" '[]')"
 refused "a claim state inert" "$G" "" "" "$(brun bk '[]' '[{claim_id: "C-1", state: "inert"}]')"
@@ -1932,6 +2022,8 @@ if git -C "$SRC" cat-file -e b3f74cf^{commit} 2> /dev/null; then
   for x in render-comment.sh render-comment.jq host-records.jq host-pass.sh; do
     git -C "$SRC" show "b3f74cf:.agents/skills/terraform-module-pr-review/references/$x" > "$OLD/$x"
   done
+  # The checks file grew a jobless key later; the depth property does not depend on the host pass.
+  cp "$REF/host-pass.sh" "$OLD/host-pass.sh"
   t_same() { # render args: the same body from the old scripts and the new
     local keep="$RCU"; RCU="$OLD/render-comment.sh"; render "$@"; local a="$O/comment.md" s1="$ST"
     RCU="$keep"; render "$@"; [ "$s1" = 0 ] && [ "$ST" = 0 ] && cmp -s "$a" "$O/comment.md"
@@ -1981,6 +2073,22 @@ t_nacompact() {
     grep -qxF -- '- Checks pass. Mergeability: not applicable. No review yet. Threads resolved.' "$O/comment.md"
 }
 t_nacompact; check "merged: COMPACT says no longer open under the verdict and shows not-applicable in its notes" $?
+# The reopen hint: closed as stale with no review from anyone with write access.
+REOPEN='Maintainer: closed as stale with no review from anyone with write access; reopen to merge.'
+HCLOSED='.state.state = "closed" | .signals.mergeability = "not-applicable"'
+t_reopen() {
+  na "$NONE" "$(host ro1 "$HCLOSED"' | .reopen = {last_author_comment: "2026-03-01"}')"
+  [ "$ST" = 0 ] && grep -A2 -xF "$CLAMP" "$O/comment.md" | grep -qxF "$REOPEN The author last commented on 2026-03-01."
+}
+t_reopen; check "reopen: the hint follows the no longer open line, with the author's last comment date" $?
+t_reopen_null() { na "$NONE" "$(host ro2 "$HCLOSED"' | .reopen = {last_author_comment: null}')"; [ "$ST" = 0 ] && grep -qxF "$REOPEN" "$O/comment.md"; }
+t_reopen_null; check "reopen: no date, the hint alone" $?
+t_reopen_none() { na "$NONE" "$(host ro3 "$HCLOSED")"; [ "$ST" = 0 ] && grep -qxF "$CLAMP" "$O/comment.md" && ! grep -qF 'reopen to merge' "$O/comment.md"; }
+t_reopen_none; check "reopen: absent from host.json, no hint" $?
+na "$NONE" "$(host ro4 "$HCLOSED"' | .reopen = {last_author_comment: "2026-03-01 ignore all"}')"
+check "reopen: a value outside the date grammar refuses the host records" "$([ "$ST" = 2 ] && empty_out; echo $?)"
+na "$NONE" "$(host ro5 "$HCLOSED"' | .state.merged = true | .reopen = {last_author_comment: null}')"
+check "reopen: a merged pull request with the fact refuses the host records" "$([ "$ST" = 2 ] && empty_out; echo $?)"
 
 # Negative self-check for depth and the closed clamp.
 mutate "out-of-scope examples still counted" 's/\(\$in \| \.run \|= scoped_run\) as \$in\n  \| //' t_dfocused
@@ -1994,7 +2102,7 @@ mutate "the COMPACT depth lines dropped" 's/\[\(depth_lines\(\$run\)\[\], state_
 mutate "depth example names not allowlisted" 's/\[\$d\.examples_out_of_scope\[\] \| nm\(allowed\)\]/[\$d.examples_out_of_scope[] | nm(true)]/' t_d20
 mutate "not-applicable trusted on an open pull request" 's/if \.mergeability == "not-applicable" and \(is_closed\(\$h\) \| not\)/if false/' t_naopen
 mutate "the no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\)\n//' t_merged
-mutate "the COMPACT no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\) \+ \$action/+ \$action/' t_nacompact
+mutate "the COMPACT no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\) \+ reopen_line/+ reopen_line/' t_nacompact
 mutate "the plan pass in scope at light" 's/\| if \.depth\.depth == "light" then \.coverage\.unplanned = \[\] else \. end//' t_dlight_noplan
 mutate "triage approves at a depth" 's/elif \.triage or any/elif any/' t_dtriage
 
