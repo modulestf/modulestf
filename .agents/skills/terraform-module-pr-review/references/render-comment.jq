@@ -279,7 +279,11 @@ def depth_bound($h): .binding.head_sha == $h.head_sha and $h.merge_base != null 
 
 def valid_run:
   type == "object"
-  and ((keys - ["behaviour", "depth", "examples", "plan_mode", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((keys - ["behaviour", "depth", "examples", "plan_mode", "profile", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  # The reviewer's profile line, as the run checked it against its handover.
+  and ((has("profile") | not) or (.profile | type == "object" and keys == ["label", "tree"]
+        and (.label | type == "string" and test("^(shipped:[a-z0-9-]{1,64}|custom)$"))
+        and (.tree | type == "string" and test("^([0-9a-f]{64}|none)$"))))
   and ((has("tests") | not) or (.tests | valid_tests))
   and ((has("behaviour") | not) or (.behaviour | valid_behaviour))
   and ((has("depth") | not) or (.depth | valid_depth))
@@ -508,6 +512,7 @@ def texts: {
   "reopen-hint": "Maintainer: closed as stale with no review from anyone with write access; reopen to merge.",
   "reopen-hint-date": "Maintainer: closed as stale with no review from anyone with write access; reopen to merge. The author last commented on {date}.",
   "depth-line": "Review depth: {depth}. Reasons: {reasons}.",
+  "profile-line": "Profile: `{label}`, profile_tree_sha256 `{tree}`.",
   "depth-out-of-scope": "Out of scope at this depth, so not unknowns: {items}.",
   "depth-more": ", and {count} more",
   "depth-check-A": "Check A",
@@ -715,6 +720,8 @@ def depth_lines($run):
            [tx("depth-out-of-scope"; {items: (($i[:20] | join(", "))
               + (if ($i | length) > 20 then tx("depth-more"; {count: (($i | length) - 20)}) else "" end))})] end)
   end;
+
+def profile_lines($run): if $run | has("profile") then [tx("profile-line"; $run.profile)] else [] end;
 
 # Rule 4 per depth (verdict.md): an example out of scope by the run's depth is no verification gap
 # and no example not planned, and at light the plan pass is out of scope, so no example is
@@ -991,7 +998,7 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
          ($b.claims | length | select(. > 0) | if . == 1 then tx("evidence-claims-one") else tx("evidence-claims-many"; {count: .}) end)]
         | if . == [] then [] else ["- " + join(" ")] end)
      + [$o[] | select(routed) | tx("evidence-predates"; {rule_id, location: safe_loc($p), summary})]
-     + [(depth_lines($run)[], state_lines($h; $in.checks)[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
+     + [(depth_lines($run)[], profile_lines($run)[], state_lines($h; $in.checks)[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
   | {body: ([$in.assessment, $verdict] + (if is_closed($h) then [tx("clamp-closed")] else [] end) + reopen_line($h) + $action + (if $bullets == [] then [] else [$bullets | join("\n")] end)
             + (if $notes == [] then [] else ["<details><summary>\(tx("evidence-summary"))</summary>\n\n" + ($notes | join("\n")) + "\n</details>"] end)
             | join("\n\n") + "\n"),
@@ -1062,6 +1069,7 @@ def render($in):
      # check that could not run describes.
      + section(if $cov != [] then "Examples not planned" else "Checks that could not run" end; gap_lines($h; $in.run; $b; $p; $cov); "\n")
      + section("Review depth"; depth_lines($in.run); "\n\n")
+     + section("Profile"; profile_lines($in.run); "\n\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")
      + section("Existing threads"; thread_lines($h; $in.findings; $p); "\n")
      + section("Conversation comments"; conversation_lines($h.conversation; $in.run.counts); "\n\n")

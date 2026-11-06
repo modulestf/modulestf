@@ -90,21 +90,21 @@ Engine: `candidate`
 ### Rule text: `profile.region-not-allowed`
 
 **Fails when:**
-- A region literal the change adds or edits is neither `eu-west-1` nor `us-east-1`, against [Regions](../../../terraform-module-maintainer/profiles/terraform-aws-modules/code-conventions.md#regions). Scope is the literals the diff touches, and only where the literal chooses a region: a provider `region`, a `region` argument, a module input, an example's locals. A region appearing as a key in a lookup map, inside an ARN, or inside a hostname is not a choice and never fires this. A pre-existing literal the diff does not touch is not reported.
+- A region literal the change adds or edits is neither the `primary` nor the `secondary` value of the selected profile's `regions` constants (`eu-west-1` and `us-east-1` in the default profile), against [Regions](../../../terraform-module-maintainer/profiles/terraform-aws-modules/code-conventions.md#regions). Scope is the literals the diff touches, and only where the literal chooses a region: a provider `region`, a `region` argument, a module input, an example's locals. A region appearing as a key in a lookup map, inside an ARN, or inside a hostname is not a choice and never fires this. A pre-existing literal the diff does not touch is not reported.
 
 **Severity:**
 - HIGH when a region literal the change touches is neither of the two the profile allows (`profile.region-not-allowed`), or the change carries a file format the profile's quality gate cannot read (`profile.nonstandard-config-file`).
 
 ### Confirm when: `profile.region-not-allowed`
 
-- The change adds or edits the literal, and the literal is neither `eu-west-1` nor `us-east-1`.
+- The change adds or edits the literal, and the literal is neither the profile's `regions` `primary` nor its `secondary`.
 - The literal chooses a region: a provider `region`, a `region` argument, a module input or an example's locals.
 - It is not a lookup map key, part of an ARN or part of a hostname.
 
 ### Host templates: `profile.region-not-allowed`
 
-- `summary`: `{subject} sets a region literal other than eu-west-1 or us-east-1, the two regions the profile allows.`
-- `suggested_fix`: `Set the region literal at {subject} to eu-west-1, or to us-east-1 where a second region is needed, per the profile's Regions convention.`
+- `summary`: `{subject} sets a region literal other than the primary and secondary regions the profile allows.`
+- `suggested_fix`: `Set the region literal at {subject} to the profile's primary region, or to its secondary one where a second region is needed.`
 
 ## `profile.nonstandard-config-file`
 

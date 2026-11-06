@@ -1,8 +1,8 @@
 #!/bin/bash
 # Mechanical checks over the repository's markdown and templates: relative links
 # resolve, anchors match a real heading, no two headings in a file share a slug,
-# text is plain ASCII, the profile's review guide still matches the profile
-# sections it restates, the profile constants blocks parse and equal the rule
+# text is plain ASCII, each shipped profile's review guide still matches the profile
+# sections it restates, each shipped profile's constants blocks parse and equal the rule
 # text they restate, and the reviewer's rule facts table has a row, a carry
 # value and valid registry columns for every rule, and the engine files hold one
 # well-formed section for each tool and candidate rule, and the judgment prefix is what its
@@ -285,8 +285,10 @@ done < "$TMP/rec"
 #   skill, whatever its prefix.
 # Headings inside fenced code are skipped by a plain open/close toggle, which is
 # enough for these files; the checker above handles nested fences in full.
-GDIR=.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules
-GUIDE="$GDIR/review-guide.md"
+# Each shipped profile lives in its own directory under the maintainer's profiles/. GDIR is
+# the default profile, whose companion files the constants checks below read.
+PDIR=.agents/skills/terraform-module-maintainer/profiles
+GDIR=$PDIR/terraform-aws-modules
 section() { # file, slug: the section's lines, or the slugs of its H2s for "##"
   LC_ALL=C awk -v want="$2" '
     function slug(t) {
@@ -305,11 +307,13 @@ section() { # file, slug: the section's lines, or the slugs of its H2s for "##"
     on { print }
   ' "$1"
 }
-if [ ! -f "$GUIDE" ]; then
-  fail "review guide matches the profile" "$GUIDE" "is missing"
-else
-  nguide=0
+# A profile without a review guide has nothing to hold to it.
+nguide=0
+for GDIR in "$PDIR"/*/; do
+  GDIR=${GDIR%/}; GUIDE="$GDIR/review-guide.md"
+  [ -f "$GUIDE" ] || continue
   for f in PROFILE.md code-conventions.md SCOPE.md templates-map.md pr-description.md; do
+    [ -f "$GDIR/$f" ] || continue
     while IFS= read -r s; do
       nguide=$((nguide + 1))
       grep -qF "]($f#$s)" "$GUIDE" ||
@@ -339,16 +343,21 @@ else
       fail "review guide matches the profile" "$GUIDE" \
         "$id is named nowhere in the reviewer skill"
   done < <(grep -E '^IDs?: ' "$GUIDE" | grep -oE '`[^`]+`' | sort -u)
-  grep -qxF "review guide matches the profile" "$TMP/failed" ||
-    echo "ok   review guide matches the profile ($nguide checked)"
-fi
+done
+GDIR=$PDIR/terraform-aws-modules
+[ -f "$GDIR/review-guide.md" ] || fail "review guide matches the profile" "$GDIR/review-guide.md" "is missing"
+grep -qxF "review guide matches the profile" "$TMP/failed" ||
+  echo "ok   review guide matches the profile ($nguide checked)"
 
-# The profile constants: every fenced block with the profile-constants info string in
-# PROFILE.md parses, the blocks and their keys are exactly the expected ones, and each
-# value equals the rule text it restates, read out of that text here. A negative
-# self-check mutates temp copies of PROFILE.md and requires each mutation to be reported
-# under the block it changed.
-CONST_BLOCKS="required-files regions argument-order template-destinations profile-owned-files tooling banner adjunct-types"
+# The profile constants, for every shipped profile (profiles/*/PROFILE.md): every fenced
+# block with the profile-constants info string parses, the blocks and their keys are
+# exactly format 1 of references/profile-format.md, only the keys that may be empty are,
+# the profile-options values are in their closed sets, examples: none holds no example
+# entry, the first heading names the directory, and each value equals the rule text it
+# restates, read out of that text here. A negative self-check mutates temp copies of each
+# PROFILE.md and requires each mutation to be reported under the block it changed.
+CONST_BLOCKS="required-files regions argument-order template-destinations profile-owned-files tooling banner adjunct-types profile-options"
+CONST_EMPTY_OK="example example-dirs verbatim workflow-dir files dirs line"
 const_keys() { # block: its fixed keys; template-destinations is keyed by template and checked by pairs
   case "$1" in
     required-files) echo "root submodule example example-dirs" ;;
@@ -358,6 +367,13 @@ const_keys() { # block: its fixed keys; template-destinations is keyed by templa
     tooling) echo "files dirs" ;;
     banner) echo "line" ;;
     adjunct-types) echo "types" ;;
+    profile-options) echo "format consumers partitions examples release" ;;
+  esac
+}
+opt_values() { # profile-options key: its closed set of values, the default first
+  case "$1" in
+    format) echo "1" ;; consumers) echo "public in-repo" ;; partitions) echo "portable fixed" ;;
+    examples) echo "required none" ;; release) echo "registry none" ;;
   esac
 }
 const_parse() { # file: C<TAB>block<TAB>key<TAB>value per value, E<TAB>block<TAB>detail per problem
@@ -367,8 +383,9 @@ const_parse() { # file: C<TAB>block<TAB>key<TAB>value per value, E<TAB>block<TAB
     on && /^```$/ { if (name == "") bad("a block with no name line"); on = 0; next }
     on {
       nl++
-      if (!match($0, /^[A-Za-z0-9._-]+: /)) { bad("not <key>: <value>"); next }
-      k = substr($0, 1, RLENGTH - 2); v = substr($0, RLENGTH + 1)
+      if (match($0, /^[A-Za-z0-9._-]+:$/)) { k = substr($0, 1, RLENGTH - 1); v = ""; empty = 1 }
+      else if (!match($0, /^[A-Za-z0-9._-]+: /)) { bad("not <key>: <value>"); next }
+      else { k = substr($0, 1, RLENGTH - 2); v = substr($0, RLENGTH + 1); empty = 0 }
       if (nl == 1) {
         if (k != "name") { bad("the first line is not name:"); next }
         name = v
@@ -378,7 +395,7 @@ const_parse() { # file: C<TAB>block<TAB>key<TAB>value per value, E<TAB>block<TAB
       if (name == "") next
       if ((name, k) in keys) bad("key " k " used twice")
       keys[name, k] = 1
-      if (v == "" || v ~ /  / || v ~ / $/) bad("key " k " has an empty value or a stray space")
+      if (!empty && (v == "" || v ~ /  / || v ~ / $/)) bad("key " k " has an empty value or a stray space")
       print "C\t" name "\t" k "\t" v
     }
     END { if (on) bad("a block is not closed") }' "$1"
@@ -404,23 +421,71 @@ numword() { # a number written as a word, one to ten
   case "$1" in one) echo 1 ;; two) echo 2 ;; three) echo 3 ;; four) echo 4 ;; five) echo 5 ;;
     six) echo 6 ;; seven) echo 7 ;; eight) echo 8 ;; nine) echo 9 ;; ten) echo 10 ;; esac
 }
+has() { awk -F'\t' -v n="$1" -v k="$2" '$1 == n && $2 == k {f = 1} END {exit !f}' "$TMP/const.tsv"; }
 constants_check() { # profile file: one line per problem, block<TAB>detail
-  local p="$1" b k t prose wd want
+  local p="$1" d="${2:-$(dirname "$1")}" b k t v prose wd want
   const_parse "$p" > "$TMP/const.raw"
   awk -F'\t' -v OFS='\t' '$1 == "E" {print $2, $3}' "$TMP/const.raw"
   awk -F'\t' -v OFS='\t' '$1 == "C" {print $2, $3, $4}' "$TMP/const.raw" > "$TMP/const.tsv"
-  for b in $(cut -f1 "$TMP/const.tsv" | sort -u); do
+  grep '^```profile-constants$' -A1 "$p" | grep -E '^name: [a-z-]+$' | cut -c7- | sort -u > "$TMP/const.names"
+  for b in $(cat "$TMP/const.names"); do
     case " $CONST_BLOCKS " in *" $b "*) ;; *) printf '%s\tis no block this profile defines\n' "$b" ;; esac
   done
   for b in $CONST_BLOCKS; do
-    grep -q "^$b"$'\t' "$TMP/const.tsv" || { printf '%s\tthe block is missing\n' "$b"; continue; }
+    if ! grep -qxF "$b" "$TMP/const.names"; then
+      [ "$b" = profile-options ] || printf '%s\tthe block is missing\n' "$b"
+      continue
+    fi
     [ "$b" = template-destinations ] && continue
     for k in $(awk -F'\t' -v n="$b" '$1 == n {print $2}' "$TMP/const.tsv"); do
       case " $(const_keys "$b") " in *" $k "*) ;; *) printf '%s\thas the unknown key %s\n' "$b" "$k" ;; esac
     done
     for k in $(const_keys "$b"); do
-      [ -n "$(cv "$b" "$k")" ] || printf '%s\tlacks the key %s\n' "$b" "$k"
+      if ! has "$b" "$k"; then printf '%s\tlacks the key %s\n' "$b" "$k"
+      elif [ -z "$(cv "$b" "$k")" ]; then
+        case " $CONST_EMPTY_OK " in *" $k "*) ;; *) printf '%s\tkey %s may not be empty\n' "$b" "$k" ;; esac
+      fi
     done
+  done
+  for k in $(const_keys profile-options); do
+    has profile-options "$k" || continue
+    v="$(cv profile-options "$k")"
+    case " $(opt_values "$k") " in *" $v "*) ;; *) printf 'profile-options\t%s is "%s", not one of: %s\n' "$k" "$v" "$(opt_values "$k")" ;; esac
+  done
+  if [ "$(cv profile-options examples)" = none ] &&
+    [ -n "$(cv required-files example)$(cv required-files example-dirs)" ]; then
+    printf 'required-files\texamples: none, but example or example-dirs is not empty\n'
+  fi
+  if [ "$(cv profile-options examples)" != none ] &&
+    { [ -z "$(cv required-files example)" ] || [ -z "$(cv required-files example-dirs)" ]; }; then
+    printf 'profile-options\texample or example-dirs is empty, but examples is not none\n'
+  fi
+  [ "$(head -n 1 "$p")" = "# Profile: $(basename "$d")" ] ||
+    printf 'name\tthe first line is not "# Profile: %s"\n' "$(basename "$d")"
+  for t in $(awk -F'\t' '$1 == "template-destinations" {print $2}' "$TMP/const.tsv"); do
+    [ -f "$d/templates/$t" ] || printf 'template-destinations\t%s is no file under templates/\n' "$t"
+  done
+  case "$(basename "$d")" in
+    terraform-aws-modules) restates_default "$p" ;;
+    in-repo-modules) restates_in_repo "$p" ;;
+    *) printf 'name\tno restatement check for the profile %s; add one to this test\n' "$(basename "$d")" ;;
+  esac
+}
+restates_in_repo() { # the in-repo-modules profile: its layout paragraphs and its options
+  local p="$1" k
+  same required-files root "$(cv required-files root)" "$(para "$p" '^\*\*Root\.\*\*' | ticks)"
+  same required-files submodule "$(cv required-files submodule)" \
+    "$(para "$p" '^\*\*A submodule\*\*' | sed 's/.*same files: //' | ticks)"
+  for k in consumers partitions examples release; do
+    grep -qF -- "- \`$k: $(cv profile-options "$k")\`: " "$p" ||
+      printf 'profile-options\t%s is not the value Relaxed conventions names\n' "$k"
+  done
+}
+restates_default() { # the terraform-aws-modules profile, against its companion files
+  local p="$1" k t prose wd want
+  for k in $(const_keys profile-options); do
+    [ "$(cv profile-options "$k")" = "$(opt_values "$k" | cut -d' ' -f1)" ] ||
+      printf 'profile-options\t%s is not the default, and the profile says it relaxes nothing\n' "$k"
   done
 
   # Module layout in PROFILE.md: the root, submodule and example paragraphs.
@@ -454,9 +519,6 @@ constants_check() { # profile file: one line per problem, block<TAB>detail
     printf 'template-destinations\tthe templates-map.md tables yield no template\n'
   comm -23 "$TMP/const-got" "$TMP/const-want" | sed 's/^/template-destinations\tnot in templates-map.md: /'
   comm -13 "$TMP/const-got" "$TMP/const-want" | sed 's/^/template-destinations\tmissing from the block: /'
-  for t in $(awk -F'\t' '$1 == "template-destinations" {print $2}' "$TMP/const.tsv"); do
-    [ -f "$GDIR/templates/$t" ] || printf 'template-destinations\t%s is no file under templates/\n' "$t"
-  done
 
   # SCOPE.md: the verbatim class sentence, its count of workflows and the Static Files table.
   prose="$(joined "$GDIR/SCOPE.md" profile-owned-files | sed 's/.*The verbatim class is//; s/\. The files mapped.*//')"
@@ -499,28 +561,37 @@ const_mutate() { # file, block, kind, key, value: the file with one block change
       next
     }
     on == 2 && /^```$/ { on = 0 }
-    on == 2 && hit && index($0, k ": ") == 1 {
+    on == 2 && hit && (index($0, k ": ") == 1 || $0 == k ":") {
       if (kind == "set") { print k ": " v; next }
+      if (kind == "empty") { print k ":"; next }
       if (kind == "append") { print $0 " " v; next }
       if (kind == "drop") next
     }
     { print }' "$1"
 }
-PROF="$GDIR/PROFILE.md"
-while IFS=$'\t' read -r b d; do
-  fail "profile constants" "$PROF" "$b: $d"
-done < <(constants_check "$PROF")
-nconst=$(grep -c '^C' "$TMP/const.raw")
+nconst=0
 nmut=0
-while IFS='|' read -r name b kind k v; do
-  nmut=$((nmut + 1))
-  const_mutate "$PROF" "$b" "$kind" "$k" "$v" > "$TMP/prof-mut"
-  if cmp -s "$TMP/prof-mut" "$PROF"; then
-    fail "profile constants" "$PROF" "self-check: $name (the mutation changed nothing)"
-  elif ! constants_check "$TMP/prof-mut" | cut -f1 | grep -qxF "$b"; then
-    fail "profile constants" "$PROF" "self-check: $name is not reported under $b"
-  fi
-done <<'EOF'
+mutations() { # profile file, its directory: each mutation on stdin must be reported under its block
+  local prof="$1" dir="$2" name b kind k v
+  while IFS='|' read -r name b kind k v; do
+    nmut=$((nmut + 1))
+    const_mutate "$prof" "$b" "$kind" "$k" "$v" > "$TMP/prof-mut"
+    if cmp -s "$TMP/prof-mut" "$prof"; then
+      fail "profile constants" "$prof" "self-check: $name (the mutation changed nothing)"
+    elif ! constants_check "$TMP/prof-mut" "$dir" | cut -f1 | grep -qxF "$b"; then
+      fail "profile constants" "$prof" "self-check: $name is not reported under $b"
+    fi
+  done
+}
+for PROF in "$PDIR"/*/PROFILE.md; do
+  while IFS=$'\t' read -r b d; do
+    fail "profile constants" "$PROF" "$b: $d"
+  done < <(constants_check "$PROF")
+  nconst=$((nconst + $(grep -c '^C' "$TMP/const.raw")))
+done
+[ -f "$GDIR/PROFILE.md" ] && [ -f "$PDIR/in-repo-modules/PROFILE.md" ] ||
+  fail "profile constants" "$PDIR" "a shipped profile is missing"
+mutations "$GDIR/PROFILE.md" "$GDIR" <<'EOF'
 the root loses LICENSE|required-files|set|root|main.tf variables.tf outputs.tf versions.tf README.md
 a submodule loses README.md|required-files|set|submodule|main.tf variables.tf outputs.tf versions.tf
 an example gains variables.tf|required-files|append|example|variables.tf
@@ -546,6 +617,23 @@ an empty value|tooling|set|dirs|
 a doubled space|adjunct-types|set|types|aws_iam_role  aws_iam_policy
 a renamed block|banner|rename|banners|
 another info string|tooling|info||
+a relaxing option|profile-options|set|release|none
+an empty region|regions|empty|primary|
+EOF
+mutations "$PDIR/in-repo-modules/PROFILE.md" "$PDIR/in-repo-modules" <<'EOF'
+an unknown consumers value|profile-options|set|consumers|private
+an unknown option key|profile-options|add|owners|team
+another format|profile-options|set|format|2
+a missing option key|profile-options|drop|release|
+examples none with an example file|required-files|set|example|main.tf
+examples none with an example directory|required-files|set|example-dirs|examples/basic
+an empty root|required-files|empty|root|
+a root that loses README.md|required-files|set|root|main.tf variables.tf outputs.tf versions.tf
+a template the profile does not ship|template-destinations|add|renovate.json.template|renovate.json
+a stray space after an empty key|tooling|set|dirs|
+an unknown block|banner|rename|badge|
+partitions fixed while Relaxed conventions says portable|profile-options|set|partitions|fixed
+examples required with empty example entries|profile-options|set|examples|required
 EOF
 grep -qxF "profile constants" "$TMP/failed" ||
   echo "ok   profile constants ($nconst values; $nmut mutations caught)"
@@ -792,6 +880,58 @@ EOF
     echo "ok   engine files ($(grep -h '^## `' "$ENG"/*.md | wc -l | tr -d ' ') sections; $nmut mutations caught)"
   fi
 fi
+
+# The profile gates: every rule id the maintainer's references/profile-format.md names in
+# its Gate table and Downgrade sections is a row of rule-facts.md. When the mtf-facts found
+# ($MTF_FACTS, else on PATH) has profile-check, every shipped profile passes it, and its
+# --gates rows (option, value, rules) equal the Gate table's rows and --downgrade-ids equals the
+# Downgrade list,
+# and a copy of in-repo-modules that relaxes every option has the whole table in gated_rules. With MTF_FACTS_REQUIRED=1 a missing binary, or
+# one without profile-check, fails.
+PF=.agents/skills/terraform-module-maintainer/references/profile-format.md
+ngate=0
+gate_triples() { # "<option>: <value> <rule_id>" per rule of each Gate table row
+  section "$PF" gate-table | grep '^| `[a-z]*: [a-z0-9-]*` |' | while IFS='|' read -r _ opt rules _; do
+    opt="$(printf '%s' "$opt" | tr -d '` ' | sed 's/:/: /')"
+    printf '%s\n' "$rules" | grep -oE "$ID_RE" | tr -d '`' | sed "s/^/$opt /"
+  done | sort -u
+}
+gate_ids() { section "$PF" gate-table | grep '^| `' | grep -oE "$ID_RE" | tr -d '`' | sort -u; }
+down_ids() { section "$PF" downgrade | awk '/^These two never downgrade/ {exit} {print}' | grep -oE "^- $ID_RE" | cut -c3- | tr -d '`' | sort -u; }
+never_ids() { section "$PF" downgrade | awk 'f; /^These two never downgrade/ {f = 1}' | grep -oE "^- $ID_RE" | cut -c3- | tr -d '`' | sort -u; }
+[ "$(gate_ids | wc -l)" -ge 16 ] && [ "$(down_ids | wc -l | tr -d " ")" = 5 ] && [ "$(never_ids | wc -l | tr -d " ")" = 2 ] ||
+  fail "profile gates" "$PF" "the Gate table or Downgrade section lost its rule ids"
+for id in $( { gate_ids; down_ids; never_ids; } | sort -u); do
+  ngate=$((ngate + 1))
+  grep -qF "| \`$id\` |" "$RF" || fail "profile gates" "$PF" "$id is no row of rule-facts.md"
+done
+[ -z "$(comm -12 <(down_ids) <(never_ids))" ] || fail "profile gates" "$PF" "a rule both downgrades and never does"
+MF="${MTF_FACTS:-$(cd / && command -v mtf-facts)}"
+# An mtf-facts without the subcommand prints its root help, so the probe reads the usage line.
+if [ -n "$MF" ] && "$MF" profile-check --help 2>&1 | grep -qF 'mtf-facts profile-check --profile-dir'; then
+  for d in "$PDIR"/*/; do
+    "$MF" profile-check --profile-dir "${d%/}" > "$TMP/pc.out" 2>&1 ||
+      fail "profile gates" "${d%/}" "mtf-facts profile-check refuses it: $(head -n 3 "$TMP/pc.out" | tr '\n' ' ')"
+  done
+  mkdir -p "$TMP/gates-profile" && cp -R "$PDIR/in-repo-modules/." "$TMP/gates-profile/" &&
+    sed -i.bak 's/^partitions: portable$/partitions: fixed/' "$TMP/gates-profile/PROFILE.md" && rm -f "$TMP/gates-profile/PROFILE.md.bak"
+  "$MF" profile-check --profile-dir "$TMP/gates-profile" --gates --downgrade-ids > "$TMP/pc.json" 2> /dev/null
+  jq -r '.gates[] | .option as $o | .value as $v | .rules[] | "\($o): \($v) \(.)"' "$TMP/pc.json" 2> /dev/null | sort -u > "$TMP/gates.got"
+  jq -r '.gated_rules[]' "$TMP/pc.json" 2> /dev/null | sort -u > "$TMP/gated.got"
+  jq -r '.downgrade_ids[]' "$TMP/pc.json" 2> /dev/null | sort -u > "$TMP/down.got"
+  diff <(gate_triples) "$TMP/gates.got" > /dev/null ||
+    fail "profile gates" "$PF" "the Gate table rows differ from mtf-facts --gates: $(diff <(gate_triples) "$TMP/gates.got" | grep '^[<>]' | tr '\n' ' ')"
+  diff <(gate_ids) "$TMP/gated.got" > /dev/null ||
+    fail "profile gates" "$PF" "a profile that relaxes every option does not gate the whole Gate table: $(diff <(gate_ids) "$TMP/gated.got" | grep '^[<>]' | tr '\n' ' ')"
+  diff <(down_ids) "$TMP/down.got" > /dev/null ||
+    fail "profile gates" "$PF" "the downgrade ids differ from mtf-facts --downgrade-ids: $(diff <(down_ids) "$TMP/down.got" | grep '^[<>]' | tr '\n' ' ')"
+  ngate=$((ngate + 2))
+elif [ "${MTF_FACTS_REQUIRED:-}" = 1 ]; then
+  fail "profile gates" "${MF:-mtf-facts}" "no mtf-facts with profile-check, and MTF_FACTS_REQUIRED=1"
+else
+  echo "note profile gates: no mtf-facts with profile-check, parity with it not checked"
+fi
+grep -qxF "profile gates" "$TMP/failed" || echo "ok   profile gates ($ngate checked)"
 
 # The judgment prefix: references/judgment/assemble.sh runs, gives the same bytes twice,
 # those bytes are the committed prefix.md, prefix.md is 90 KB (92160 bytes) or less, and

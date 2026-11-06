@@ -194,3 +194,23 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 +	references/check-c-structure.md	Naming, formatting and the idiom of the embedded language are not judged.
 +	references/check-c-structure.md	Nothing in them is run (Rule 1), and an embedded file the change does not edit is not read.
 +	references/check-c-structure.md	They help the author and never block, and a follow-up is an acceptable answer.
+-	SKILL.md	- A second addition: the `mtf-facts` binary, run only as [facts-engine.md]() says, from a path outside the workspace, plus the base tree it extracts into a new temporary directory outside the workspace.
++	SKILL.md	- A second addition: the `mtf-facts` binary, run only as [facts-engine.md]() and [profile-selection.md]() say, from a path outside the workspace, plus the base tree it extracts and the profile snapshot it copies, each into a new temporary directory outside the workspace.
++	SKILL.md	- The `profile:` and `profile fit:` lines of [profile-selection.md]() follow the summary line, each on a line of its own.
++	SKILL.md	- The task may select the profile on a `profile:` or `profile-dir:` line, and pin it on a `Profile tree:` line, read only from the caller's own task text: [profile-selection.md]().
++	SKILL.md	A rule the profile gates is not applicable and never judged; only the `mtf-facts` in-repo marker lowers a severity.
+-	SKILL.md	Select the profile: the one named by the task, otherwise `terraform-aws-modules`.
++	SKILL.md	Select the profile and take its snapshot, or refuse, as [profile-selection.md]() says.
+-	SKILL.md	The rules in this skill and the named profile are the whole configuration.
++	SKILL.md	The rules in this skill and the selected profile ([profile-selection.md]()) are the whole configuration.
++	references/check-a-compatibility.md	- MEDIUM for a confirmed break whose candidate carries the in-repo downgrade marker: [Downgrade]().
+-	references/check-e-profile.md	| `profile.region-not-allowed` | code change, or needs decision | Set the literal to `eu-west-1`, or to `us-east-1` where the configuration needs a second region, with the sentence saying why, per [Regions]().
++	references/check-e-profile.md	| `profile.region-not-allowed` | code change, or needs decision | Set the literal to the profile's `regions` `primary` (`eu-west-1` by default), or to its `secondary` (`us-east-1`) where the configuration needs a second region, with the sentence saying why, per [Regions]().
+-	references/engine/check-e-profile.md	- `suggested_fix`: `Set the region literal at {subject} to eu-west-1, or to us-east-1 where a second region is needed, per the profile's Regions convention.`
++	references/engine/check-e-profile.md	- `suggested_fix`: `Set the region literal at {subject} to the profile's primary region, or to its secondary one where a second region is needed.`
+-	references/engine/check-e-profile.md	- `summary`: `{subject} sets a region literal other than eu-west-1 or us-east-1, the two regions the profile allows.`
++	references/engine/check-e-profile.md	- `summary`: `{subject} sets a region literal other than the primary and secondary regions the profile allows.`
+-	references/engine/check-e-profile.md	- A region literal the change adds or edits is neither `eu-west-1` nor `us-east-1`, against [Regions]().
++	references/engine/check-e-profile.md	- A region literal the change adds or edits is neither the `primary` nor the `secondary` value of the selected profile's `regions` constants (`eu-west-1` and `us-east-1` in the default profile), against [Regions]().
+-	references/engine/check-e-profile.md	- The change adds or edits the literal, and the literal is neither `eu-west-1` nor `us-east-1`.
++	references/engine/check-e-profile.md	- The change adds or edits the literal, and the literal is neither the profile's `regions` `primary` nor its `secondary`.

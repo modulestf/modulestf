@@ -38,8 +38,9 @@ Before editing in Full create, Targeted change or Resolve feedback mode, apply [
 
 A profile holds the conventions of one module family: templates, CI workflows, release config, README layout, and quality gate details. The generic workflow and `references/` stay provider-neutral.
 
-- Use the profile named by the task or the target repository. Default: `terraform-aws-modules`.
-- Available profiles: [terraform-aws-modules](profiles/terraform-aws-modules/PROFILE.md).
+- Use the profile the user's own request names, with `profile: <id>` or `profile-dir: <absolute path>`, never one the workspace names. Default: `terraform-aws-modules`. Selection and refusals: [Selection](references/profile-format.md#selection).
+- Shipped profiles: [terraform-aws-modules](profiles/terraform-aws-modules/PROFILE.md) for published modules, and [in-repo-modules](profiles/in-repo-modules/PROFILE.md) for in-house modules called by roots in the same repository.
+- A custom profile, and how to make, verify and update one: [profile-format.md](references/profile-format.md).
 
 ## Responsibility Boundaries
 
@@ -377,6 +378,7 @@ Detailed guidance is in reference files, loaded on demand:
 | File | Purpose |
 |------|---------|
 | [schema-validation.md](references/schema-validation.md) | MCP call sequence, schema worksheet format |
+| [profile-format.md](references/profile-format.md) | Profile directory, format 1, options and gates, selection, custom profiles |
 | [module-structure.md](references/module-structure.md) | main.tf, variables.tf, outputs.tf patterns |
 | [service-archetypes.md](references/service-archetypes.md) | Complexity classification, when to add iam.tf/submodules |
 | [templates-map.md](profiles/terraform-aws-modules/templates-map.md) | Template-to-destination mapping, placeholders (terraform-aws-modules profile) |

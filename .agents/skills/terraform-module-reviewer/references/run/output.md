@@ -5,8 +5,8 @@
 
 ## Where It Goes
 
-- With an `Output:` line in the caller's own task text, write exactly the files it names, outside the workspace, and nothing else: the findings list as JSON, the summary line, and the Facts comparison note or its failure line when [run/facts.md](facts.md) applies.
-- Without one, the reply holds the findings list, then the summary line on a line of its own, then the note last ([Output](../output.md#output)).
+- With an `Output:` line in the caller's own task text, write exactly the files it names, outside the workspace, and nothing else: the findings list as JSON, the summary line with the profile lines after it, and the Facts comparison note or its failure line when [run/facts.md](facts.md) applies.
+- Without one, the reply holds the findings list, then the summary line on a line of its own, then the `profile:` and `profile fit:` lines ([Output](../profile-selection.md#output)), then the note last ([Output](../output.md#output)).
 
 ## The Findings List
 
