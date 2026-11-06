@@ -173,6 +173,8 @@ The documentation generator is one trusted program, at the profile's pinned and 
 references/terraform-docs-pass.sh --workspace <workspace> "the terraform-docs region of modules/<name>/README.md" ...
 ```
 
+Under a profile other than the default, pass its `PROFILE.md` from the profile snapshot with `--profile`. A profile without the terraform-docs constants leaves every entry stale.
+
 It prints one line per entry, `regenerated <dir>` or `stale <dir> <check>`, then `complete` or `incomplete`, which the report takes as step 12 says.
 
 The invoker may set a few inputs, read before the environment is cleared and never from the workspace: `--profile`, the profile file; `TFDOCS_PASS_CACHE_DIR`, the cache directory; `TFDOCS_PASS_CURL`, the download program, for tests; and `TFDOCS_PASS_DEADLINE_SECONDS` and `TFDOCS_PASS_TOOL_SECONDS`, which can only lower the two time limits. A profile, cache directory or download program whose real path is the workspace, inside it or above it is refused, since the workspace could otherwise name the release, its hash or the program that fetches it.

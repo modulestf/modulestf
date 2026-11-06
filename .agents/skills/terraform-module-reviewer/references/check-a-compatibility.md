@@ -28,6 +28,7 @@
 - `compat.claim-contradicts-analysis`: one band below the highest `compat.*` code finding that refutes the claim: CRITICAL gives HIGH, HIGH gives MEDIUM, MEDIUM and LOW give LOW. Both findings are reported, never deduplicated.
 - MEDIUM for a silent compatible change: moved to `compat.default-changed` in [engine/check-a-compatibility.md](engine/check-a-compatibility.md#compatdefault-changed).
 - MEDIUM when the title or the body declares the break and names no reason it was unavoidable (`compat.break-unexplained`). It never replaces the finding for the break itself; both are reported.
+- MEDIUM for a confirmed break whose candidate carries the in-repo downgrade marker: [Downgrade](profile-selection.md#downgrade).
 - LOW for a provider minor or patch floor: moved to `compat.provider-floor-raised` in [engine/check-a-compatibility.md](engine/check-a-compatibility.md#compatprovider-floor-raised).
 
 How `compat.version-constraint-raised`, `compat.generated-policy-narrowed` and `compat.provider-floor-raised` rank against each other: moved to each of their sections in [engine/check-a-compatibility.md](engine/check-a-compatibility.md).

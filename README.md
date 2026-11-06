@@ -193,7 +193,12 @@ Tell the reviewer that the checkout holds a new module, for example one offered 
 
 ### Profiles
 
-The terraform-aws-modules profile holds the family's templates, layout, release rules and scope lists. The skills' shared references stay provider-neutral; anything specific to one family goes in its profile. A second profile is not designed yet: [PROFILE.md](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md) says how to start one. A module can record its own scope exceptions in `docs/SCOPE.md`; the review reads that file from the base, so an exception must be merged before the change that needs it. To hand the profile to another code reviewer, pin [review-guide.md](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/review-guide.md) by commit; it gives advice, not a verdict.
+A profile holds the rules of one module family. Two ship with the skills:
+
+- [`terraform-aws-modules`](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md), the default: published modules with examples, released from commit titles.
+- [`in-repo-modules`](.agents/skills/terraform-module-maintainer/profiles/in-repo-modules/PROFILE.md): in-house modules whose only callers are root configurations in the same repository, with no examples and no releases. A break whose callers all change in the same pull request is MEDIUM, not CRITICAL.
+
+Pick one with `profile: in-repo-modules` in your request, or name your own with `profile-dir: /absolute/path`. A custom profile lives outside any repository. [profile-format.md](.agents/skills/terraform-module-maintainer/references/profile-format.md) says how to make, verify and update one, and which rules each option turns off. The review prints the profile it used and a hash of its files. A module can record its own scope exceptions in `docs/SCOPE.md`; the review reads that file from the base, so an exception must be merged before the change that needs it. To hand the profile to another code reviewer, pin [review-guide.md](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/review-guide.md) by commit; it gives advice, not a verdict.
 
 ### Hosted adapters
 

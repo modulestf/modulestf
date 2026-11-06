@@ -5,7 +5,7 @@
 
 ## mtf-facts
 
-1. Find the binary outside the workspace, or do nothing and write nothing about it: [When to run](../facts-engine.md#when-to-run).
+1. Find the binary outside the workspace, or do nothing and write nothing about it: [When to run](../facts-engine.md#when-to-run). Take the profile snapshot first, or refuse: [The snapshot](../profile-selection.md#the-snapshot).
 2. Pick the base input, the first that applies ([The base tree](../facts-engine.md#the-base-tree)):
    - the task's `Diff: <path>` line: pass the path to `--diff` as given, read in place, never copied or written;
    - a merge base from the task's `Merge base: <sha>` line, or a base reference: extract it to a new temporary directory with the script of that section and pass `--base`;
@@ -16,7 +16,7 @@
    mtf-facts lint <workspace> [--base <base-dir> | --diff <file>] --json --ai --timeout 60s \
      --registry <this skill>/references/rule-facts.md \
      --head-sha <git rev-parse HEAD> [--merge-base-sha <the task's Merge base>] \
-     --profile-dir <maintainer skill>/profiles/terraform-aws-modules \
+     --profile-dir <profile snapshot> \
      [--schema-handoff <the task's Schema handoff>]
    ```
 

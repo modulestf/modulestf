@@ -13,6 +13,7 @@ After this text comes, in order: the SKILL.md judgment edition, the Reads, Fails
 - Do not run `mtf-facts`: the bundle replaces it, and the Facts comparison note of [facts-engine.md](../facts-engine.md) is not written.
 - Mandatory Rules 1 to 4, the severity scale, the Inputs rules, Step 1 and the Final Step stay as copied below. One exception: no new `rule_id` is minted, since the host drops a name it does not allow, so the Final Step's "declared new" clause does not apply.
 - A `tool` rule is decided by the engine and a `candidate` rule is confirmed or rejected from its candidate. Neither is judged from the files, unless the host injects it (see [Injected Rules](#injected-rules)). Every `llm` rule is judged from the files, as in the full variant, under the check text below.
+- A rule the caller's own task text lists on a `Gated rules:` line is not applicable: never judged. A confirmed candidate the bundle marks `downgrade: "in-repo"` is MEDIUM ([profile-selection.md](../profile-selection.md)).
 - Where the copied text says to load a check file, the check's Reads, Fails when and Severity text is already below. Its other parts are read as [On-Demand Reads](#on-demand-reads) lists.
 - The output is the envelope in [Output Envelope](#output-envelope), in place of the full variant's findings list. Write no summary line: its three counts go in the envelope's `counts`.
 

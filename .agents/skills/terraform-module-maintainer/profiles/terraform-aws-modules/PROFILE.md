@@ -326,6 +326,8 @@ The format is the same for every block:
 - A list value is its items separated by single spaces. No item contains a space.
 - A block name appears once in this file, and a key once in its block. Each block has a fixed
   set of keys. A block with a missing or an unknown key is invalid.
+- A key written `<key>:` with nothing after the colon has the empty value. This profile has none.
+- The blocks and keys are format 1 of [Profile Format](../../references/profile-format.md#format-1).
 
 ### Required files
 
@@ -425,6 +427,21 @@ name: adjunct-types
 types: aws_iam_role aws_iam_role_policy aws_iam_role_policy_attachment aws_iam_policy aws_iam_instance_profile aws_cloudwatch_log_group aws_cloudwatch_log_resource_policy aws_security_group aws_vpc_security_group_ingress_rule aws_vpc_security_group_egress_rule aws_security_group_rule
 ```
 
+### Profile options
+
+Restates [What this profile defines](#what-this-profile-defines): modules published for any
+caller, portable across partitions, with examples, released from commit titles. Every value is
+the default, so this profile relaxes nothing ([Profile options](../../references/profile-format.md#profile-options)).
+
+```profile-constants
+name: profile-options
+format: 1
+consumers: public
+partitions: portable
+examples: required
+release: registry
+```
+
 ## Plan providers
 
 [plan-providers.txt](plan-providers.txt) adds `hashicorp/*` and `compliancetf/*` to the providers the review's plan pass admits in runner mode, beyond its default eight ([Runner providers](../../../terraform-module-pr-review/references/plan-pass.md#runner-providers)). Laptop mode does not read it.
@@ -436,4 +453,7 @@ types: aws_iam_role aws_iam_role_policy aws_iam_role_policy_attachment aws_iam_p
 
 ## Adding another profile
 
-Not designed yet. When a second module family appears, copy this directory to `profiles/<name>/`, replace the templates, and add it to the list in `../../SKILL.md`. Define a profile format only once two profiles exist and differ.
+A second shipped profile, `in-repo-modules`, exists. The format,
+the options and how to make, verify and update a custom profile are in
+[Profile Format](../../references/profile-format.md). A new shipped profile is its own
+self-contained directory under `profiles/`, listed in `../../SKILL.md`.
