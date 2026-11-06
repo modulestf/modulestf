@@ -462,16 +462,17 @@ LT='Write short: a `summary` of at most 200 characters and a `suggested_fix` of 
 t_targets_stated() {
   awk '/^## Length Targets$/ { on = 1; next } on && /^## / { exit } on' \
     "$SRC/.agents/skills/terraform-module-reviewer/references/findings-schema.md" | grep -qF -- "$LT" &&
-    awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -qF -- "$LT"
+    awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -F -- "$LT" > /dev/null
 }
 t_targets_stated; check "strings: the length targets are stated in the findings schema and the handover" $?
 # A COMPACT refusal gives one piece of advice, the same in the script, SKILL.md Step 10, the
-# handover and Tiers.
+# handover and Tiers. grep reads the whole section (no -q): with pipefail, an early exit would let
+# a SIGPIPE to awk fail the check at random.
 ADVICE='send it back to the reviewer once; if it keeps the finding because it is within the schema targets, render with --standard'
 t_advice() {
   grep -qF -- "\$refuse; $ADVICE\"" "$RCU" &&
     grep -F -- '- **Step 10 - Render.**' "$STEPS" | grep -qF -- "\`$ADVICE\`" &&
-    awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -qF -- "\`$ADVICE\`" &&
+    awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -F -- "\`$ADVICE\`" > /dev/null &&
     awk '/^## Tiers$/ { on = 1; next } on && /^## / { exit } on' "$CF" | grep -qF -- "\`$ADVICE\`"
 }
 t_advice; check "strings: the COMPACT refusal advice is one sentence in the script, SKILL.md Step 10, the handover and Tiers" $?

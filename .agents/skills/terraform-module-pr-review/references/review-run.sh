@@ -189,6 +189,7 @@ cmd_prepare() {
   [ -z "$mp" ] || [ -z "$mpd" ] || die "profile refused: profile and profile-dir both given"
   [ -z "$mp" ] || [[ "$mp" =~ ^[a-z0-9-]{1,64}$ ]] || die "--module-profile must be a shipped profile id"
   case "$mpd" in "" | /?*) ;; *) die "profile refused: profile-dir is not absolute" ;; esac
+  ! [[ "$mpd" =~ [[:cntrl:]] ]] || die "--module-profile-dir must not hold a control character"
   [ -n "$cache" ] || cache="${XDG_CACHE_HOME:-$HOME/.cache}/modulestf/provider-cache"
   case "$cache" in /?*) ;; *) die "--provider-cache must be an absolute path" ;; esac
 
@@ -827,10 +828,11 @@ write_bundle() { # <file>
 # other selection then refuses. Refusals name no path.
 MAINT="$(cd "$HERE/../../terraform-module-maintainer" 2> /dev/null && pwd -P)"
 module_profile() {
-  local id="" dir="" src label facts snap tree gated="[]" pc
+  local id="" dir="" pid src label facts snap tree gated="[]" pc sdir=""
   [ ! -f "$RUN/state/module-profile-args.json" ] || {
     id="$(jq -r '.id' "$RUN/state/module-profile-args.json")"; dir="$(jq -r '.dir' "$RUN/state/module-profile-args.json")"; }
   if [ -n "$dir" ]; then
+    [ ! -L "${dir%/}" ] || fail "profile refused: profile snapshot failed"
     src="$(cd -- "$dir" 2> /dev/null && pwd -P)" || fail "profile refused: profile snapshot failed"
     case "$src/" in "$RUN"/*) fail "profile refused: profile-dir lies inside the workspace or a checkout" ;; esac
     local up="$src"
@@ -840,30 +842,44 @@ module_profile() {
     done
     label=custom
   else
-    if [ -z "$id" ] && [ ! -f "$MAINT/profiles/terraform-aws-modules/PROFILE.md" ]; then
+    pid="${id:-terraform-aws-modules}"
+    if [ -z "$id" ] && [ ! -f "$MAINT/profiles/$pid/PROFILE.md" ]; then
       # The default, with no maintainer checkout beside this skill: nothing to snapshot.
       jq -n '{label: "shipped:terraform-aws-modules", tree: "none", id: "", dir: "", gated: []}' > "$RUN/state/profile.json"
       return 0
     fi
-    [ -n "$id" ] || id=terraform-aws-modules
-    src="$MAINT/profiles/$id"
+    src="$MAINT/profiles/$pid"
     [ -n "$MAINT" ] && [ -f "$src/PROFILE.md" ] && [ ! -L "$src" ] || fail "profile refused: unknown profile id"
-    [ "$(head -n 1 "$src/PROFILE.md")" = "# Profile: $id" ] || fail "profile refused: shipped profile name does not match its directory"
-    label="shipped:$id"
+    [ "$(head -n 1 "$src/PROFILE.md")" = "# Profile: $pid" ] || fail "profile refused: shipped profile name does not match its directory"
+    label="shipped:$pid"
   fi
   facts="$(facts_bin)"
   snap="$(limit 60 "$facts" profile-snapshot --profile-dir "$src" 2> /dev/null)" || snap=""
   tree="$(printf '%s' "$snap" | jq -r 'select(type == "object") | .tree_sha256 // empty' 2> /dev/null)"
   if [[ "$tree" =~ ^[0-9a-f]{64}$ ]]; then
-    pc="$(limit 60 "$facts" profile-check --profile-dir "$(printf '%s' "$snap" | jq -r '.dir')" --gates 2> /dev/null)" ||
+    sdir="$(printf '%s' "$snap" | jq -r '.dir')"
+    if ! "$facts" profile-check --help 2>&1 | grep -qF 'profile-check --profile-dir'; then
+      rm -rf -- "$sdir"
+      if relaxes_text "$src/PROFILE.md"; then fail "profile refused: profile relaxes, and mtf-facts has no profile-check or in_repo_downgrade"; fi
       fail "profile refused: profile-check failed"
+    fi
+    pc="$(limit 60 "$facts" profile-check --profile-dir "$sdir" --gates 2> /dev/null)" || pc=""
+    rm -rf -- "$sdir"
     printf '%s' "$pc" | jq -e '.valid == true' > /dev/null 2>&1 || fail "profile refused: profile-check failed"
     gated="$(printf '%s' "$pc" | jq -c 'if .relaxing then [.gated_rules[]?] else [] end')"
-    rm -rf -- "$(printf '%s' "$snap" | jq -r '.dir')"
-  elif [ "$label" = shipped:terraform-aws-modules ]; then tree=none
+  elif [ "$label" = shipped:terraform-aws-modules ] && [ -z "$dir" ]; then tree=none
+  elif relaxes_text "$src/PROFILE.md"; then fail "profile refused: profile relaxes, and mtf-facts has no profile-check or in_repo_downgrade"
   else fail "profile refused: profile snapshot failed"
   fi
-  jq -n --arg l "$label" --arg t "$tree" --arg id "$id" --arg d "$dir" --argjson g "$gated"     '{label: $l, tree: $t, id: $id, dir: $d, gated: $g}' > "$RUN/state/profile.json"
+  jq -n --arg l "$label" --arg t "$tree" --arg id "$id" --arg d "$dir" --argjson g "$gated" \
+    '{label: $l, tree: $t, id: $id, dir: $d, gated: $g}' > "$RUN/state/profile.json"
+}
+# A profile-options value other than its default, read only to refuse (profile-selection.md).
+relaxes_text() {
+  awk '/^```profile-constants$/ { b = 1; o = 0; next } b && /^```$/ { b = 0; next }
+    b && $0 == "name: profile-options" { o = 1; next }
+    o && /^(consumers: in-repo|partitions: fixed|examples: none|release: none)$/ { f = 1 }
+    END { exit !f }' "$1" 2> /dev/null
 }
 
 cmd_handover() {
@@ -928,7 +944,7 @@ cmd_handover() {
     jq -r 'if .dir != "" then "profile-dir: \(.dir)" elif .id != "" then "profile: \(.id)" else empty end,
       (select(.tree != "none") | "Profile tree: \(.tree)"),
       (select(.gated != []) | "Gated rules: \(.gated | join(" "))")' "$RUN/state/profile.json"
-    printf 'Output: write the findings list as JSON to %s, the summary line to %s and the facts comparison note to %s, and nothing else.\n' \
+    printf 'Output: write the findings list as JSON to %s, the summary line and the profile lines to %s and the facts comparison note to %s, and nothing else.\n' \
       "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt"
     [ ! -f "$out/reviewer-references.md" ] || printf 'References: %s\n' "$out/reviewer-references.md"
     sed -n "$n,\$p" "$t" | sed '$d'
@@ -992,7 +1008,12 @@ cmd_render() {
   pl="$( { [ -n "$summary" ] && [ -f "$summary" ] && grep -m1 '^profile: ' "$summary"; } || true)"
   if [ -f "$RUN/state/profile.json" ]; then
     want="$(jq -r '"profile: \(.label) profile_tree_sha256:\(.tree)"' "$RUN/state/profile.json")"
-    if [ -n "$pl" ]; then [ "$pl" = "$want" ] || fail "the reviewer's profile line does not match the handover; nothing is rendered"
+    if [ "$pl" = "profile: refused" ]; then
+      local why
+      why="$(jq -r '[.[] | select((.summary // "") | startswith("profile refused: ")) | .summary][0] // "profile refused"' "$findings" 2> /dev/null |
+        head -n 1 | tr -cd 'a-z0-9 :_-' | cut -c1-120)"
+      fail "the reviewer refused the profile (${why:-profile refused}); nothing is rendered"
+    elif [ -n "$pl" ]; then [ "$pl" = "$want" ] || fail "the reviewer's profile line does not match the handover; nothing is rendered"
     else jq -e '.label == "shipped:terraform-aws-modules" and .tree == "none"' "$RUN/state/profile.json" > /dev/null ||
       fail "the reviewer reported no profile line; nothing is rendered"
     fi
