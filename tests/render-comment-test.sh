@@ -1968,6 +1968,22 @@ t_dfocused() {
       'Out of scope at this depth, so not unknowns: Check B, `examples/other`.')
 }
 t_dfocused; check "depth: focused, an example out of scope that did not verify or plan is no unknown (rule 8)" $?
+
+# --- Profile: the run file's optional profile key renders the reviewer's profile line, in a
+# Profile section in STANDARD and as an evidence note in COMPACT; a malformed one is refused.
+TREE="$(printf 'tree' | shasum -a 256 | cut -c1-64)"
+t_profile() {
+  render "$NONE" "" "" "$(runf p-std ".profile = {label: \"shipped:in-repo-modules\", tree: \"$TREE\"}")" "" --standard
+  [ "$ST" = 0 ] && awk '/^### Profile$/ { on = 1; getline; next } on && /^### / { exit } on' "$O/comment.md" | sed '/^$/d' |
+    cmp -s - <(printf 'Profile: `shipped:in-repo-modules`, profile_tree_sha256 `%s`.\n' "$TREE")
+}
+t_profile; check "profile: the run file's profile renders the Profile section, golden" $?
+t_profile_none() { render "$NONE"; [ "$ST" = 0 ] && ! grep -qF 'Profile' "$O/comment.md"; }
+t_profile_none; check "profile: a run file without the key renders no profile line" $?
+for bad in '{label: "shipped:../x", tree: "none"}' '{label: "custom", tree: "abc"}' '{label: "custom"}' '{label: "custom", tree: "none", dir: "/x"}'; do
+  render "$NONE" "" "" "$(runf p-bad ".profile = $bad")"
+  [ "$ST" != 0 ] && empty_out; check "profile: a malformed profile is refused ($bad)" $?
+done
 ladder "focused, the same gaps in an example in scope" "inconclusive COMMENT" 4 "$NONE" "" "" \
   "$(rund d-foc-in focused . "$(printf '%s' "$GAPS" | sed 's/examples\/other/examples\/complete/g')")"
 grep -qxF -- '- Verification of `examples/complete`: not run: budget.' "$O/comment.md"; check "depth: an example in scope that did not verify is still listed in section 5" $?
@@ -1992,6 +2008,12 @@ t_dcompact() {
     ! grep -q '^### ' "$O/comment.md"
 }
 t_dcompact; check "depth: COMPACT states the depth in its details block" $?
+t_profile_compact() {
+  rc "$(F556)" "$(R556 p556 '.profile = {label: "custom", tree: "none"}')"
+  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] &&
+    awk '/^<details><summary>Evidence and notes<\/summary>$/ { on = 1 } on' "$O/comment.md" | grep -qxF -- '- Profile: `custom`, profile_tree_sha256 `none`.'
+}
+t_profile_compact; check "profile: COMPACT carries the profile line as an evidence note" $?
 
 # Refused: exit 2 and nothing written.
 refused "depth: an unknown key" "$NONE" "" "" "$(rund dr-key light '.extra = 1')"
@@ -2098,7 +2120,9 @@ t_dfocused_a() { render "$NONE" "" "" "$(rund dr-a2 focused '.checks_out_of_scop
 mutate "the scope table not checked" 's/and \(\.depth as \$d \| \.checks_out_of_scope - depth_scope\[\$d\] == \[\]\)//' t_dfocused_a
 mutate "all out-of-scope items listed" 's/\$i\[:20\]/\$i/' t_d20
 mutate "the depth section dropped" 's/\+ section\("Review depth"; depth_lines\(\$in\.run\); "\\n\\n"\)//' t_dlight
-mutate "the COMPACT depth lines dropped" 's/\[\(depth_lines\(\$run\)\[\], state_lines/[(state_lines/' t_dcompact
+mutate "the COMPACT depth lines dropped" 's/\[\(depth_lines\(\$run\)\[\], profile_lines/[(profile_lines/' t_dcompact
+mutate "the COMPACT profile line dropped" 's/, profile_lines\(\$run\)\[\], state_lines/, state_lines/' t_profile_compact
+mutate "the Profile section dropped" 's/\+ section\("Profile"; profile_lines\(\$in\.run\); "\\n\\n"\)//' t_profile
 mutate "depth example names not allowlisted" 's/\[\$d\.examples_out_of_scope\[\] \| nm\(allowed\)\]/[\$d.examples_out_of_scope[] | nm(true)]/' t_d20
 mutate "not-applicable trusted on an open pull request" 's/if \.mergeability == "not-applicable" and \(is_closed\(\$h\) \| not\)/if false/' t_naopen
 mutate "the no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\)\n//' t_merged

@@ -22,7 +22,9 @@ A pull request body also carries the What to do section, between sections 3 and 
 
 A run file with a `depth` key ([depth.md](depth.md)) adds the Review depth section between sections 5 and 6: the `depth-line` row with the depth and its reasons, each in a code span, then, when a check or an example is out of scope, the `depth-out-of-scope` row naming the checks out of scope, at light the plan pass, the ladder and the provider facts, and then the examples out of scope, the first 20 and `depth-more` with the count of the rest. Each is its own paragraph. An example out of scope is not listed in section 5 and is no unknown, nor, at light, an example not planned ([verdict.md](verdict.md#rule-4-per-depth)). A run file without the key renders no such section and nothing else changes.
 
-Sections 1 to 3 carry no heading: the assessment and the rationale are paragraphs and the verdict line is bold. The What to do section and sections 4 to 8 each open with a `###` heading naming the section: `### What to do`, `### Findings`, `### Checks that could not run` (`### Examples not planned` when it holds covered skips only), `### Review depth`, `### Pull request state`, `### Existing threads`, `### Conversation comments`. An omitted section drops its heading too. Where a section above says one line, it means the content under that heading. Inside section 4 each severity is a bold label on its own line, not a heading.
+A run file with a `profile` key adds the Profile section after the Review depth section: the `profile-line` row with the reviewer's profile label, `shipped:<id>` or `custom`, and its `profile_tree_sha256`, which the run checked against what it handed over ([github-io.md](github-io.md#handover)). In COMPACT the row is one more evidence note. A run file without the key renders no such section and nothing else changes.
+
+Sections 1 to 3 carry no heading: the assessment and the rationale are paragraphs and the verdict line is bold. The What to do section and sections 4 to 8 each open with a `###` heading naming the section: `### What to do`, `### Findings`, `### Checks that could not run` (`### Examples not planned` when it holds covered skips only), `### Review depth`, `### Profile`, `### Pull request state`, `### Existing threads`, `### Conversation comments`. An omitted section drops its heading too. Where a section above says one line, it means the content under that heading. Inside section 4 each severity is a bold label on its own line, not a heading.
 
 Nothing else. No checklist outside the What to do section, no emoji, no closing pleasantry, no offer to make the change.
 
@@ -571,6 +573,7 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `reopen-hint` | Maintainer: closed as stale with no review from anyone with write access; reopen to merge. |
 | `reopen-hint-date` | Maintainer: closed as stale with no review from anyone with write access; reopen to merge. The author last commented on {date}. |
 | `depth-line` | Review depth: {depth}. Reasons: {reasons}. |
+| `profile-line` | Profile: `{label}`, profile_tree_sha256 `{tree}`. |
 | `depth-out-of-scope` | Out of scope at this depth, so not unknowns: {items}. |
 | `depth-more` | , and {count} more |
 | `depth-check-A` | Check A |

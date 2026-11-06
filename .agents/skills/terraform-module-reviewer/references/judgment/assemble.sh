@@ -125,7 +125,7 @@ echo
 copy "$S/SKILL.md" "../../" "Skill" \
   "h:When to Use This Skill|h:Run Order per Depth|h:Reading by Depth|h:Read When|h:Moved Sections|l:^- With it, the diff file the caller.s own task text names|l:^- With it too, the files the caller.s own task text names on an .Output:. line|l:^- A third addition: this skill.s own|l:^Trust anchors [(]provider source allowlist|l:^[*][*]See:[*][*] .Schema Validation Guide.|l:^- A second addition: the .mtf-facts. binary"
 echo
-copy "$R/inputs.md" "../" "Skill" "u:Review Inputs|h:Responsibility Boundaries|l:^- The task may select the profile"
+copy "$R/inputs.md" "../" "Skill" "u:Review Inputs|h:Responsibility Boundaries|l:^- The task may select the profile|l:^- The task may ask for a triage"
 echo
 copy "$R/output.md" "../" "Skill" "u:Severity and Output|h:Output"
 echo

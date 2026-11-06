@@ -37,7 +37,7 @@ The constants are fenced blocks with the info string `profile-constants`, in `PR
 | `adjunct-types` | `types` |
 | `profile-options` | `format`, `consumers`, `partitions`, `examples`, `release` |
 
-A key written `<key>:` with nothing after the colon has the empty value: an empty list, or no value for a key that holds one. A key written with a colon, a space and nothing else is invalid. Only these keys may be empty: `example` and `example-dirs` of `required-files`, `verbatim` and `workflow-dir` of `profile-owned-files`, `files` and `dirs` of `tooling`, and `line` of `banner`. An empty `workflow-dir` owns no workflow, and an empty banner `line` asks for no banner.
+A key written `<key>:` with nothing after the colon has the empty value: an empty list, or no value for a key that holds one. A key written with a colon, a space and nothing else is invalid. Only these keys may be empty: `example` and `example-dirs` of `required-files`, and those two only with `examples: none`; `verbatim` and `workflow-dir` of `profile-owned-files`, `files` and `dirs` of `tooling`, and `line` of `banner`. An empty `workflow-dir` owns no workflow, and an empty banner `line` asks for no banner.
 
 ### Profile options
 
@@ -108,7 +108,7 @@ A run refuses, with a message that names no path:
 - a profile that fails `mtf-facts profile-check`;
 - a profile that relaxes, when the `mtf-facts` installed has no `profile-check`, or its report has no `in_repo_downgrade`.
 
-Each run takes one snapshot, `mtf-facts profile-snapshot --profile-dir <dir>`, and every later step reads the profile from the snapshot's `dir` only. The command prints `{dir, tree_sha256, profile_sha256}`. `profile_tree_sha256` is that `tree_sha256`: the sha256 of the sorted lines `<sha256 hex>  <relative path>` with a line feed, one per file of the snapshot. Without an `mtf-facts` that has `profile-snapshot`, only a shipped profile that relaxes nothing runs, read in place, and `profile_tree_sha256` is `none`.
+`profile-check` and `profile-snapshot` both refuse a profile directory that holds a symbolic link or a special file. Each run takes one snapshot, `mtf-facts profile-snapshot --profile-dir <dir>`, and every later step reads the profile from the snapshot's `dir` only. The command prints `{dir, tree_sha256, profile_sha256}`. `profile_tree_sha256` is that `tree_sha256`: the sha256 of the sorted lines `<sha256 hex>  <relative path>` with a line feed, one per file of the snapshot. Without an `mtf-facts` that has `profile-snapshot`, only the shipped default profile runs, read in place, and `profile_tree_sha256` is `none`; any other selection is refused.
 
 Public output names the profile as `shipped:<id>` or `custom`, with `profile_tree_sha256`. It never prints the path of a custom profile.
 

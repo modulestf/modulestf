@@ -45,7 +45,7 @@ The [Gate table](../../references/profile-format.md#gate-table) lists each rule 
 
 The blocks in format 1 of [Profile Format](../../references/profile-format.md#format-1). A key written `<key>:` with nothing after the colon has the empty value.
 
-`required-files` restates [Module layout](#module-layout). `regions` are values to edit to the regions your examples and tests may name. `argument-order` is the generic order of the maintainer's module structure reference. The repository owns its own files, so no template, owned file, tooling list or banner applies. `adjunct-types` is the list of supporting AWS types a module may create beside its main resource; edit it for another provider.
+`required-files` restates [Module layout](#module-layout). `regions` are the only two regions a region literal the change adds or edits may name, in every module and root area of the repository: `profile.region-not-allowed` reads them. Edit them to the regions your repository deploys to. `argument-order` is the generic order of the maintainer's module structure reference. The repository owns its own files, so no template, owned file, tooling list or banner applies. `adjunct-types` is the list of supporting AWS types a module may create beside its main resource; edit it for another provider.
 
 ```profile-constants
 name: required-files

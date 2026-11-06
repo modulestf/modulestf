@@ -456,6 +456,10 @@ constants_check() { # profile file: one line per problem, block<TAB>detail
     [ -n "$(cv required-files example)$(cv required-files example-dirs)" ]; then
     printf 'required-files\texamples: none, but example or example-dirs is not empty\n'
   fi
+  if [ "$(cv profile-options examples)" != none ] &&
+    { [ -z "$(cv required-files example)" ] || [ -z "$(cv required-files example-dirs)" ]; }; then
+    printf 'profile-options\texample or example-dirs is empty, but examples is not none\n'
+  fi
   [ "$(head -n 1 "$p")" = "# Profile: $(basename "$d")" ] ||
     printf 'name\tthe first line is not "# Profile: %s"\n' "$(basename "$d")"
   for t in $(awk -F'\t' '$1 == "template-destinations" {print $2}' "$TMP/const.tsv"); do
@@ -628,6 +632,8 @@ a root that loses README.md|required-files|set|root|main.tf variables.tf outputs
 a template the profile does not ship|template-destinations|add|renovate.json.template|renovate.json
 a stray space after an empty key|tooling|set|dirs|
 an unknown block|banner|rename|badge|
+partitions fixed while Relaxed conventions says portable|profile-options|set|partitions|fixed
+examples required with empty example entries|profile-options|set|examples|required
 EOF
 grep -qxF "profile constants" "$TMP/failed" ||
   echo "ok   profile constants ($nconst values; $nmut mutations caught)"
@@ -878,11 +884,18 @@ fi
 # The profile gates: every rule id the maintainer's references/profile-format.md names in
 # its Gate table and Downgrade sections is a row of rule-facts.md. When the mtf-facts found
 # ($MTF_FACTS, else on PATH) has profile-check, every shipped profile passes it, and its
-# --gates and --downgrade-ids JSON (gates[].rules, downgrade_ids) equal those two sections,
+# --gates rows (option, value, rules) equal the Gate table's rows and --downgrade-ids equals the
+# Downgrade list,
 # and a copy of in-repo-modules that relaxes every option has the whole table in gated_rules. With MTF_FACTS_REQUIRED=1 a missing binary, or
 # one without profile-check, fails.
 PF=.agents/skills/terraform-module-maintainer/references/profile-format.md
 ngate=0
+gate_triples() { # "<option>: <value> <rule_id>" per rule of each Gate table row
+  section "$PF" gate-table | grep '^| `[a-z]*: [a-z0-9-]*` |' | while IFS='|' read -r _ opt rules _; do
+    opt="$(printf '%s' "$opt" | tr -d '` ' | sed 's/:/: /')"
+    printf '%s\n' "$rules" | grep -oE "$ID_RE" | tr -d '`' | sed "s/^/$opt /"
+  done | sort -u
+}
 gate_ids() { section "$PF" gate-table | grep '^| `' | grep -oE "$ID_RE" | tr -d '`' | sort -u; }
 down_ids() { section "$PF" downgrade | awk '/^These two never downgrade/ {exit} {print}' | grep -oE "^- $ID_RE" | cut -c3- | tr -d '`' | sort -u; }
 never_ids() { section "$PF" downgrade | awk 'f; /^These two never downgrade/ {f = 1}' | grep -oE "^- $ID_RE" | cut -c3- | tr -d '`' | sort -u; }
@@ -894,7 +907,8 @@ for id in $( { gate_ids; down_ids; never_ids; } | sort -u); do
 done
 [ -z "$(comm -12 <(down_ids) <(never_ids))" ] || fail "profile gates" "$PF" "a rule both downgrades and never does"
 MF="${MTF_FACTS:-$(cd / && command -v mtf-facts)}"
-if [ -n "$MF" ] && "$MF" profile-check --profile-dir "$GDIR" > /dev/null 2>&1; then
+# An mtf-facts without the subcommand prints its root help, so the probe reads the usage line.
+if [ -n "$MF" ] && "$MF" profile-check --help 2>&1 | grep -qF 'mtf-facts profile-check --profile-dir'; then
   for d in "$PDIR"/*/; do
     "$MF" profile-check --profile-dir "${d%/}" > "$TMP/pc.out" 2>&1 ||
       fail "profile gates" "${d%/}" "mtf-facts profile-check refuses it: $(head -n 3 "$TMP/pc.out" | tr '\n' ' ')"
@@ -902,11 +916,11 @@ if [ -n "$MF" ] && "$MF" profile-check --profile-dir "$GDIR" > /dev/null 2>&1; t
   mkdir -p "$TMP/gates-profile" && cp -R "$PDIR/in-repo-modules/." "$TMP/gates-profile/" &&
     sed -i.bak 's/^partitions: portable$/partitions: fixed/' "$TMP/gates-profile/PROFILE.md" && rm -f "$TMP/gates-profile/PROFILE.md.bak"
   "$MF" profile-check --profile-dir "$TMP/gates-profile" --gates --downgrade-ids > "$TMP/pc.json" 2> /dev/null
-  jq -r '.gates[].rules[]' "$TMP/pc.json" 2> /dev/null | sort -u > "$TMP/gates.got"
+  jq -r '.gates[] | .option as $o | .value as $v | .rules[] | "\($o): \($v) \(.)"' "$TMP/pc.json" 2> /dev/null | sort -u > "$TMP/gates.got"
   jq -r '.gated_rules[]' "$TMP/pc.json" 2> /dev/null | sort -u > "$TMP/gated.got"
   jq -r '.downgrade_ids[]' "$TMP/pc.json" 2> /dev/null | sort -u > "$TMP/down.got"
-  diff <(gate_ids) "$TMP/gates.got" > /dev/null ||
-    fail "profile gates" "$PF" "the Gate table differs from mtf-facts --gates: $(diff <(gate_ids) "$TMP/gates.got" | grep '^[<>]' | tr '\n' ' ')"
+  diff <(gate_triples) "$TMP/gates.got" > /dev/null ||
+    fail "profile gates" "$PF" "the Gate table rows differ from mtf-facts --gates: $(diff <(gate_triples) "$TMP/gates.got" | grep '^[<>]' | tr '\n' ' ')"
   diff <(gate_ids) "$TMP/gated.got" > /dev/null ||
     fail "profile gates" "$PF" "a profile that relaxes every option does not gate the whole Gate table: $(diff <(gate_ids) "$TMP/gated.got" | grep '^[<>]' | tr '\n' ' ')"
   diff <(down_ids) "$TMP/down.got" > /dev/null ||

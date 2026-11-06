@@ -147,6 +147,12 @@ case "$1" in
       limits: {tf_files: (if $d == "light" then 0 else 1 end), changed_lines: 3, changed_blocks: 0, selected_examples: 1},
       schema_providers: [], schema_types: [], schema_locks: []}' ;;
   affected) echo '{"schema_version": 1, "inert": false, "fallback": null, "changed": [], "examples": []}' ;;
+  # With PROFILE_STUB set: a snapshot copy and a valid, relaxing profile-check.
+  profile-snapshot) [ -n "${PROFILE_STUB-}" ] || exit 1
+    d="$(mktemp -d "${TMPDIR:-/tmp}/snap.XXXXXX")"; cp -R "$3/." "$d/"
+    jq -n --arg d "$d" '{dir: $d, tree_sha256: "'"$(printf 'stub' | shasum -a 256 | cut -c1-64)"'", profile_sha256: null}' ;;
+  profile-check) [ -n "${PROFILE_STUB-}" ] || exit 1
+    echo '{"valid": true, "problems": [], "relaxing": true, "gated_rules": ["examples.versions-missing", "profile.template-drift"]}' ;;
   *) exit 1 ;;
 esac
 EOF
@@ -313,6 +319,37 @@ check "render light: the real render-comment.sh states the depth, its reasons an
 check "render light: the run file carries depth, no gaps and the example counts" \
   "$(q "$RUN/render/run-file.json" '.depth.depth == "light" and .counts == null and .verify_gaps == [] and .examples == {count: 2, validated: 2}')"
 check "render: prints at most 30 lines" "$(lines_ok "$TMP/re.out")"
+# The module profile (github-io.md, Handover): the snapshot's tree and gate list go into the task,
+# and the reviewer's profile line must match them or nothing is rendered.
+STREE="$(printf 'stub' | shasum -a 256 | cut -c1-64)"
+cp -R "$SRC/.agents/skills/terraform-module-maintainer" "$TMP/terraform-module-maintainer"
+printf '{"id": "in-repo-modules", "dir": ""}\n' > "$RUN/state/module-profile-args.json"
+PROFILE_STUB=1 run_rr handover "$RUN" > /dev/null 2>&1
+check "handover: a selected profile travels with its tree and gate list" \
+  "$(grep -qx 'profile: in-repo-modules' "$T" && grep -qx "Profile tree: $STREE" "$T" &&
+     grep -qx 'Gated rules: examples.versions-missing profile.template-drift' "$T" &&
+     [ "$(q "$RUN/state/profile.json" '.label == "shipped:in-repo-modules" and .tree == "'"$STREE"'"')" = 0 ]; echo $?)"
+printf 'summary: critical:0 high:0 medium:0 low:0\nprofile: shipped:terraform-aws-modules profile_tree_sha256:none\n' > "$TMP/sum-bad.txt"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --summary "$TMP/sum-bad.txt" --out "$TMP/render-pbad" > "$TMP/rp.out" 2>&1
+check "render: a profile line that differs from the handover is refused" \
+  "$([ $? = 1 ] && grep -qF 'does not match the handover' "$TMP/rp.out" && [ ! -e "$TMP/render-pbad/comment.md" ]; echo $?)"
+printf 'summary: critical:0 high:0 medium:0 low:0\n' > "$TMP/sum-none.txt"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --summary "$TMP/sum-none.txt" --out "$TMP/render-pnone" > "$TMP/rp.out" 2>&1
+check "render: no profile line for a selected profile is refused" "$([ $? = 1 ] && [ ! -e "$TMP/render-pnone/comment.md" ]; echo $?)"
+printf 'summary: critical:0 high:0 medium:0 low:0\nprofile: shipped:in-repo-modules profile_tree_sha256:%s\n' "$STREE" > "$TMP/sum-ok.txt"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --summary "$TMP/sum-ok.txt" --out "$TMP/render-pok" > "$TMP/rp.out" 2>&1
+check "render: the matching profile line renders, and the run file carries it" \
+  "$([ $? = 0 ] && grep -qF "Profile: \`shipped:in-repo-modules\`, profile_tree_sha256 \`$STREE\`." "$TMP/render-pok/comment.md" &&
+     [ "$(q "$RUN/render/run-file.json" '.profile == {label: "shipped:in-repo-modules", tree: "'"$STREE"'"}')" = 0 ]; echo $?)"
+printf '{"id": "no-such-profile", "dir": ""}\n' > "$RUN/state/module-profile-args.json"
+PROFILE_STUB=1 run_rr handover "$RUN" > "$TMP/rp.out" 2>&1
+check "handover: an unknown profile id is refused, path-free" "$([ $? = 1 ] && grep -qx 'review-run.sh: profile refused: unknown profile id' "$TMP/rp.out"; echo $?)"
+printf '{"id": "in-repo-modules", "dir": ""}\n' > "$RUN/state/module-profile-args.json"
+run_rr handover "$RUN" > "$TMP/rp.out" 2>&1
+check "handover: a non-default profile with no snapshot is refused" "$([ $? = 1 ] && grep -qF 'profile snapshot failed' "$TMP/rp.out"; echo $?)"
+printf '{"id": "", "dir": ""}\n' > "$RUN/state/module-profile-args.json"
+rm -rf "$TMP/terraform-module-maintainer"
+run_rr handover "$RUN" > "$TMP/ho.out"
 # Any edit of depth.json after prepare, raising it included, stops the run.
 jq '.depth = "deep"' "$RUN/depth.json" > "$TMP/d.json"; cp "$RUN/depth.json" "$TMP/depth-keep.json"
 cp "$TMP/d.json" "$RUN/depth.json"
@@ -713,6 +750,10 @@ check "usage: a run directory outside the pattern is refused" "$(run_rr verify /
 check "usage: a repository with a shell word is refused" "$(run_rr prepare --repo 'a/$(touch x)' --pr 1 > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
 check "usage: a profile name that starts like an option is refused" \
   "$(run_rr prepare --repo a/b --pr 1 --profile -x --role-arn arn:aws:iam::000000000000:role/r > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
+check "prepare: profile and profile-dir both given is a usage error" \
+  "$(run_rr prepare --repo a/b --pr 1 --module-profile in-repo-modules --module-profile-dir /x > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
+check "prepare: a relative profile-dir is a usage error" \
+  "$(run_rr prepare --repo a/b --pr 1 --module-profile-dir rel/x > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
 # Long values under the system bash: a role name of 512 characters and a 300 character path pass.
 LONGARN="arn:aws:iam::000000000000:role/$(printf 'r%.0s' $(seq 512))"
 run_rr prepare --repo example-org/nothing --pr 7 --profile p1 --role-arn "$LONGARN" > "$TMP/p6.out" 2>&1

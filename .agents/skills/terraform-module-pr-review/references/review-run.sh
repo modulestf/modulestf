@@ -6,7 +6,7 @@
 #
 #   review-run.sh prepare --repo <owner/name> --pr <number> [--render-only] [--triage]
 #       [--profile <name> --role-arn <arn>] [--owner-depth deep] [--owner-pid <pid>]
-#       [--provider-cache <dir>]
+#       [--provider-cache <dir>] [--module-profile <id> | --module-profile-dir <absolute path>]
 #       Steps 1 to 5, 7 and 7.5: identity, host-pass.sh run and checks and their check, the
 #       clone, the merge base worktree, G0 and the plan pass mode when a profile is named, the
 #       acquisition, the classifier, mtf-facts affected and depth.sh compute. Writes the run
@@ -22,7 +22,8 @@
 #   review-run.sh tests <run>           the test pass (test-pass.md) in the runner, with a
 #                                        non-hcl-dependency trigger
 #   review-run.sh evidence <run>        the commands above the depth needs, side by side at deep
-#   review-run.sh handover <run>        <run>/handover/task.md and record.txt for the reviewer
+#   review-run.sh handover <run>        <run>/handover/task.md and record.txt for the reviewer, after
+#                                        the module profile snapshot (state/profile.json)
 #   review-run.sh render <run> --findings <file> --assessment <file> --out <dir>
 #       [--summary <file>] [--standard]
 #                                        the run file, depth.sh verify, render-comment.sh
@@ -158,7 +159,7 @@ refuse() { # fixed reason, words: index.json says refused and nothing else
 }
 
 cmd_prepare() {
-  local repo="" pr="" render_only=false triage=false profile="" role="" owner_depth="" opid="" cache=""
+  local repo="" pr="" render_only=false triage=false profile="" role="" owner_depth="" opid="" cache="" mp="" mpd=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2-}"; shift 2 || die "--repo needs a value" ;;
@@ -170,6 +171,8 @@ cmd_prepare() {
       --owner-depth) owner_depth="${2-}"; shift 2 || die "--owner-depth needs a value" ;;
       --owner-pid) opid="${2-}"; shift 2 || die "--owner-pid needs a value" ;;
       --provider-cache) cache="${2-}"; shift 2 || die "--provider-cache needs a value" ;;
+      --module-profile) mp="${2-}"; shift 2 || die "--module-profile needs a value" ;;
+      --module-profile-dir) mpd="${2-}"; shift 2 || die "--module-profile-dir needs a value" ;;
       *) die "unexpected argument" ;;
     esac
   done
@@ -182,6 +185,10 @@ cmd_prepare() {
   }
   [ -z "$owner_depth" ] || [ "$owner_depth" = deep ] || die "--owner-depth takes only deep"
   [ -z "$opid" ] || [[ "$opid" =~ ^[1-9][0-9]{0,9}$ ]] || die "--owner-pid must be a process id"
+  # The module profile of the user's own message (profile-format.md, Selection), not the AWS profile.
+  [ -z "$mp" ] || [ -z "$mpd" ] || die "profile refused: profile and profile-dir both given"
+  [ -z "$mp" ] || [[ "$mp" =~ ^[a-z0-9-]{1,64}$ ]] || die "--module-profile must be a shipped profile id"
+  case "$mpd" in "" | /?*) ;; *) die "profile refused: profile-dir is not absolute" ;; esac
   [ -n "$cache" ] || cache="${XDG_CACHE_HOME:-$HOME/.cache}/modulestf/provider-cache"
   case "$cache" in /?*) ;; *) die "--provider-cache must be an absolute path" ;; esac
 
@@ -203,6 +210,7 @@ cmd_prepare() {
     --arg cache "$cache" --arg login "$login" --arg posting "$posting" \
     '{repo: $repo, pr: $pr, render_only: $ro, triage: $tr, profile: $profile, role_arn: $role,
       owner_depth: $od, owner_pid: $opid, cache: $cache, login: $login, posting: $posting}' > "$RUN/state/args.json"
+  jq -n --arg id "$mp" --arg dir "$mpd" '{id: $id, dir: $dir}' > "$RUN/state/module-profile-args.json"
 
   # Steps 2, 4, 5 and 7.5, and the check runs of Step 7, by host-pass.sh.
   local hp=(bash "$HERE/host-pass.sh") ro=() tr=() err
@@ -813,8 +821,54 @@ write_bundle() { # <file>
   echo "$skip"
 }
 
+# The module profile (reviewer profile-selection.md): one snapshot with mtf-facts profile-snapshot,
+# checked with profile-check --gates, into state/profile.json {label, tree, id, dir, gated}. The
+# default profile without a snapshot-capable mtf-facts is read in place with tree "none"; any
+# other selection then refuses. Refusals name no path.
+MAINT="$(cd "$HERE/../../terraform-module-maintainer" 2> /dev/null && pwd -P)"
+module_profile() {
+  local id="" dir="" src label facts snap tree gated="[]" pc
+  [ ! -f "$RUN/state/module-profile-args.json" ] || {
+    id="$(jq -r '.id' "$RUN/state/module-profile-args.json")"; dir="$(jq -r '.dir' "$RUN/state/module-profile-args.json")"; }
+  if [ -n "$dir" ]; then
+    src="$(cd -- "$dir" 2> /dev/null && pwd -P)" || fail "profile refused: profile snapshot failed"
+    case "$src/" in "$RUN"/*) fail "profile refused: profile-dir lies inside the workspace or a checkout" ;; esac
+    local up="$src"
+    while [ -n "$up" ]; do
+      [ ! -e "$up/.git" ] || fail "profile refused: profile-dir lies inside the workspace or a checkout"
+      up="${up%/*}"
+    done
+    label=custom
+  else
+    if [ -z "$id" ] && [ ! -f "$MAINT/profiles/terraform-aws-modules/PROFILE.md" ]; then
+      # The default, with no maintainer checkout beside this skill: nothing to snapshot.
+      jq -n '{label: "shipped:terraform-aws-modules", tree: "none", id: "", dir: "", gated: []}' > "$RUN/state/profile.json"
+      return 0
+    fi
+    [ -n "$id" ] || id=terraform-aws-modules
+    src="$MAINT/profiles/$id"
+    [ -n "$MAINT" ] && [ -f "$src/PROFILE.md" ] && [ ! -L "$src" ] || fail "profile refused: unknown profile id"
+    [ "$(head -n 1 "$src/PROFILE.md")" = "# Profile: $id" ] || fail "profile refused: shipped profile name does not match its directory"
+    label="shipped:$id"
+  fi
+  facts="$(facts_bin)"
+  snap="$(limit 60 "$facts" profile-snapshot --profile-dir "$src" 2> /dev/null)" || snap=""
+  tree="$(printf '%s' "$snap" | jq -r 'select(type == "object") | .tree_sha256 // empty' 2> /dev/null)"
+  if [[ "$tree" =~ ^[0-9a-f]{64}$ ]]; then
+    pc="$(limit 60 "$facts" profile-check --profile-dir "$(printf '%s' "$snap" | jq -r '.dir')" --gates 2> /dev/null)" ||
+      fail "profile refused: profile-check failed"
+    printf '%s' "$pc" | jq -e '.valid == true' > /dev/null 2>&1 || fail "profile refused: profile-check failed"
+    gated="$(printf '%s' "$pc" | jq -c 'if .relaxing then [.gated_rules[]?] else [] end')"
+    rm -rf -- "$(printf '%s' "$snap" | jq -r '.dir')"
+  elif [ "$label" = shipped:terraform-aws-modules ]; then tree=none
+  else fail "profile refused: profile snapshot failed"
+  fi
+  jq -n --arg l "$label" --arg t "$tree" --arg id "$id" --arg d "$dir" --argjson g "$gated"     '{label: $l, tree: $t, id: $id, dir: $d, gated: $g}' > "$RUN/state/profile.json"
+}
+
 cmd_handover() {
   ready handover
+  module_profile
   if [ -f "$RUN/depth.json" ]; then
     bash "$HERE/depth.sh" verify "$RUN/depth.json" --clone "$RUN/clone" > /dev/null 2>&1 ||
       fail "depth.sh verify: the depth binding does not match the clone; the run stops"
@@ -871,6 +925,9 @@ cmd_handover() {
       printf 'Schema handoff: %s\n' "$RUN/schema-handoff/schema-handoff.json.gz"
     [ "$nm" = true ] || printf 'Diff: %s\n' "$out/change.diff"
     [ -z "$mbl" ] || printf 'Merge base: %s\n' "$mbl"
+    jq -r 'if .dir != "" then "profile-dir: \(.dir)" elif .id != "" then "profile: \(.id)" else empty end,
+      (select(.tree != "none") | "Profile tree: \(.tree)"),
+      (select(.gated != []) | "Gated rules: \(.gated | join(" "))")' "$RUN/state/profile.json"
     printf 'Output: write the findings list as JSON to %s, the summary line to %s and the facts comparison note to %s, and nothing else.\n' \
       "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt"
     [ ! -f "$out/reviewer-references.md" ] || printf 'References: %s\n' "$out/reviewer-references.md"
@@ -930,6 +987,16 @@ cmd_render() {
        "review.quoted-claim-unverifiable": n("review.quoted-claim-unverifiable")}
       | if all(.[]; test("^[0-9]{1,6}$")) then map_values(tonumber) else null end')" || counts=null
   fi
+  # The reviewer's profile line must be the profile handed over (profile-selection.md, Output).
+  local pl want
+  pl="$( { [ -n "$summary" ] && [ -f "$summary" ] && grep -m1 '^profile: ' "$summary"; } || true)"
+  if [ -f "$RUN/state/profile.json" ]; then
+    want="$(jq -r '"profile: \(.label) profile_tree_sha256:\(.tree)"' "$RUN/state/profile.json")"
+    if [ -n "$pl" ]; then [ "$pl" = "$want" ] || fail "the reviewer's profile line does not match the handover; nothing is rendered"
+    else jq -e '.label == "shipped:terraform-aws-modules" and .tree == "none"' "$RUN/state/profile.json" > /dev/null ||
+      fail "the reviewer reported no profile line; nothing is rendered"
+    fi
+  fi
   build_run_file "$counts" > "$r/run-file.json" || fail "the run file could not be built"
   local line rc
   line="$(bash "$HERE/render-comment.sh" --head "$HEAD_SHA" --findings "$r/findings.json" --host "$RUN/host/host.json" \
@@ -956,9 +1023,11 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   [ ! -f "$RUN/skip-check.json" ] || skip="$(cat "$RUN/skip-check.json")"
   [ ! -f "$RUN/depth.json" ] || dj="$(cat "$RUN/depth.json")"
   [ "$TRIAGE" = true ] || [ ! -f "$RUN/tests.json" ] || tj="$(cat "$RUN/tests.json")"
+  local prof=null
+  [ ! -f "$RUN/state/profile.json" ] || prof="$(cat "$RUN/state/profile.json")"
   mode="$(plan_mode)"
   jq -n --argjson triage "$triage" --argjson counts "$1" --argjson beh "$beh" --argjson ver "$ver" \
-    --argjson cov "$cov" --argjson skip "$skip" --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" \
+    --argjson cov "$cov" --argjson skip "$skip" --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
     --argjson planned "$( [ -f "$RUN/state/plan" ] && echo true || echo false)" \
     --slurpfile sel "$RUN/selection.json" "
     {format: 1, triage: \$triage, plan_ran: \$planned,
@@ -976,7 +1045,9 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
          | {count: length, validated: (map(select(.head.validate == 0)) | length)})} else {} end)
     + (if \$mode != \"\" then {plan_mode: \$mode} else {} end)
     + (if \$depth != null then {depth: \$depth} else {} end)
-    + (if \$tests != null then {tests: \$tests} else {} end)"
+    + (if \$tests != null then {tests: \$tests} else {} end)
+    + (if \$prof != null and (\$prof.label != \"shipped:terraform-aws-modules\" or \$prof.tree != \"none\")
+       then {profile: {label: \$prof.label, tree: \$prof.tree}} else {} end)"
 }
 
 # --- cleanup ---------------------------------------------------------------------------------
