@@ -1,3 +1,12 @@
+# [0.2.0](https://github.com/modulestf/modulestf/compare/v0.1.2...v0.2.0) (2026-11-06)
+
+
+### Features
+
+* **pr-review:** runner providers, CI job-less runs, embedded-code rule, test pass ([#110](https://github.com/modulestf/modulestf/issues/110)) ([a7f2368](https://github.com/modulestf/modulestf/commit/a7f23682bb60702b45bdbd976e62bd64a54468b7)), closes [terraform-aws-modules/terraform-aws-notify-slack#283](https://github.com/terraform-aws-modules/terraform-aws-notify-slack/issues/283)
+
+
+
 ## [0.1.2](https://github.com/modulestf/modulestf/compare/v0.1.1...v0.1.2) (2026-11-04)
 
 
