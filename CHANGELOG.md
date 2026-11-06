@@ -1,3 +1,12 @@
+# [0.3.0](https://github.com/modulestf/modulestf/compare/v0.2.0...v0.3.0) (2026-11-06)
+
+
+### Features
+
+* custom module profiles and the in-repo-modules profile ([#112](https://github.com/modulestf/modulestf/issues/112)) ([45c1e4b](https://github.com/modulestf/modulestf/commit/45c1e4bbe1fa41a6d917f82dfacdaca1502ca6e3))
+
+
+
 # [0.2.0](https://github.com/modulestf/modulestf/compare/v0.1.2...v0.2.0) (2026-11-06)
 
 
