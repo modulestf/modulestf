@@ -82,12 +82,15 @@ def context: split("\n") | (length - 1) as $last
 # Reviews in list order, the resolved login, and whether the run is render-only. The login's
 # own reviews are left out in every run, render-only included: a body this run does not post
 # can still be posted later by that login, and it then replaces the earlier review.
-# $render_only is kept for callers and changes nothing.
+# $render_only is kept for callers and changes nothing. Only a reviewer with write access
+# counts, as in GitHub's own review decision: an approval or change request from an author
+# whose association is not OWNER, MEMBER or COLLABORATOR decides nothing.
 def decision($login; $render_only):
   [.[] | select(.state != "COMMENTED" and .state != "PENDING")] as $nc
   | ($nc | map(select($login != "" and .user.login == $login)) | last
      | if . == null then null else {state, commit_id} end) as $own
-  | [$nc[] | select($login == "" or .user.login != $login)]
+  | [$nc[] | select(($login == "" or .user.login != $login)
+      and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")))]
   | group_by(.user.id) | map(last.state) as $latest
   | {review_decision: (if any($latest[]; . == "CHANGES_REQUESTED") then "fail"
                        elif any($latest[]; . == "APPROVED") then "pass" else "none" end),
