@@ -195,9 +195,10 @@ fixes themselves drew, is a new invocation with a new set, in which answered ite
 
 The task states the round number. When it does not, the round is 1 if no item carries
 `replied: true`; otherwise the skill edits nothing and asks which round this is. The report
-states the round it assumed. The limit is 3 unless the task sets another. From the limit
-on, the skill still verifies, decides and drafts replies, but edits nothing, and the report
-hands the open items to a person. Bot rounds that keep raising new items stop there.
+states the round it assumed. The limit is the last round that edits: 3 unless the task sets
+another. In a round after the limit, the skill still verifies, decides and drafts replies, but
+edits nothing, and the report hands the open items to a person. Bot rounds that keep raising
+new items stop there.
 
 ## Worked example: pull request 410
 

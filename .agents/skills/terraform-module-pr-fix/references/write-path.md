@@ -20,7 +20,15 @@ The output directory comes only from the user's own message. It is refused unles
 | No `.git` in it or in any parent | `inside a git work tree` |
 | Empty | `not empty` |
 
-With no directory named, the run makes `mktemp -d "$ROOT/pr-fix-out.XXXXXX"`, mode 0700, prints it and keeps it. Cleanup never deletes it. It receives the round-0 review, the patch, the disposition tables, the reply drafts and the last findings.
+With no directory named, the run makes `mktemp -d "$ROOT/pr-fix-out.XXXXXX"`, mode 0700, prints it and keeps it. Cleanup never deletes it. It receives the round-0 review, the patch, the disposition tables, the reply drafts, the last findings and the trust record.
+
+## Trust Files
+
+Later commands trust these files of the run: `state.json`, `commit-identity.json`, `out.txt`, `run.json`, `merge-base.json`, `config-keys.txt`, the fix clone's `.git/config`, `items.json`, `round0-findings.json`, `apply.txt` and `prose.txt`. Verification runs provider code as the same user, and file modes do not stop a process of that user, so the files are bound by their digests:
+
+- `prepare`, `clone`, `items` and `apply`, the only commands that write them, record the SHA-256 of each, or `absent`, in `trust.sha256` in the output directory.
+- Every other command but `cleanup` recomputes the digests first and aborts on any difference.
+- `verify` keeps the digests in its own process across the pass and aborts when any file changed during it. This is the control against code that the verification runs; the record in the output directory is the check between commands.
 
 ## Captured State
 
@@ -63,9 +71,11 @@ The frozen item set holds the round-0 findings, `F-<n>`, and one item per commen
 | A comment of origin `self` | Yes |
 | Any other comment | No: verified, decided and drafted, never applied |
 
-`apply --item <id>` makes one more item eligible from the next round. It runs only when a new user message names that id with the word apply. An id outside the frozen set is refused.
+`apply --item <id>` makes one more item eligible from the next round. It runs only when a new user message names that id with the word apply. An id outside the frozen set is refused, and so is any id once the loop has stopped: no round reopens.
 
-Each comment item carries its reply endpoint, pinned when the set is frozen: `repos/<repo>/pulls/<n>/comments/<top>/replies` for a review comment, where `<top>` is `in_reply_to_id` or the comment's own id, and `repos/<repo>/issues/<n>/comments` for the others. A finding has none.
+A comment item's reply endpoint follows from the pinned state and the id alone: `repos/<repo>/pulls/<n>/comments/<top>/replies` for a review comment, where `<top>` is `in_reply_to_id` or the comment's own id, and `repos/<repo>/issues/<n>/comments` for the others. A finding has none.
+
+`items` also keeps the prose of round 0: the lines of the untrusted block of pr-review's handover task before its record, in pr-review's [form](../../terraform-module-pr-review/references/github-io.md#handover) and under its caps. A handover with no such block, or with more than one `BEGIN`, `RECORD` or `END` line for its suffix, is refused.
 
 ## Write Path
 
@@ -107,21 +117,26 @@ Every case but the last makes the write path render-only.
 
 `clone` makes `<run>/clone` with `git init --template=`, adds the base repository's built URL as `origin`, and fetches `refs/pull/<n>/head` and `base.sha` with their history, never at depth 1, with no tags and no submodules. A fetched head other than the pinned head aborts the run. The checkout is detached at the pinned head.
 
-Every git call on the clone goes through one function:
+Every git call on the clone, and on the verification and push repositories, goes through one function:
 
 ```
 env -i PATH="$PATH" HOME="<run>/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
-  GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1 \
-  git -C <run>/clone -c core.hooksPath=/dev/null -c credential.helper= \
+  GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1 GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 \
+  GIT_GRAFT_FILE=/dev/null GIT_PAGER=cat \
+  git --no-pager -C <repository> -c core.hooksPath=/dev/null -c credential.helper= \
+  -c core.fsmonitor=false -c diff.external= -c log.showSignature=false -c core.pager=cat \
+  -c advice.graftFileDeprecated=false \
   -c filter.lfs.smudge=cat -c filter.lfs.process= -c filter.lfs.required=false \
   -c submodule.recurse=false ...
 ```
 
-`env -i` also drops `GIT_CONFIG_COUNT`, its keys and `GIT_CONFIG_PARAMETERS`, so no variable can add a hook, an identity or a URL rewrite. The clone's local configuration is recorded right after the checkout; the gate refuses any other key or value, such as `url.<x>.insteadOf` or `http.extraheader`. A commit passes the identity of [Captured State](#captured-state) with `-c user.name` and `-c user.email`, and `--no-verify`.
+`env -i` also drops `GIT_CONFIG_COUNT`, its keys and `GIT_CONFIG_PARAMETERS`, so no variable can add a hook, an identity or a URL rewrite. The other guards are those of the reviewer's [git-safety.md](../../terraform-module-reviewer/references/git-safety.md#the-form), for the same reasons: no lazy fetch, no replace refs, no grafts, no pager, no fsmonitor, no external diff, no signature program. Every `diff` and `log` carries `--no-ext-diff --no-textconv`. The clone's local configuration is recorded right after the checkout; the gate refuses any other key or value, such as `url.<x>.insteadOf` or `http.extraheader`, and the [Trust Files](#trust-files) record catches the change first. A commit passes the identity of [Captured State](#captured-state) with `-c user.name` and `-c user.email`, and `--no-verify`.
 
 ## Verification
 
-`verify` runs pr-review's [verify-pass.sh](../../terraform-module-pr-review/references/verify-pass.sh) `run` on the round's tree, by its path beside this skill, under `env -i` with `HOME` the run's empty home and no global or system git configuration. It is the same no-credential exception as pr-review's [Rule 5](../../terraform-module-pr-review/SKILL.md#rule-5-verification-is-trust-aware), in the same harness sandbox, with a plugin cache per verification and `TF_CLI_CONFIG_FILE=/dev/null` from that script. Its run directory is a `pr-review.XXXXXX` directory inside the run, holding a worktree of the round's commit, deleted when the pass ends. With no commit identity the round's tree is verified as a throwaway commit object that is never pushed. The changed files list is built from the clone, merge base to the round's commit.
+`verify` runs pr-review's [verify-pass.sh](../../terraform-module-pr-review/references/verify-pass.sh) `run` on the round's tree, by its path beside this skill, under `env -i` with `HOME` the run's empty home and no global or system git configuration. It is the same no-credential exception as pr-review's [Rule 5](../../terraform-module-pr-review/SKILL.md#rule-5-verification-is-trust-aware), in the same harness sandbox, with a plugin cache per verification and `TF_CLI_CONFIG_FILE=/dev/null` from that script. The verification tree has no path back to the run. It is `mktemp -d "$ROOT/pr-fix-verify.XXXXXX"`, outside the run directory, holding the `pr-review.XXXXXX` directory the script takes and in it a new repository with no remote: the merge base tree, written from the fix clone's objects with a scratch index, `read-tree` and `checkout-index`, committed with a throwaway identity, then the round's tree the same way. No attribute of the tree can leave a file out of it. The directory is deleted when the pass ends. With no commit identity the round's tree is taken as a throwaway commit object that is never pushed. The changed files list is built from the clone, merge base to the round's commit. Every trust file must come out of the pass unchanged ([Trust Files](#trust-files)).
+
+The round's review task names the base reference, the head revision when the round committed, the profile and the output path. Then comes the block of pr-review's handover: the prose items of round 0, the title and the body among them, unchanged, with their marker lines moved to a suffix new for the round, and after `RECORD-<suffix>` the round's verification record as one JSON line. The round reviewer so judges the same prose as round 0, and a prose-based finding stays open until a fix closes it.
 
 ## Content Gate
 
@@ -129,7 +144,7 @@ env -i PATH="$PATH" HOME="<run>/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOS
 
 | Rule | Refusal |
 |---|---|
-| A path is plain: no `..`, no leading `/`, no control character | `not a plain path` |
+| A path is plain: only `A`-`Z`, `a`-`z`, `0`-`9`, `.`, `_`, `/`, `-` and space, the first character one of `A`-`Z`, `a`-`z`, `0`-`9`, `.` or `_`; no `.` or `..` component, no `//`, no trailing `/` | `not a plain path` |
 | With a module root prefix, the path is under it | `outside the module root` |
 | No `.git` or `.terraform` component | `a .git or .terraform path` |
 | No `*.tfstate*` file | `a state file` |
@@ -144,6 +159,8 @@ env -i PATH="$PATH" HOME="<run>/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOS
 | The local configuration is the one recorded after the checkout | `the clone's local config changed` |
 
 The paths checked are every path changed against the pinned head and every path any commit since it touched, so a file added in one commit and removed in the next is still checked. With no commit identity, the commit rules become one: no commit since the pinned head.
+
+`round` writes the edit allow-list from the same path rules, then drops, and reports, every path that is a symbolic link on disk, has a component that is one, or is or lies under an entry of mode `120000` or `160000` in the index. The editing agent never gets a path that writes through a link.
 
 ## Fingerprints and the Local Verdict
 
@@ -211,12 +228,12 @@ Comments are not read again, so new comment traffic never aborts. Then `gh auth 
 
 ## Push
 
-`push` needs `--confirm-branch`, equal to the destination ref, and `--expect-sha`, equal to the pinned head, taken from a new user message after the gate that names the push and the branch. Either missing or different is a refusal, and the run is kept. It re-runs the content gate and the push precondition, asserts the identity a second time, as pr-review's [Rule 4](../../terraform-module-pr-review/SKILL.md#rule-4-identity-is-asserted-twice), runs the pre-push read, then:
+`push` needs `--confirm-branch`, equal to the destination ref, and `--expect-sha`, equal to the pinned head, taken from a new user message after the gate that names the push and the branch. Either missing or different is a refusal, and the run is kept. It re-runs the content gate and the push precondition, asserts the identity a second time, as pr-review's [Rule 4](../../terraform-module-pr-review/SKILL.md#rule-4-identity-is-asserted-twice), runs the pre-push read, then pushes from a new bare repository, `<run>/push.git`, made with `git init --bare --template=`. Its configuration must hold only `core.*` keys; it fetches the one commit from the fix clone through the wrapper, and must then hold exactly that SHA. So no key of the fix clone, such as `url.<x>.pushInsteadOf`, reaches the push:
 
 ```
 env -i PATH="$PATH" HOME="$HOME" [GH_CONFIG_DIR="$GH_CONFIG_DIR"] GIT_CONFIG_GLOBAL=/dev/null \
-  GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
-  git -C <run>/clone -c core.hooksPath=/dev/null -c credential.helper= \
+  GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GIT_NO_REPLACE_OBJECTS=1 GIT_PAGER=cat \
+  git --no-pager -C <run>/push.git -c core.hooksPath=/dev/null -c credential.helper= \
   -c credential.helper='!gh auth git-credential' -c http.followRedirects=false \
   push --no-follow-tags --recurse-submodules=no <built url> <sha>:refs/heads/<ref>
 ```
@@ -225,8 +242,16 @@ No force, no lease, no tags, no submodules, no other ref. The SHA is the clone's
 
 ## Replies
 
-`replies` posts a reply drafts file, `[{"item", "body"}]`, after its own confirmation. `--confirm-items` must name exactly the items of the file. It refuses unless the push happened and its remote ref matched; the pull request is not locked and the base is not archived; every item is in the frozen set with a reply endpoint and was not posted before; and no body holds the run directory, the home directory, or a path or token prefix of pr-review's [leak scan](../../terraform-module-pr-review/references/comment-format.md#leak-scan). It asserts the identity again, then posts each body to its pinned endpoint with `jq -n --arg body` piped to `gh api -X POST <endpoint> --input -`. A failed post stops: it may have landed, so the comments are read before any retry.
+`gate` writes `$OUT/replies.json`, the reply drafts of every round, the latest draft per item.
+
+`replies` posts a reply drafts file, `[{"item", "body"}]`, after its own confirmation. `--confirm-items` must name exactly the items of the file. It refuses unless the push happened and its remote ref matched; the pull request is not locked and the base is not archived; and every item is a comment item of the frozen set that was not posted before. Then, for each body:
+
+1. Every `<sha>` placeholder becomes the pushed SHA.
+2. pr-review's whole [leak scan](../../terraform-module-pr-review/references/comment-format.md#leak-scan) runs on it, with the same functions of `render-comment.jq`: the run directory, `HOME`, `PWD` and `TMPDIR`, the path prefixes, the token shapes, and the value of every secret-named environment variable of 12 characters or more. A match refuses the file and names the pattern and the item.
+3. pr-review's [at-mention step](../../terraform-module-pr-review/references/comment-format.md#at-mentions) wraps every bare at-mention in a code span; one left outside a span refuses the file.
+
+It asserts the identity again. Each endpoint is rebuilt at post time from the pinned `state.json` and the item id, never read from the item set, and must match `^repos/<pinned repo>/(pulls/<n>/comments/[0-9]+/replies|issues/<n>/comments)$`. Each body is posted with `jq -n --arg body` piped to `gh api -X POST <endpoint> --input -`. A failed post stops: it may have landed, so the comments are read before any retry.
 
 ## Aborts and Refusals
 
-Exit 1 is either. An abort ends the run and deletes the run directory: a fetched head other than the pinned head, a failed fetch or checkout, an identity that changed, a pre-push reason, no token, a rejected push, an interrupt. A refusal keeps the run: a wrong confirmation, a gate rule, an unknown item, the round limit, a stopped loop. Exit 2 is a usage error.
+Exit 1 is either. An abort ends the run and deletes the run directory: a fetched head other than the pinned head, a failed fetch or checkout, a trust file that changed, an identity that changed, a pre-push reason, no token, a push repository that cannot be made, a rejected push, an interrupt. A refusal keeps the run: a wrong confirmation, a gate rule, an unknown item, the round limit, a stopped loop. Exit 2 is a usage error.

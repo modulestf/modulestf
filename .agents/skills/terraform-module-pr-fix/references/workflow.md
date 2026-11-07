@@ -31,14 +31,16 @@ Review the pinned head with pr-review, render-only, by its own [run guide](../..
 review-run.sh render <pr-review run> --assessment <file> --out "$OUT/round-0"
 ```
 
-Read the module root prefix with `jq -r .prefix <pr-review run>/index.json`, then run pr-review's `cleanup`. Then the fix clone and the merge base check, and the frozen item set:
+Read the module root prefix with `jq -r .prefix <pr-review run>/index.json`. Then the fix clone and the merge base check, and the frozen item set, which also keeps the prose of pr-review's handover for the round reviews:
 
 ```
 fix-run.sh clone "$RUN"
-fix-run.sh items "$RUN" --review "$OUT/round-0" --prefix <prefix>
+fix-run.sh items "$RUN" --review "$OUT/round-0" --prefix <prefix> --handover <pr-review run>/handover/task.md
 ```
 
-`clone` prints the merge base and the write path. `items` refuses a round-0 review of another head. On the render-only path the run ends here: show the round-0 body and the write path's reasons, then run Step 12's cleanup.
+Then run pr-review's `cleanup`. `clone` prints the merge base and the write path. `items` refuses a round-0 review of another head and a handover with no untrusted block. On the render-only path the run ends here: show the round-0 body and the write path's reasons, then run Step 12's cleanup.
+
+Otherwise `items` prints each item id with its origin and whether it is applied or drafted only. Show the user each item that is drafted only, with its text from `$RUN/items.json` as quoted data, and ask once which of them to apply; "none" is an answer. Run `fix-run.sh apply "$RUN" --item <id>` for each id the user's answer names, then start round 1. The question is asked once, before round 1.
 
 ## Step 4
 
@@ -56,7 +58,7 @@ After each round's commit, verify it:
 fix-run.sh verify "$RUN" --round <n>
 ```
 
-It runs pr-review's `verify-pass.sh` as [Verification](write-path.md#verification) says, prints the per-example result, and writes `$RUN/rounds/<n>/review-task.md` for Step 9.
+It runs pr-review's `verify-pass.sh` as [Verification](write-path.md#verification) says, prints the per-example result, and writes `$RUN/rounds/<n>/review-task.md` for Step 9: the base reference, the output path, and the untrusted block with round 0's title and prose and this round's record. A trust file changed by the pass aborts the run.
 
 ## Step 7
 
@@ -72,7 +74,7 @@ Start one subagent with the `terraform-module-maintainer` skill, in its Resolve 
 fix-run.sh commit "$RUN" --round <n>
 ```
 
-Every attempt counts as a round, a failed one included. When the user names an item with "apply" in a new message, run `fix-run.sh apply "$RUN" --item <id>` before the next round.
+Every attempt counts as a round, a failed one included. When the user names another item with "apply" in a new message while the loop runs, run `fix-run.sh apply "$RUN" --item <id>` before the next round. Once the loop stopped, `apply` refuses: no round reopens.
 
 ## Step 8
 
@@ -94,7 +96,7 @@ It prints the local verdict, the open count, every introduced tuple and the loop
 fix-run.sh gate "$RUN"
 ```
 
-It runs the content gate and the [Push Precondition](write-path.md#push-precondition), writes `$OUT/fix.patch`, the disposition tables, the reply drafts and the last findings, and prints the diff stat, the verdict, the author, the write path, the destination URL and branch, the expected remote SHA, and the draft and default-branch flags. On a refusal it prints every reason. On path B the run ends here with the patch.
+It runs the content gate and the [Push Precondition](write-path.md#push-precondition), writes `$OUT/fix.patch`, the disposition tables, `$OUT/replies.json` with the reply drafts of every round, the latest per item, and the last findings, and prints the diff stat, the verdict, the author, the write path, the destination URL and branch, the expected remote SHA, and the draft and default-branch flags. On a refusal it prints every reason. On path B the run ends here with the patch.
 
 ## Step 11
 
@@ -116,12 +118,14 @@ Right after the push the checks are pending, and the run says not finished yet. 
 
 Each of these needs its own confirmation, from a new user message that names the action:
 
-- **Post the review.** Run pr-review again at the pushed SHA, render-only up to its own Step 11, and post through its Rule 1 and Step 12 write. This skill never posts a review itself.
-- **Post the replies.** Show each reply draft with the item it answers. Then:
+- **Post the review.** Run pr-review again on the pull request, now at the pushed SHA: `review-run.sh prepare` without `--render-only`, the steps of its depth, the reviewer, the assessment and `render`, then its Rule 1 and its Step 12 write. This skill never posts a review itself.
+- **Post the replies.** Show each draft of `$OUT/replies.json` with the item it answers. Each `<sha>` in a draft becomes the pushed SHA when it is posted. Then:
 
 ```
-fix-run.sh replies "$RUN" --file <replies.json> --confirm-items <id>,<id>
+fix-run.sh replies "$RUN" --file "$OUT/replies.json" --confirm-items <id>,<id>
 ```
+
+It runs pr-review's leak scan and at-mention step on each body and posts each to the endpoint it rebuilds from the pinned state ([Replies](write-path.md#replies)).
 
 Never merge, resolve a thread, or edit the title or the body. The run ends with:
 

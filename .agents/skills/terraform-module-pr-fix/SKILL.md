@@ -63,7 +63,7 @@ This skill owns the review loop: the maintainer gets `Review loop: caller` and m
 | Step | Command or action |
 |---|---|
 | 0, 1 | `prepare`: identity, captured state, output directory |
-| 3 | pr-review render-only to `<out>/round-0`; `clone`; `items` |
+| 3 | pr-review render-only to `<out>/round-0`; `clone`; `items`; ask once which items to apply; `apply` |
 | 7, 6, 9 | Per round: `round`; maintainer; `commit`; `verify`; reviewer; `compare` |
 | 10 | `gate` |
 | 11 | Show the gate; confirm; `push`; `checks` |

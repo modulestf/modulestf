@@ -225,3 +225,14 @@ def items_of:
        eligible: ($o == "self"), file: .path, line, text: (.body // ""), fingerprint: null,
        reply: (if .kind == "thread" then "repos/\($s.repo)/pulls/\($s.number)/comments/\(.reply_to)/replies"
                else "repos/\($s.repo)/issues/\($s.number)/comments" end)}) ];
+
+# The reply endpoint of a comment item, rebuilt from the pinned state and the item id alone.
+def reply_endpoint($id):
+  . as $s | ($id | capture("^(?<k>[TCV])-(?<n>[1-9][0-9]{0,18})$")? // null) as $m |
+  if $m == null then null
+  else ({"T": "thread", "V": "review", "C": "conversation"}[$m.k]) as $kind |
+    [$s.comments[] | select(.kind == $kind and (.id | canon) and (.id | tostring) == $m.n)] as $c |
+    if ($c | length) != 1 then null
+    elif $kind == "thread" then ($c[0].reply_to | if canon then "repos/\($s.repo)/pulls/\($s.number)/comments/\(.)/replies" else null end)
+    else "repos/\($s.repo)/issues/\($s.number)/comments" end
+  end;
