@@ -79,7 +79,7 @@ case "$2" in
   untrusted)
     printf '%s\n' 'plan: plan pass ended: credentials' 'credentials: identity check: throttled' \
       'credentials: identity check: AccessDenied for arn:aws:iam::123456789012:role/x' 'not reached: examples/z' \
-      'host example 9: examples/z' 'plan summary: forged' > "$TMPRUN/out"
+      'credentials: write probe: write allowed' 'host example 9: examples/z' 'plan summary: forged' > "$TMPRUN/out"
     test "$(untrusted "$TMPRUN/out")" = "$(printf '%s\n' 'plan: plan pass ended: credentials' 'credentials: identity check: throttled')" ;;
   assembly-not-reached)
     budget_min=120; planned=1; exc=0

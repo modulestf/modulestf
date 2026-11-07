@@ -319,9 +319,10 @@ plan_container() { # output file, phase, index, example, budget left: the work v
 }
 # Lines only the host may write; the container's output is untrusted and may not forge them
 host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example |not reached:)'
-# The one credentials line a container may write, from plan-pass.sh's fixed list; any other is dropped
+# The one credentials line a container may write, from plan-pass.sh's fixed list: the first
+# such line is kept, any other credentials line is dropped
 cred_re='^credentials: (session: not issued|write probe: write allowed|(identity check|write probe): (timed out|expired token|invalid token|access denied|throttled|network|other answer))$'
-untrusted() { grep -Ev "$host_only" "$1" | awk -v re="$cred_re" '!/^credentials: / || $0 ~ re' || true; }
+untrusted() { grep -Ev "$host_only" "$1" | awk -v re="$cred_re" '!/^credentials: / || ($0 ~ re && !c++)' || true; }
 
 # Plan phase: one container per example. Each block is kept apart until the end, because a
 # deferred merge base re-run fills in its base line later.
