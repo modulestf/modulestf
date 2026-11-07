@@ -95,9 +95,10 @@ empty_out() { [ -z "$(ls -A "$O")" ]; }
 
 # The Nth markdown fence of comment-format.md, without its fence lines.
 fence() { awk -v want="$1" '/^```markdown$/ { k++; if (k == want) { on = 1; next } } on && /^```$/ { exit } on' "$CF"; }
-nofix() { grep -v '^ *- Fix: '; }
-# Run 1 of pull request 410 predates the Fix lines, the Fix blocks of grouping rule 7 and the
-# What to do section, so all three are removed from a render before it is compared with run 1.
+nofix() { grep -v -e '^ *- Fix: ' -e '^ *- Fix for each location above: '; }
+# Run 1 of pull request 410 predates the Fix lines, the Fix blocks of grouping rule 7, the shared
+# Fix line of rule 8 and the What to do section, so all are removed from a render before it is
+# compared with run 1.
 run1() {
   perl -0pe 's/### What to do\n\n.*?\n\n(?=### Findings)//s;
     s/\n\n<details><summary>Fix for each location \(\d+\)<\/summary>\n\n.*?\n\n<\/details>(?:\n(?=\n- ))?//gs' | nofix
@@ -904,11 +905,11 @@ unfolded "a fix holding </details>" c.tf "C." 'Close the </details> tag.'
 unfolded "a summary holding <DETAILS" c.tf 'An open <DETAILS block.' "Fix C."
 unfolded "a location holding </details" 'x/</details>.tf' "C." "Fix C."
 t_newline() { # a newline cannot pass the input grammar, so the grouping is checked directly
-  jq -n -L "$REF" --arg s "$(printf 'Two\nlines.')" 'include "render-comment";
-    [{id: "F-001", rule_id: "structure.grouping", severity: "LOW", file: "a.tf", line: 1, summary: "A.", suggested_fix: "F."},
-     {id: "F-002", rule_id: "structure.grouping", severity: "LOW", file: "b.tf", line: 1, summary: "B.", suggested_fix: "F."},
-     {id: "F-003", rule_id: "structure.grouping", severity: "LOW", file: "c.tf", line: 1, summary: $s, suggested_fix: "F."}]
-    | findings_md(7; 10; "") | (contains("Fix for each location") | not) and contains("    - Fix: F.")' > /dev/null
+  jq -e -n -L "$REF" --arg s "$(printf 'Two\nlines.')" 'include "render-comment";
+    [{id: "F-001", rule_id: "structure.grouping", severity: "LOW", file: "a.tf", line: 1, summary: "A.", suggested_fix: "F1."},
+     {id: "F-002", rule_id: "structure.grouping", severity: "LOW", file: "b.tf", line: 1, summary: "B.", suggested_fix: "F2."},
+     {id: "F-003", rule_id: "structure.grouping", severity: "LOW", file: "c.tf", line: 1, summary: $s, suggested_fix: "F3."}]
+    | findings_md(7; 10; "") | (contains("Fix for each location") | not) and contains("    - Fix: F3.")' > /dev/null
 }
 t_newline; check "fix block: a newline in a summary renders unfolded" $?
 
@@ -2056,7 +2057,9 @@ if git -C "$SRC" cat-file -e b3f74cf^{commit} 2> /dev/null; then
   }
   t_same "$NONE"; check "depth absent: nothing open renders as before, byte for byte" $?
   t_same "$WF" "$H2" "" "" "$TMP/assess-worked.txt"; check "depth absent: worked example 2 renders as before, byte for byte" $?
-  t_same "$TMP/pr410.json" "$H410" "" "" "$TMP/assess-410.txt"; check "depth absent: pull request 410 renders as before, byte for byte" $?
+  # A fix per finding: grouping rule 8, later than b3f74cf, prints a fix that every entry shares once.
+  jq 'map(.suggested_fix = "Fix \(.id).")' "$TMP/pr410.json" > "$TMP/pr410-fixes.json"
+  t_same "$TMP/pr410-fixes.json" "$H410" "" "" "$TMP/assess-410.txt"; check "depth absent: pull request 410 renders as before, byte for byte" $?
   t_same "$(F556)" "$H556" "" "$(R556 same)" "$TMP/assess-556.txt"; check "depth absent: the COMPACT pull request 556 renders as before, byte for byte" $?
   t_same "$NONE" "" "" "$TMP/run-cov-none.json"; check "depth absent: unplanned examples render as before, byte for byte" $?
 else
@@ -2179,6 +2182,102 @@ t_gate_body() {
   [ "$ST" = 0 ] && grep -qxF -- '- 1 example was not planned: plan gate G3.' "$O/comment.md" && ! grep -qE '\.tf(:|`)' "$O/comment.md"
 }
 t_gate_body; check "section 5: a gate stop names the gate class and no file" $?
+
+# --- A closed, unmerged pull request: the block lead says what applies on a reopen, and the
+# Checks phrase of the signal line agrees with the job-less line under it.
+LEAD_CLOSED="$(jq -nr -L "$REF" 'include "render-comment"; texts["todo-lead-closed"]')"
+JL1='.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = []'
+t_closed_lead() {
+  na "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")" "$(host cl-lead "$HCLOSED"' | .reopen = {last_author_comment: null}')" \
+    "$(checks cl-lead unknown "$JL1")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 2 ] && [ "$(verdict)" = "block COMMENT" ] &&
+    todo | cmp -s - <(printf '%s\n' '### What to do' '' "$LEAD_CLOSED" '' \
+      '- [ ] Maintainer: approve or re-run the workflow that never started a job: `pre-commit.yml`.' \
+      '- [ ] `structure.docs-contradict-code`: apply the Fix at `a.tf:1`.') &&
+    ! grep -qF "$LEAD_BLOCK" "$O/comment.md" && grep -qxF "$REOPEN" "$O/comment.md" &&
+    grep -qxF 'Checks: unknown, as a workflow ended without starting a job. Mergeability: not applicable. No review yet. Threads resolved.' "$O/comment.md" &&
+    grep -qxF 'Checks: workflow `pre-commit.yml` ended `failure` without starting a job, so its tests never ran and say nothing about this change.' "$O/comment.md"
+}
+t_closed_lead; check "closed: the block lead names the reopen, and the Checks phrase names the job-less run" $?
+t_merged_lead() { na "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")" "$HMERGED"; [ "$ST" = 0 ] && todo | grep -qxF "$LEAD_BLOCK"; }
+t_merged_lead; check "merged: the block lead is unchanged" $?
+t_open_jobless_line() {
+  render "$NONE" "" "$(checks jl-open unknown "$JL1")"
+  grep -qxF 'Checks: unknown, as a workflow ended without starting a job. Mergeable. No review yet. Threads resolved.' "$O/comment.md"
+}
+t_open_jobless_line; check "checks: a job-less run gives the Checks phrase its reason" $?
+render "$NONE" "" "$(checks queued unknown)"
+check "checks: a queued check keeps the plain unknown phrase" "$(grep -qxF 'Checks: unknown. Mergeable. No review yet. Threads resolved.' "$O/comment.md"; echo $?)"
+
+# --- Grouping rule 8: entries that share a fix byte for byte print it once, with every location
+# listed, and keep one What to do item. One differing fix restores the Fix block of rule 7.
+DFIX='In the `terraform` block of `versions.tf`, raise `hashicorp/aws` to the first 6.x version whose schema lists `global_secondary_index.key_schema`. Generated content made stale: the terraform-docs region of `README.md`.'
+shared_list() { # name, the last finding's fix
+  local l k=0; n=0
+  for l in 72 77 266 271 456 461; do
+    k=$((k + 1)); f coverage.argument-above-min-version HIGH main.tf "$l" "Line $l sets \`key_schema\`, which the declared floor does not list." "$([ "$k" = 6 ] && printf '%s' "$2" || printf '%s' "$DFIX")"
+  done | list "$1"
+}
+SHLOCS='`main.tf:72`, `main.tf:77`, `main.tf:266`, `main.tf:271`, `main.tf:456`, `main.tf:461`'
+t_shared() {
+  render "$(shared_list shared "$DFIX")"
+  { printf '%s\n' '### What to do' '' "$LEAD_BLOCK" '' "- [ ] \`coverage.argument-above-min-version\` (6): apply the Fix at $SHLOCS." "- [ ] $GEN" '' \
+      '### Findings' '' '**HIGH**' '' '- `coverage.argument-above-min-version` (6):'
+    for l in 72 77 266 271 456 461; do printf '  - `main.tf:%s` - Line %s sets `key_schema`, which the declared floor does not list.\n' "$l" "$l"; done
+    printf '%s\n' "  - Fix for each location above: $DFIX"
+  } > "$TMP/shared.md"
+  [ "$ST" = 0 ] && [ "$(rule)" = 2 ] && awk '/^### What to do$/ { on = 1 } on' "$O/comment.md" | cmp -s - "$TMP/shared.md"
+}
+t_shared; check "fix block: six entries sharing one fix print it once, byte for byte" $?
+t_shared_differs() {
+  render "$(shared_list shared2 "$DFIX Also bump the lock file.")"
+  [ "$ST" = 0 ] && grep -qxF '<details><summary>Fix for each location (6)</summary>' "$O/comment.md" &&
+    ! grep -qF 'Fix for each location above' "$O/comment.md" && [ "$(grep -c '^- `main.tf:[0-9]*` - Fix: ' "$O/comment.md")" = 6 ] &&
+    todo | grep -qxF -- "- [ ] \`coverage.argument-above-min-version\` (6): apply the Fix at $SHLOCS."
+}
+t_shared_differs; check "fix block: one differing fix keeps the Fix block, one fix per entry" $?
+t_shared_two() {
+  render "$({ f structure.grouping MEDIUM a.tf 1 "A." "Same."; f structure.grouping MEDIUM b.tf null "B." "Same."; } | list sh2)"
+  awk '/^### Findings$/ { on = 1; getline; next } on' "$O/comment.md" | cmp -s - <(printf '%s\n' '**MEDIUM**' '' \
+    '- `structure.grouping` (2):' '  - `a.tf:1` - A.' '  - `b.tf` - B.' '  - Fix for each location above: Same.')
+}
+t_shared_two; check "fix block: two entries sharing one fix print it once" $?
+t_shared_collapsed() {
+  n=0
+  { f structure.grouping MEDIUM a.tf 1 "M." "Fix M."
+    for i in 1 2 3 4 5 6 7 8 9 10; do f structure.argument-order LOW "f$i.tf" 2 "Order $i." "Reorder."; done
+  } | list shc > /dev/null
+  render "$TMP/shc.json"
+  { printf '%s\n' '**MEDIUM**' '' '- `structure.grouping` - `a.tf:1` - M.' '  - Fix: Fix M.' '' '**LOW**' '' \
+      '<details><summary><code>structure.argument-order</code> (10)</summary>' ''
+    for i in 1 2 3 4 5 6 7 8 9 10; do printf -- '- `f%s.tf:2` - Order %s.\n' "$i" "$i"; done
+    printf '%s\n' '- Fix for each location above: Reorder.' '' '</details>'
+  } > "$TMP/shc.md"
+  [ "$(rule)" = 6 ] && awk '/^### Findings$/ { on = 1; getline; next } on' "$O/comment.md" | cmp -s - "$TMP/shc.md"
+}
+t_shared_collapsed; check "collapse: a collapsed group sharing one fix prints it once, byte for byte" $?
+
+# --- Behaviour evidence when no selected example passes validate at the head: the trigger lines
+# say so, from the run file's example counts.
+TR6="[$(bt T-001 lifecycle-change unverifiable), $(bt T-002 wrapper-change unverifiable), $(bt T-003 lifecycle-change unverifiable), \
+$(bt T-004 literal-argument-change unverifiable), $(bt T-005 lifecycle-change unverifiable), $(bt T-006 literal-argument-change unverifiable)]"
+binv() { runf "binv-$1" ".behaviour = {status: \"ran\", reason: null, triggers: $2, claims: [], capped: 0} | .examples = {count: 3, validated: $3}"; }
+t_binvalid() {
+  render "$NONE" "" "" "$(binv six "$TR6" 0)"
+  [ "$ST" = 0 ] && grep -qxF -- '- 6 behaviour changes not verified (the head does not validate in any example): 3 lifecycle-change, 2 literal-argument-change, 1 wrapper-change.' "$O/comment.md"
+}
+t_binvalid; check "behaviour: a head that validates in no example is named on the grouped line" $?
+render "$NONE" "" "" "$(binv one "[$(bt T-001 wrapper-change unverifiable)]" 0)"
+check "behaviour: a head that validates in no example is named on a trigger line" "$(grep -qxF -- '- Behaviour change at `main.tf:2` (wrapper-change): not verified (the head does not validate in any example).' "$O/comment.md"; echo $?)"
+render "$NONE" "" "" "$(binv some "$TR6" 1)"
+check "behaviour: a head that validates in one example keeps the plain line" "$(grep -qxF -- '- 6 behaviour changes not verified: 3 lifecycle-change, 2 literal-argument-change, 1 wrapper-change.' "$O/comment.md"; echo $?)"
+
+mutate "the closed lead dropped" 's/elif \$closed then "todo-lead-closed" //' t_closed_lead
+mutate "the job-less Checks phrase dropped" 's/then "-jobless" else "" end/then "" else "" end/' t_open_jobless_line
+mutate "a shared fix printed per entry" 's/elif shared_fix then/elif false then/' t_shared
+mutate "a shared fix printed per entry in a collapsed block" 's/\(if shared_fix then \[/(if false then [/' t_shared_collapsed
+mutate "a fix shared by entries that differ" 's/\| unique \| length\) == 1;/| unique | length) >= 1;/' t_shared_differs
+mutate "the validate clause dropped" 's/\(if \$invalid then "-invalid" else "" end\)/""/' t_binvalid
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi
