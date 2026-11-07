@@ -9,7 +9,7 @@ A review has two readers, and they need different things.
 - A person reads the review and fixes the code by hand. They need a verdict, the findings most severe first, each with a file, a line and a suggested fix in words, the checks that could not run, and one comment they can post.
 - A coding agent applies the fixes at once. It needs the same findings as data: rule id, severity, file, line and the suggested fix, and the head and base commits the findings hold for. Once it has applied them, the review is out of date, and the agent needs a new review of the new head, not the old comment.
 
-The gap today: the rendered comment sits between the two. A review run writes `findings.json` in its local run directory, so an agent on the same machine can read it. An agent that works from the pull request elsewhere sees only the markdown comment and has to parse prose back into findings. [The dual-audience comment](#the-dual-audience-comment) closes that gap.
+The gap today: the rendered comment sits between the two. A review run's render step writes `findings.json` and `result.json` to the output directory the task names, outside the run directory, which cleanup deletes ([render-output.md](../.agents/skills/terraform-module-pr-review/references/render-output.md)). An agent on the same machine can read those files. An agent that works from the pull request elsewhere sees only the markdown comment and has to parse prose back into findings. [The dual-audience comment](#the-dual-audience-comment) closes that gap.
 
 ## Layers
 
@@ -36,7 +36,7 @@ An adapter produces no finding of its own. Its decisions, such as the verdict or
 
 A work in progress skill is a skeleton that refuses every request and names the skill to use instead. It holds a fixed Status paragraph and prose sections only, and [tests/wip-skills-test.sh](../tests/wip-skills-test.sh) checks that shape.
 
-## Why pr-fix is a separate skill
+## Why terraform-module-pr-fix is a separate skill
 
 - The pull request review never writes a ref. That is what a user relies on when they ask for a review, and it keeps the review's rules short: no push path, no push credential, no push gate. A fix mode inside it would put all three into every review run.
 - The two have different credential boundaries. The review needs to post one comment. The fix needs push access at its end, and nowhere before it.
@@ -72,15 +72,15 @@ One run has one owner of the review loop. When a caller runs its own loop, as th
 
 | Skill | Status | Writes files | Writes to GitHub | Returns |
 |-------|--------|--------------|------------------|---------|
-| terraform-module-reviewer | shipped | no | no | findings |
+| terraform-module-reviewer | shipped | no workspace file; only the files a caller's `Output:` line names, outside the workspace | no | findings |
 | terraform-module-maintainer | shipped | the workspace only | no | edits, a report of the checks it ran, reply drafts |
 | change-scope | shipped | no | no | a scope outcome and its rule |
-| terraform-module-pr-review | shipped | its run directory only | one confirmed comment and review event, never a ref | a verdict and a comment |
+| terraform-module-pr-review | shipped | its run directory, and the output directory the task names | one confirmed comment and review event, never a ref | a verdict and a comment |
 | `terraform-module-pr-fix` | planned | a fix clone in its run directory | a confirmed push to the pull request branch; the review and replies each after their own confirmation | pushed commits, or a patch, a disposition table and reply drafts |
 | terraform-module-issue | work in progress | nothing yet | nothing yet; later a branch and a pull request after confirmation | a refusal |
 | terraform-module-create | work in progress | nothing yet | nothing yet; later a new repository after confirmation | a refusal |
 
-## The pr-fix design in short
+## The terraform-module-pr-fix design in short
 
 This is the design the fix skill will follow. Its own entry point and references will hold the rules.
 

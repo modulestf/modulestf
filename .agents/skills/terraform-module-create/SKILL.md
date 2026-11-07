@@ -1,6 +1,6 @@
 ---
 name: terraform-module-create
-description: Work in progress, not usable yet. Will create a new Terraform module repository from a module profile, such as terraform-aws-modules, around the Full create mode of terraform-module-maintainer, for a request like "create a module for service Y". Use terraform-module-maintainer today.
+description: Work in progress, not usable yet. Will create a new module repository from a module profile. Use terraform-module-maintainer today.
 ---
 
 # Terraform Module Create
@@ -16,10 +16,10 @@ Work in progress. This skill does nothing yet: refuse the request, read and writ
 
 ## Responsibilities
 
-- Set up a new repository directory with the files and templates the profile lists.
-- Hand the module code to the Full create mode of terraform-module-maintainer, with its coverage ledger from the provider schema.
-- Review the whole module with terraform-module-reviewer before it hands the module back, and fix or report what the review finds.
-- Create a remote repository or push to one only after a new message from the user confirms it.
+- It will set up a new repository directory with the files and templates the profile lists.
+- It will hand the module code to the Full create mode of terraform-module-maintainer, with its coverage ledger from the provider schema.
+- It will have terraform-module-reviewer review the whole module before it hands the module back, and will fix or report what the review finds.
+- It will create a remote repository, or push to one, only after a new message from the user confirms it.
 
 ## Non-goals
 
