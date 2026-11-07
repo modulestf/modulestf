@@ -390,20 +390,23 @@ read_related() { # work, path, repo, pr
   REQ_LEFT=$FETCH_REQUESTS BYTES_LEFT=$FETCH_BYTES FAILCAT=
   related_out() { jq -n --arg s "$1" --argjson o "${2:-[]}" --argjson n "$not_read" \
     '{status: $s, open_unlinked: $o, sidebar_not_read: $n}' > "$w/related.json"; }
-  jq -e '.state == "open" and .base.ref == .base.repo.default_branch' "$w/meta" > /dev/null ||
-    { related_out not-applicable; return; }
-  # Linked: GraphQL on the GraphQL path, else the body's keywords.
+  # Linked: GraphQL on the GraphQL path, else the body's keywords. Read before the state test:
+  # read_issues takes the closing issues of a closed pull request too.
+  local linked=true
   if [ "$path" = graphql ]; then
-    t30 gh api graphql -f owner="${repo%/*}" -f repo="${repo#*/}" -F number="$pr" -f query="$Q_CLOSING" > "$w/closing" 2> /dev/null &&
+    { t30 gh api graphql -f owner="${repo%/*}" -f repo="${repo#*/}" -F number="$pr" -f query="$Q_CLOSING" > "$w/closing" 2> /dev/null &&
       jq -e '.errors == null and (.data.repository.pullRequest.closingIssuesReferences.pageInfo.hasNextPage == false)' \
-        "$w/closing" > /dev/null 2>&1 || { related_out failed; return; }
-    jq '[.data.repository.pullRequest.closingIssuesReferences.nodes[] | {repo: .repository.nameWithOwner, number}]' \
-      "$w/closing" > "$w/linked.json"
+        "$w/closing" > /dev/null 2>&1 &&
+      jq '[.data.repository.pullRequest.closingIssuesReferences.nodes[] | {repo: .repository.nameWithOwner, number}]' \
+        "$w/closing" > "$w/linked.json"; } || { linked=false; rm -f "$w/linked.json"; }
   else
-    not_read=true
     RJ --arg base "$repo" --argjson self "$pr" 'include "host-records";
       [.body // "" | body_refs($base; $self)[] | select(.linked) | .ref] | dedupe' "$w/meta" > "$w/linked.json"
   fi
+  jq -e '.state == "open" and .base.ref == .base.repo.default_branch' "$w/meta" > /dev/null ||
+    { related_out not-applicable; return; }
+  [ "$linked" = true ] || { related_out failed; return; }
+  [ "$path" = graphql ] || not_read=true
   # Candidates: the body, then the timeline, deduplicated.
   : > "$w/tl"
   url="repos/$repo/issues/$pr/timeline?per_page=100"

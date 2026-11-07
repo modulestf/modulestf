@@ -324,7 +324,7 @@ A `conclusion` of `success`, `neutral` or `skipped` passes, and a combined `stat
 
 Whether merging the pull request closes the open issues it is related to, per the profile's [Closing keywords](../../terraform-module-maintainer/profiles/terraform-aws-modules/pr-description.md#closing-keywords). The answer is a line under pull request state in [comment-format.md](comment-format.md), never a finding, and it feeds nothing in [verdict.md](verdict.md). It is host state computed by fixed rules, so it adds no judgement of the code, and the reviewer never sees it: a local diff has no issues, and no host fact crosses the [Handover](#handover).
 
-Nothing is read and nothing is rendered when the pull request is not open, or when `base.ref` differs from `base.repo.default_branch`, because GitHub ignores closing keywords on any other base.
+Nothing is rendered when the pull request is not open, or when `base.ref` differs from `base.repo.default_branch`, because GitHub ignores closing keywords on any other base. Then only the linked set is read, for [Issue Text](#issue-text).
 
 ### Linked
 
@@ -378,11 +378,11 @@ terraform-aws-modules/terraform-aws-lambda pull request 770, read on 2026-09-24.
 
 ### Issue Text
 
-The text of the issues the pull request closes travels to the reviewer as untrusted prose: a reporter's reproduction and workaround tell the reviewer what the change is for. This is the one part of Related Issues the reviewer sees, and it reads nothing new: it takes the linked set of [Linked](#linked), in its order, on either path.
+The text of the issues the pull request closes travels to the reviewer as untrusted prose: a reporter's reproduction and workaround tell the reviewer what the change is for. This is the one part of Related Issues the reviewer sees: it takes the linked set of [Linked](#linked), in its order, on either path.
 
 Of the linked set, keep the issues in the pull request's own repository, compared case-insensitively, and take the first two. Read each once, `gh api -i repos/<owner>/<repo>/issues/<issue-number>`, under the 30 second limit and one retry of [Fetch](#fetch), with a budget of its own of 4 requests and 5 MB. The item is the issue's number and title on one line, `#<number> <title>`, then a blank line and the body, under [Caps](#caps).
 
-An issue in another repository, a 404 or 410, a response carrying a `pull_request` field, a response that is not the issue asked for, and any other failed read adds no item and stops nothing. None of them is recorded, and the comment says nothing of them. When the linked set was not read, because the check above did not run or the closing issues query failed, no issue travels.
+An issue in another repository, a 404 or 410, a response carrying a `pull_request` field, a response that is not the issue asked for, and any other failed read adds no item and stops nothing. None of them is recorded, and the comment says nothing of them. The linked set is read whatever the pull request's state or base; when the closing issues query failed, no issue travels.
 
 ## Commit Target
 
