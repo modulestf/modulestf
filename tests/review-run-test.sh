@@ -14,6 +14,8 @@
 #   - the baseline defects: the Write short line, mergeability not-applicable on a merged
 #     pull request, the posting login's own review left out of a render-only run, several
 #     module roots resolved by the prefix rule or refused with a fixed reason;
+#   - the closing issues' text: kind=issue items by origin, the 4000 byte cut and its entry, one issue
+#     named twice read once, and a cross-repository reference, a third issue or a failed read adding nothing;
 #   - a failed validate at light escalates, a schema escalation at focused escalates;
 #   - the pr-review SKILL.md workflow move: the sentence multiset of SKILL.md and
 #     references/workflow.md and references/inputs.md is the pinned one, navigation excluded,
@@ -111,6 +113,7 @@ case "$ep" in
   repos/*/compare/*) f=compare ;;
   repos/*/git/trees/*) f="tree-${ep##*/}" ;;
   repos/*/issues/*/timeline) f=empty ;;
+  repos/*/issues/*) f="issue-${ep##*/}" ;;
   repos/*/commits/*/check-runs) f=runs ;;
   repos/*/commits/*/status) f=status ;;
   repos/*/actions/runs) f=wfruns ;;
@@ -792,6 +795,47 @@ GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer
 check "defect: several module roots resolve to the one holding every changed path" "$(q "$TMP/hp1/host.json" '.prefix == "modules/a"')"
 check "host-pass: an empty login is refused without --render-only" \
   "$(GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login "" --out "$TMP/hp2" > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
+# The closing issues' text (github-io.md, Issue Text): the first two in this repository, as
+# kind=issue items after the body, origin by numeric id, 4000 bytes each; a reference to another
+# repository, a third issue and a failed read add nothing and fail nothing.
+closing() { jq -n '{data: {repository: {pullRequest: {closingIssuesReferences: {pageInfo: {hasNextPage: false},
+  nodes: [$ARGS.positional[] | split("#") | {number: (.[1] | tonumber), repository: {nameWithOwner: .[0]}}]}}}}}' \
+  --args "$@" > "$GHD/closing"; }
+issue() { jq -n --argjson n "$1" --argjson id "$2" --arg body "$3" '{number: $n, title: "Issue \($n) $(touch z)",
+  body: $body, user: {login: "u\($id)", id: $id, type: "User"}}' > "$GHD/issue-$1"; }
+issue 1303 11 'Repro: apply twice. Workaround: aws_ec2_tag.'
+issue 1304 12 "$(printf 'line %04d\n' $(seq 600))"
+issue 1305 12 'third'
+closing example-org/widget#1303 other-org/widget#1303 Example-Org/Widget#1304 example-org/widget#1305
+GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/hp3" > /dev/null 2>&1
+T3="$TMP/hp3/task.md"; S3="$(sed -n 's/^UNTRUSTED-\([0-9a-f]\{12\}\) BEGIN$/\1/p' "$T3")"
+check "issues: two items after the body and before the record, same author change-author, other author other" \
+  "$([ "$(grep "^ITEM-$S3 \|^RECORD-$S3\|^UNTRUSTED-$S3 END" "$T3" | sed "s/-$S3//" | tr '\n' '|')" = \
+     'ITEM kind=title origin=change-author|ITEM kind=body origin=change-author|ITEM kind=issue origin=change-author|ITEM kind=issue origin=other|UNTRUSTED END|' ]; echo $?)"
+check "issues: an item starts with the number and title, then the body" \
+  "$(awk -v s="ITEM-$S3 kind=issue origin=change-author" '$0 == s {getline a; getline b; getline c; exit !(a ~ /^#1303 Issue 1303 / && b == "" && c ~ /^Repro: /)}' "$T3"; echo $?)"
+check "issues: a cross-repository reference and the third issue add nothing" \
+  "$([ "$(grep -c '^#1303 \|^#1304 \|^#1305 ' "$T3")" = 2 ] && ! grep -q '^#1305 \|^third$' "$T3"; echo $?)"
+check "issues: an issue over 4000 bytes is cut and recorded" \
+  "$(grep -qx "\[truncated-$S3: 2030 bytes omitted\]" "$T3" &&
+     [ "$(q "$TMP/hp3/host.json" '[.could_not_run[] | select(.kind == "prose-truncated")] == [{kind: "prose-truncated", item: "issue", omitted: 2030}]')" = 0 ]; echo $?)"
+check "issues: the records pass their own check" "$(GH_TOKEN=x bash "$HP" check "$TMP/hp3" --head "$HEADC" | grep -qx 'records accepted'; echo $?)"
+rm -f "$GHD/issue-1304"
+closing example-org/widget#1304 example-org/widget#1303
+GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/hp4" > /dev/null 2>&1
+check "issues: a failed read adds no item and fails nothing" \
+  "$([ -f "$TMP/hp4/host.json" ] && [ "$(grep -c ' kind=issue ' "$TMP/hp4/task.md")" = 1 ] && grep -q '^#1303 ' "$TMP/hp4/task.md" &&
+     [ "$(q "$TMP/hp4/host.json" '.could_not_run == [] and .related.status == "ok"')" = 0 ]; echo $?)"
+check "issues: nothing in an issue title ran" "$([ ! -e z ] && [ ! -e "$TMP/cwd/z" ]; echo $?)"
+# Without GraphQL the linked set comes from the body's keywords; one issue named twice is read once.
+mv "$GHD/threads" "$TMP/threads.keep"; cp "$GHD/meta" "$TMP/meta.keep"
+jq '.body = "Fixes #1303. Closes #1303."' "$TMP/meta.keep" > "$GHD/meta"
+GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/hp5" > /dev/null 2>&1
+check "issues: without GraphQL, an issue the body names twice is one item" \
+  "$([ "$(q "$TMP/hp5/host.json" '.conversation.path == "rest"' 2> /dev/null)" = 0 ] &&
+     [ "$(grep -c ' kind=issue ' "$TMP/hp5/task.md")" = 1 ]; echo $?)"
+mv "$TMP/threads.keep" "$GHD/threads"; cp "$TMP/meta.keep" "$GHD/meta"
+closing
 
 # --- 5. usage and run directory refusals --------------------------------------------------------------
 check "usage: a run directory outside the pattern is refused" "$(run_rr verify /tmp > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
@@ -999,6 +1043,7 @@ run_rr cleanup "$RUN" > /dev/null
 # REVIEW_RUN_SENTENCES=<file> to write the list and compare it with the previous one.
 # Updated for Rule 3's second exception, the test pass, and its Rule 5 paragraph (test-pass.md);
 # the plan pass's measured packaging-script sentence moved to plan-pass.md, Limits.
+# Updated for the closing issues that now cross in Step 6 (github-io.md, Issue Text), and their origin in Rule 2.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1007,7 +1052,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=3962134d228d
+want=fdc52d7945e2
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"

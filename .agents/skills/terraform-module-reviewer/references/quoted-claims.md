@@ -12,7 +12,7 @@ Prose may arrive as items in one untrusted block. This section is the grammar of
 Every CRLF is turned into LF before any line is compared. After that, a marker is a whole line that is exactly one of these, with single spaces, nothing before and nothing after:
 
 - `UNTRUSTED-<s> BEGIN` and `UNTRUSTED-<s> END`, the first and last lines of the block.
-- `ITEM-<s> kind=<kind> origin=<origin>`, where `<kind>` is `title`, `body`, `thread`, `conversation` or `bot`, and `<origin>` is `change-author` or `other`. A `bot` item is a comment a program wrote, such as a scanner's report, and its origin is always `other`. It starts an item, which runs to the next marker line.
+- `ITEM-<s> kind=<kind> origin=<origin>`, where `<kind>` is `title`, `body`, `issue`, `thread`, `conversation` or `bot`, and `<origin>` is `change-author` or `other`. An `issue` item is the text of an issue the change says it closes: its number and title on the first line, then its body. A `bot` item is a comment a program wrote, such as a scanner's report, and its origin is always `other`. It starts an item, which runs to the next marker line.
 - `RECORD-<s>`, which starts the verification record. It runs to the end line.
 - `[truncated-<s>: <n> bytes omitted]`, after the kept text of an item that was cut, where `<n>` is the number of bytes cut.
 
@@ -26,12 +26,12 @@ At most 20 claims are resolved per run. Claims are taken in block order, with ev
 
 What the overflow produces depends on where the unread claims sit:
 
-- In a `title`, `body` or `thread` item: one `review.check-not-run` finding, naming how many went unread.
+- In a `title`, `body`, `issue` or `thread` item: one `review.check-not-run` finding, naming how many went unread.
 - In a `conversation` or `bot` item: no finding. Report the number in the summary line beside the findings as `conversation-claims-unread:<n>`, one count for both kinds. A conversation or bot comment is a hint about where to look, and the code it points at is reviewed whether or not the hint is read, so its overflow is not a check that could not run.
 
 ## Compatibility Claims Come From the Title and the Body
 
-Only the `title` and `body` items, whose origin is always `change-author`, carry compatibility claims. A statement about compatibility in a `thread`, `conversation` or `bot` item is not a claim for [Check A](check-a-compatibility.md): it arms neither `compat.claim-contradicts-analysis` nor `compat.break-unexplained`. Otherwise anyone able to comment could land a finding, HIGH beside a CRITICAL break, on someone else's change by writing that it breaks nothing. A defect claim, a path and a line, may come from any item, and is resolved as below.
+Only the `title` and `body` items, whose origin is always `change-author`, carry compatibility claims. A statement about compatibility in an `issue`, `thread`, `conversation` or `bot` item is not a claim for [Check A](check-a-compatibility.md): it arms neither `compat.claim-contradicts-analysis` nor `compat.break-unexplained`. Otherwise anyone able to comment could land a finding, HIGH beside a CRITICAL break, on someone else's change by writing that it breaks nothing. A defect claim, a path and a line, may come from any item, and is resolved as below.
 
 ## A Confirmed Claim Is an Ordinary Finding
 

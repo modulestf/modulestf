@@ -1186,6 +1186,21 @@ check "caps: a conversation comment is not cut" "$([ "$(cq '.[4] | [(.text | len
 check "caps: truncations name each cut class with its bytes" \
   "$([ "$(cq 'truncations')" = '[{"kind":"prose-truncated","item":"body","omitted":200},{"kind":"prose-truncated","item":"thread","omitted":1004},{"kind":"prose-truncated","item":"title","omitted":100}]' ]; echo $?)"
 check "caps: no truncation, no entry" "$([ "$(jq -n -c -L "${PP%/*}" 'include "host-records"; [{kind: "body", text: "short"}] | capped | truncations')" = '[]' ]; echo $?)"
+# An issue item: 4000 bytes of its own, outside the 16000, so the threads keep their share.
+iq() { jq -n -c -L "${PP%/*}" "include \"host-records\";
+  [{kind: \"title\", text: (\"t\" * 4000)}, {kind: \"body\", text: (\"b\" * 8000)},
+   {kind: \"issue\", text: (\"i\" * 4100)}, {kind: \"issue\", text: \"short\"}, {kind: \"thread\", text: (\"c\" * 4000)}]
+  | capped | $1"; }
+check "caps: an issue is cut to 4000 bytes" "$([ "$(iq '.[2] | [(.text | length), .omitted]')" = '[4000,100]' ]; echo $?)"
+check "caps: issues take nothing from the 16000" "$([ "$(iq '[.[3].omitted, (.[4].text | length), .[4].omitted]')" = '[0,4000,0]' ]; echo $?)"
+check "caps: a cut issue has its own prose-truncated entry, last" \
+  "$([ "$(iq 'truncations')" = '[{"kind":"prose-truncated","item":"issue","omitted":100}]' ]; echo $?)"
+# The issue item: number and title first, origin by numeric id as for a comment.
+ii() { jq -n -c -L "${PP%/*}" "include \"host-records\"; $1 | issue_item({typename: \"User\", id: 11, login: \"a\"})"; }
+check "issue item: the pull request author's issue is change-author, number and title first" \
+  "$([ "$(ii '{number: 1303, title: "T", body: "B", user: {typename: "User", id: 11, login: "x"}}')" = '{"kind":"issue","origin":"change-author","text":"#1303 T\n\nB"}' ]; echo $?)"
+check "issue item: another author's issue is other, an empty body adds no blank line" \
+  "$([ "$(ii '{number: 2, title: "T", body: "", user: {typename: "User", id: 12, login: "a"}}')" = '{"kind":"issue","origin":"other","text":"#2 T"}' ]; echo $?)"
 HV="{\"format\":1,\"repo\":\"o/r\",\"number\":1,\"head_sha\":\"$HH\",\"base_sha\":\"$HH\",\"merge_base\":null,\"prefix\":\"\",
   \"state\":{\"state\":\"open\",\"merged\":false,\"draft\":false,\"base_is_default\":true,\"self_authored\":false},
   \"signals\":{\"threads\":\"pass\",\"review_decision\":\"none\",\"mergeability\":\"pass\"},\"own_review\":null,
@@ -1196,6 +1211,7 @@ hv() { printf '%s' "$HV" | jq -c "$1" | jq -r -L "${PP%/*}" --arg h "$HH" 'inclu
 check "host.json: the base object is valid" "$([ "$(hv .)" = true ]; echo $?)"
 check "host.json: prose-truncated with its item and bytes is valid" \
   "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 200}, {kind: "prose-truncated", item: "thread", omitted: 1}]')" = true ]; echo $?)"
+check "host.json: prose-truncated of an issue is valid" "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "issue", omitted: 7}]')" = true ]; echo $?)"
 check "host.json: a prose-truncated of an older record, kind alone, is valid" "$([ "$(hv '.could_not_run = [{kind: "prose-truncated"}]')" = true ]; echo $?)"
 check "host.json: prose-truncated omitting 0 bytes is refused" "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 0}]')" = false ]; echo $?)"
 check "host.json: prose-truncated omitting negative bytes is refused" "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: -5}]')" = false ]; echo $?)"

@@ -66,7 +66,7 @@
 #   safety-gate skips, holds for every one of them, skip_head_sha equal to --head, skip_base_sha
 #   to host.json's merge_base and at most 100 distinct witnesses among them; else it is ignored. A
 #   host.json prose-truncated entry
-#   may carry "item" (body, title or thread) and "omitted" (bytes); only a cut of the body, the
+#   may carry "item" (body, title, thread or issue) and "omitted" (bytes); only a cut of the body, the
 #   description, is a cause COMPACT admits. The behaviour object's triggers may carry claims-eval's
 #   "complete", "outstanding" and "evidence_digest" (behaviour-pass.md, The Run Object); a trigger
 #   whose outstanding differences findings explain is reported (verdict.md, Behaviour evidence).

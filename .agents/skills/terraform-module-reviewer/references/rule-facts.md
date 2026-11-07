@@ -98,7 +98,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `structure.argument-order` | none | - | - | file | candidate | config-semantic | touched-block | no | root, submodule | candidates | LOW | lead | small |
 | `structure.arn-partition-hardcoded` | none | - | - | file | candidate | config-semantic | newly-introduced | no | root, submodule | candidates | HIGH | lead | small |
 | `structure.comment-redundant` | none | - | - | file | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
-| `structure.comment-unsourced` | none | - | - | file | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
+| `structure.comment-unsourced` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM, LOW | - | - |
 | `structure.copied-content-unattributed` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
 | `structure.create-flag-ignored` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | interface-diff | HIGH | - | - |
 | `structure.docs-contradict-code` | page | data source behaviour | A changed block, output, local or documentation line depends on what a data source of the type does with its inputs. | never | llm | config-semantic | touched-block | no | root, submodule, example | interface-diff | HIGH | - | - |
@@ -114,6 +114,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `structure.passthrough-default-drift` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule | candidates, interface-diff | HIGH, MEDIUM, LOW | lead | lead |
 | `structure.passthrough-field-drift` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule | candidates, interface-diff | HIGH, MEDIUM | lead | lead |
 | `structure.schema-shape-flattened` | schema | - | - | never | llm | config-semantic | touched-block | no | root, submodule | schema-coverage, interface-diff | HIGH | - | - |
+| `structure.set-index-by-position` | schema | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | schema-coverage | HIGH, MEDIUM | - | - |
 | `structure.sibling-argument-omitted` | schema | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | schema-coverage | HIGH | - | - |
 | `structure.sibling-block-asymmetry` | schema | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | schema-coverage | HIGH, MEDIUM | - | - |
 | `structure.suppression-unexplained` | none | - | - | file | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
@@ -151,7 +152,6 @@ The evidence each `file` rule reads, all of it in the target file:
 - `structure.argument-order`: `count`, `for_each`, `tags` and `labels` positions inside a resource block of the target, and whether the change touched that block, read from the target at the base and the head.
 - `structure.arn-partition-hardcoded`: An ARN literal the change adds in the target; `local.partition` can always be added, so no other file decides it.
 - `structure.comment-redundant`: A comment the change adds in the target, read against the code beside it in the same file.
-- `structure.comment-unsourced`: A comment the change adds in the target and whether it carries a source link and a date.
 - `structure.flag-polarity`: A new flag variable's name and default, both in its own block of the target.
 - `structure.missing-description`: A new variable or output block of the target without a `description`.
 - `structure.multi-provider`: A `provider` block with an `alias`, or a `provider` or `providers` argument, in the target, and whether the target's path is under `examples/`.

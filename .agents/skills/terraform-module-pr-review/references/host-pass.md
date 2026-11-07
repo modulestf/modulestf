@@ -70,7 +70,7 @@ bash <skill>/references/host-pass.sh check-plan <file> <records directory> --hea
 | 5.5 | Run, as [Verification](#verification) below, ending with the behaviour evaluation |
 | 6 | `task.md`, as [Handover](#handover) below |
 | 7 | The check runs file, as [Check Runs File](#check-runs-file) below |
-| 7.5 | `host.json`'s `related` |
+| 7.5 | `host.json`'s `related`, and the closing issues' text as `kind=issue` items of the block in `task.md` ([github-io.md](github-io.md#issue-text)) |
 | 8 | `host.json`'s `prefix`, put back in front of every finding's path |
 | 9 to 11 | Unchanged, with the inputs in [Host Facts](#host-facts) |
 | 12 | Not run: the run is render-only |
@@ -150,7 +150,7 @@ Each field of `host.json` is an input to [verdict.md](verdict.md#the-ladder) or 
 | `signals.threads`, `signals.review_decision`, `signals.mergeability` | The Threads, Review decision and Mergeability signals, values as [verdict.md](verdict.md#host-signals) names them. A closed or merged pull request has mergeability `not-applicable`, since there is no merge left to compute, and only such a pull request may carry it |
 | `state` | The draft, closed or merged and self-authored clamps |
 | `own_review` | The posting login's latest non-comment review. Its reviews are left out of `signals.review_decision` in every run, render-only included, since the body can still be posted later by that login and then replaces the earlier review |
-| `could_not_run` | Section 5, one line each: `patch-unavailable` with its path, made repository-relative with the prefix; `thread-resolution-unknown`; `prose-truncated`, one entry per item class that was cut, `item` `body`, `thread` or `title` in that order with `omitted` the bytes cut across that class (an older record carries `kind` alone); `threads-over-count` with how many thread comments did not travel. Each is an unknown at ladder rule 4 |
+| `could_not_run` | Section 5, one line each: `patch-unavailable` with its path, made repository-relative with the prefix; `thread-resolution-unknown`; `prose-truncated`, one entry per item class that was cut, `item` `body`, `thread`, `title` or `issue` in that order with `omitted` the bytes cut across that class (an older record carries `kind` alone); `threads-over-count` with how many thread comments did not travel. Each is an unknown at ladder rule 4 |
 | `unresolved_threads` | Section 7, one line per thread, its path already repository-relative as the host read it, and ladder rule 5 when the list is not empty |
 | `conversation` | Section 8: `considered` and `bot_considered`, each `counts` entry as `<category>:<n>`, and `notes`; an `omitted` category is the one line `Conversation and bot comments not considered: <category>.` |
 | `reopen` | Present only on a closed, unmerged pull request closed by an account of type `Bot` (the issue's `closed_by.type`, one extra read) or carrying a label named `stale` in any case, whose reviews were read and hold none from an `OWNER`, `MEMBER` or `COLLABORATOR` other than the author. Its one key, `last_author_comment`, is the `YYYY-MM-DD` date of the author's latest conversation comment, taken only from a timestamp in GitHub's `YYYY-MM-DDTHH:MM:SSZ` grammar, else null. No login, label or other GitHub text is kept. It gives the `reopen-hint` or `reopen-hint-date` line under the verdict of [comment-format.md](comment-format.md#host-render-strings); a read that failed leaves it out |

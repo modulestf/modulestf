@@ -1357,6 +1357,9 @@ t_cut; check "tiers: the description cause takes the bytes omitted from host.jso
 rc "$(F556)" "$(R556 cutt)" "$(host cutt '.could_not_run = [{kind: "prose-truncated", item: "thread", omitted: 40}]')"; std0() { [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ]; }
 check "tiers: a thread item cut forces STANDARD" "$(std0; echo $?)"
 grep -qxF -- '- Quoted prose was truncated, so part of the discussion was not read.' "$O/comment.md"; check "tiers: STANDARD keeps its truncated prose line" $?
+rc "$(F556)" "$(R556 cuti)" "$(host cuti '.could_not_run = [{kind: "prose-truncated", item: "issue", omitted: 50}]')"
+check "tiers: a closing issue item cut forces STANDARD" "$(std0; echo $?)"
+grep -qxF -- '- Quoted prose was truncated, so part of the discussion was not read.' "$O/comment.md"; check "tiers: an issue cut renders the truncated prose line" $?
 rc "$(F556)" "$(R556 cuto)" "$(host cuto '.could_not_run = [{kind: "prose-truncated"}]')"
 check "tiers: a prose-truncated entry that names no item forces STANDARD" "$(std0; echo $?)"
 t_prose_once() {

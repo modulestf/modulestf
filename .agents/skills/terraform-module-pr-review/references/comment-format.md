@@ -64,7 +64,7 @@ The rule 4 causes a COMPACT body admits, in the order the verdict line and the a
 | Examples not planned for `plan gate G0`, which runner mode keeps, after a laptop-mode pass | `cause-file-gate` | `action-file-gate-one` or `action-file-gate-many` |
 | Examples not planned for `no AWS profile named` | `cause-no-plan` | `action-no-plan` |
 
-Covered skips are not in the table: they are no rule 4 cause at all, and the run lands at rule 7 or above it ([verdict.md](verdict.md#covered-safety-gate-skips)). A `prose-truncated` entry with item `title` or `thread`, or with no item, is a cause outside the table. A gate hit is in the table only when the run file's `plan_mode` is `laptop`: runner mode still refuses what is left, so after a runner-mode pass, or with no `plan_mode`, it forces STANDARD, which gives no runner advice. Only the safety gate class takes the runner mode clause.
+Covered skips are not in the table: they are no rule 4 cause at all, and the run lands at rule 7 or above it ([verdict.md](verdict.md#covered-safety-gate-skips)). A `prose-truncated` entry with item `title`, `thread` or `issue`, or with no item, is a cause outside the table. A gate hit is in the table only when the run file's `plan_mode` is `laptop`: runner mode still refuses what is left, so after a runner-mode pass, or with no `plan_mode`, it forces STANDARD, which gives no runner advice. Only the safety gate class takes the runner mode clause.
 
 ## A Commit Target
 
