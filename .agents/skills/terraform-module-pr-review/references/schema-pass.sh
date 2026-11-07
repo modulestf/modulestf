@@ -657,8 +657,9 @@ if [ -n "$MODULESTF_SCHEMA_MIRROR" ]; then
     awk -v p="$prov" '$1 == p { print $3 ":" $4 ":" $5 }' "$WORK/since-want" | LC_ALL=C sort -u > "$WORK/s-all"
     [ -s "$WORK/s-all" ] || continue
     : > "$WORK/s-tgt"; : > "$WORK/s-obs"; : > "$WORK/s-fail"; : > "$WORK/s-vfail"
-    # The first MAX_SINCE_PATHS paths of each type, by name, are bisected; the rest overflow.
-    awk -F: -v m="$MAX_SINCE_PATHS" -v t="$WORK/s-tgt" '++n[$1 ":" $2] <= m { print > t; next } { print $0, "overflow" }' "$WORK/s-all" >> "$WORK/s-fail"
+    # The first MAX_SINCE_PATHS paths of each type, by name, are bisected; the rest are only
+    # counted in the section's summary line ("more").
+    awk -F: -v m="$MAX_SINCE_PATHS" -v t="$WORK/s-tgt" '++n[$1 ":" $2] <= m { print > t; next } { print $0, "more" }' "$WORK/s-all" >> "$WORK/s-fail"
     cut -d: -f1,2 "$WORK/s-all" | LC_ALL=C sort -u > "$WORK/s-types"
     # The versions already read: a sheet gives its paths, absent gives none, page nothing.
     while read -r p v; do
@@ -701,14 +702,22 @@ if [ -n "$MODULESTF_SCHEMA_MIRROR" ]; then
     f="$(sheet_file "$prov" "$latest" "$kind" "$type")"
     [ -n "$f" ] && [ -n "$res" ] && echo "${f#"$WORK/stage/"} since: $path $res"
   done | LC_ALL=C sort -u |
-    # The byte cap, in this order: a line keeps its result while the since lines so far,
-    # itself included, total at most MAX_SINCE_BYTES; past that it is unresolved overflow.
-    awk -v m="$MAX_SINCE_BYTES" '{ l = $0; sub(/^[^ ]* /, "", l); if (t + length(l) + 1 > m) { $0 = $1 " since: " $3 " unresolved overflow"; l = substr($0, length($1) + 2) }
-      t += length(l) + 1; print }' > "$WORK/since-lines"
+    # The byte bound, in sheet and path order: one line per path while the since lines so
+    # far, itself included, total at most MAX_SINCE_BYTES. The first line that does not fit
+    # stops the lines of every later path; those, and the paths past MAX_SINCE_PATHS, are
+    # counted in one fixed line per sheet, last in its section.
+    awk -v m="$MAX_SINCE_BYTES" -v cf="$WORK/since-count" '
+      !($1 in seen) { seen[$1] = 1; ord[++nf] = $1 }
+      { n++; l = $0; sub(/^[^ ]* /, "", l)
+        if ($NF == "more" || shut || t + length(l) + 1 > m) { if ($NF != "more") shut = 1; c[$1]++; u++; next }
+        if ($4 == "unresolved") u++
+        t += length(l) + 1; out[$1] = out[$1] $0 "\n" }
+      END { for (i = 1; i <= nf; i++) { f = ord[i]; printf "%s", out[f]; if (c[f]) print f, "since:", c[f], "more paths unresolved overflow" }
+        print n + 0, u + 0 > cf }' > "$WORK/since-lines"
   cut -d ' ' -f 1 "$WORK/since-lines" | uniq | while IFS= read -r f; do
     { echo; echo "introduced:"; awk -v f="$f" '$1 == f { $1 = ""; sub(/^ /, ""); print }' "$WORK/since-lines"; } >> "$WORK/stage/$f" || exit 1
   done || exit 1
-  n="$(grep -c . "$WORK/since-lines")" u="$(grep -c ' unresolved ' "$WORK/since-lines")"
+  read -r n u < "$WORK/since-count" || n=0 u=0
   [ "$n" = 0 ] || echo "schema pass: introduced $n paths, $u unresolved, $tried bisect downloads"
   [ -z "$late" ] || echo "schema pass: introduced deadline of $MAX_SINCE_SECONDS s passed, open paths unresolved overflow"
 fi

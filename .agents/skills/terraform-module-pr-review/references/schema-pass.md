@@ -89,6 +89,7 @@ block <name> (<mode>, min N, max M|unlimited); deprecated
 introduced:   (only at a latest version, as in Introduced Versions)
 since: <path> <x.y.z>
 since: <path> unresolved <reason>
+since: <n> more paths unresolved overflow
 ```
 
 - **Flags:** only the ones that are true; `optional` and `computed` can both appear. A block line carries `deprecated` only.
@@ -106,12 +107,13 @@ The first version that has an argument or block, for `coverage.argument-above-mi
 - **Result:** the lowest version with the path, when the candidate below it was observed without it: `since: <path> <x.y.z>`. Both ends are read, never inferred. Otherwise `since: <path> unresolved <reason>`:
   - `non_monotone`: a version above the lowest one with the path was observed without it.
   - A reason of [Reason Codes](#reason-codes) for a version the search needed that could not be read, such as `not_in_mirror` for a version the mirror lacks. Every path that needs that version takes the same reason.
-  - `overflow`: past the caps below. A path is never left out.
-- **Caps:** at most 16 paths per type and 12 bisect downloads per provider (`MAX_SINCE_PATHS`, `MAX_SINCE_DOWNLOADS`), within the 96 provider versions of [Caps](#caps). A failed download counts. Paths past 16, in name order, and every path still open when the downloads run out are `unresolved overflow`. Bisection needs about log2 of the candidates per introducing version, so 12 downloads cover a few distinct introducing versions over a hundred candidates.
-- **Deadline:** the whole search stops starting downloads after 120 seconds of wall clock (`MAX_SINCE_SECONDS`; the host may set another whole number of seconds in `SCHEMA_SINCE_SECONDS`). Every path still open then is `unresolved overflow`, and the pass prints `schema pass: introduced deadline of <n> s passed, open paths unresolved overflow`.
-- **Section bytes:** at most 8192 bytes of `since:` lines per run (`MAX_SINCE_BYTES`), taken in sheet path and then line order. A line keeps its result while the lines so far, itself included, fit; every later line is written `unresolved overflow` instead, so the section still names every path. This cap is the section's own.
+  - `overflow`: a bisected path still open when the downloads or the deadline below run out.
+- **Count line:** `since: <n> more paths unresolved overflow`, at most one per sheet and last in its section, counts the paths of that sheet with no line of their own: those past the paths cap and those past the section bytes. It names no path. Every new argument with no line of its own goes to the fetch helper.
+- **Caps:** at most 16 paths per type and 12 bisect downloads per provider (`MAX_SINCE_PATHS`, `MAX_SINCE_DOWNLOADS`), within the 96 provider versions of [Caps](#caps). A failed download counts. Paths past 16, in name order, are not searched and are only counted in the count line. A bisected path still open when the downloads run out is `unresolved overflow`. Bisection needs about log2 of the candidates per introducing version, so 12 downloads cover a few distinct introducing versions over a hundred candidates.
+- **Deadline:** the whole search stops starting downloads after 120 seconds of wall clock (`MAX_SINCE_SECONDS`; the host may set another whole number of seconds in `SCHEMA_SINCE_SECONDS`). Every path still open then is `unresolved overflow`, and the pass prints `schema pass: introduced deadline of <n> s passed, open paths unresolved overflow`. A download that started before the deadline is not cut short, so the search can end up to one download's time limits after it.
+- **Section bytes:** at most 8192 bytes of path lines per run (`MAX_SINCE_BYTES`), taken in sheet path and then path order, plus the count lines. A path keeps its line while the lines so far, itself included, fit. The first path that does not fit, and every path after it in the run, gets no line and is counted in its sheet's count line instead. This cap is the section's own.
 - **Layout:** the lines are sorted by path, after a blank line and the line `introduced:`, at the end of the sheet that holds the latest version's sheet, after any [deduplication](#depth-modes). The section is written after every sheet cap is checked and is outside them: the focused and deep caps, and the byte counts of the run's lines, take each sheet without its introduced section.
-- **Failures:** no result here is a failure of the run. It adds no reason, never escalates a focused run and never makes a deep run partial; an `unresolved` line sends the reviewer to its fetch helper for that path only.
+- **Failures:** no result here is a failure of the run. It adds no reason, never escalates a focused run and never makes a deep run partial; an `unresolved` line sends the reviewer to its fetch helper for that path only, and a count line for the new arguments of that type with no line of their own.
 - **Output:** `schema pass: introduced <n> paths, <u> unresolved, <d> bisect downloads` when there is a path, and in a depth mode a source line per bisect version that no other step read.
 - **Limits:** a path removed and added again between two versions the search reads is not seen; only the found version and the one below it are read for certain. Presence is taken from the sheet layout, so a path is present when its name is, whatever its type or flags.
 

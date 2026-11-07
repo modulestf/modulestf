@@ -383,12 +383,13 @@ SPX="$TMP/since-pv/schema-pass.sh" D="$(mk hist_thing "$HP" "$HT" "")" run since
 check "introduced: bisect downloads count toward the 96 provider versions of a run" "$?"
 capped since-n 's/^MAX_SINCE_PATHS=16$/MAX_SINCE_PATHS=1/'
 SPX="$TMP/since-n/schema-pass.sh" D="$(mk hist_thing "$HP" "$HT" "")" run since-n
-[ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved overflow|since: gamma unresolved overflow|since: gamma.x unresolved overflow|' ]
-check "introduced: past the paths per type, the first by name is bisected and the rest are unresolved overflow" "$?"
+[ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: 3 more paths unresolved overflow|' ] &&
+  grep -qx 'schema pass: introduced 4 paths, 3 unresolved, 3 bisect downloads' "$R.out"
+check "introduced: past the paths per type, the first by name is bisected and the rest are one count line" "$?"
 capped since-bytes 's/^MAX_SINCE_BYTES=8192$/MAX_SINCE_BYTES=60/'
 SPX="$TMP/since-bytes/schema-pass.sh" D="$(mk hist_thing "$HP" "$HT" "")" run since-bytes
-[ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma unresolved overflow|since: gamma.x unresolved overflow|' ]
-check "introduced: past the section byte cap, the later lines are unresolved overflow" "$?"
+[ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: 2 more paths unresolved overflow|' ]
+check "introduced: past the section byte cap, no more path lines, one count line for the rest" "$?"
 SCHEMA_SINCE_SECONDS=0 D="$(mk hist_thing "$HP" "$HT" "")" run since-late
 [ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha unresolved overflow|since: beta unresolved overflow|since: gamma unresolved overflow|since: gamma.x unresolved overflow|' ] &&
   grep -qx 'schema pass: introduced deadline of 0 s passed, open paths unresolved overflow' "$R.out" &&
@@ -396,10 +397,30 @@ SCHEMA_SINCE_SECONDS=0 D="$(mk hist_thing "$HP" "$HT" "")" run since-late
 check "introduced: past the deadline, every open path is unresolved overflow, no bisect download, and the pass says so" "$?"
 D="$(mk hist_many "$HP" ".:resource:hist_many:example/hist" "")" run since-big
 fb="$(sed -n 's/^schema pass: focused, .*, 2 sheets, \([0-9]*\) bytes$/\1/p' "$R.out")"
-[ "$RC" = 0 ] && [ -n "$fb" ] && [ "$fb" -le 49152 ] && [ "$(cat "$R"/facts/example/hist/*/resources/hist_many.facts | wc -c | tr -d ' ')" -gt 49152 ] &&
-  [ "$(intro 1.8.0 hist_many | tr '|' '\n' | grep -c '^since: ')" = 600 ] &&
-  [ "$(intro 1.8.0 hist_many | tr '|' '\n' | grep -c '^since: .* 1\.8\.0$')" = 16 ]
-check "introduced: 600 since lines past the sheet bytes do not escalate focused; the section is outside the sheet cap" "$?"
+[ "$RC" = 0 ] && [ -n "$fb" ] && [ "$(intro 1.8.0 hist_many | tr '|' '\n' | grep -c '^since: .* 1\.8\.0$')" = 16 ] &&
+  [ "$(intro 1.8.0 hist_many | tr '|' '\n' | grep -c '^since: ')" = 17 ] &&
+  [ "$(intro 1.8.0 hist_many | tr '|' '\n' | tail -n 1)" = 'since: 584 more paths unresolved overflow' ]
+check "introduced: 600 new paths, 16 bisected lines and one count line for the 584 past the paths cap" "$?"
+# The section is outside the sheet cap: a copy whose focused byte cap equals the sheets' own
+# bytes still passes, though the files with their sections are larger.
+capped since-cap "s/^MAX_SHEET_BYTES=49152\$/MAX_SHEET_BYTES=$fb/"
+SPX="$TMP/since-cap/schema-pass.sh" D="$(mk hist_many "$HP" ".:resource:hist_many:example/hist" "")" run since-cap
+[ "$RC" = 0 ] && grep -q "^schema pass: focused, .*, 2 sheets, $fb bytes\$" "$R.out" &&
+  [ "$(cat "$R"/facts/example/hist/*/resources/hist_many.facts | wc -c | tr -d ' ')" -gt "$fb" ]
+check "introduced: since lines past the focused byte cap do not escalate; the section is outside the sheet cap" "$?"
+# The byte bound with 600 path lines: written since lines are at most 8192 bytes plus the one
+# count line of the sheet.
+bound() { # -> status 0 when the since lines of hist_many fit the cap plus its count lines
+  local s c
+  s="$(intro 1.8.0 hist_many | tr '|' '\n' | grep '^since: ' | wc -c | tr -d ' ')"
+  c="$(intro 1.8.0 hist_many | tr '|' '\n' | grep -E '^since: [0-9]+ more paths unresolved overflow$' | wc -c | tr -d ' ')"
+  [ "$s" -le $((8192 + c)) ] && [ "$c" -gt 0 ]
+}
+capped since-all 's/^MAX_SINCE_PATHS=16$/MAX_SINCE_PATHS=1000/'
+SPX="$TMP/since-all/schema-pass.sh" D="$(mk hist_many "$HP" ".:resource:hist_many:example/hist" "")" run since-all
+[ "$RC" = 0 ] && bound && [ "$(intro 1.8.0 hist_many | tr '|' '\n' | grep -c '^since: .* 1\.8\.0$')" -gt 100 ] &&
+  grep -qx 'schema pass: introduced 600 paths, [0-9]* unresolved, 3 bisect downloads' "$R.out"
+check "introduced: 600 path lines are bounded by 8192 bytes plus one count line" "$?"
 DEPTH=deep D="$(DEPTH=deep mk "" "$HP" "$HT" "")" run since-deep
 [ "$RC" = 0 ] && grep -qx 'schema pass: deep, mirror modulestf/terraform-schema-mirror, 2 sheets, [0-9]* bytes' "$R.out" &&
   [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma 1.6.0|since: gamma.x 1.6.0|' ] &&
@@ -543,12 +564,17 @@ mutant since-monotone-unchecked 's/if (ov\[k, i\] + 0 > P\[k\] + 0) bad = 1$/if 
 mutant since-not-written 's/^    { echo; echo "introduced:"; /    { :; /' c_since k_since
 c_late() { SCHEMA_SINCE_SECONDS=0 D="$(mk hist_thing "$HP" "$HT" "")" run m-late; }
 k_late() { [ "$RC" = 0 ] && grep -qx 'schema pass: introduced deadline of 0 s passed, open paths unresolved overflow' "$R.out" && [ "$(hfetched 1.4.0)" = "0 " ]; }
-k_bytes() { [ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma unresolved overflow|since: gamma.x unresolved overflow|' ]; }
+k_bytes() { [ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: 2 more paths unresolved overflow|' ]; }
+k_bound() { [ "$RC" = 0 ] && bound; }
 c_many() { D="$(mk hist_many "$HP" ".:resource:hist_many:example/hist" "")" run m-big; }
 k_bigok() { [ "$RC" = 0 ] && grep -q '^schema pass: focused, .*, 2 sheets, ' "$R.out"; }
 mutant since-no-deadline 's/ || late=1$/ || :/' c_late k_late
-mutant since-bytes-ignored 's/^MAX_SINCE_BYTES=8192$/MAX_SINCE_BYTES=60/; s/if (t + length(l) + 1 > m)/if (0)/' c_since k_bytes
-mutant since-counted-in-cap 's/^    \[ "\$sheets" -le "\$MAX_SHEETS" \] && \[ "\$bytes" -le "\$MAX_SHEET_BYTES" \] || escalate overflow$/    :/; s/^  \[ -z "\$late" \] || echo "schema pass: introduced deadline/  [ "$MODE" != focused ] || [ "$(find "$WORK\/stage" -type f -name "*.facts" -exec cat -- {} + | wc -c)" -le "$MAX_SHEET_BYTES" ] || escalate overflow; [ -z "$late" ] || echo "schema pass: introduced deadline/' c_many k_bigok
+mutant since-bytes-ignored 's/^MAX_SINCE_BYTES=8192$/MAX_SINCE_BYTES=60/; s/ || t + length(l) + 1 > m) {/) {/' c_since k_bytes
+mutant since-unbounded 's/^MAX_SINCE_PATHS=16$/MAX_SINCE_PATHS=1000/; s/ || t + length(l) + 1 > m) {/) {/' c_many k_bound
+k_many() { [ "$RC" = 0 ] && [ "$(intro 1.8.0 hist_many | tr '|' '\n' | grep -c '^since: ')" = 17 ] &&
+  [ "$(intro 1.8.0 hist_many | tr '|' '\n' | tail -n 1)" = 'since: 584 more paths unresolved overflow' ]; }
+mutant since-more-written 's/if (\$NF == "more" || shut/if (shut/' c_many k_many
+mutant since-counted-in-cap "s/^MAX_SHEET_BYTES=49152\$/MAX_SHEET_BYTES=$fb/;"'s/^    \[ "\$sheets" -le "\$MAX_SHEETS" \] && \[ "\$bytes" -le "\$MAX_SHEET_BYTES" \] || escalate overflow$/    :/; s/^  \[ -z "\$late" \] || echo "schema pass: introduced deadline/  [ "$MODE" != focused ] || [ "$(find "$WORK\/stage" -type f -name "*.facts" -exec cat -- {} + | wc -c)" -le "$MAX_SHEET_BYTES" ] || escalate overflow; [ -z "$late" ] || echo "schema pass: introduced deadline/' c_many k_bigok
 mutant since-overflow-silent 's/^MAX_SINCE_DOWNLOADS=12$/MAX_SINCE_DOWNLOADS=1/; s/{ print p, \$1, "unresolved", \$3 }/{ next }/' c_since k_sover
 
 if [ "$fails" = 0 ]; then echo "all passed"; else echo "$fails failed"; exit 1; fi
