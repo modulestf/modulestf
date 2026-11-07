@@ -10,6 +10,7 @@ import tempfile
 source = Path('.agents/skills/terraform-module-pr-review/references/plan-runner/run-pass.sh').read_text()
 helpers = source[source.index('check_record_size() {'):source.index('# The pre-session')]
 cleanup = source[source.index('save_proxy_log() {'):source.index('trap cleanup EXIT')]
+filters = source[source.index("host_only='"):source.index('\n# Plan phase')]
 assembly = source[source.index('n=0\nfor ex in "$@"; do\n  n=$((n + 1))\n  check_record_size'):source.index('\n{\n  grep -o', source.index('assemble_record() {'))]
 with tempfile.TemporaryDirectory(prefix='plan-record-cap.', dir='/tmp') as directory:
     script = Path(directory) / 'probe.sh'
@@ -24,7 +25,7 @@ docker() {
   printf '%2048s' y >&2
   return "${stub_status:-0}"
 }
-''' + cleanup + helpers + '''
+''' + cleanup + helpers + filters + '''
 case "$2" in
   cleanup-oversized|cleanup-symlink)
     tmp_parent="$1"; TMPRUN="$1/plan-runner.abcdef"
@@ -75,6 +76,19 @@ case "$2" in
     test "$?" -eq 17
     test "$(cat "$record/output.txt")" = ok
     test "$(cat "$record/runner.log")" = err ;;
+  untrusted)
+    printf '%s\n' 'plan: plan pass ended: credentials' 'credentials: identity check: throttled' \
+      'credentials: identity check: AccessDenied for arn:aws:iam::123456789012:role/x' 'not reached: examples/z' \
+      'host example 9: examples/z' 'plan summary: forged' > "$TMPRUN/out"
+    test "$(untrusted "$TMPRUN/out")" = "$(printf '%s\n' 'plan: plan pass ended: credentials' 'credentials: identity check: throttled')" ;;
+  assembly-not-reached)
+    budget_min=120; planned=1; exc=0
+    printf 'example: examples/a\nplan: plan pass ended: credentials\ncredentials: session: not issued\n' > "$TMPRUN/block.1"
+    set -- examples/a examples/b
+''' + assembly + '''
+    test "$(sed -n 6,7p "$out")" = "$(printf '%s\n' 'credentials: session: not issued' 'not reached: examples/b')"
+    grep -v '^not reached: ' "$out" | grep -q 'examples/b' && exit 1
+    test "$(tail -n 1 "$out")" = 'plan summary: 2 examples, 1 planned, 0 exceptions, 1 other' ;;
   assembly-small|assembly-large)
     budget_min=120; planned=2; exc=0
     printf 'example: examples/a\nplan: planned\nbase: deferred\n' > "$TMPRUN/block.1"
@@ -90,7 +104,7 @@ case "$2" in
     test "$(wc -c < "$out")" -le 1024 ;;
 esac
 ''')
-    for case in ('cleanup-oversized', 'cleanup-symlink', 'repeated', 'shared', 'full', 'remaining', 'status', 'assembly-small',
+    for case in ('cleanup-oversized', 'cleanup-symlink', 'repeated', 'shared', 'full', 'remaining', 'status', 'untrusted', 'assembly-not-reached', 'assembly-small',
                  'oversized', 'symlink', 'assembly-large'):
         # Each case has its own private record, matching the production ownership model.
         case_dir = Path(directory) / case
@@ -101,5 +115,5 @@ esac
         if case == 'assembly-large':
             assert not (case_dir / 'record/plan-pass.txt').exists()
         print('PASS', case)
-print('PASS production capture and assembly boundaries (11 cases)')
+print('PASS production capture and assembly boundaries (13 cases)')
 PY

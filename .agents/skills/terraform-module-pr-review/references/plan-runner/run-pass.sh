@@ -318,7 +318,10 @@ plan_container() { # output file, phase, index, example, budget left: the work v
     plan-pass ${base_args[@]+"${base_args[@]}"} "$4"
 }
 # Lines only the host may write; the container's output is untrusted and may not forge them
-host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example )'
+host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example |not reached:)'
+# The one credentials line a container may write, from plan-pass.sh's fixed list; any other is dropped
+cred_re='^credentials: (session: not issued|write probe: write allowed|(identity check|write probe): (timed out|expired token|invalid token|access denied|throttled|network|other answer))$'
+untrusted() { grep -Ev "$host_only" "$1" | awk -v re="$cred_re" '!/^credentials: / || $0 ~ re' || true; }
 
 # Plan phase: one container per example. Each block is kept apart until the end, because a
 # deferred merge base re-run fills in its base line later.
@@ -333,7 +336,7 @@ for ex in "$@"; do
   fi
   : > "$TMPRUN/example.out"
   plan_container "$TMPRUN/example.out" plan "$n" "$ex" "$rem"
-  grep -Ev "$host_only" "$TMPRUN/example.out" > "$blk" || true
+  untrusted "$TMPRUN/example.out" > "$blk"
   line="$(grep -m 1 '^plan: ' "$blk" || true)"
   case "$line" in
     'plan: planned'*) planned=$((planned + 1)) ;; # planned and planned-no-changes
@@ -406,7 +409,8 @@ if [ "${#deferred[@]}" -gt 0 ]; then
     ex="${examples[n - 1]}"
     : > "$TMPRUN/example.out"
     plan_container "$TMPRUN/example.out" base-plan "$n" "$ex" "$rem"
-    grep -E '^base: ' "$TMPRUN/example.out" | head -n 1 > "$TMPRUN/base.$n" || true
+    { grep -E '^base: ' "$TMPRUN/example.out" | head -n 1
+      untrusted "$TMPRUN/example.out" | grep '^credentials: ' | head -n 1; } > "$TMPRUN/base.$n" || true
     [ -s "$TMPRUN/base.$n" ] || echo 'base: not available' > "$TMPRUN/base.$n"
   done
   save_proxy_log "$proxy_plan" proxy-plan.log
@@ -426,7 +430,8 @@ printf 'plan pass mode: runner\nplan pass budget: %s minutes\n' "$budget_min"
 n=0
 for ex in "$@"; do
   n=$((n + 1))
-  [ -f "$TMPRUN/block.$n" ] || continue
+  # No block: the plan loop ended at credentials before this example, which never started
+  [ -f "$TMPRUN/block.$n" ] || { printf 'not reached: %s\n' "$ex"; continue; }
   check_record_size "$TMPRUN/block.$n"
   check_record_size "$TMPRUN/base.$n"
   printf 'host example %s: %s\n' "$n" "$ex"

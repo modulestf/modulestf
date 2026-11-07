@@ -684,7 +684,21 @@ set_env() { # example key
     ${RPROXY:+http_proxy=$RPROXY}
     ${AK:+AWS_ACCESS_KEY_ID=$AK} ${SK:+AWS_SECRET_ACCESS_KEY=$SK} ${ST:+AWS_SESSION_TOKEN=$ST})
 }
+CREDWHY= # the step that ended the pass at credentials and its reason, from a fixed list
+cred_why() { # step, exit status, answer: sets CREDWHY to a fixed reason, never to the answer itself
+  if [ "$2" -eq 142 ]; then CREDWHY="$1: timed out"; return; fi # perl's alarm: SIGALRM
+  case "$3" in
+    *ExpiredToken*) CREDWHY="$1: expired token" ;;
+    *InvalidClientTokenId*|*SignatureDoesNotMatch*|*UnrecognizedClient*) CREDWHY="$1: invalid token" ;;
+    *AccessDenied*) CREDWHY="$1: access denied" ;;
+    *Throttling*|*RequestLimitExceeded*|*TooManyRequests*|*'Rate exceeded'*) CREDWHY="$1: throttled" ;;
+    *'Could not connect'*|*'Connect timeout'*|*'Read timeout'*|*'Connection was closed'*|*ProxyConnect*|*'SSL validation failed'*)
+      CREDWHY="$1: network" ;;
+    *) CREDWHY="$1: other answer" ;;
+  esac
+}
 get_creds() {
+  CREDWHY='session: not issued'
   if [ "$GMODE" = runner ]; then
     # The runner exported them on its host and passed them to the plan phase only
     [ -n "$RAK" ] && [ -n "$RSK" ] && [ -n "$RST" ] || return 1
@@ -699,11 +713,18 @@ get_creds() {
   fi
   CREDS=; LEAKS="$LEAKS $AK $SK $ST"
   set_env none
-  "${TFENV[@]}" perl -e 'alarm 30; exec @ARGV' "$AWSBIN" sts get-caller-identity --no-cli-pager < /dev/null > /dev/null 2>&1 || return 1
+  # Standard error only: standard output holds the account id, which is never kept
+  PROBE="$("${TFENV[@]}" perl -e 'alarm 30; exec @ARGV' "$AWSBIN" sts get-caller-identity --no-cli-pager < /dev/null 2>&1 > /dev/null)"
+  rc=$?; [ "$rc" -eq 0 ] || { cred_why 'identity check' "$rc" "$PROBE"; PROBE=; return 1; }
   # The write probe: a dry-run write the session must not be allowed. Only
   # UnauthorizedOperation goes on; DryRunOperation, any other answer or a timeout ends the pass.
   PROBE="$("${TFENV[@]}" perl -e 'alarm 30; exec @ARGV' "$AWSBIN" ec2 create-vpc --cidr-block 10.255.0.0/16 --dry-run --no-cli-pager < /dev/null 2>&1)"
-  case "$PROBE" in *'(UnauthorizedOperation)'*) PROBE= ;; *) PROBE=; return 1 ;; esac
+  rc=$?
+  case "$PROBE" in
+    *'(UnauthorizedOperation)'*) PROBE=; CREDWHY= ;;
+    *'(DryRunOperation)'*) PROBE=; CREDWHY='write probe: write allowed'; return 1 ;;
+    *) cred_why 'write probe' "$rc" "$PROBE"; PROBE=; return 1 ;;
+  esac
 }
 
 lock_hits() { # lock file: providers outside the mode's allowlist
@@ -981,6 +1002,7 @@ if [ "$PHASE" = plan ]; then
   if [ "$CLASS" = ready ]; then cd "$HROOT/$rel_ex" || CLASS='plan gate G0 unreadable'; fi
   [ "$CLASS" = ready ] && pe_plan "$key"
   echo "plan: $CLASS${KEPT:+ | $KEPT}"
+  [ "$CLASS" = 'plan pass ended: credentials' ] && echo "credentials: $CREDWHY"
   [ -n "$SCOPE" ] && echo "scope: ${SCOPE% }"
   [ -n "$VERSIONS" ] && echo "modules: ${VERSIONS%;}"
   # The merge base re-run is a later phase, so only an example that needs it pays for it
@@ -1010,6 +1032,7 @@ if [ "$PHASE" = base-plan ]; then
       planned|planned-no-changes) echo "base: new under this change" ;;
       *) echo "base: $CLASS" ;;
     esac
+    [ "$CLASS" = 'plan pass ended: credentials' ] && echo "credentials: $CREDWHY"
   else
     echo "base: not available"
   fi
@@ -1017,6 +1040,7 @@ if [ "$PHASE" = base-plan ]; then
 fi
 rm -rf -- "$RUN/plan-addresses" && mkdir -m 700 "$RUN/plan-addresses"
 [ "$GMODE" = laptop ] && PHEAD="$(clone_git rev-parse --verify -q 'HEAD^{commit}' 2> /dev/null)"
+NALL=$#
 for rel_ex in "$@"; do
   EXN=$((EXN + 1))
   echo "example: $rel_ex"
@@ -1045,7 +1069,10 @@ for rel_ex in "$@"; do
       echo "base: not available"
     fi
   fi
-  [ "$CLASS" = 'plan pass ended: credentials' ] && break
+  if [ "$CLASS" = 'plan pass ended: credentials' ]; then echo "credentials: $CREDWHY"; break; fi
 done
-echo "plan summary: $# examples, $NPLAN planned, $NEXC exceptions, $(($# - NPLAN - NEXC)) other"
+# The examples after the one that ended the pass: never started, unlike one the caller left out
+shift "$EXN"
+for rel_ex in "$@"; do echo "not reached: $rel_ex"; done
+echo "plan summary: $NALL examples, $NPLAN planned, $NEXC exceptions, $((NALL - NPLAN - NEXC)) other"
 exit 0

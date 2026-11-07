@@ -107,7 +107,7 @@ Every terraform command runs under `env -i` with exactly the environment `set_en
 
 `init` never has credentials: `AK`, `SK` and `ST` are empty then, and an empty unquoted `${VAR:+...}` adds no element under either shell. For `plan` only, just before each example's plan, the pass gets a session on the review role ([Credentials](#credentials)), reading it with `jq` and never with `eval`, then checks it with `aws sts get-caller-identity` and the write probe, as `get_creds` does. Each call runs non-interactive with a 30 second limit.
 
-A failure or a timeout of any of these calls ends the plan pass, recorded as `plan pass ended: credentials`. The caller identity output is discarded, so the account id is never recorded. The keys contain no whitespace, so the unquoted `${AK:+...}` form passes each as one word. After each plan, `AK=`, `SK=` and `ST=` are cleared; `LEAKS` keeps every value exported during the run for the leak scan.
+A failure or a timeout of any of these calls ends the plan pass, recorded as `plan pass ended: credentials`, with a `credentials: <step>: <reason>` line after it that names the call. The step is `session`, `identity check` or `write probe`. The reason comes from a fixed list and is never the answer's own text: `session: not issued` when no session reached the pass, `write probe: write allowed` for `DryRunOperation`, and otherwise `timed out`, `expired token`, `invalid token`, `access denied`, `throttled`, `network` or `other answer`, matched on the call's error output. The caller identity output is discarded, so the account id is never recorded. The keys contain no whitespace, so the unquoted `${AK:+...}` form passes each as one word. After each plan, `AK=`, `SK=` and `ST=` are cleared; `LEAKS` keeps every value exported during the run for the leak scan.
 
 ## Credentials
 
@@ -266,10 +266,13 @@ The record lines per example are:
 - `scope: <directories>`: the directories the gates read, repository-relative with the root written `.`, the clone scope's directories and then the downloaded module directories. It is printed for every example that reached the per-file gates, whether they passed or not, so a clean gate result leaves its trace too.
 - `modules: <key> <source> <version>;...`: the registry modules `init` resolved, on success too.
 - `base: <result>` for a `code-error`, below.
+- `credentials: <step>: <reason>` after `plan pass ended: credentials`, as [Environment](#environment) lists.
+
+`plan pass ended: credentials` stops the pass. Each example after the one it stopped at gets no block, only a `not reached: <example>` line before the summary. An example the caller never named gets no line at all, so the record tells an example the pass never reached from one left out of it.
 
 After the last example the pass prints its `plan summary:` line, described in [Modes](#modes).
 
-A gate records its first distinct hit and the number of distinct hits in its class, and every hit is printed as a `gate-hit` line for the run's own log, which the verification record does not carry. `plan pass ended: credentials` stops the pass.
+A gate records its first distinct hit and the number of distinct hits in its class, and every hit is printed as a `gate-hit` line for the run's own log, which the verification record does not carry.
 
 A `code-error` is re-run at the merge base, and only a `code-error`, in the base worktree, with the same gates, environment and classification, inside the same budget, reading the G0 result saved when the worktree was added. The script adds the worktree itself when `--base <sha>` was given and none exists, saving its G0 result first. It accepts only a full 40-character lowercase hex SHA and passes it after `--`; anything else is `base: not available`. At the base, `code-error` records `reproduces at base`, and `planned` or `planned-no-changes` records `new under this change`. Any other class at the base records that class, and the head's `code-error` then stays a note. An example directory absent from the base worktree is recorded `new under this change (absent at base)` with no base run, and no base worktree at all is `base: not available`.
 
