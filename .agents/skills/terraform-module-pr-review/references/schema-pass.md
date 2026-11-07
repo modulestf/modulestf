@@ -54,7 +54,7 @@ Per provider version:
 
 ## Caps
 
-Per run: 32 providers, 96 provider versions, taken in provider order (by count of needed types, most first, then by name) and within a provider latest, minimum, then old floor, and 1000 types in name order. Past a cap: `overflow`.
+Per run: 32 providers, 96 provider versions, taken in provider order (by count of needed types, most first, then by name) and within a provider latest, minimum, then old floor, and 1000 types in name order. Past a cap: `overflow`. The bisect downloads of [Introduced Versions](#introduced-versions) count toward the 96 too, after every other version.
 
 ## Fact Sheets
 
@@ -85,6 +85,10 @@ attr <name> (<mode>, min N, max M|unlimited); <flags>
   <nested attributes, indented>
 block <name> (<mode>, min N, max M|unlimited); deprecated
   <the block's attributes and blocks, indented>
+
+introduced:   (only at a latest version, as in Introduced Versions)
+since: <path> <x.y.z>
+since: <path> unresolved <reason>
 ```
 
 - **Flags:** only the ones that are true; `optional` and `computed` can both appear. A block line carries `deprecated` only.
@@ -92,6 +96,22 @@ block <name> (<mode>, min N, max M|unlimited); deprecated
 - **Limits:** `single` is `max 1`, an omitted `min_items` is 0, an omitted or 0 `max_items` on `list`, `set` or `map` is `unlimited`, and `group` shows no limits: `block <name> (group)`.
 
 A type is read from sheets only when every version it is needed at is `sheet` or `absent`. A type that is a miss, unresolved or over a cap at any of them is `page` at every one, and its sheets are removed.
+
+## Introduced Versions
+
+The first version that has an argument or block, for `coverage.argument-above-min-version`, found from the mirror with no model and no page.
+
+- **Paths:** per directory and type with a sheet at both the latest version and the declared minimum, every attribute and block path of the latest sheet that the minimum sheet lacks. A path is the names from the top of the sheet down, joined with `.`, such as `gamma.x`. A path under a new block is listed too, since it can be newer than the block.
+- **Search:** presence is assumed monotone from the introducing version up to the latest. The candidates are the stable versions of [Versions](#versions) from the minimum to the latest. Every version the run already read is an observation, from its sheet or its `absent` entry. While the lowest version observed with the path and the highest version below it observed without the path have candidates between them, the candidate halfway between is read, as in [Downloads](#downloads) with every check, for every open path of the provider at once. Paths are taken by type and path name. A bisect version is never published.
+- **Result:** the lowest version with the path, when the candidate below it was observed without it: `since: <path> <x.y.z>`. Both ends are read, never inferred. Otherwise `since: <path> unresolved <reason>`:
+  - `non_monotone`: a version above the lowest one with the path was observed without it.
+  - A reason of [Reason Codes](#reason-codes) for a version the search needed that could not be read, such as `not_in_mirror` for a version the mirror lacks. Every path that needs that version takes the same reason.
+  - `overflow`: past the caps below. A path is never left out.
+- **Caps:** at most 16 paths per type and 12 bisect downloads per provider (`MAX_SINCE_PATHS`, `MAX_SINCE_DOWNLOADS`), within the 96 provider versions of [Caps](#caps). A failed download counts. Paths past 16, in name order, and every path still open when the downloads run out are `unresolved overflow`. Bisection needs about log2 of the candidates per introducing version, so 12 downloads cover a few distinct introducing versions over a hundred candidates.
+- **Layout:** the lines are sorted by path, after a blank line and the line `introduced:`, at the end of the sheet that holds the latest version's sheet, after any [deduplication](#depth-modes). They count toward the sheet caps of the depth modes.
+- **Failures:** no result here is a failure of the run. It adds no reason, never escalates a focused run and never makes a deep run partial; an `unresolved` line sends the reviewer to its fetch helper for that path only.
+- **Output:** `schema pass: introduced <n> paths, <u> unresolved, <d> bisect downloads` when there is a path, and in a depth mode a source line per bisect version that no other step read.
+- **Limits:** a path removed and added again between two versions the search reads is not seen; only the found version and the one below it are read for certain. Presence is taken from the sheet layout, so a path is present when its name is, whatever its type or flags.
 
 ## Output
 

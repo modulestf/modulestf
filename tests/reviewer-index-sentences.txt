@@ -223,3 +223,5 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 +	references/check-c-structure.md	A set becomes a list in its own sort order, so the pairs are arbitrary and move when either side changes.
 -	SKILL.md	- Marked prose arrives as items in one untrusted block, each opened by an item line that gives its kind (`title`, `body`, `thread`, `conversation` or `bot`) and its origin role (`change-author` or `other`).
 +	SKILL.md	- Marked prose arrives as items in one untrusted block, each opened by an item line that gives its kind (`title`, `body`, `issue`, `thread`, `conversation` or `bot`) and its origin role (`change-author` or `other`).
+-	references/check-b-coverage.md	| `coverage.argument-above-min-version` | code change or needs decision | Raise the provider floor in `versions.tf` to the first version whose page lists the argument, named.
++	references/check-b-coverage.md	| `coverage.argument-above-min-version` | code change or needs decision | Raise the provider floor in `versions.tf` to the first version that has the argument, named: the version of its host `since` line, else the first version whose page lists it.
