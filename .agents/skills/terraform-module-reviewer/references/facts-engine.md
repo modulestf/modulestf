@@ -159,6 +159,7 @@ Write one line per manifest entry present, in manifest order. An AI report has o
 - `agree` when every tool finding and candidate item of that rule and area is covered by a review finding, and every review finding is covered by a tool item; or when the tool says `clean` or `not_applicable` and the review has no finding there. Items cover each other when file and line match. A tool item with a null `line`, such as an example directory, covers every review finding of that rule in that area, and a review finding with a null `line` covers every tool item of that rule in that area. A candidate the review confirmed agrees; one it rejected disagrees.
 - `disagree` otherwise. Follow the result with a short reason, such as the review reading the rule text differently or the tool missing a block. A tool `clean` or `not_applicable` against `row not applied` agrees.
 - `not compared` for `not_evaluated` entries, `tool: no entry` lines and `check not run` results.
+- Totals: each `<n>` is a count of the note's own lines with that result. Count every rule line, the `tool: no entry` lines included, by the result it ends with, and the Omitted line once, as its result. The three counts add up to the number of rule lines plus one for the Omitted line when there is one. Count them from the lines as written, after the last line is written.
 
 Disagreements are where the tool or the review is wrong. Each is a case to check by hand, and a project that tracks review cost records each run's totals beside its token counts.
 
