@@ -1,3 +1,12 @@
+# [0.4.0](https://github.com/modulestf/modulestf/compare/v0.3.0...v0.4.0) (2026-11-07)
+
+
+### Features
+
+* set element pairing rule, sourced comment severity, closing issue text ([#114](https://github.com/modulestf/modulestf/issues/114)) ([62266ba](https://github.com/modulestf/modulestf/commit/62266bade89f9bc8778570fd91cf012a26ba6b49))
+
+
+
 # [0.3.0](https://github.com/modulestf/modulestf/compare/v0.2.0...v0.3.0) (2026-11-06)
 
 
