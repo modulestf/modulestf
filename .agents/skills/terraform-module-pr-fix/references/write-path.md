@@ -24,11 +24,13 @@ With no directory named, the run makes `mktemp -d "$ROOT/pr-fix-out.XXXXXX"`, mo
 
 ## Trust Files
 
-Later commands trust these files of the run: `state.json`, `commit-identity.json`, `out.txt`, `run.json`, `merge-base.json`, `config-keys.txt`, the fix clone's `.git/config`, `items.json`, `round0-findings.json`, `apply.txt` and `prose.txt`. Verification runs provider code as the same user, and file modes do not stop a process of that user, so the files are bound by their digests:
+Later commands trust these files of the run: `state.json`, `commit-identity.json`, `out.txt`, `run.json`, `merge-base.json`, `config-keys.txt`, the fix clone's `.git/config`, `items.json`, `round0-findings.json`, `apply.txt` and `prose.txt`; once a round is compared, also `reviewed.json` and that round's `review.json`, `findings-repo.json` and `dispositions.json`. Verification runs provider code as the same user, and file modes do not stop a process of that user, so the files are bound by their digests:
 
-- `prepare`, `clone`, `items` and `apply`, the only commands that write them, record the SHA-256 of each, or `absent`, in `trust.sha256` in the output directory.
+- `prepare`, `clone`, `items`, `apply` and `compare`, the only commands that write them, record the SHA-256 of each, or `absent`, in `trust.sha256` in the output directory.
 - Every other command but `cleanup` recomputes the digests first and aborts on any difference.
-- `verify` keeps the digests in its own process across the pass and aborts when any file changed during it. This is the control against code that the verification runs; the record in the output directory is the check between commands.
+- `verify` keeps the digests in its own process across the pass and aborts when any file changed during it.
+
+A process that the verification starts can leave its process group, find the run by name and rewrite the record too, so digests on disk are defence in depth, never the binding. The binding is the value the user confirmed and passes back: the push takes `--target`, `--confirm-head` and `--confirm-patch` ([Push](#push)), and the replies take `--target` ([Replies](#replies)).
 
 ## Captured State
 
@@ -134,9 +136,9 @@ env -i PATH="$PATH" HOME="<run>/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOS
 
 ## Verification
 
-`verify` runs pr-review's [verify-pass.sh](../../terraform-module-pr-review/references/verify-pass.sh) `run` on the round's tree, by its path beside this skill, under `env -i` with `HOME` the run's empty home and no global or system git configuration. It is the same no-credential exception as pr-review's [Rule 5](../../terraform-module-pr-review/SKILL.md#rule-5-verification-is-trust-aware), in the same harness sandbox, with a plugin cache per verification and `TF_CLI_CONFIG_FILE=/dev/null` from that script. The verification tree has no path back to the run. It is `mktemp -d "$ROOT/pr-fix-verify.XXXXXX"`, outside the run directory, holding the `pr-review.XXXXXX` directory the script takes and in it a new repository with no remote: the merge base tree, written from the fix clone's objects with a scratch index, `read-tree` and `checkout-index`, committed with a throwaway identity, then the round's tree the same way. No attribute of the tree can leave a file out of it. The directory is deleted when the pass ends. With no commit identity the round's tree is taken as a throwaway commit object that is never pushed. The changed files list is built from the clone, merge base to the round's commit. Every trust file must come out of the pass unchanged ([Trust Files](#trust-files)).
+`verify` runs pr-review's [verify-pass.sh](../../terraform-module-pr-review/references/verify-pass.sh) `run` on the round's tree, by its path beside this skill, under `env -i` with `HOME` the run's empty home and no global or system git configuration. It is the same no-credential exception as pr-review's [Rule 5](../../terraform-module-pr-review/SKILL.md#rule-5-verification-is-trust-aware), in the same harness sandbox, with a plugin cache per verification and `TF_CLI_CONFIG_FILE=/dev/null` from that script. The verification tree has no path back to the run. It is `mktemp -d "$ROOT/pr-fix-verify.XXXXXX"`, outside the run directory, holding the `pr-review.XXXXXX` directory the script takes and in it a new repository with no remote: the merge base tree, written from the fix clone's objects with a scratch index, `read-tree` and `checkout-index`, committed with a throwaway identity, then the round's tree the same way. No attribute of the tree can leave a file out of it. The directory is deleted when the pass ends, and, under the same pattern check, on an abort or an interrupt. With no commit identity the round's tree is taken as a throwaway commit object that is never pushed. The changed files list is built from the clone, merge base to the round's commit. Every trust file must come out of the pass unchanged ([Trust Files](#trust-files)).
 
-The round's review task names the base reference, the head revision when the round committed, the profile and the output path. Then comes the block of pr-review's handover: the prose items of round 0, the title and the body among them, unchanged, with their marker lines moved to a suffix new for the round, and after `RECORD-<suffix>` the round's verification record as one JSON line. The round reviewer so judges the same prose as round 0, and a prose-based finding stays open until a fix closes it.
+The round's review task names the base reference, the head revision when the round committed, the profile and the output path. Then comes the block of pr-review's handover: the prose items of round 0, the title and the body among them, unchanged, with their marker lines moved to a suffix new for the round, and after `RECORD-<suffix>` the round's verification record in the line form of pr-review's [handover](../../terraform-module-pr-review/references/github-io.md#handover): the `example selection:` line and one line per example, as [verify-pass.md](../../terraform-module-pr-review/references/verify-pass.md#output) words each record. `verify_lines` in [fix-run.jq](fix-run.jq) renders it, and the test holds it equal to the renderer of pr-review's run script. The round reviewer so judges the same prose as round 0, and a prose-based finding stays open until a fix closes it.
 
 ## Content Gate
 
@@ -228,7 +230,17 @@ Comments are not read again, so new comment traffic never aborts. Then `gh auth 
 
 ## Push
 
-`push` needs `--confirm-branch`, equal to the destination ref, and `--expect-sha`, equal to the pinned head, taken from a new user message after the gate that names the push and the branch. Either missing or different is a refusal, and the run is kept. It re-runs the content gate and the push precondition, asserts the identity a second time, as pr-review's [Rule 4](../../terraform-module-pr-review/SKILL.md#rule-4-identity-is-asserted-twice), runs the pre-push read, then pushes from a new bare repository, `<run>/push.git`, made with `git init --bare --template=`. Its configuration must hold only `core.*` keys; it fetches the one commit from the fix clone through the wrapper, and must then hold exactly that SHA. So no key of the fix clone, such as `url.<x>.pushInsteadOf`, reaches the push:
+`gate` prints the new SHA, the clone's head, and the SHA-256 of `fix.patch`, the diff from the pinned head to that SHA. `push` takes, each from a new user message after the gate that names the push, the branch and the new SHA, or from the original request:
+
+| Argument | Must equal |
+|---|---|
+| `--target <owner>/<repo>#<n>` | The pull request of the user's original request, which must be the pinned one (repository compared without case) |
+| `--confirm-branch` | The destination ref |
+| `--expect-sha` | The pinned head, the remote ref's expected value |
+| `--confirm-head` | The clone's head, whose tree must be the last reviewed tree |
+| `--confirm-patch` | The SHA-256 of the diff from the pinned head to `--confirm-head`, recomputed |
+
+Any one missing or different is a refusal, and the run is kept. So a commit made after the gate is never pushed, even by a process that rewrote the run's files. `push` re-runs the content gate and the push precondition, asserts the identity a second time, as pr-review's [Rule 4](../../terraform-module-pr-review/SKILL.md#rule-4-identity-is-asserted-twice), and runs the pre-push read of the target, so a destination that is not that pull request's head aborts. It then pushes the confirmed SHA from a new bare repository, `<run>/push.git`, made with `git init --bare --template=`. Its configuration must hold only `core.*` keys, checked once before and once immediately before the push command; it fetches the one commit from the fix clone through the wrapper, and must then hold exactly that SHA. So no key of the fix clone, such as `url.<x>.pushInsteadOf`, reaches the push:
 
 ```
 env -i PATH="$PATH" HOME="$HOME" [GH_CONFIG_DIR="$GH_CONFIG_DIR"] GIT_CONFIG_GLOBAL=/dev/null \
@@ -250,7 +262,7 @@ No force, no lease, no tags, no submodules, no other ref. The SHA is the clone's
 2. pr-review's whole [leak scan](../../terraform-module-pr-review/references/comment-format.md#leak-scan) runs on it, with the same functions of `render-comment.jq`: the run directory, `HOME`, `PWD` and `TMPDIR`, the path prefixes, the token shapes, and the value of every secret-named environment variable of 12 characters or more. A match refuses the file and names the pattern and the item.
 3. pr-review's [at-mention step](../../terraform-module-pr-review/references/comment-format.md#at-mentions) wraps every bare at-mention in a code span; one left outside a span refuses the file.
 
-It asserts the identity again. Each endpoint is rebuilt at post time from the pinned `state.json` and the item id, never read from the item set, and must match `^repos/<pinned repo>/(pulls/<n>/comments/[0-9]+/replies|issues/<n>/comments)$`. Each body is posted with `jq -n --arg body` piped to `gh api -X POST <endpoint> --input -`. A failed post stops: it may have landed, so the comments are read before any retry.
+`replies` takes `--target <owner>/<repo>#<n>`, the pull request of the user's original request; it must equal the pinned repository and number. It asserts the identity again. Each endpoint is rebuilt at post time from the pinned `state.json` and the item id, never read from the item set, and must match `^repos/<target repo>/(pulls/<n>/comments/[0-9]+/replies|issues/<n>/comments)$` for the target, so a rewritten `state.json` cannot send a reply elsewhere. Each body is posted with `jq -n --arg body` piped to `gh api -X POST <endpoint> --input -`. A failed post stops: it may have landed, so the comments are read before any retry.
 
 ## Aborts and Refusals
 

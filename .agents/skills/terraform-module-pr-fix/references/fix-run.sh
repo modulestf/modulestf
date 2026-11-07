@@ -42,7 +42,14 @@ delete_run() { # the pattern-checked delete of github-io.md, Cleanup, for this s
     *) echo "fix-run.sh: refusing to delete: ${RUN-}" >&2; return 1 ;;
   esac
 }
-abort() { echo "fix-run.sh: abort: $1"; delete_run && echo "run directory deleted"; exit 1; }
+delete_vtree() { # the verification tree of a verify that is running, under the same pattern check
+  case "${ROOT-}" in /?*) ;; *) return 0 ;; esac
+  case "${VTREE-}" in
+    "$ROOT"/pr-fix-verify.??????) find "$VTREE" -type d -exec chmod u+w {} + 2> /dev/null; rm -rf -- "$VTREE" ;;
+  esac
+  VTREE=""
+}
+abort() { echo "fix-run.sh: abort: $1"; delete_vtree; delete_run && echo "run directory deleted"; exit 1; }
 
 open_run() {
   local d="${1-}"
@@ -54,7 +61,7 @@ open_run() {
   [ -f "$RUN/state.json" ] || die "no prepared run in that directory"
   OUT="$(cat "$RUN/out.txt")"; PREFIX="$(jq -r '.prefix // ""' "$RUN/run.json")"
   PINNED="$(jq -r '.pr.head.sha' "$RUN/state.json")"
-  trap 'echo "fix-run.sh: interrupted"; delete_run; exit 130' INT TERM
+  trap 'echo "fix-run.sh: interrupted"; delete_vtree; delete_run; exit 130' INT TERM
   [ "$CMD" = cleanup ] || trust_check
 }
 
@@ -81,8 +88,13 @@ ginit() { # dir [--bare]: a new repository with no template and no inherited con
 # record lives in the output directory, outside the run; every command but cleanup checks it.
 TRUST_FILES="state.json commit-identity.json out.txt run.json merge-base.json config-keys.txt clone/.git/config items.json round0-findings.json apply.txt prose.txt"
 trust_lines() {
-  local f
-  for f in $TRUST_FILES; do
+  local f k list="$TRUST_FILES"
+  # A compared round adds the files the loop and the gate decide from; its review.json marks it.
+  [ ! -f "$RUN/reviewed.json" ] || list="$list reviewed.json"
+  for k in 1 2 3; do
+    [ ! -f "$RUN/rounds/$k/review.json" ] || list="$list rounds/$k/review.json rounds/$k/findings-repo.json rounds/$k/dispositions.json"
+  done
+  for f in $list; do
     if [ -f "$RUN/$f" ]; then printf '%s %s\n' "$(shasum -a 256 < "$RUN/$f" | cut -d' ' -f1)" "$f"
     else printf 'absent %s\n' "$f"; fi
   done
@@ -456,12 +468,13 @@ cmd_verify() {
   # path back: the merge base tree, then the round's tree. verify-pass.sh takes a run directory
   # named like pr-review's, so one is made inside it.
   v="$(mktemp -d "$ROOT/pr-fix-verify.XXXXXX")" || fail "no verification directory"
-  vr="$(mktemp -d "$v/pr-review.XXXXXX")" && ginit "$vr/clone" || { rm -rf -- "$v"; fail "no verification repository"; }
+  VTREE="$v"
+  vr="$(mktemp -d "$v/pr-review.XXXXXX")" && ginit "$vr/clone" || { delete_vtree; fail "no verification repository"; }
   files_json "$mb" "$c" > "$v/files.json"
   export_tree "$mb" "$vr/clone" "$v/index" && lb="$(vcommit "$vr/clone" base)" &&
     find "$vr/clone" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} + &&
     export_tree "$c" "$vr/clone" "$v/index" && vcommit "$vr/clone" head > /dev/null ||
-    { rm -rf -- "$v"; fail "the verification tree cannot be written"; }
+    { delete_vtree; fail "the verification tree cannot be written"; }
   rm -f "$v/index"
   # Provider code runs as this user; every trust file must come out of the pass unchanged.
   local before; before="$(trust_lines)"
@@ -472,7 +485,7 @@ cmd_verify() {
   local rc=$?
   cp -- "$v/verify.out" "$RD/verify.out" 2> /dev/null
   [ "$rc" != 0 ] || cp -- "$v/verify.json" "$RD/verify.json" || rc=1
-  find "$v" -type d -exec chmod u+w {} + 2> /dev/null; rm -rf -- "$v"
+  delete_vtree
   [ "$(trust_lines)" = "$before" ] || abort "a trust file changed during verification"
   [ "$rc" = 0 ] || fail "verify-pass.sh failed (rounds/$ROUND/verify.out)"
   printf '%s\n' "$c" > "$RD/verified.txt"
@@ -492,7 +505,7 @@ cmd_verify() {
     echo "UNTRUSTED-$n BEGIN"
     prose_block "$n"
     echo "RECORD-$n"
-    jq -c '{selection, dirs}' "$RD/verify.json"
+    J -r 'include "fix-run"; verify_lines' "$RD/verify.json"
     echo "UNTRUSTED-$n END"
   } > "$RD/review-task.md"
   echo "review: workspace $ws, task $RD/review-task.md"
@@ -548,6 +561,7 @@ cmd_compare() {
      decision: ({history: $h, round: $round, limit: $limit, verdict: $v, nonactionable: $na} | loop_decision)}' > "$RD/review.json" ||
     fail "the comparison could not be built"
   jq '{round, head, tree}' "$RD/review.json" > "$RUN/reviewed.json"
+  trust_record
   jq -r '"round \(.round): verdict \(.verdict), \(.open | length) open, \(.introduced | length) introduced",
     (.introduced[0:20][] | "  introduced: \(.[0]) \(.[1]) \(.[2]) \(.[3])"),
     "loop: " + (if .decision.stop then "stop, " else "" end) + .decision.reason' "$RD/review.json"
@@ -614,9 +628,10 @@ gate_check() {
 cmd_gate() {
   path_now > "$RUN/path.json"
   [ "$(jq -r '.path' "$RUN/path.json")" != render-only ] || fail "the write path is render-only"
-  local why
+  local why head
   why="$(gate_check 2>&1)"
-  G diff --cached --binary --no-ext-diff --no-textconv "$PINNED" > "$OUT/fix.patch"
+  head="$(G rev-parse HEAD)"
+  fix_patch "$head" > "$OUT/fix.patch"
   local last; last="$(last_reviewed)"
   for k in 1 2 3; do [ ! -f "$RUN/rounds/$k/dispositions.json" ] || cp -- "$RUN/rounds/$k/dispositions.json" "$OUT/dispositions-round-$k.json"; done
   # Every round's reply drafts, the latest per item.
@@ -629,18 +644,35 @@ cmd_gate() {
   [ "$last" = 0 ] || cp -- "$RUN/rounds/$last/findings-repo.json" "$OUT/findings-round-$last.json"
   if [ -n "$why" ]; then
     printf '%s\n' "$why" | head -n 20
-    jq -n '{ok: false}' > "$RUN/gate.json"
     fail "the gate refuses; the patch is $OUT/fix.patch"
   fi
   G diff --cached --stat --no-ext-diff --no-textconv "$PINNED" | tail -n 12
-  jq -n --arg h "$(G rev-parse HEAD)" '{ok: true, head: $h}' > "$RUN/gate.json"
   jq -r '"verdict: \(.verdict) at round \(.round)"' "$RUN/rounds/$last/review.json"
   jq -r '"author: " + (if .commit_identity then "\(.commit_identity.name) <\(.commit_identity.email)>" else "none, patch only" end)' "$RUN/state.json"
-  jq -r --arg h "$(G rev-parse HEAD)" '"write path: \(.path)", (select(.path == "A") |
+  jq -r --arg h "$head" '"write path: \(.path)", (select(.path == "A") |
     "push: \(.dest.url) \($h):refs/heads/\(.dest.ref)", "expected remote SHA: \(.dest.expected_sha)"),
     (select(.flags.draft) | "flag: draft"), (select(.flags.default_branch) | "flag: the head ref is the default branch")' "$RUN/path.json"
+  echo "new SHA: $head"
+  echo "patch sha256: $(shasum -a 256 < "$OUT/fix.patch" | cut -d' ' -f1)"
   echo "patch: $OUT/fix.patch"
 }
+
+# The fix as a patch: the pinned head to the given commit, or the index with no commit identity.
+fix_patch() {
+  if jq -e '.commit_identity != null' "$RUN/state.json" > /dev/null; then
+    G diff --binary --no-ext-diff --no-textconv "$PINNED" "$1"
+  else G diff --cached --binary --no-ext-diff --no-textconv "$PINNED"; fi
+}
+
+# The pull request the user's own request named, owner/repo#n; it must be the pinned one.
+target_check() {
+  [[ "${1-}" =~ ^([A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100})#([1-9][0-9]{0,9})$ ]] ||
+    fail "--target must be owner/repo#number from the user's request"
+  TREPO="${BASH_REMATCH[1]}"; TNUM="${BASH_REMATCH[2]}"
+  [ "$(lower "$TREPO")" = "$(lower "$(jq -r '.repo' "$RUN/state.json")")" ] && [ "$TNUM" = "$(jq -r '.number' "$RUN/state.json")" ] ||
+    fail "--target is not the pull request this run pinned"
+}
+lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
 
 assert_identity() { # the second identity assertion of pr-review's Rule 4
   local now
@@ -653,14 +685,18 @@ GHENV=()
 gh_env() { GHENV=(env -i PATH="$PATH" HOME="$HOME"); [ -z "${GH_CONFIG_DIR-}" ] || GHENV+=(GH_CONFIG_DIR="$GH_CONFIG_DIR"); }
 
 cmd_push() {
-  local cb="" es=""
+  local cb="" es="" ch="" cp="" tg=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --confirm-branch) cb="${2-}"; shift 2 || die "--confirm-branch needs a value" ;;
       --expect-sha) es="${2-}"; shift 2 || die "--expect-sha needs a value" ;;
+      --confirm-head) ch="${2-}"; shift 2 || die "--confirm-head needs a value" ;;
+      --confirm-patch) cp="${2-}"; shift 2 || die "--confirm-patch needs a value" ;;
+      --target) tg="${2-}"; shift 2 || die "--target needs a value" ;;
       *) die "unexpected argument" ;;
     esac
   done
+  target_check "$tg"
   [ ! -e "$RUN/pushed.json" ] || fail "this run pushed already"
   path_now > "$RUN/path.json"
   [ "$(jq -r '.path' "$RUN/path.json")" = A ] || fail "the write path is $(jq -r '.path' "$RUN/path.json"), not A: no push"
@@ -668,14 +704,19 @@ cmd_push() {
   ref="$(jq -r '.dest.ref' "$RUN/path.json")"; url="$(jq -r '.dest.url' "$RUN/path.json")"
   [ -n "$cb" ] && [ "$cb" = "$ref" ] || fail "the confirmation names no branch or another branch than $ref"
   [ "$es" = "$PINNED" ] || fail "--expect-sha is not the pinned head"
+  # The confirmation binds the push to what the user saw at the gate: the new SHA and the patch.
+  [[ "$ch" =~ $sha_re ]] && [ "$(G rev-parse HEAD)" = "$ch" ] || fail "HEAD is not the head the confirmation names"
+  [ "$(G rev-parse "$ch^{tree}")" = "$(jq -r '.tree // ""' "$RUN/reviewed.json" 2> /dev/null)" ] || fail "the confirmed head's tree is not the reviewed tree"
+  [[ "$cp" =~ ^[0-9a-f]{64}$ ]] && [ "$(fix_patch "$ch" | shasum -a 256 | cut -d' ' -f1)" = "$cp" ] ||
+    fail "the patch differs from the digest the confirmation names"
   local why; why="$(gate_check 2>&1)"
   [ -z "$why" ] || { printf '%s\n' "$why" | head -n 10; fail "the gate refuses"; }
-  [ "$(G rev-parse HEAD)" = "$(jq -r '.head // ""' "$RUN/gate.json" 2> /dev/null)" ] || fail "HEAD is not the head the gate showed"
   assert_identity
-  # Pre-push re-fetch (write-path.md, Pre-push): every field that moved aborts.
+  # Pre-push re-fetch (write-path.md, Pre-push), of the pull request the user named: every field
+  # that moved aborts, and a destination that is not that pull request's head aborts.
   RAW="$RUN/prepush"; rm -rf "$RAW"; mkdir "$RAW"
   cp "$RUN/raw/user.json" "$RAW/user.json"
-  read_host "$(jq -r '.repo' "$RUN/state.json")" "$(jq -r '.number' "$RUN/state.json")" false > "$RAW/state.json" || abort "the pre-push read failed"
+  read_host "$TREPO" "$TNUM" false > "$RAW/state.json" || abort "the pre-push read failed"
   local reasons
   reasons="$(J -r -n --slurpfile f "$RAW/state.json" --slurpfile s "$RUN/state.json" --slurpfile m "$RUN/merge-base.json" \
     --slurpfile p "$RUN/path.json" 'include "fix-run"; $f[0] | prepush_abort({state: $s[0], merge_base: $m[0]}; $p[0])[]')" ||
@@ -684,14 +725,15 @@ cmd_push() {
   gh_env
   "${GHENV[@]}" gh auth status --hostname github.com > /dev/null 2>&1 &&
     [ -n "$("${GHENV[@]}" gh auth token --hostname github.com 2> /dev/null)" ] || abort "gh holds no github.com token"
-  local sha err pg="$RUN/push.git"
-  sha="$(G rev-parse HEAD)"
+  local sha="$ch" err pg="$RUN/push.git"
   # The push runs from a new bare repository that holds the one commit and only the
   # configuration git init wrote, so no key of the fix clone reaches it.
   rm -rf -- "$pg"; ginit --bare "$pg" || abort "the push repository cannot be made"
   [ -z "$(GDIR="$pg" G config --local --name-only --list | grep -v '^core\.')" ] || abort "the push repository holds other configuration"
   GDIR="$pg" G fetch -q --no-tags --no-recurse-submodules "$RUN/clone" "+$sha:refs/pr-fix/push" > /dev/null 2>&1 &&
     [ "$(GDIR="$pg" G rev-parse -q --verify 'refs/pr-fix/push^{commit}')" = "$sha" ] || abort "the push repository cannot take the commit"
+  # Checked again immediately before the push, so the window for a change is the one command.
+  [ -z "$(GDIR="$pg" G config --local --name-only --list | grep -v '^core\.')" ] || abort "the push repository holds other configuration"
   # No force, no lease, no tags, no submodules; the URL is built from pinned names.
   err="$("${GHENV[@]}" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
     GIT_NO_REPLACE_OBJECTS=1 GIT_PAGER=cat git --no-pager -C "$pg" -c core.hooksPath=/dev/null -c credential.helper= -c credential.helper='!gh auth git-credential' \
@@ -732,14 +774,16 @@ cmd_checks() {
 }
 
 cmd_replies() {
-  local f="" ids=""
+  local f="" ids="" tg=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --file) f="${2-}"; shift 2 || die "--file needs a value" ;;
       --confirm-items) ids="${2-}"; shift 2 || die "--confirm-items needs a value" ;;
+      --target) tg="${2-}"; shift 2 || die "--target needs a value" ;;
       *) die "unexpected argument" ;;
     esac
   done
+  target_check "$tg"
   jq -e '.remote_ok' "$RUN/pushed.json" > /dev/null 2>&1 || fail "replies follow a push whose remote ref matched"
   [ -f "$f" ] && jq -e 'type == "array" and length > 0 and all(.[]; (.item | type == "string") and (.body | type == "string" and length > 0 and length <= 65536))' \
     "$f" > /dev/null 2>&1 || fail "the replies file is not a list of {item, body}"
@@ -759,11 +803,11 @@ cmd_replies() {
   jq --arg sha "$psha" 'map(.body |= gsub("<sha>"; $sha))' "$f" > "$RUN/replies.tmp" || fail "the replies cannot be read"
   leak="$(jq -n -r -L "$PRR" --arg run "$RUN" --arg home "${HOME-}" --arg pwd "${PWD-}" --arg tmp "${TMPDIR-}" \
     --slurpfile r "$RUN/replies.tmp" 'include "render-comment";
-    ([ {name: "the run directory", v: $run}, {name: "HOME", v: $home}, {name: "PWD", v: $pwd}, {name: "TMPDIR", v: $tmp} ]
+    (([ {name: "the run directory", v: $run}, {name: "HOME", v: $home}, {name: "PWD", v: $pwd}, {name: "TMPDIR", v: $tmp} ]
        | map(select(.v != "" and .v != "/")))
     + [ "/home/", "/Users/", "/tmp/", "/var/folders/", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_" | {name: ., v: .} ]
     + [ $ENV | to_entries[] | select((.key | test("TOKEN|KEY|SECRET|PASSWORD|PAT")) and (.value | length >= 12))
-        | {name: "the value of \(.key)", v: .value} ] as $lits
+        | {name: "the value of \(.key)", v: .value} ]) as $lits
     | leak_hit([$r[0][] | {text: .body, src: .item}]; $lits; []) | if . then "\(.pattern) in \(.src)" else "" end')" ||
     fail "the leak scan failed"
   [ -z "$leak" ] || fail "leak scan: $leak; nothing posted"
@@ -772,13 +816,13 @@ cmd_replies() {
     fail "an at-mention is left outside a code span; nothing posted"
   f="$RUN/replies.json"
   assert_identity
-  local id ep body n=0 repo num
-  repo="$(jq -r '.repo' "$RUN/state.json")"; num="$(jq -r '.number' "$RUN/state.json")"
+  local id ep body n=0
   while IFS= read -r id; do
-    # The endpoint is rebuilt from the pinned state, never read from the item set.
+    # The endpoint is rebuilt from the pinned state, never read from the item set, and must name
+    # the pull request of the user's own request.
     ep="$(J -r -n --slurpfile s "$RUN/state.json" --arg i "$id" 'include "fix-run"; $s[0] | reply_endpoint($i) // ""')"
     [[ "$ep" =~ ^repos/([^/]+/[^/]+)/(pulls/([0-9]+)/comments/[0-9]+/replies|issues/([0-9]+)/comments)$ ]] &&
-      [ "${BASH_REMATCH[1]}" = "$repo" ] && [ "${BASH_REMATCH[3]}${BASH_REMATCH[4]}" = "$num" ] ||
+      [ "$(lower "${BASH_REMATCH[1]}")" = "$(lower "$TREPO")" ] && [ "${BASH_REMATCH[3]}${BASH_REMATCH[4]}" = "$TNUM" ] ||
       fail "no pinned reply endpoint for $id; nothing more posted"
     body="$(jq -r --arg i "$id" '.[] | select(.item == $i) | .body' "$f")"
     jq -n --arg body "$body" '{body: $body}' | gh api -X POST "$ep" --input - > /dev/null 2>&1 ||

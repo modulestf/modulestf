@@ -100,13 +100,14 @@ It runs the content gate and the [Push Precondition](write-path.md#push-precondi
 
 ## Step 11
 
-Show the gate: the diff (`$OUT/fix.patch`), the disposition table, the verdict, the author identity, the destination URL and branch, the expected remote SHA, the new SHA, and the flags. Ask once whether to push, and wait. Only a new user message after the gate that names the push and the branch confirms it. Then:
+Show the gate: the diff (`$OUT/fix.patch`), the disposition table, the verdict, the author identity, the destination URL and branch, the expected remote SHA, the new SHA and the patch digest (`new SHA:` and `patch sha256:`), and the flags. Ask once whether to push, and wait. Only a new user message after the gate that names the push, the branch and the new SHA confirms it. Then, with `<owner>/<repo>#<number>` the pull request of the user's original request:
 
 ```
-fix-run.sh push "$RUN" --confirm-branch <ref> --expect-sha <pinned head>
+fix-run.sh push "$RUN" --target <owner>/<repo>#<number> --confirm-branch <ref> --expect-sha <pinned head> \
+  --confirm-head <new SHA> --confirm-patch <patch sha256>
 ```
 
-It re-runs the gate, asserts the identity again, runs the [Pre-Push](write-path.md#pre-push) read, checks the token, and pushes once as [Push](write-path.md#push) gives it. A refused confirmation keeps the run; an abort ends it. Then, after a while:
+It checks the target against the pinned pull request, refuses unless the clone's head is the confirmed SHA with the reviewed tree and the patch has the confirmed digest, re-runs the gate, asserts the identity again, runs the [Pre-Push](write-path.md#pre-push) read of the target, checks the token, and pushes the confirmed SHA once as [Push](write-path.md#push) gives it. A refused confirmation keeps the run; an abort ends it. Then, after a while:
 
 ```
 fix-run.sh checks "$RUN"
@@ -122,7 +123,7 @@ Each of these needs its own confirmation, from a new user message that names the
 - **Post the replies.** Show each draft of `$OUT/replies.json` with the item it answers. Each `<sha>` in a draft becomes the pushed SHA when it is posted. Then:
 
 ```
-fix-run.sh replies "$RUN" --file "$OUT/replies.json" --confirm-items <id>,<id>
+fix-run.sh replies "$RUN" --target <owner>/<repo>#<number> --file "$OUT/replies.json" --confirm-items <id>,<id>
 ```
 
 It runs pr-review's leak scan and at-mention step on each body and posts each to the endpoint it rebuilds from the pinned state ([Replies](write-path.md#replies)).

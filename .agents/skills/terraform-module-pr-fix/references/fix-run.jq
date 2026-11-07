@@ -236,3 +236,31 @@ def reply_endpoint($id):
     elif $kind == "thread" then ($c[0].reply_to | if canon then "repos/\($s.repo)/pulls/\($s.number)/comments/\(.)/replies" else null end)
     else "repos/\($s.repo)/issues/\($s.number)/comments" end
   end;
+
+# The verification record in the line form of pr-review's verify-pass.md, Records, as review-run.sh
+# writes it into the handover (its VERIFY_LINES_JQ); tests/pr-fix-test.sh holds the two equal.
+def verify_lines:
+  def side_base: if . == null then ""
+    elif .record == "code-result" then (if .validate == 0 then "new under this change" else "already failing at the base" end)
+    elif .record == "init-failed" then "already failing at the base"
+    elif .record == "absent-at-base" then "absent at base"
+    elif .record == "base-unavailable" then "merge base not available"
+    elif .record == "not-run-environment" then "merge base not run: environment"
+    elif .record == "not-run-limit" then "merge base not run: command limit"
+    elif .record == "not-run-budget" then "merge base not run: budget"
+    else "merge base not available" end;
+  def ln: if .line then ": " + .line else "" end;
+  "example selection: \(.selection.tool)" + (if .selection.fallback then ", fallback \(.selection.fallback)" else "" end)
+    + (if .selection.inert then ", inert: nothing to verify" else "" end),
+  (.dirs[] | "\(.dir) (\(.affected)): " + (
+    if .reason == "skipped-version-bump" then "not run: version bump only"
+    elif .reason == "skipped-symlink" then "not run: symbolic link"
+    elif .head.record == "code-result" then "terraform init -backend=false exit \(.head.init), terraform validate exit \(.head.validate)"
+      + (if .head.validate != 0 then (.head | ln) + "; at the merge base: " + (.base | side_base) else "" end)
+    elif .head.record == "init-failed" then "terraform init -backend=false exit \(.head.init), init failed" + (.head | ln)
+    elif .head.record == "not-run-environment" then "not run: environment" + (.head | ln)
+    elif .head.record == "terraform-absent" then "terraform absent"
+    elif .head.record == "not-run-limit" then "not run: command limit"
+    elif .head.record == "not-run-budget" then "not run: budget"
+    else "verification input refused" end)
+    + (if .outside then ", outside the sandbox, by authorization" else "" end));
