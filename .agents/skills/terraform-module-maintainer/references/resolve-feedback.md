@@ -29,7 +29,12 @@ Sources:
   line per finding: `` `rule_id` - `path:line` - summary ``, followed by a nested
   `- Fix: <suggested_fix>` line. Each finding line becomes one item, and its Fix line is that
   item's `suggested_fix`, read as a `finding` item's is. A grouped line with several locations
-  becomes one item per location, sharing the fix. An older comment without Fix lines gives items
+  becomes one item per location, sharing the fix. A group whose entries share one fix carries no
+  Fix line under each entry: one `- Fix for each location above: <suggested_fix>` line follows
+  the entries, and every location of those entries takes that fix. A group of three or more
+  entries may instead carry its fixes in a `Fix for each location` block below its entries, one
+  `- <locations> - Fix: <suggested_fix>` line per entry, and each location takes the fix of its
+  line. An older comment without Fix lines gives items
   with no fix, located from the summary.
   The assessment, the verdict, the rationale and the state lines restate the findings or
   describe the host, so they produce no item.

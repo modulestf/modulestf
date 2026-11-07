@@ -783,8 +783,10 @@ def gap_lines($h; $run; $b; $p; $cov):
             else ([tx(if ($all | length) == 1 then "unplanned-group-one" else "unplanned-group-many" end; {count: ($all | length), reason: $r})]
                   + [$shown[] | select(.reason == $r) | tx("unplanned-name"; {dir})] | join("\n")) end ])
      + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end) end)
-  # No selected example passed validate at the head: the trigger lines say so, from the run file's counts.
-  + (($run.examples // {count: 0} | .count > 0 and .validated == 0) as $invalid
+  # Every selected example ran validate at the head and none passed: the trigger lines say so. A
+  # verification gap other than a merge base re-run means validate did not run there, so no clause.
+  + ((($run.examples // {count: 0} | .count > 0 and .validated == 0)
+      and all($run.verify_gaps[]; .reason | startswith("merge base "))) as $invalid
   | (if $invalid then "-invalid" else "" end) as $why
   | $b | if . == null then []
      elif .status == "not-run" then [tx("behaviour-not-run"; {reason})]

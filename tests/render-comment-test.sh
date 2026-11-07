@@ -2059,7 +2059,7 @@ if git -C "$SRC" cat-file -e b3f74cf^{commit} 2> /dev/null; then
   t_same "$WF" "$H2" "" "" "$TMP/assess-worked.txt"; check "depth absent: worked example 2 renders as before, byte for byte" $?
   # A fix per finding: grouping rule 8, later than b3f74cf, prints a fix that every entry shares once.
   jq 'map(.suggested_fix = "Fix \(.id).")' "$TMP/pr410.json" > "$TMP/pr410-fixes.json"
-  t_same "$TMP/pr410-fixes.json" "$H410" "" "" "$TMP/assess-410.txt"; check "depth absent: pull request 410 renders as before, byte for byte" $?
+  t_same "$TMP/pr410-fixes.json" "$H410" "" "" "$TMP/assess-410.txt"; check "depth absent: pull request 410 with a fix per finding renders as before, byte for byte" $?
   t_same "$(F556)" "$H556" "" "$(R556 same)" "$TMP/assess-556.txt"; check "depth absent: the COMPACT pull request 556 renders as before, byte for byte" $?
   t_same "$NONE" "" "" "$TMP/run-cov-none.json"; check "depth absent: unplanned examples render as before, byte for byte" $?
 else
@@ -2261,7 +2261,25 @@ t_shared_collapsed; check "collapse: a collapsed group sharing one fix prints it
 # say so, from the run file's example counts.
 TR6="[$(bt T-001 lifecycle-change unverifiable), $(bt T-002 wrapper-change unverifiable), $(bt T-003 lifecycle-change unverifiable), \
 $(bt T-004 literal-argument-change unverifiable), $(bt T-005 lifecycle-change unverifiable), $(bt T-006 literal-argument-change unverifiable)]"
-binv() { runf "binv-$1" ".behaviour = {status: \"ran\", reason: null, triggers: $2, claims: [], capped: 0} | .examples = {count: 3, validated: $3}"; }
+binv() { # name, triggers, validated [, verify_gaps [, count]]
+  runf "binv-$1" ".behaviour = {status: \"ran\", reason: null, triggers: $2, claims: [], capped: 0} | .examples = {count: ${5:-3}, validated: $3} | .verify_gaps = ${4:-[]}"
+}
+NOTF='- 6 behaviour changes not verified: 3 lifecycle-change, 2 literal-argument-change, 1 wrapper-change.'
+NOTF_INV='- 6 behaviour changes not verified (the head does not validate in any example): 3 lifecycle-change, 2 literal-argument-change, 1 wrapper-change.'
+# Validate never ran where terraform was absent: no clause, though no example validated.
+t_binv_absent() {
+  render "$NONE" "" "" "$(binv absent "$TR6" 0 '[{dir: "examples/a", reason: "terraform was not installed"}, {dir: "examples/b", reason: "terraform was not installed"}]' 2)"
+  [ "$ST" = 0 ] && grep -qxF -- "$NOTF" "$O/comment.md" && ! grep -qF 'does not validate' "$O/comment.md"
+}
+# A merge base re-run that did not run follows a head that ran validate and failed: the clause holds.
+t_binv_mb() {
+  render "$NONE" "" "" "$(binv mb "$TR6" 0 '[{dir: "examples/a", reason: "merge base not available"}, {dir: "examples/b", reason: "merge base not run: budget"}]' 2)"
+  [ "$ST" = 0 ] && grep -qxF -- "$NOTF_INV" "$O/comment.md"
+}
+t_binv_zero() {
+  render "$NONE" "" "" "$(binv zero "$TR6" 0 '[]' 0)"
+  [ "$ST" = 0 ] && grep -qxF -- "$NOTF" "$O/comment.md" && ! grep -qF 'does not validate' "$O/comment.md"
+}
 t_binvalid() {
   render "$NONE" "" "" "$(binv six "$TR6" 0)"
   [ "$ST" = 0 ] && grep -qxF -- '- 6 behaviour changes not verified (the head does not validate in any example): 3 lifecycle-change, 2 literal-argument-change, 1 wrapper-change.' "$O/comment.md"
@@ -2270,7 +2288,10 @@ t_binvalid; check "behaviour: a head that validates in no example is named on th
 render "$NONE" "" "" "$(binv one "[$(bt T-001 wrapper-change unverifiable)]" 0)"
 check "behaviour: a head that validates in no example is named on a trigger line" "$(grep -qxF -- '- Behaviour change at `main.tf:2` (wrapper-change): not verified (the head does not validate in any example).' "$O/comment.md"; echo $?)"
 render "$NONE" "" "" "$(binv some "$TR6" 1)"
-check "behaviour: a head that validates in one example keeps the plain line" "$(grep -qxF -- '- 6 behaviour changes not verified: 3 lifecycle-change, 2 literal-argument-change, 1 wrapper-change.' "$O/comment.md"; echo $?)"
+check "behaviour: a head that validates in one example keeps the plain line" "$(grep -qxF -- "$NOTF" "$O/comment.md"; echo $?)"
+t_binv_absent; check "behaviour: examples where terraform was not installed get no validate clause" $?
+t_binv_mb; check "behaviour: merge base re-runs that did not run keep the validate clause" $?
+t_binv_zero; check "behaviour: no example counted gives no validate clause" $?
 
 mutate "the closed lead dropped" 's/elif \$closed then "todo-lead-closed" //' t_closed_lead
 mutate "the job-less Checks phrase dropped" 's/then "-jobless" else "" end/then "" else "" end/' t_open_jobless_line
@@ -2278,6 +2299,8 @@ mutate "a shared fix printed per entry" 's/elif shared_fix then/elif false then/
 mutate "a shared fix printed per entry in a collapsed block" 's/\(if shared_fix then \[/(if false then [/' t_shared_collapsed
 mutate "a fix shared by entries that differ" 's/\| unique \| length\) == 1;/| unique | length) >= 1;/' t_shared_differs
 mutate "the validate clause dropped" 's/\(if \$invalid then "-invalid" else "" end\)/""/' t_binvalid
+mutate "the validate clause over head-side gaps" 's/\n      and all\(\$run\.verify_gaps\[\]; \.reason \| startswith\("merge base "\)\)//' t_binv_absent
+mutate "the validate clause with no example counted" 's/\.count > 0 and \.validated == 0/.validated == 0/' t_binv_zero
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi
