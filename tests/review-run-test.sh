@@ -228,7 +228,7 @@ B="$FR/handover/reviewer-references.md"
 blist() { sed -n '2,/^BUNDLE-SECTION /p' "$1" | grep -v '^BUNDLE-SECTION ' | tr '\n' ' '; }
 check "bundle: a .tf change at deep carries every run summary, run/facts.md and Check A's Read First" \
   "$(l="$(blist "$B")"; for e in run/check-a.md run/check-b.md run/check-d.md run/check-g.md run/facts.md check-a-compatibility.md#reads-fails-when-and-severity; do
-     case "$l" in *"references/$e "*) ;; *) exit 1 ;; esac; done; echo 0)"
+     case "$l" in (*"references/$e "*) ;; (*) exit 1 ;; esac; done; echo 0)"
 check "bundle: the cap holds, and a section is section.sh's bytes" \
   "$([ "$(sed -n '/^BUNDLE-SECTION /,$p' "$B" | wc -c)" -le 100000 ] &&
      awk '/^BUNDLE-SECTION references\/inputs.md#inputs$/{p=1; next} /^BUNDLE-SECTION /{p=0} p' "$B" |
@@ -827,6 +827,14 @@ check "issues: a failed read adds no item and fails nothing" \
   "$([ -f "$TMP/hp4/host.json" ] && [ "$(grep -c ' kind=issue ' "$TMP/hp4/task.md")" = 1 ] && grep -q '^#1303 ' "$TMP/hp4/task.md" &&
      [ "$(q "$TMP/hp4/host.json" '.could_not_run == [] and .related.status == "ok"')" = 0 ]; echo $?)"
 check "issues: nothing in an issue title ran" "$([ ! -e z ] && [ ! -e "$TMP/cwd/z" ]; echo $?)"
+# A closed pull request takes no related issues, and still its closing issues' text.
+cp "$GHD/meta" "$TMP/meta.keep"
+jq '.state = "closed" | .merged = false' "$TMP/meta.keep" > "$GHD/meta"
+GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/hp6" > /dev/null 2>&1
+check "issues: a closed pull request still reads its closing issue" \
+  "$([ "$(q "$TMP/hp6/host.json" '.related == {status: "not-applicable", open_unlinked: [], sidebar_not_read: false}')" = 0 ] &&
+     [ "$(grep -c ' kind=issue ' "$TMP/hp6/task.md")" = 1 ] && grep -q '^#1303 ' "$TMP/hp6/task.md"; echo $?)"
+cp "$TMP/meta.keep" "$GHD/meta"
 # Without GraphQL the linked set comes from the body's keywords; one issue named twice is read once.
 mv "$GHD/threads" "$TMP/threads.keep"; cp "$GHD/meta" "$TMP/meta.keep"
 jq '.body = "Fixes #1303. Closes #1303."' "$TMP/meta.keep" > "$GHD/meta"
@@ -834,6 +842,11 @@ GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer
 check "issues: without GraphQL, an issue the body names twice is one item" \
   "$([ "$(q "$TMP/hp5/host.json" '.conversation.path == "rest"' 2> /dev/null)" = 0 ] &&
      [ "$(grep -c ' kind=issue ' "$TMP/hp5/task.md")" = 1 ]; echo $?)"
+jq '.body = "Fixes #1303." | .state = "closed" | .merged = false' "$TMP/meta.keep" > "$GHD/meta"
+GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/hp7" > /dev/null 2>&1
+check "issues: without GraphQL, a closed pull request still reads its closing issue" \
+  "$([ "$(q "$TMP/hp7/host.json" '.conversation.path == "rest" and .related == {status: "not-applicable", open_unlinked: [], sidebar_not_read: false}')" = 0 ] &&
+     [ "$(grep -c ' kind=issue ' "$TMP/hp7/task.md")" = 1 ]; echo $?)"
 mv "$TMP/threads.keep" "$GHD/threads"; cp "$TMP/meta.keep" "$GHD/meta"
 closing
 
@@ -1044,6 +1057,7 @@ run_rr cleanup "$RUN" > /dev/null
 # Updated for Rule 3's second exception, the test pass, and its Rule 5 paragraph (test-pass.md);
 # the plan pass's measured packaging-script sentence moved to plan-pass.md, Limits.
 # Updated for the closing issues that now cross in Step 6 (github-io.md, Issue Text), and their origin in Rule 2.
+# Updated for Rule 2's origin sentence, shortened to keep SKILL.md under 16384 bytes.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1052,7 +1066,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=fdc52d7945e2
+want=8c35d5b09bce
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"
