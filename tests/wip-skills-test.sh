@@ -7,9 +7,9 @@
 # refuses every request. Its frontmatter name is its directory, its body opens with one
 # level-1 title and then the Status section, and that section is the one fixed
 # paragraph below, where only the skill name slot varies and names an existing skill
-# directory that is not itself work in progress. Its other headings, at column 0 or
-# indented up to three spaces, are level-2 sections from the allow-list, in that order,
-# and no line is an HTML heading tag. It holds no backtick and no fenced code. At least
+# directory that is not itself work in progress. Its other headings are level-2 sections
+# at column 0 from the allow-list, in that order; an indented heading fails, and no line
+# is an HTML heading tag. It holds no backtick and no fenced code. At least
 # one such skill must exist. A negative self-check mutates temp copies and confirms
 # each check catches its breakage. No network. Run: tests/wip-skills-test.sh
 set -uo pipefail
