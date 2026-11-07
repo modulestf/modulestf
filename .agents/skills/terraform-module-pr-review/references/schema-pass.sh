@@ -39,6 +39,10 @@ MAX_TYPES=1000
 # also count toward MAX_PROVIDER_VERSIONS. Past either: "unresolved overflow".
 MAX_SINCE_PATHS=16
 MAX_SINCE_DOWNLOADS=12
+# The introduced sections' own byte cap per run, outside the sheet caps, and the wall-clock
+# deadline of the whole search, which SCHEMA_SINCE_SECONDS may lower or raise (digits only).
+MAX_SINCE_BYTES=8192
+MAX_SINCE_SECONDS=120
 CAP_SUMS=4096
 CAP_MANIFEST=16384
 CAP_VERSIONS=2097152
@@ -584,10 +588,59 @@ probe() { # provider, version -> observations of every target type at it; prints
   done < "$d/rendered"
   rm -rf "$d"
 }
+if [ -n "$MODE" ]; then
+  if [ "$MODE" = deep ]; then
+    # Deep's caps bound the disk: types in name order, each with all its sheets or none;
+    # a type that does not fit is page at every version, the next one may still fit.
+    files_under "$WORK/stage" -name '*.facts' | while IFS= read -r p; do
+      IFS=/ read -r ns name ver cat file <<< "$p"
+      kind=resource; [ "$cat" = resources ] || kind=data
+      echo "$ns/$name $kind ${file%.facts} $(wc -c < "$WORK/stage/$p" | tr -d ' ')"
+    done | awk '{ k = $1 " " $2 " " $3; n[k]++; b[k] += $4 } END { for (k in n) print k, n[k], b[k] }' |
+      sort -k1,1 -k3,3 -k2,2 | awk -v ms="$MAX_DEEP_SHEETS" -v mb="$MAX_DEEP_BYTES" \
+      '{ if (s + $4 <= ms && t + $5 <= mb) { s += $4; t += $5 } else print $1, $2, $3 }' > "$WORK/over"
+    [ ! -s "$WORK/over" ] || note overflow
+    while read -r prov kind type; do
+      ns="${prov%%/*}" name="${prov#*/}" cat=resources
+      [ "$kind" = resource ] || cat=data-sources
+      while read -r p v; do
+        [ "$p" = "$prov" ] || continue
+        st="$WORK/stage/$ns/$name/$v"
+        rm -f "$st/$cat/$type.facts" && rmdir "$st/$cat" 2> /dev/null
+        jq -c --arg k "$kind:$type" '.types[$k] = "page" | if .same_as then del(.same_as[$k]) | if .same_as == {} then del(.same_as) else . end else . end' \
+          "$st/index.json" > "$st/index.n" && mv "$st/index.n" "$st/index.json" || exit 1
+      done < "$WORK/pvok"
+      echo "$prov $kind $type" >> "$WORK/pagetypes"
+    done < "$WORK/over"
+    [ -s "$WORK/reasons" ] || [ ! -s "$WORK/pagetypes" ] || note page
+    # Every type with no sheet, with the versions it was needed at: the reviewer fetches
+    # these and only these through its fetch helper.
+    awk 'FILENAME == ARGV[1] { if ($3 == "ok") res[$1 " " $2] = $4 " " $5 " " $6; next }
+      FILENAME == ARGV[2] { lk[$1] = lk[$1] " " $2; next }
+      FILENAME == ARGV[3] { pg[$1 " " $2 " " $3] = 1; next }
+      ($2 " " $3 " " $4) in pg { k = $2 " " $3 " " $4; print k, "-"
+        n = split(res[$1 " " $2] " " lk[$2], a, " "); for (i = 1; i <= n; i++) if (a[i] != "-") print k, a[i] }' \
+      "$WORK/resolved" "$WORK/locks" "$WORK/pagetypes" "$WORK/types" | sort -u |
+      jq -R -s -c --arg r "$(awk '!s[$0]++' "$WORK/reasons" | tr '_' '-' | tr '\n' ' ')" '
+        split("\n") | map(select(. != "") | split(" ")) | group_by(.[0:3])
+        | map({provider: .[0][0], type: (.[0][1] + ":" + .[0][2]), versions: (map(.[3] | select(. != "-")) | unique)})
+        | {format: 1, reasons: ($r | split(" ") | map(select(. != ""))), missing: .}' > "$WORK/missing.json" || exit 1
+  fi
+  sheets="$(files_under "$WORK/stage" -name '*.facts' | wc -l | tr -d ' ')"
+  bytes="$(find "$WORK/stage" -type f -name '*.facts' -exec cat -- {} + | wc -c | tr -d ' ')"
+  if [ "$MODE" = focused ]; then
+    [ "$sheets" -le "$MAX_SHEETS" ] && [ "$bytes" -le "$MAX_SHEET_BYTES" ] || escalate overflow
+  fi
+fi
+
+# Here, after every sheet cap: the sections are outside them, so no line escalates a focused
+# run or makes a deep run partial.
 : > "$WORK/since-want"
 : > "$WORK/since"
 : > "$WORK/probed"
-tried=0
+tried=0 late=""
+[[ "${SCHEMA_SINCE_SECONDS:-}" =~ ^[0-9]{1,5}$ ]] && MAX_SINCE_SECONDS="$SCHEMA_SINCE_SECONDS"
+since_start="$(date +%s)"
 if [ -n "$MODULESTF_SCHEMA_MIRROR" ]; then
   # "<provider> <latest> <kind> <type> <path>": the paths new at a directory's latest.
   while read -r dir prov st latest min _; do
@@ -631,7 +684,8 @@ if [ -n "$MODULESTF_SCHEMA_MIRROR" ]; then
       k="${nx% *}" v="${nx#* }"
       r="$(awk -v v="$v" -v t="${k%:*}" '$1 == v && ($2 == "*" || $2 == t) { print $3; exit }' "$WORK/s-vfail")"
       if [ -n "$r" ]; then echo "$k $r" >> "$WORK/s-fail"; continue; fi
-      if [ "$used" -ge "$MAX_SINCE_DOWNLOADS" ] || [ "$left" -le 0 ]; then
+      [ $(($(date +%s) - since_start)) -lt "$MAX_SINCE_SECONDS" ] || late=1
+      if [ -n "$late" ] || [ "$used" -ge "$MAX_SINCE_DOWNLOADS" ] || [ "$left" -le 0 ]; then
         awk '$2 == "probe" { print $1, "overflow" }' "$WORK/s-state" >> "$WORK/s-fail"
         continue
       fi
@@ -646,56 +700,21 @@ if [ -n "$MODULESTF_SCHEMA_MIRROR" ]; then
     { print $1, $2, $3, $4, $5, r[$1 " " $3 ":" $4 ":" $5] }' "$WORK/since" "$WORK/since-want" | while read -r prov latest kind type path res; do
     f="$(sheet_file "$prov" "$latest" "$kind" "$type")"
     [ -n "$f" ] && [ -n "$res" ] && echo "${f#"$WORK/stage/"} since: $path $res"
-  done | LC_ALL=C sort -u > "$WORK/since-lines"
+  done | LC_ALL=C sort -u |
+    # The byte cap, in this order: a line keeps its result while the since lines so far,
+    # itself included, total at most MAX_SINCE_BYTES; past that it is unresolved overflow.
+    awk -v m="$MAX_SINCE_BYTES" '{ l = $0; sub(/^[^ ]* /, "", l); if (t + length(l) + 1 > m) { $0 = $1 " since: " $3 " unresolved overflow"; l = substr($0, length($1) + 2) }
+      t += length(l) + 1; print }' > "$WORK/since-lines"
   cut -d ' ' -f 1 "$WORK/since-lines" | uniq | while IFS= read -r f; do
     { echo; echo "introduced:"; awk -v f="$f" '$1 == f { $1 = ""; sub(/^ /, ""); print }' "$WORK/since-lines"; } >> "$WORK/stage/$f" || exit 1
   done || exit 1
   n="$(grep -c . "$WORK/since-lines")" u="$(grep -c ' unresolved ' "$WORK/since-lines")"
   [ "$n" = 0 ] || echo "schema pass: introduced $n paths, $u unresolved, $tried bisect downloads"
+  [ -z "$late" ] || echo "schema pass: introduced deadline of $MAX_SINCE_SECONDS s passed, open paths unresolved overflow"
 fi
 
 if [ -n "$MODE" ]; then
-  if [ "$MODE" = deep ]; then
-    # Deep's caps bound the disk: types in name order, each with all its sheets or none;
-    # a type that does not fit is page at every version, the next one may still fit.
-    files_under "$WORK/stage" -name '*.facts' | while IFS= read -r p; do
-      IFS=/ read -r ns name ver cat file <<< "$p"
-      kind=resource; [ "$cat" = resources ] || kind=data
-      echo "$ns/$name $kind ${file%.facts} $(wc -c < "$WORK/stage/$p" | tr -d ' ')"
-    done | awk '{ k = $1 " " $2 " " $3; n[k]++; b[k] += $4 } END { for (k in n) print k, n[k], b[k] }' |
-      sort -k1,1 -k3,3 -k2,2 | awk -v ms="$MAX_DEEP_SHEETS" -v mb="$MAX_DEEP_BYTES" \
-      '{ if (s + $4 <= ms && t + $5 <= mb) { s += $4; t += $5 } else print $1, $2, $3 }' > "$WORK/over"
-    [ ! -s "$WORK/over" ] || note overflow
-    while read -r prov kind type; do
-      ns="${prov%%/*}" name="${prov#*/}" cat=resources
-      [ "$kind" = resource ] || cat=data-sources
-      while read -r p v; do
-        [ "$p" = "$prov" ] || continue
-        st="$WORK/stage/$ns/$name/$v"
-        rm -f "$st/$cat/$type.facts" && rmdir "$st/$cat" 2> /dev/null
-        jq -c --arg k "$kind:$type" '.types[$k] = "page" | if .same_as then del(.same_as[$k]) | if .same_as == {} then del(.same_as) else . end else . end' \
-          "$st/index.json" > "$st/index.n" && mv "$st/index.n" "$st/index.json" || exit 1
-      done < "$WORK/pvok"
-      echo "$prov $kind $type" >> "$WORK/pagetypes"
-    done < "$WORK/over"
-    [ -s "$WORK/reasons" ] || [ ! -s "$WORK/pagetypes" ] || note page
-    # Every type with no sheet, with the versions it was needed at: the reviewer fetches
-    # these and only these through its fetch helper.
-    awk 'FILENAME == ARGV[1] { if ($3 == "ok") res[$1 " " $2] = $4 " " $5 " " $6; next }
-      FILENAME == ARGV[2] { lk[$1] = lk[$1] " " $2; next }
-      FILENAME == ARGV[3] { pg[$1 " " $2 " " $3] = 1; next }
-      ($2 " " $3 " " $4) in pg { k = $2 " " $3 " " $4; print k, "-"
-        n = split(res[$1 " " $2] " " lk[$2], a, " "); for (i = 1; i <= n; i++) if (a[i] != "-") print k, a[i] }' \
-      "$WORK/resolved" "$WORK/locks" "$WORK/pagetypes" "$WORK/types" | sort -u |
-      jq -R -s -c --arg r "$(awk '!s[$0]++' "$WORK/reasons" | tr '_' '-' | tr '\n' ' ')" '
-        split("\n") | map(select(. != "") | split(" ")) | group_by(.[0:3])
-        | map({provider: .[0][0], type: (.[0][1] + ":" + .[0][2]), versions: (map(.[3] | select(. != "-")) | unique)})
-        | {format: 1, reasons: ($r | split(" ") | map(select(. != ""))), missing: .}' > "$WORK/missing.json" || exit 1
-  fi
-  sheets="$(files_under "$WORK/stage" -name '*.facts' | wc -l | tr -d ' ')"
-  bytes="$(find "$WORK/stage" -type f -name '*.facts' -exec cat -- {} + | wc -c | tr -d ' ')"
   if [ "$MODE" = focused ]; then
-    [ "$sheets" -le "$MAX_SHEETS" ] && [ "$bytes" -le "$MAX_SHEET_BYTES" ] || escalate overflow
     echo "schema pass: focused, mirror $TRUSTED_MIRROR, $sheets sheets, $bytes bytes"
   elif [ -s "$WORK/reasons" ]; then
     echo "schema pass: deep partial $(head -n 1 "$WORK/reasons" | tr '_' '-'), $sheets sheets, $bytes bytes, $(jq '.missing | length' "$WORK/missing.json") types without a sheet"

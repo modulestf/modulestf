@@ -161,8 +161,9 @@ check "versions: with a handoff, focused reads the base token for the handoff's 
   [ "$(jq -c '.directories["."]["example/demo"]' "$R/facts/versions.json")" = '{"latest":"1.3.0","minimum":"1.2.0"}' ]
 check "versions: with a handoff, focused still reads no old floor sheet" "$?"
 unset HS
-[ "$ver_bytes" = "$(cat "$R"/facts/example/demo/*/resources/*.facts | wc -c | tr -d ' ')" ]
-check "versions: the byte count is the sheets' total" "$?"
+[ "$ver_bytes" = "$(for f in "$R"/facts/example/demo/*/resources/*.facts; do perl -0777 -pe 's/\nintroduced:\n.*\z//s' "$f"; done | wc -c | tr -d ' ')" ] &&
+  grep -q '^introduced:$' "$R/facts/example/demo/1.3.0/resources/demo_thing.facts"
+check "versions: the byte count is the sheets' total without their introduced sections" "$?"
 src="$(sed -n 's/^schema pass: source //p' "$R.out" | LC_ALL=C sort)"
 want="$(for v in 1.2.0 1.2.5 1.3.0; do printf 'modulestf/terraform-schema-mirror example_demo-v%s %s\n' "$v" \
   "$(sha256 < "$SITE/mirror/example_demo-v$v/example_demo-$v.schema.json.gz" | cut -d ' ' -f 1)"; done)"
@@ -313,7 +314,9 @@ hschema() { # index 0 to 8 -> the schema JSON
     resource_schemas: {hist_thing: {block: ({attributes: ({id: {type: "string", computed: true}}
       + (if $i >= 5 then {alpha: {type: "string", optional: true}} else {} end)
       + (if $i == 4 or $i == 8 then {beta: {type: "bool", optional: true}} else {} end))}
-      + (if $i >= 6 then {block_types: {gamma: {nesting_mode: "list", block: {attributes: {x: {type: "number", optional: true}}}}}} else {} end))}},
+      + (if $i >= 6 then {block_types: {gamma: {nesting_mode: "list", block: {attributes: {x: {type: "number", optional: true}}}}}} else {} end))},
+      hist_many: {block: {attributes: ({id: {type: "string", computed: true}} + (if $i == 8 then [range(600)]
+        | map({key: "attribute_with_a_rather_long_name_number_\(1000 + . | tostring)", value: {type: "string", optional: true}}) | from_entries else {} end))}}},
     data_source_schemas: {}}}}'
 }
 HV="1.0.0 1.1.0 1.2.0 1.3.0 1.4.0 1.5.0 1.6.0 1.7.0 1.8.0"
@@ -331,7 +334,7 @@ HT=".:resource:hist_thing:example/hist"
 hfetched() { # versions -> how many times each one's SHA256SUMS was read, space separated
   for v in "$@"; do grep -c "^URL https://github.com/modulestf/terraform-schema-mirror/releases/download/example_hist-v$v/SHA256SUMS$" "$R.log"; done | tr '\n' ' '
 }
-intro() { sed -n '/^introduced:$/,$p' "$R/facts/example/hist/1.8.0/resources/hist_thing.facts" | tr '\n' '|'; }
+intro() { sed -n '/^introduced:$/,$p' "$R/facts/example/hist/${1:-1.8.0}/resources/${2:-hist_thing}.facts" | tr '\n' '|'; } # version, type
 D="$(mk hist_thing "$HP" "$HT" "")" run since
 [ "$RC" = 0 ] && grep -qx 'schema pass: focused, mirror modulestf/terraform-schema-mirror, 2 sheets, [0-9]* bytes' "$R.out" &&
   [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma 1.6.0|since: gamma.x 1.6.0|' ] &&
@@ -352,6 +355,12 @@ D="$(mk hist_thing "$HP" "$HT" "")" run since-again
 (cd "$R/facts" && find . -type f | LC_ALL=C sort | while IFS= read -r f; do sha256 "$f"; done) > "$TMP/since-b"
 [ "$RC" = 0 ] && cmp -s "$TMP/since-a" "$TMP/since-b" && [ "$(cat "$R.out")" = "$since_out" ] && [ -s "$TMP/since-a" ]
 check "introduced: the same input gives the same bytes, every file and the output" "$?"
+D="$(mk hist_thing "$HP" "$HT" ".:example/hist=1.4.0 .:example/hist=1.6.0")" run since-locks
+[ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma 1.6.0|since: gamma.x 1.6.0|' ] &&
+  grep -qx 'schema pass: introduced 4 paths, 1 unresolved, 1 bisect downloads' "$R.out" && [ "$(hfetched 1.5.0 1.2.0 1.3.0 1.7.0)" = "1 0 0 0 " ]
+check "introduced: non_monotone from the lock versions read in any case (beta at 1.4.0, not at 1.6.0), whatever the bisect probes" "$?"
+# With 1.6.0 gone, beta's search reads 1.2.0 and 1.3.0 only and ends at 1.4.0: a path absent
+# again at a version the search never reads is not seen, the documented limit.
 mv "$SITE/mirror/example_hist-v1.6.0" "$TMP/hist-1.6.0"
 D="$(mk hist_thing "$HP" "$HT" "")" run since-404
 [ "$RC" = 0 ] && grep -q '^schema pass: focused, ' "$R.out" &&
@@ -376,7 +385,40 @@ capped since-n 's/^MAX_SINCE_PATHS=16$/MAX_SINCE_PATHS=1/'
 SPX="$TMP/since-n/schema-pass.sh" D="$(mk hist_thing "$HP" "$HT" "")" run since-n
 [ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved overflow|since: gamma unresolved overflow|since: gamma.x unresolved overflow|' ]
 check "introduced: past the paths per type, the first by name is bisected and the rest are unresolved overflow" "$?"
-grep -qxF 'MAX_SINCE_PATHS=16' "$SP" && grep -qxF 'MAX_SINCE_DOWNLOADS=12' "$SP" && grep -qF 'at most 16 paths per type and 12 bisect downloads per provider' "$DOC"
+capped since-bytes 's/^MAX_SINCE_BYTES=8192$/MAX_SINCE_BYTES=60/'
+SPX="$TMP/since-bytes/schema-pass.sh" D="$(mk hist_thing "$HP" "$HT" "")" run since-bytes
+[ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma unresolved overflow|since: gamma.x unresolved overflow|' ]
+check "introduced: past the section byte cap, the later lines are unresolved overflow" "$?"
+SCHEMA_SINCE_SECONDS=0 D="$(mk hist_thing "$HP" "$HT" "")" run since-late
+[ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha unresolved overflow|since: beta unresolved overflow|since: gamma unresolved overflow|since: gamma.x unresolved overflow|' ] &&
+  grep -qx 'schema pass: introduced deadline of 0 s passed, open paths unresolved overflow' "$R.out" &&
+  [ "$(grep -c '^URL https://github.com/.*example_hist-v.*/SHA256SUMS$' "$R.log")" = 2 ]
+check "introduced: past the deadline, every open path is unresolved overflow, no bisect download, and the pass says so" "$?"
+D="$(mk hist_many "$HP" ".:resource:hist_many:example/hist" "")" run since-big
+fb="$(sed -n 's/^schema pass: focused, .*, 2 sheets, \([0-9]*\) bytes$/\1/p' "$R.out")"
+[ "$RC" = 0 ] && [ -n "$fb" ] && [ "$fb" -le 49152 ] && [ "$(cat "$R"/facts/example/hist/*/resources/hist_many.facts | wc -c | tr -d ' ')" -gt 49152 ] &&
+  [ "$(intro 1.8.0 hist_many | tr '|' '\n' | grep -c '^since: ')" = 600 ] &&
+  [ "$(intro 1.8.0 hist_many | tr '|' '\n' | grep -c '^since: .* 1\.8\.0$')" = 16 ]
+check "introduced: 600 since lines past the sheet bytes do not escalate focused; the section is outside the sheet cap" "$?"
+DEPTH=deep D="$(DEPTH=deep mk "" "$HP" "$HT" "")" run since-deep
+[ "$RC" = 0 ] && grep -qx 'schema pass: deep, mirror modulestf/terraform-schema-mirror, 2 sheets, [0-9]* bytes' "$R.out" &&
+  [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma 1.6.0|since: gamma.x 1.6.0|' ] &&
+  [ "$(jq -c . "$R/facts/missing.json")" = '{"format":1,"reasons":[],"missing":[]}' ]
+check "introduced: deep writes the same section, never partial for an unresolved line" "$?"
+R="$TMP/run-since-normal"
+STUB_LOG="$R.log" SCHEMA_PROVIDERS="$HP" SCHEMA_TYPES="$HT" MODULESTF_SCHEMA_MIRROR=modulestf/terraform-schema-mirror \
+  /bin/bash "$SP" "$R/facts" "$R/work" > "$R.out" 2>&1
+[ $? = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma 1.6.0|since: gamma.x 1.6.0|' ] &&
+  (cd "$R/facts" && sha256 --strict -c files.sha256 > /dev/null)
+check "introduced: normal mode writes the same section" "$?"
+D="$(mk hist_thing "head:.:hist=example/hist:>=1.0,<1.7" "$HT" ".:example/hist=1.7.0")" run since-same
+[ "$RC" = 0 ] && [ ! -e "$R/facts/example/hist/1.6.0/resources/hist_thing.facts" ] &&
+  [ "$(jq -c .same_as "$R/facts/example/hist/1.6.0/index.json")" = '{"resource:hist_thing":"1.7.0"}' ] &&
+  grep -qx 'versions: 1.6.0 1.7.0' "$R/facts/example/hist/1.7.0/resources/hist_thing.facts" &&
+  [ "$(intro 1.7.0)" = 'introduced:|since: alpha 1.5.0|since: gamma 1.6.0|since: gamma.x 1.6.0|' ]
+check "introduced: the latest 1.6.0 is same_as 1.7.0, so the section is in the 1.7.0 sheet that holds it" "$?"
+grep -qxF 'MAX_SINCE_PATHS=16' "$SP" && grep -qxF 'MAX_SINCE_DOWNLOADS=12' "$SP" && grep -qF 'at most 16 paths per type and 12 bisect downloads per provider' "$DOC" &&
+  grep -qxF 'MAX_SINCE_BYTES=8192' "$SP" && grep -qxF 'MAX_SINCE_SECONDS=120' "$SP" && grep -qF 'at most 8192 bytes' "$DOC" && grep -qF '120 seconds' "$DOC"
 check "doc: the introduced-version caps match the script" "$?"
 
 # --- Normal mode is unchanged: the same lock-free failure is a page type, exit 0.
@@ -499,6 +541,14 @@ k_sover() { [ "$RC" = 0 ] && [ "$(grep -c ' unresolved overflow$' "$R/facts/exam
 mutant since-no-predecessor 's/ix\[P\[k\]\] - ix\[A\] == 1/1/' c_since k_since
 mutant since-monotone-unchecked 's/if (ov\[k, i\] + 0 > P\[k\] + 0) bad = 1$/if (0) bad = 1/' c_since k_since
 mutant since-not-written 's/^    { echo; echo "introduced:"; /    { :; /' c_since k_since
+c_late() { SCHEMA_SINCE_SECONDS=0 D="$(mk hist_thing "$HP" "$HT" "")" run m-late; }
+k_late() { [ "$RC" = 0 ] && grep -qx 'schema pass: introduced deadline of 0 s passed, open paths unresolved overflow' "$R.out" && [ "$(hfetched 1.4.0)" = "0 " ]; }
+k_bytes() { [ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma unresolved overflow|since: gamma.x unresolved overflow|' ]; }
+c_many() { D="$(mk hist_many "$HP" ".:resource:hist_many:example/hist" "")" run m-big; }
+k_bigok() { [ "$RC" = 0 ] && grep -q '^schema pass: focused, .*, 2 sheets, ' "$R.out"; }
+mutant since-no-deadline 's/ || late=1$/ || :/' c_late k_late
+mutant since-bytes-ignored 's/^MAX_SINCE_BYTES=8192$/MAX_SINCE_BYTES=60/; s/if (t + length(l) + 1 > m)/if (0)/' c_since k_bytes
+mutant since-counted-in-cap 's/^    \[ "\$sheets" -le "\$MAX_SHEETS" \] && \[ "\$bytes" -le "\$MAX_SHEET_BYTES" \] || escalate overflow$/    :/; s/^  \[ -z "\$late" \] || echo "schema pass: introduced deadline/  [ "$MODE" != focused ] || [ "$(find "$WORK\/stage" -type f -name "*.facts" -exec cat -- {} + | wc -c)" -le "$MAX_SHEET_BYTES" ] || escalate overflow; [ -z "$late" ] || echo "schema pass: introduced deadline/' c_many k_bigok
 mutant since-overflow-silent 's/^MAX_SINCE_DOWNLOADS=12$/MAX_SINCE_DOWNLOADS=1/; s/{ print p, \$1, "unresolved", \$3 }/{ next }/' c_since k_sover
 
 if [ "$fails" = 0 ]; then echo "all passed"; else echo "$fails failed"; exit 1; fi
