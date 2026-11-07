@@ -1,3 +1,12 @@
+## [0.4.1](https://github.com/modulestf/modulestf/compare/v0.4.0...v0.4.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **pr-review:** read the closing issues of a closed pull request ([#116](https://github.com/modulestf/modulestf/issues/116)) ([7bd306f](https://github.com/modulestf/modulestf/commit/7bd306f8628b59173c2eeb35c3ace482d530fb2c)), closes [terraform-aws-modules/terraform-aws-vpc#1312](https://github.com/terraform-aws-modules/terraform-aws-vpc/issues/1312)
+
+
+
 # [0.4.0](https://github.com/modulestf/modulestf/compare/v0.3.0...v0.4.0) (2026-11-07)
 
 
