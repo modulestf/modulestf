@@ -184,6 +184,12 @@ def timeline_refs($pr_author; $base):
            and ((.repository.full_name // "") | ascii_downcase) == ($base | ascii_downcase)))
    | {repo: .repository.full_name, number}];
 
+# An issue the pull request closes, as {number, title, body, user}, and the pull request author
+# -> its block item: the number and title on the first line, the body after a blank line.
+def issue_item($pr_author):
+  {kind: "issue", origin: (.user | origin($pr_author)),
+   text: ("#\(.number) \(.title)" + (if .body == "" then "" else "\n\n" + .body end))};
+
 # --- The untrusted block.
 
 def bytecut($n):
@@ -204,22 +210,23 @@ def cut($n):
 
 # Items [{kind, origin, text}] in block order -> items with text cut and omitted bytes, under
 # the per-item 8000 for the body and 4000 for the title and a thread item, and the total 16000.
+# An issue item has its own 4000, outside the total: at most two travel.
 def capped:
   reduce .[] as $i ({out: [], left: 16000};
     ($i.text | crlf) as $t
-    | if $i.kind | IN("title", "body", "thread") then
-        ([(if $i.kind == "body" then 8000 else 4000 end), .left] | min) as $lim
+    | if $i.kind | IN("title", "body", "thread", "issue") then
+        (if $i.kind == "issue" then 4000 else [(if $i.kind == "body" then 8000 else 4000 end), .left] | min end) as $lim
         | ($t | cut($lim)) as $k
         | .out += [$i + {text: $k, omitted: (($t | utf8bytelength) - ($k | utf8bytelength))}]
-        | .left -= ($k | utf8bytelength)
+        | .left -= (if $i.kind == "issue" then 0 else $k | utf8bytelength end)
       else .out += [$i + {text: $t, omitted: 0}] end)
   | .out;
 
 # Capped items -> host.json's prose-truncated entries: one per item class that lost bytes, in
-# the order body, thread, title, each with the bytes cut across that class.
+# the order body, thread, title, issue, each with the bytes cut across that class.
 def truncations:
   . as $it
-  | [("body", "thread", "title") as $k
+  | [("body", "thread", "title", "issue") as $k
      | ([$it[] | select(.kind == $k) | .omitted] | add // 0) as $n
      | select($n > 0) | {kind: "prose-truncated", item: $k, omitted: $n}];
 
@@ -289,7 +296,7 @@ def valid_host($head):
         (keys == ["kind", "path"] and .kind == "patch-unavailable" and (.path | plain_path))
         or (keys == ["kind"] and (.kind | IN("thread-resolution-unknown", "prose-truncated")))
         or (keys == ["item", "kind", "omitted"] and .kind == "prose-truncated"
-            and (.item | IN("body", "thread", "title")) and (.omitted | nat and . > 0))
+            and (.item | IN("body", "thread", "title", "issue")) and (.omitted | nat and . > 0))
         or (keys == ["count", "kind"] and .kind == "threads-over-count" and (.count | nat and . > 0))))
        and ([.[] | select(.kind == "prose-truncated") | .item // ""] | length == (unique | length)))
   and (.unresolved_threads | type == "array" and all(.[]; type == "object" and keys == ["line", "path"]

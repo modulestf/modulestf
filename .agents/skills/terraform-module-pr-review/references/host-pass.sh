@@ -15,7 +15,8 @@
 #       github-io.md Steps 2 to 5 and 7.5 and the Step 8 prefix, read as a host: metadata and
 #       mergeability, merge base, module root, changed files with the rename and empty file
 #       proofs from the trees API, the review decision, threads, conversation and bot
-#       comments under their bounds, and related issues. Writes <dir>/host.json, host facts
+#       comments under their bounds, related issues and the text of up to two issues the pull
+#       request closes in its own repository. Writes <dir>/host.json, host facts
 #       with a fixed grammar, <dir>/task.md, the reviewer task with all prose inside the
 #       untrusted block and no verification record, which the skill adds after its own
 #       verify-pass.sh check, and <dir>/files.json, the changed files list that check reads. The pure rules are in host-records.jq. Exits 1, writing nothing,
@@ -401,7 +402,7 @@ read_related() { # work, path, repo, pr
   else
     not_read=true
     RJ --arg base "$repo" --argjson self "$pr" 'include "host-records";
-      [.body // "" | body_refs($base; $self)[] | select(.linked) | .ref]' "$w/meta" > "$w/linked.json"
+      [.body // "" | body_refs($base; $self)[] | select(.linked) | .ref] | dedupe' "$w/meta" > "$w/linked.json"
   fi
   # Candidates: the body, then the timeline, deduplicated.
   : > "$w/tl"
@@ -433,6 +434,28 @@ read_related() { # work, path, repo, pr
         "$w/cand.json" >> "$w/open"
   done
   related_out ok "$(jq -s '.' "$w/open")"
+}
+
+# Step 7.6, the closing issues' text: the first two linked issues in the pull request's own
+# repository, in the order the linked set has them, each read once with its own budget. A
+# reference to another repository, an issue that is gone, a pull request or a failed read adds
+# nothing and fails nothing. Writes issues.json: [{number, title, body, user}].
+read_issues() { # work, repo
+  local w="$1" repo="$2" n
+  REQ_LEFT=4 BYTES_LEFT=$FETCH_BYTES FAILCAT=
+  : > "$w/issues"
+  if [ -f "$w/linked.json" ]; then
+    for n in $(jq -r --arg base "$repo" '[.[] | select((.repo | ascii_downcase) == ($base | ascii_downcase))
+        | .number][0:2][]' "$w/linked.json" 2> /dev/null); do
+      [[ "$n" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+      bget "$w/is" "repos/$repo/issues/$n" || continue
+      jq -c --argjson n "$n" 'select(type == "object" and .number == $n and (has("pull_request") | not)
+          and (.title | type == "string") and ((.body // "") | type == "string"))
+        | {number, title, body: (.body // ""), user: (.user // {} | {typename: .type, id, login})}' \
+        "$w/is" >> "$w/issues" 2> /dev/null
+    done
+  fi
+  jq -s '.' "$w/issues" > "$w/issues.json" 2> /dev/null || echo '[]' > "$w/issues.json"
 }
 
 cmd_run() {
@@ -520,6 +543,7 @@ cmd_run() {
 
   # Step 7.5.
   read_related "$w" "$path" "$repo" "$pr"
+  read_issues "$w" "$repo"
 
   # The reopen fact: who closed a closed, unmerged pull request, by account type only. A read
   # that failed leaves it null, so no reopen line renders (host-pass.md, Host Facts).
@@ -536,13 +560,14 @@ cmd_run() {
   [[ "$s" =~ ^[0-9a-f]{12}$ ]] || fail_run "no block suffix"
   mkdir "$stage"
   RJ -n -r --arg s "$s" --arg login "$login" --slurpfile meta "$w/meta" --slurpfile t "$w/threads.json" \
-    --slurpfile c "$w/comments.json" '
+    --slurpfile c "$w/comments.json" --slurpfile i "$w/issues.json" '
     include "host-records";
     ($meta[0]) as $m | ($m.user | {typename: .type, id, login}) as $author
     | ([$t[0].items[] | {kind: "thread", origin: origin($author), text: (.body // "")}]) as $threads
     | (if ($c[0] | type) == "array" then ($c[0] | conversation($t[0].path; $author; $login)) else {items: []} end) as $conv
     | [{kind: "title", origin: "change-author", text: ($m.title // "")},
        {kind: "body", origin: "change-author", text: ($m.body // "")}]
+      + [$i[0][] | issue_item($author)]
       + $threads[0:20] + $conv.items
     | capped | {items: ., block: block($s; null)}' > "$w/block.json"
   RJ -n --arg repo "$repo" --argjson pr "$pr" --arg head "$head" --arg base "$base" --arg mb "$mb" \
