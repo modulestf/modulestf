@@ -1072,6 +1072,8 @@ run_rr cleanup "$RUN" > /dev/null
 # the plan pass's measured packaging-script sentence moved to plan-pass.md, Limits.
 # Updated for the closing issues that now cross in Step 6 (github-io.md, Issue Text), and their origin in Rule 2.
 # Updated for Rule 2's origin sentence, shortened to keep SKILL.md under 16384 bytes.
+# Updated for the Don't activate line that points a fix and push to terraform-module-pr-fix, with two
+# sentences of Rules 2 and 3 shortened to keep SKILL.md under 16384 bytes.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1080,7 +1082,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=8c35d5b09bce
+want=b87149b5c3e2
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"
