@@ -17,11 +17,12 @@ Agent skills that review reusable Terraform modules against a written profile of
 | Skill | You give it | You get back |
 |-------|-------------|--------------|
 | [`terraform-module-pr-review`](.agents/skills/terraform-module-pr-review/SKILL.md) | A pull request or commit URL, or `owner/repo#123` | A verdict and a comment to post, after you confirm |
+| [`terraform-module-pr-fix`](.agents/skills/terraform-module-pr-fix/SKILL.md) | A pull request URL or `owner/repo#123` to finish | A reviewed fix pushed to the pull request's branch, after you confirm, or a patch |
 | [`terraform-module-reviewer`](.agents/skills/terraform-module-reviewer/SKILL.md) | A module checkout and a diff, a base ref or a list of changed files | A list of findings. Read-only, no verdict |
 | [`terraform-module-maintainer`](.agents/skills/terraform-module-maintainer/SKILL.md) | A change to make, review feedback to work through, a module to create or a provider to upgrade | Edits in your checkout, a report of the checks it ran, and reply drafts |
 | [`change-scope`](.agents/skills/change-scope/SKILL.md) | A proposed addition, in any language or project | Whether it belongs in the thing being changed, and where it goes if not |
 
-The pull request review calls the reviewer, and both call `change-scope`. The rules of the module family live in a profile: [`terraform-aws-modules`](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md).
+The pull request review calls the reviewer, and both call `change-scope`. The pull request fix calls the pull request review, the maintainer and the reviewer. The rules of the module family live in a profile: [`terraform-aws-modules`](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md).
 
 Two more skills are work in progress and not usable yet. Each refuses every request and points you to the maintainer:
 
@@ -92,6 +93,15 @@ triage terraform-aws-modules/terraform-aws-lambda#780
 ```
 
 A quick pass: scope and the checks that need no provider lookup, with no validation. It never approves. Use it to decide whether a full review is worth it.
+
+### Review and finish a pull request
+
+```text
+review and finish terraform-aws-modules/terraform-aws-lambda#780
+fix https://github.com/terraform-aws-modules/terraform-aws-lambda/pull/780 and push
+```
+
+The skill reviews the pull request, applies the review's findings and your own comments in a throwaway clone, and reviews again, at most three rounds. It applies another person's comment only when you name its item id with "apply". It shows the diff, the verdict, the author and the branch, and pushes only when you confirm that branch in a new message. It never force pushes and never merges, and it pushes only where your token may push to the pull request's branch; otherwise you get a patch. Posting the review and the replies each needs its own confirmation.
 
 ### Review your own change before you push
 
@@ -219,8 +229,9 @@ When a check cannot run inside your agent's sandbox, the review records it as no
 
 | Task | Needs |
 |------|-------|
-| Every Terraform skill | The four skill directories side by side, a Terraform MCP server |
+| Every Terraform skill | The five skill directories side by side, a Terraform MCP server |
 | Review a pull request or commit | `gh` logged in as a person (a bot or CI identity runs render-only and posts nothing), `git`, `jq`, `perl`, `terraform`, `mtf-facts`, and `sandbox-exec` (macOS) or `bwrap` (Linux) for the ladder |
+| Review and finish a pull request | Everything a pull request review needs, `gh` logged in to github.com with a token that can push to the pull request's branch, and `user.name` and `user.email` in your global git configuration |
 | Review a local change | `git` |
 | Change, fix or upgrade a module | `terraform`; for a trusted run also `pre-commit`, `terraform-docs` and `tflint` |
 | Create a module | The same. To finish it: a trusted run and a `terraform plan` you run with your own credentials, not a review role |
