@@ -53,6 +53,13 @@ printf '%s\n' "\$*" >> "$TMP/git-argv.log"
 # Failure mode: a diff-tree that fails, for the rule's refusal of a failing git call.
 [ ! -e "$TMP/difftree-fail" ] || case " \$* " in *" diff-tree "*) exit 1 ;; esac
 env | grep -iE 'token|secret|canary' >> "$TMP/git-env.log"
+# The clause 6 extract: after its checkout, record every symbolic link in it.
+case " \$* " in
+  *" checkout-index "*" --work-tree=/tmp/pr-fix-extract."* | *" --work-tree=/tmp/pr-fix-extract."*" checkout-index "*)
+    wt=""; for a in "\$@"; do case "\$a" in --work-tree=*) wt="\${a#--work-tree=}" ;; esac; done
+    "$REALGIT" -c "url.file://$REM/.insteadOf=https://github.com/" "\$@"; rc=\$?
+    printf 'extract %s\n' "\$wt" >> "$TMP/extract-links.log"; find "\$wt" -type l >> "$TMP/extract-links.log"; exit \$rc ;;
+esac
 exec "$REALGIT" -c "url.file://$REM/.insteadOf=https://github.com/" "\$@"
 EOF
 cat > "$BIN/terraform" <<EOF
@@ -1188,7 +1195,20 @@ t_docs_links_() { # the docs step: a README that is a link and a directory with 
   fr cleanup "$RUN" > /dev/null
 }
 t_docs_links() { pilot t_docs_links_; }
+t_extract_links_() { # the clause 6 extract holds no symbolic link; an author's linked README stays stale in it
+  pilot_run "$PS" || return 1
+  size_fix; : > "$TMP/extract-links.log"
+  fr docs "$RUN" --round 1 > /dev/null 2>&1 && fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 || { cat "$TMP/c.out"; return 1; }
+  grep -q '^extract /tmp/pr-fix-extract\.' "$TMP/extract-links.log" && [ "$(grep -vc '^extract ' "$TMP/extract-links.log")" = 0 ] ||
+    { cat "$TMP/extract-links.log"; return 1; }
+  grep -qx 'stale examples/complete the README is not a regular file' "$RUN/rule/docs.out" &&
+    grep -qx 'stale modules/a a .tf in its directory is a symbolic link' "$RUN/rule/docs.out" && grep -qx 'regenerated .' "$RUN/rule/docs.out" ||
+    { cat "$RUN/rule/docs.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_extract_links() { pilot t_extract_links_; }
 t_docs_links; check "allowed paths: the docs step reports a linked README and a directory with a linked .tf stale and writes neither" $?
+t_extract_links; check "allowed paths: the clause 6 extract checks out an author's links as files, and the linked README stays stale" $?
 
 t_cfg_() { # a terraform-docs configuration beside the README: the entry is stale, and a hand edit is refused
   pilot_run "$PC" || return 1
@@ -1326,6 +1346,7 @@ mutate "the outside findings flag dropped" 's/"outside findings: \\\(if test/"fl
 mutate "the docs results not in the review task" 's/    \[ ! -f "\$RD\/docs\.txt" \] \|\| sed [^\n]*\n//' t_pilot
 mutate "the patch-only restore to the pinned head" 's/  if jq -e \x27\.commit_identity == null\x27 "\$RUN\/state\.json" > \/dev\/null && \[ -f "\$RUN\/reviewed\.json" \]; then/  if false; then/' t_noident_restore
 mutate "a file not judged printed as a refusal" 's/\[ "\$r" = ok \] \|\| \[ "\$r" = need \] && continue/[ "\$r" = ok ] \&\& continue/' t_markers
+mutate "the extract checked out with links" 's/o=\(-c core\.symlinks=false\)/o=()/' t_extract_links
 mutate "the push without the http hardening" 's/ -c http\.proxy= -c http\.sslVerify=true -c http\.extraHeader= \\\n/ \\\n/' t_e2e
 
 echo

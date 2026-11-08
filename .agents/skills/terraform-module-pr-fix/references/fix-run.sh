@@ -484,7 +484,7 @@ docs_extract() { # tree-ish, its ls-tree listing
   XTREE="$(mktemp -d /tmp/pr-fix-extract.XXXXXX)" || { XTREE=""; return 1; }
   real="$(cd -P -- "$XTREE" && pwd -P)" || return 1
   case "$real" in "$RUN" | "$RUN"/* | "$ROOT"/pr-fix.*) XTREE=""; return 1 ;; esac
-  chmod 700 "$XTREE" && mkdir "$XTREE/tree" && export_tree "$1" "$XTREE/tree" "$XTREE/index" || return 1
+  chmod 700 "$XTREE" && mkdir "$XTREE/tree" && export_tree "$1" "$XTREE/tree" "$XTREE/index" nolinks || return 1
   rm -f "$XTREE/index"
   local d="$RUN/rule"
   G diff-tree -r -z --name-only --no-renames "$FMB" "$1" > "$d/tf" 2> /dev/null || return 1
@@ -492,7 +492,7 @@ docs_extract() { # tree-ish, its ls-tree listing
   J -n -c --rawfile t "$2" --rawfile tf "$d/tf" --arg x "$FPFX" 'include "fix-run"; ($t | tree_modes) as $m
     | {tf: $tf, prefix: $x, readme: [$m | to_entries[] | select(.value != "040000" and (.key | test("(^|/)README\\.md$"))) | .key],
        links: [$m | to_entries[] | select(.value == "120000" and (.key | endswith(".tf"))) | .key | split("/") | .[:-1] | join("/")]}
-    | docs_selection' > "$d/sel.json" || return 1
+    | docs_selection | map(if .stale == null and $m[.readme] == "120000" then .stale = "the README is not a regular file" else . end)' > "$d/sel.json" || return 1
   docs_run "$XTREE/tree" "$d/sel.json" > "$d/docs.out"
 }
 
@@ -697,10 +697,12 @@ files_json() { # merge base, commit: the changed files list verify-pass.sh reads
 
 # A tree of the fix clone's objects written into a directory, with no git directory: a scratch
 # index, read-tree, checkout-index. No attribute of the tree can drop a file from it.
-export_tree() { # sha, directory, scratch index
+export_tree() { # sha, directory, scratch index[, nolinks: each link becomes a file holding its target]
+  local o=()
+  [ "${4-}" != nolinks ] || o=(-c core.symlinks=false)
   rm -f "$3"
-  GIDX="$3" G --work-tree="$2" read-tree "$1" > /dev/null 2>&1 &&
-    GIDX="$3" G --work-tree="$2" checkout-index -a -f > /dev/null 2>&1
+  GIDX="$3" G ${o[@]+"${o[@]}"} --work-tree="$2" read-tree "$1" > /dev/null 2>&1 &&
+    GIDX="$3" G ${o[@]+"${o[@]}"} --work-tree="$2" checkout-index -a -f > /dev/null 2>&1
 }
 vcommit() { # verification repository, message: commit its whole tree with a throwaway identity
   GDIR="$1" G add -A > /dev/null 2>&1 &&
