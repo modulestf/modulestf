@@ -598,15 +598,22 @@ stage_check() {
   return 0
 }
 # The index and work tree back to the last pr-fix commit, or the pinned head before the first; HEAD
-# must be that commit and stays. A restoration that fails aborts the run.
+# must be that commit and stays. With no commit identity there are no commits: the target is the tree
+# of the last reviewed round, or the pinned head's before any round was reviewed. A target that
+# cannot be read or applied aborts the run.
 restore() {
-  local t="$PINNED" k
+  local t="$PINNED" k tree
   for k in 1 2 3; do [ ! -s "$RUN/rounds/$k/commit.txt" ] || t="$(cat "$RUN/rounds/$k/commit.txt")"; done
   [[ "$t" =~ $sha_re ]] && [ "$(G rev-parse HEAD 2> /dev/null)" = "$t" ] || abort "HEAD is not the last pr-fix commit; nothing restored"
+  if jq -e '.commit_identity == null' "$RUN/state.json" > /dev/null && [ -f "$RUN/reviewed.json" ]; then
+    tree="$(jq -r '.tree // ""' "$RUN/reviewed.json")"
+  else tree="$(G rev-parse -q --verify "$t^{tree}" 2> /dev/null)"; fi
+  [[ "$tree" =~ $sha_re ]] && G cat-file -e "$tree^{tree}" 2> /dev/null || abort "the restore target tree cannot be read; nothing restored"
   # Untracked files first, so that a link standing where a tracked directory was is gone before the reset.
-  G clean -ffdxq > /dev/null 2>&1; G reset -q --hard HEAD > /dev/null 2>&1 && G clean -ffdxq > /dev/null 2>&1 &&
-    [ -z "$(G status --porcelain --untracked-files=all --ignored 2> /dev/null)" ] || abort "the work tree cannot be restored"
-  echo "restored: the index and work tree are $t"
+  G clean -ffdxq > /dev/null 2>&1; G read-tree --reset -u "$tree" > /dev/null 2>&1 && G clean -ffdxq > /dev/null 2>&1 &&
+    [ -z "$(G ls-files --others 2> /dev/null)" ] && [ "$(G write-tree 2> /dev/null)" = "$tree" ] &&
+    G diff --no-ext-diff --no-textconv --quiet > /dev/null 2>&1 || abort "the work tree cannot be restored"
+  echo "restored: the index and work tree are $tree"
 }
 
 cmd_docs() {
