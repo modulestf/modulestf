@@ -1,3 +1,13 @@
+## [0.4.2](https://github.com/modulestf/modulestf/compare/v0.4.1...v0.4.2) (2026-11-08)
+
+
+### Bug Fixes
+
+* **pr-review:** closed pull request lead, shared fix line, validate clause ([#119](https://github.com/modulestf/modulestf/issues/119)) ([49bbc2a](https://github.com/modulestf/modulestf/commit/49bbc2a67bafb51766ce1162a071603a1b22fd2f)), closes [terraform-aws-modules/terraform-aws-cloudfront#210](https://github.com/terraform-aws-modules/terraform-aws-cloudfront/issues/210) [terraform-aws-modules/terraform-aws-dynamodb-table#117](https://github.com/terraform-aws-modules/terraform-aws-dynamodb-table/issues/117)
+* **pr-review:** name the failed credential step, count only write-access reviews ([#120](https://github.com/modulestf/modulestf/issues/120)) ([c2f29ae](https://github.com/modulestf/modulestf/commit/c2f29aeb7695c931b962880c4f6548bcf67f6598)), closes [terraform-aws-modules/terraform-aws-cloudfront#210](https://github.com/terraform-aws-modules/terraform-aws-cloudfront/issues/210) [terraform-aws-modules/terraform-aws-dynamodb-table#117](https://github.com/terraform-aws-modules/terraform-aws-dynamodb-table/issues/117)
+
+
+
 ## [0.4.1](https://github.com/modulestf/modulestf/compare/v0.4.0...v0.4.1) (2026-11-07)
 
 
