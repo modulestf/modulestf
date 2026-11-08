@@ -288,15 +288,19 @@ the skill's plan pass whenever a container runtime is available.
   removed, and every line such a match spans is replaced, so a secret split across lines
   is caught too.
 - **Blocks:** each plan container writes to a file of its own. The host drops any
-  `plan summary:`, `plan pass mode:` or `host example` line from it, and heads the block with
+  `plan summary:`, `plan pass mode:`, `host example` or `not reached:` line from it, and any
+  `credentials:` line outside the fixed list of [plan-pass.md](../plan-pass.md#environment),
+  and heads the block with
   `host example <n>: <example>`, its own index, so a forged block cannot claim another
-  example or the summary.
+  example or the summary. After a plan pass that ended at credentials, the host writes
+  `not reached: <example>` for each later example, which got no container.
 
 The record directory must not exist yet, and receives regular files only:
 
 - `plan-pass.txt`: the mode and budget lines, then per example the host's `host example <n>:` line and
   the example's `example:`, `gate-hit`, `exception-hit`,
-  `plan:`, `scope:`, `modules:` and `base:` lines, and the `plan summary:` line, which
+  `plan:`, `credentials:`, `scope:`, `modules:` and `base:` lines, a `not reached:` line per
+  example the pass never started, and the `plan summary:` line, which
   `run-pass.sh` writes from the examples' `plan:` lines;
 - `plan-pass-init.txt`: the G0 count, one `init:` line per example, and one per merge base
   re-run;

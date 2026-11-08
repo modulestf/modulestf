@@ -290,6 +290,20 @@ check "defect: task.md carries the Write short line word for word" \
   "$(grep -qxF 'Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.' "$RUN/host/task.md"; echo $?)"
 check "defect: the posting login's own CHANGES_REQUESTED is left out of a render-only run" \
   "$(q "$RUN/host/host.json" '.signals.review_decision == "none" and .own_review.state == "CHANGES_REQUESTED"')"
+# The review decision counts only reviewers with write access, as GitHub's own does: the replay of
+# a pull request whose one approval came from an author with association NONE, before and after
+# the maintainer, who is the posting login, requested changes.
+dec() { jq -r -L "$SKILL/references" --arg l "$1" 'include "host-records"; decision($l; false) | .review_decision' <<< "$2"; }
+r() { printf '{"user": {"login": "%s", "id": %s}, "author_association": "%s", "state": "%s", "commit_id": "c"}' "$@"; }
+check "defect: an approval by an author without write access is no approval" \
+  "$([ "$(dec me "[$(r drive-by 9 NONE APPROVED)]")" = none ]; echo $?)"
+check "defect: the posting login's change request leaves a drive-by approval deciding nothing" \
+  "$([ "$(dec me "[$(r drive-by 9 NONE APPROVED), $(r me 1 MEMBER CHANGES_REQUESTED)]")" = none ]; echo $?)"
+check "review decision: a member's or collaborator's approval passes" \
+  "$([ "$(dec me "[$(r m 2 MEMBER APPROVED)]")" = pass ] && [ "$(dec me "[$(r c 3 COLLABORATOR APPROVED)]")" = pass ]; echo $?)"
+check "review decision: a contributor's change request fails nothing, an owner's fails" \
+  "$([ "$(dec me "[$(r m 2 MEMBER APPROVED), $(r x 4 CONTRIBUTOR CHANGES_REQUESTED)]")" = pass ] &&
+    [ "$(dec me "[$(r m 2 MEMBER APPROVED), $(r o 5 OWNER CHANGES_REQUESTED)]")" = fail ]; echo $?)"
 check "records files.json keeps additions and deletions" "$(q "$RUN/host/files.json" 'all(.[]; .additions == 1 and .deletions == 0)')"
 run_rr handover "$RUN" > /dev/null 2>&1
 check "handover: refused before verify" "$([ $? = 1 ] && [ ! -e "$RUN/handover" ]; echo $?)"

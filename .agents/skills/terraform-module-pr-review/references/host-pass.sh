@@ -24,7 +24,8 @@
 #       single module root (several shallowest roots resolve to the one that holds every changed
 #       path, github-io.md Workspace), or when a changed path is outside it or not plain text.
 #       --login may be empty only with --render-only, when the identity read failed. The
-#       login's own reviews never count in the review decision, render-only or not; a closed or
+#       login's own reviews never count in the review decision, render-only or not, nor do those of
+#       an author without write access (OWNER, MEMBER or COLLABORATOR); a closed or
 #       merged pull request has mergeability "not-applicable"; task.md carries the Write short line.
 #   host-pass.sh check <dir> --head <sha>
 #       Checks a directory the checks or the run command wrote: the exact file set, regular

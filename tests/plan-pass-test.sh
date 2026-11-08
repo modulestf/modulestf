@@ -71,6 +71,12 @@ case "\$1 \$2" in
   *) echo "An error occurred (AccessDenied) when calling the AssumeRole operation" >&2; exit 254 ;;
   esac
   echo '{"Credentials":{"AccessKeyId":"ASIAFIXTUREFIXTURE01","SecretAccessKey":"s3cr3t-value-xyz","SessionToken":"tok-fixture","Expiration":"2026-10-01T00:15:00Z"}}' ;;
+"sts get-caller-identity")
+  case "\$(cat "$TMP/ident" 2> /dev/null || echo ok)" in
+  ok) echo '{"Account":"210987654321"}' ;;
+  throttled) echo "An error occurred (Throttling) when calling the GetCallerIdentity operation: Rate exceeded for arn:aws:iam::210987654321:role/x" >&2; exit 254 ;;
+  *) echo "An error occurred (ExpiredToken) when calling the GetCallerIdentity operation" >&2; exit 254 ;;
+  esac ;;
 "ec2 create-vpc")
   case "\$(cat "$TMP/probe" 2> /dev/null || echo denied)" in
   denied) echo "An error occurred (UnauthorizedOperation) when calling the CreateVpc operation: You are not authorized to perform this operation." >&2 ;;
@@ -812,14 +818,23 @@ for sh in bash zsh; do
   check "$sh: no review role, no plan pass" "$(has "$out" 'plan pass not run: no review role')"
   out="$(run plan "$R" demo --role-arn 'arn:aws:iam::21098765432:role/x' examples/ok)"
   check "$sh: a role ARN outside the pattern is no review role" "$(has "$out" 'plan pass not run: no review role')"
-  for c in "fail denied|the session cannot be issued" "ok allowed|the probe write is allowed (DryRunOperation)" "ok offline|the probe gets another answer"; do
+  for c in "fail ok denied|session: not issued|the session cannot be issued" \
+    "ok throttled denied|identity check: throttled|the identity check is throttled" \
+    "ok expired denied|identity check: expired token|the identity check sees an expired token" \
+    "ok ok allowed|write probe: write allowed|the probe write is allowed (DryRunOperation)" \
+    "ok ok offline|write probe: network|the probe gets another answer"; do
     R="$(newrun)"; run g0 "$R" > /dev/null; : > "$TMP/tf.log"
-    read -r sts probe <<< "${c%%|*}"; echo "$probe" > "$TMP/probe"
-    out="$(AWSSTS="$sts" PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" plan "$R" demo --role-arn "$ROLE" examples/ok 2>&1)"
-    check "$sh: ${c#*|}: the pass ends at credentials" "$(has "$out" 'plan: plan pass ended: credentials')"
-    check "$sh: ${c#*|}: no plan runs" "$(lacks "$(cat "$TMP/tf.log")" 'ok plan')"
+    read -r sts ident probe <<< "${c%%|*}"; echo "$probe" > "$TMP/probe"; echo "$ident" > "$TMP/ident"
+    why="${c#*|}"; why="${why%%|*}"
+    out="$(AWSSTS="$sts" PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" plan "$R" demo --role-arn "$ROLE" examples/ok examples/err 2>&1)"
+    check "$sh: ${c##*|}: the pass ends at credentials" "$(has "$out" 'plan: plan pass ended: credentials')"
+    check "$sh: ${c##*|}: the record names the step: $why" "$(has "$out" "credentials: $why")"
+    check "$sh: ${c##*|}: the next example is not reached" "$(has "$out" 'not reached: examples/err')"
+    check "$sh: ${c##*|}: the next example gets no block" "$(lacks "$out" 'example: examples/err')"
+    check "$sh: ${c##*|}: the answer's account never reaches the record" "$(lacks "$out" '210987654321')"
+    check "$sh: ${c##*|}: no plan runs" "$(lacks "$(cat "$TMP/tf.log")" 'ok plan')"
   done
-  rm -f "$TMP/probe"
+  rm -f "$TMP/probe" "$TMP/ident"
 
   # The merge base re-run of a code error.
   R="$(newrun)"
