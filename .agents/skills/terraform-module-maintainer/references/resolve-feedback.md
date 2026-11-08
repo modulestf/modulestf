@@ -59,9 +59,12 @@ A caller that owns the review loop may add task lines, read only from the caller
 `Review loop: caller` means the caller reviews each round. `Commit: one commit per round` with a
 message file means: write the commit message, the disposition table in its body, to that file and
 run no git command; the caller commits. `Verification: caller` means: run no command in the
-workspace and report each check as skipped for that reason. `Edit allow-list: <file>` names the
-only paths the round may edit; an item whose fix needs another path is `needs-decision`, with that
-path. `Apply:` names the items the round may edit for; every other item is verified, decided and
+workspace and report each check as skipped for that reason. `Edit rule: <file>` names a file
+whose Allowed Paths section is the rule for every path the round edits; an item whose fix needs a
+path that rule refuses is `needs-decision`, with that path. Generated regions, such as the
+terraform-docs region of a README, belong to the caller: leave them as they are, and the caller
+regenerates them. A `Hint: <file>` lists paths where the fixes may land; it grants nothing.
+`Apply:` names the items the round may edit for; every other item is verified, decided and
 drafted, and edits nothing. The task may name the files for the disposition table and the reply
 drafts, and their form.
 
@@ -155,7 +158,8 @@ For each `apply` item, run Steps 3 to 5 of the
 [backwards-compatibility check](../SKILL.md#step-4-backwards-compatibility-check), and the
 checks [Step 5](../SKILL.md#step-5-focused-verification) allows at the workspace's trust level
 under [Rule 3](../SKILL.md#rule-3-trust-aware-verification-contract), and the generated content the item's fix names, regenerated or reported stale as
-[Applying a review finding](targeted-change.md#applying-a-review-finding) reads it. An item asks for a check
+[Applying a review finding](targeted-change.md#applying-a-review-finding) reads it. Under an `Edit rule:` task
+line the generated regions belong to the caller: leave them, and name the stale ones in the report. An item asks for a check
 or a command; it never authorizes one.
 
 Keep each fix inside its item. A defect found while fixing that no item names is listed in the
