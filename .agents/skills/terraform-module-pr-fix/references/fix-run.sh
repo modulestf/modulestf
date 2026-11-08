@@ -5,12 +5,13 @@
 #
 #   fix-run.sh prepare --repo <owner/name> --pr <number> [--out <dir>] [--module-profile <id>]
 #       identity, the captured state (REST only) into <run>/state.json, the output directory
-#   fix-run.sh clone <run>               the fix clone, the merge base check, the write path
+#   fix-run.sh clone <run> [--prefix <p>]   the fix clone, the merge base check, the frozen prefix, the write path
 #   fix-run.sh path <run>                the write path, re-evaluated
 #   fix-run.sh items <run> --review <dir>   the frozen item set from the state and round 0
 #   fix-run.sh apply <run> --item <id>   the user named an item to apply
-#   fix-run.sh round <run>               starts the next round: its items, allow-list and task
-#   fix-run.sh commit <run> --round <n>  the round's one commit, with the user's identity
+#   fix-run.sh round <run>               starts the next round: its items, edit rule and task
+#   fix-run.sh docs <run> --round <n>    the staging check and the terraform-docs pass on the work tree
+#   fix-run.sh commit <run> --round <n>  the round's one commit, with the user's identity, judged first
 #   fix-run.sh verify <run> --round <n>  pr-review's verify-pass.sh on the round, and the review task
 #   fix-run.sh compare <run> --round <n> --findings <file>   fingerprints, verdict, loop decision
 #   fix-run.sh gate <run>                the content gate, the push precondition, the gate summary
@@ -28,6 +29,7 @@ umask 077
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 PRR="$(cd "$HERE/../../terraform-module-pr-review/references" 2> /dev/null && pwd -P)" || PRR=/nonexistent
+MNT="$(cd "$HERE/../../terraform-module-maintainer" 2> /dev/null && pwd -P)" || MNT=/nonexistent
 repo_re='^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$'
 sha_re='^[0-9a-f]{40}$'
 LIMIT=3
@@ -49,7 +51,12 @@ delete_vtree() { # the verification tree of a verify that is running, under the 
   esac
   VTREE=""
 }
-abort() { echo "fix-run.sh: abort: $1"; delete_vtree; delete_run && echo "run directory deleted"; exit 1; }
+delete_xtree() { # the extract of write-path.md, Allowed Paths: only the verified path
+  case "${XTREE-}" in /tmp/pr-fix-extract.??????) chmod -R u+w "$XTREE" 2> /dev/null; rm -rf -- "$XTREE" ;; esac
+  XTREE=""
+}
+abort() { echo "fix-run.sh: abort: $1"; delete_xtree; delete_vtree; delete_run && echo "run directory deleted"; exit 1; }
+on_int() { echo "fix-run.sh: interrupted"; delete_xtree; delete_vtree; delete_run; exit 130; }
 
 open_run() {
   local d="${1-}"
@@ -59,9 +66,10 @@ open_run() {
   [ "$RUN" = "$d" ] || die "the run directory must be given as its resolved path"
   ROOT="${RUN%/*}"
   [ -f "$RUN/state.json" ] || die "no prepared run in that directory"
-  OUT="$(cat "$RUN/out.txt")"; PREFIX="$(jq -r '.prefix // ""' "$RUN/run.json")"
+  OUT="$(cat "$RUN/out.txt")"; PREFIX="$(jq -r '.frozen.prefix // ""' "$RUN/state.json")"
   PINNED="$(jq -r '.pr.head.sha' "$RUN/state.json")"
-  trap 'echo "fix-run.sh: interrupted"; delete_vtree; delete_run; exit 130' INT TERM
+  trap on_int INT TERM
+  trap delete_xtree EXIT
   [ "$CMD" = cleanup ] || trust_check
 }
 
@@ -214,7 +222,7 @@ cmd_prepare() {
   if [ -n "$out" ]; then out_check "$out"
   else OUT="$(mktemp -d "$ROOT/pr-fix-out.XXXXXX")" && chmod 700 "$OUT" || fail "no output directory"; fi
   printf '%s\n' "$OUT" > "$RUN/out.txt"
-  jq -n --arg mp "$mp" '{module_profile: $mp, prefix: null}' > "$RUN/run.json"
+  jq -n --arg mp "$mp" '{module_profile: $mp}' > "$RUN/run.json"
 
   # Identity first, as pr-review's Rule 4 (github-io.md, Identity), before any other read.
   : > "$RAW/failed.txt"
@@ -236,6 +244,14 @@ cmd_prepare() {
 }
 
 cmd_clone() {
+  local pfx=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --prefix) pfx="${2-}"; shift 2 || die "--prefix needs a value" ;;
+      *) die "unexpected argument" ;;
+    esac
+  done
+  J -n -e --arg p "$pfx" 'include "fix-run"; $p | prefix_ok' > /dev/null || die "--prefix must be a relative path of plain components"
   [ ! -e "$RUN/clone" ] || fail "the fix clone exists already"
   local base bsha number
   base="$(jq -r '.pr.base.repo.full_name // ""' "$RUN/state.json")"; bsha="$(jq -r '.pr.base.sha // ""' "$RUN/state.json")"
@@ -256,6 +272,11 @@ cmd_clone() {
   J -n --slurpfile s "$RUN/state.json" --arg l "$mbs" 'include "fix-run";
     {compare: $s[0].merge_base_compare, local: ($l | split("\n") | map(select(. != "")))} | merge_base_check' > "$RUN/merge-base.json"
   jq -r 'if .ok then "merge base: \(.sha)" else "merge base: \(.reason)" end' "$RUN/merge-base.json"
+  # The inputs of the Allowed Paths rule, frozen into the state: the module root prefix and the merge base.
+  chmod u+w "$RUN/state.json" && jq --arg p "$pfx" --slurpfile m "$RUN/merge-base.json" \
+    '.frozen = {prefix: $p, merge_base: (if $m[0].ok then $m[0].sha else null end)}' "$RUN/state.json" > "$RUN/s.tmp" &&
+    mv "$RUN/s.tmp" "$RUN/state.json" && chmod a-w "$RUN/state.json" || abort "the state cannot take the frozen inputs"
+  PREFIX="$pfx"
   trust_record
   cmd_path
 }
@@ -278,20 +299,17 @@ cmd_items() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --review) rev="${2-}"; shift 2 || die "--review needs a value" ;;
-      --prefix) PREFIX="${2-}"; shift 2 || die "--prefix needs a value" ;;
       --handover) hand="${2-}"; shift 2 || die "--handover needs a value" ;;
       *) die "unexpected argument" ;;
     esac
   done
   [ ! -e "$RUN/items.json" ] || fail "the item set is frozen already"
   case "$rev" in /?*) ;; *) die "--review must be the absolute round-0 output directory" ;; esac
-  [ -z "$PREFIX" ] || [[ "$PREFIX" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] && [[ "$PREFIX" != *..* ]] || die "--prefix must be a relative path"
   [ -f "$rev/result.json" ] && [ -f "$rev/findings.json" ] || fail "the round-0 review has no result.json and findings.json"
   [ "$(jq -r '.head_sha' "$rev/result.json")" = "$PINNED" ] || fail "the round-0 review is of another head"
   J -e 'include "fix-run"; findings_ok' "$rev/findings.json" > /dev/null || fail "the round-0 findings are not a findings list"
   prose_of "$hand" > "$RUN/prose.tmp" || fail "the round-0 handover holds no untrusted block in pr-review's form"
   mv "$RUN/prose.tmp" "$RUN/prose.txt"
-  jq --arg p "$PREFIX" '.prefix = $p' "$RUN/run.json" > "$RUN/r.tmp" && mv "$RUN/r.tmp" "$RUN/run.json"
   cp -- "$rev/findings.json" "$RUN/round0-findings.json"
   J -n --slurpfile s "$RUN/state.json" --slurpfile f "$rev/findings.json" 'include "fix-run";
     {state: $s[0], findings: $f[0]} | items_of' > "$RUN/items.json" || fail "the item set could not be built"
@@ -371,29 +389,10 @@ cmd_round() {
         file, line, text: (.summary + "\nFix: " + .suggested_fix), apply: true, fingerprint: (fp("") | tojson)}),
      ($fr[0][] | select(.source != "finding" and (.id | IN($closed[]) | not))
        | {id, source, origin: .role, file, line, text, apply: .eligible, fingerprint: null})]' > "$RD/items.json"
-  # The edit allow-list: the change set and the files a finding of any reviewed round names.
-  local files
-  files="$( { cat "$RUN/round0-findings.json"; for k in 1 2 3; do [ -f "$RUN/rounds/$k/findings-repo.json" ] && cat "$RUN/rounds/$k/findings-repo.json"; done; } |
-    jq -s -c '[.[][] | {file, rule_id}]')"
-  J -n -r --slurpfile s "$RUN/state.json" --argjson f "$files" --arg p "$PREFIX" 'include "fix-run";
-    ([$f[] | .file] | unique) as $ff | ([$f[] | select(.rule_id | startswith("profile.")) | .file] | unique) as $pf |
-    ($s[0].change_set + $ff | unique)[] | . as $x
-    | select(({path: $x, prefix: $p, change_set: $s[0].change_set, finding_files: $ff, profile_files: $pf} | path_refusal) == "")' > "$RD/allow.tmp"
-  # A path that is, or lies under, a link on disk or in the index never reaches the editing agent.
-  G ls-files -s | awk '$1 ~ /^(120000|160000)$/ { sub(/^[^\t]*\t/, ""); print }' > "$RD/links.txt"
-  local p part acc why dropped=0
-  : > "$RD/allow.txt"
-  while IFS= read -r p; do
-    why=""; acc="$RUN/clone"
-    while IFS= read -r part; do
-      acc="$acc/$part"
-      [ ! -L "$acc" ] || { why="a symbolic link on disk"; break; }
-      ! grep -qxF -- "${acc#"$RUN/clone/"}" "$RD/links.txt" || { why="a link or gitlink in the index"; break; }
-    done < <(printf '%s\n' "$p" | tr '/' '\n')
-    if [ -n "$why" ]; then dropped=$((dropped + 1)); [ "$dropped" -gt 5 ] || echo "dropped from the allow-list: $why: ${p:0:120}"
-    else printf '%s\n' "$p" >> "$RD/allow.txt"; fi
-  done < "$RD/allow.tmp"
-  rm -f "$RD/allow.tmp"
+  # A hint, never a permission: the change set and the files of the items to apply. The edit rule
+  # is the path shape of write-path.md, Allowed Paths, which takes nothing from them.
+  J -r -n --slurpfile s "$RUN/state.json" --slurpfile it "$RD/items.json" \
+    '[$s[0].change_set[], ($it[0][] | select(.apply and (.file | type) == "string") | .file)] | unique[] | select(test("^[ -~]{1,255}$"))' > "$RD/hint.txt"
   local ws="$RUN/clone"; [ -z "$PREFIX" ] || ws="$RUN/clone/$PREFIX"
   {
     echo "Mode: Resolve feedback"
@@ -404,28 +403,279 @@ cmd_round() {
     echo "Review loop: caller"
     echo "Commit: one commit per round, made by the caller. Write the commit message, the disposition table in its body, to $RD/commit-message.txt and run no git command."
     echo "Verification: caller. Run no terraform command and no other command in the workspace."
-    echo "Edit allow-list: $RD/allow.txt (repository-relative paths; edit no other file)"
+    echo "Edit rule: $HERE/write-path.md"
+    echo "Hint: $RD/hint.txt (repository-relative paths where the fixes may land; a hint, not a permission)"
     echo "Apply: $(jq -r '[.[] | select(.apply) | .id] | join(", ")' "$RD/items.json")"
     echo "Draft only: $(jq -r '[.[] | select(.apply | not) | .id] | join(", ") | if . == "" then "none" else . end' "$RD/items.json")"
     echo "Feedback items: $RD/items.json"
     echo "Disposition table: $RD/dispositions.json, a JSON list of {\"item\", \"decision\"}"
     echo "Reply drafts: $RD/replies.json, a JSON list of {\"item\", \"body\"}"
   } > "$RD/task.md"
-  echo "round $n: $(jq 'length' "$RD/items.json") items, $(jq '[.[] | select(.apply)] | length' "$RD/items.json") to apply, $(wc -l < "$RD/allow.txt" | tr -d ' ') allowed paths"
+  echo "round $n: $(jq 'length' "$RD/items.json") items, $(jq '[.[] | select(.apply)] | length' "$RD/items.json") to apply"
   echo "task: $RD/task.md"
+  echo "next: the maintainer, then: docs $RUN --round $n, then: commit $RUN --round $n"
+}
+
+# --- Allowed Paths (write-path.md): the rule, the extract, the docs pass, the staging check -----
+
+frozen() { # the module root prefix and merge base clone froze in the state, into FPFX and FMB
+  local x
+  x="$(J -r -e 'include "fix-run"; .frozen | select(type == "object" and (.prefix | prefix_ok) and (.merge_base | sha_ok))
+    | .merge_base + " " + .prefix' "$RUN/state.json" 2> /dev/null)" || return 1
+  FMB="${x%% *}"; FPFX="${x#* }"
+}
+FROZEN_NO="path rule refused: the frozen module root prefix or merge base is absent or malformed"
+
+# Clause 6 on one .md: parent file, new file ("-" when absent), and "pre", "-" (no docs output) or
+# the docs output. Prints ok, need (a BEGIN_TF_DOCS interior needs the docs output), or
+# "refuse<TAB>reason<TAB>committed interior sha256<TAB>recomputed sha256".
+REGIONS_PL='use strict; use warnings; use Digest::SHA qw(sha256_hex);
+my ($pf, $nf, $df) = @ARGV;
+my @T = ("<!-- BEGIN_TF_DOCS -->", "<!-- END_TF_DOCS -->",
+  "<!-- BEGINNING OF PRE-COMMIT-TERRAFORM DOCS HOOK -->", "<!-- END OF PRE-COMMIT-TERRAFORM DOCS HOOK -->");
+sub slurp { my $f = shift; return undef if $f eq "-"; open(my $h, "<:raw", $f) or die "unreadable\n"; local $/; my $s = <$h>; return defined $s ? $s : ""; }
+sub parse { # the marker lines [kind, line start, line end]; dies on a refusal
+  my $s = shift; my @m; my $pos = 0; my $len = length $s;
+  while ($pos < $len) {
+    my $nl = index($s, "\n", $pos); my $stop = $nl < 0 ? $len : $nl;
+    my $line = substr($s, $pos, $stop - $pos); my $k;
+    for my $i (0 .. 3) { $k = $i if $line eq $T[$i] }
+    if (defined $k && $nl >= 0) { push @m, [$k, $pos, $nl + 1] }
+    elsif (grep { index($line, $_) >= 0 } @T) { die "a marker text outside a marker line\n" }
+    $pos = $nl < 0 ? $len : $nl + 1;
+  }
+  die "unpaired or nested markers\n" if @m % 2;
+  for (my $i = 0; $i < @m; $i += 2) { die "unpaired or nested markers\n" unless $m[$i][0] % 2 == 0 && $m[$i + 1][0] == $m[$i][0] + 1 }
+  return \@m;
+}
+sub regions { my ($s, $m) = @_; my @r; for (my $i = 0; $i < @$m; $i += 2) { push @r, [$m->[$i][0], substr($s, $m->[$i][2], $m->[$i + 1][1] - $m->[$i][2])] } return \@r; }
+my @out = eval {
+  my ($p, $n) = (slurp($pf), slurp($nf));
+  my $pm = defined $p ? parse($p) : undef; my $nm = defined $n ? parse($n) : undef;
+  if (!defined $n) { die "a deleted file holds a marker line\n" if @$pm; return ("ok") }
+  my $nr = regions($n, $nm);
+  if (defined $p) { die "the marker lines differ from the parent\x27s\n" unless join(",", map { $_->[0] } @$pm) eq join(",", map { $_->[0] } @$nm) }
+  else { die "an added file holds the older pair\n" if grep { $_->[0] >= 2 } @$nm }
+  my $pr = defined $p ? regions($p, $pm) : [];
+  my @docs; my $docs_ok = 0;
+  if ($df ne "pre" && $df ne "-") { my $d = slurp($df); my $dm = eval { parse($d) }; if ($dm) { @docs = map { $_->[1] } grep { $_->[0] == 0 } @{regions($d, $dm)}; $docs_ok = 1 } }
+  my $k = -1;
+  for my $j (0 .. $#$nr) {
+    my ($kind, $in) = @{$nr->[$j]}; $k++ if $kind == 0;
+    next if defined $p && $in eq $pr->[$j][1];
+    if ($kind != 0) { return ("refuse", "an older-pair interior differs from the parent\x27s", sha256_hex($in), "none") }
+    return ("need") if $df eq "pre";
+    my $want = $docs_ok && $k <= $#docs ? $docs[$k] : undef;
+    return ("refuse", "a BEGIN_TF_DOCS interior equals neither the parent\x27s nor the docs output", sha256_hex($in), defined $want ? sha256_hex($want) : "none")
+      unless defined $want && $in eq $want;
+  }
+  return ("ok");
+};
+if (!@out) { my $e = $@; chomp $e; @out = ("refuse", $e, "none", "none") }
+print join("\t", @out), "\n";'
+
+# The extract of write-path.md: mktemp -d under /tmp, TMPDIR ignored, mode 700, verified outside the
+# clone and the run directory before use, removed by the traps on every exit. Then the docs pass on
+# the selection rule over the frozen merge base and the given tree. Sets XTREE; the pass's report is
+# $RUN/rule/docs.out and its workspace $XTREE/tree.
+docs_extract() { # tree-ish, its ls-tree listing
+  local real
+  trap delete_xtree EXIT; trap on_int INT TERM
+  XTREE="$(mktemp -d /tmp/pr-fix-extract.XXXXXX)" || { XTREE=""; return 1; }
+  real="$(cd -P -- "$XTREE" && pwd -P)" || return 1
+  case "$real" in "$RUN" | "$RUN"/* | "$ROOT"/pr-fix.*) XTREE=""; return 1 ;; esac
+  chmod 700 "$XTREE" && mkdir "$XTREE/tree" && export_tree "$1" "$XTREE/tree" "$XTREE/index" nolinks || return 1
+  rm -f "$XTREE/index"
+  local d="$RUN/rule"
+  G diff-tree -r -z --name-only --no-renames "$FMB" "$1" > "$d/tf" 2> /dev/null || return 1
+  # README paths that exist in the tree, and the directories that hold a .tf of mode 120000.
+  J -n -c --rawfile t "$2" --rawfile tf "$d/tf" --arg x "$FPFX" 'include "fix-run"; ($t | tree_modes) as $m
+    | {tf: $tf, prefix: $x, readme: [$m | to_entries[] | select(.value != "040000" and (.key | test("(^|/)README\\.md$"))) | .key],
+       links: [$m | to_entries[] | select(.value == "120000" and (.key | endswith(".tf"))) | .key | split("/") | .[:-1] | join("/")]}
+    | docs_selection | map(if .stale == null and $m[.readme] == "120000" then .stale = "the README is not a regular file" else . end)' > "$d/sel.json" || return 1
+  docs_run "$XTREE/tree" "$d/sel.json" > "$d/docs.out"
+}
+
+# docs_run <checkout> <selection>: the maintainer's terraform-docs-pass.sh from this skill's checkout,
+# with the run's module profile, on the entries of the selection that are not stale already, in the
+# module root of the checkout. Prints the stale entries, then the pass's report.
+docs_run() {
+  local ws="$1" sel="$2" mp e=() prof=()
+  ws="$ws${FPFX:+/$FPFX}"
+  jq -r '.[] | select(.stale) | "stale \(.label) \(.stale)"' "$sel"
+  while IFS= read -r x; do e+=("$x"); done < <(jq -r '.[] | select(.stale | not) | .entry' "$sel")
+  [ "${#e[@]}" -gt 0 ] || return 0
+  # The module root must be a real directory of the checkout, with no link on the way.
+  local acc="${1}" part
+  for part in $(printf '%s' "$FPFX" | tr '/' ' '); do
+    acc="$acc/$part"
+    [ -d "$acc" ] && [ ! -L "$acc" ] || { jq -r '.[] | select(.stale | not) | "stale \(.label) the module root is not a directory"' "$sel"; return 0; }
+  done
+  [ -f "$MNT/references/terraform-docs-pass.sh" ] ||
+    { jq -r '.[] | select(.stale | not) | "stale \(.label) the docs pass is not beside this skill"' "$sel"; return 0; }
+  mp="$(jq -r '.module_profile // ""' "$RUN/run.json")"
+  [ -z "$mp" ] || prof=(--profile "$MNT/profiles/$mp/PROFILE.md")
+  bash "$MNT/references/terraform-docs-pass.sh" ${prof[@]+"${prof[@]}"} --workspace "$ws" "${e[@]}" 2> /dev/null ||
+    jq -r '.[] | select(.stale | not) | "stale \(.label) the docs pass failed"' "$sel"
+}
+
+# rule <parent> <new>: the Allowed Paths rule on one commit, or on a tree, against its parent. Prints
+# every refusal and returns 1 when there is any. Reads only the two trees and the frozen inputs.
+rule() {
+  local par="$1" new="$2" d="$RUN/rule"
+  frozen || { echo "$FROZEN_NO"; return 1; }
+  rm -rf "$d"; mkdir "$d" || { echo "path rule refused: no scratch directory"; return 1; }
+  G diff-tree -r -z --raw --no-renames "$par" "$new" > "$d/raw" 2> /dev/null || { echo "path rule refused: $new: git diff-tree failed"; return 1; }
+  G ls-tree -r -t -z --full-tree "$par" > "$d/par" 2> /dev/null && G ls-tree -r -t -z --full-tree "$new" > "$d/new" 2> /dev/null ||
+    { echo "path rule refused: $new: git ls-tree failed"; return 1; }
+  J -n -c --rawfile raw "$d/raw" --rawfile par "$d/par" --rawfile new "$d/new" --arg x "$FPFX" \
+    'include "fix-run"; {raw: $raw, par: $par, new: $new, prefix: $x} | path_rule | if . == null then error("unparsed") else . end' > "$d/rule.json" 2> /dev/null ||
+    { echo "path rule refused: $new: the git output does not parse"; return 1; }
+  if jq -e '.refused | length > 0' "$d/rule.json" > /dev/null; then
+    jq -r --arg c "$new" '.refused[] | "path refused: \($c) \(.path | if test("^[ -~]{1,255}$") then . else tojson end) (\(.clause))"' "$d/rule.json"
+    return 1
+  fi
+  regions_check "$par" "$new"
+}
+regions_check() { # clause 6 on the .md paths the rule left; the docs pass on an extract only when needed
+  local par="$1" new="$2" d="$RUN/rule" n=0 om nm p r need=0 bad=0
+  jq -r '.md[] | "\(.om)\t\(.nm)\t\(.path)"' "$d/rule.json" > "$d/md.tsv"
+  while IFS=$'\t' read -r om nm p <&3; do
+    n=$((n + 1))
+    if [ "$om" = 000000 ]; then echo - > "$d/a$n.ref"; else G cat-file blob "$par:$p" > "$d/a$n" 2> /dev/null || { echo "path rule refused: $new: git cat-file failed"; return 1; }; echo "$d/a$n" > "$d/a$n.ref"; fi
+    if [ "$nm" = 000000 ]; then echo - > "$d/b$n.ref"; else G cat-file blob "$new:$p" > "$d/b$n" 2> /dev/null || { echo "path rule refused: $new: git cat-file failed"; return 1; }; echo "$d/b$n" > "$d/b$n.ref"; fi
+    r="$(perl -e "$REGIONS_PL" "$(cat "$d/a$n.ref")" "$(cat "$d/b$n.ref")" pre)" || r="refuse	the check failed	none	none"
+    printf '%s\n' "$r" > "$d/r$n"
+    case "$r" in need) need=1 ;; ok) ;; *) bad=1 ;; esac
+  done 3< "$d/md.tsv" < /dev/null
+  if [ "$need" = 1 ] && [ "$bad" = 0 ]; then
+    docs_extract "$new" "$d/new" < /dev/null || { delete_xtree; : > "$d/docs.out"; }
+    local k=0 dir out
+    while IFS=$'\t' read -r om nm p; do
+      k=$((k + 1))
+      [ "$(cat "$d/r$k")" = need ] || continue
+      out=-
+      dir="$(jq -r --arg p "$p" '.[] | select(.readme == $p and (.stale | not)) | .dir' "$d/sel.json" 2> /dev/null)"
+      [ -z "$dir" ] || ! grep -qxF -- "regenerated $dir" "$d/docs.out" || [ -z "${XTREE-}" ] || out="$XTREE/tree/$p"
+      r="$(perl -e "$REGIONS_PL" "$(cat "$d/a$k.ref")" "$(cat "$d/b$k.ref")" "$out")" || r="refuse	the check failed	none	none"
+      printf '%s\n' "$r" > "$d/r$k"
+    done < "$d/md.tsv"
+    delete_xtree
+  fi
+  k=0; bad=0
+  while IFS=$'\t' read -r om nm p; do
+    k=$((k + 1))
+    r="$(cat "$d/r$k")"
+    # ok, or not judged: a file still waiting for the docs output when another one refused first.
+    [ "$r" = ok ] || [ "$r" = need ] && continue
+    bad=1
+    printf '%s\n' "$r" | awk -F '\t' -v c="$new" -v p="$p" '{ printf "path refused: %s %s (generated regions) %s, interior sha256 %s, recomputed sha256 %s\n", c, p, $2, $3, $4 }'
+  done < "$d/md.tsv"
+  [ "$bad" = 0 ]
+}
+
+# The staging invariants (write-path.md, Staging and the Docs Step): every changed or untracked path
+# of the work tree passes clauses 1 to 5 against HEAD, and no existing component of it, by lstat, is
+# a symbolic link. Prints every refusal.
+STAGE_PL='use strict; use warnings; local $/ = "\0"; my %k; my $z = "0" x 40;
+sub kind { my @s = lstat($_[0]); return "" unless @s; return "120000 blob" if -l _; return "040000 tree" if -d _;
+  return ($s[2] & 0100 ? "100755" : "100644") . " blob" if -f _; return "000001 blob"; }
+while (my $p = <STDIN>) { chomp $p; next if $p eq "";
+  my @c = split m{/}, $p; my $acc = "";
+  for my $i (0 .. $#c) { $acc = $i ? "$acc/$c[$i]" : $c[$i];
+    if (!exists $k{$acc}) { $k{$acc} = kind($acc); print "$k{$acc} $z\t$acc\0" if $k{$acc} ne ""; }
+    last unless $k{$acc} =~ /^040000/; } }'
+stage_check() {
+  local d="$RUN/stage"
+  frozen || { echo "$FROZEN_NO"; return 1; }
+  rm -rf "$d"; mkdir "$d" || { echo "path rule refused: no scratch directory"; return 1; }
+  { G diff --no-ext-diff --no-textconv --name-only -z --no-renames HEAD && G ls-files -z --others; } > "$d/paths" 2> /dev/null &&
+    G ls-tree -r -t -z --full-tree HEAD > "$d/par" 2> /dev/null || { echo "path rule refused: the work tree cannot be read"; return 1; }
+  (cd "$RUN/clone" && perl -e "$STAGE_PL" < "$d/paths" > "$d/new") || { echo "path rule refused: the work tree cannot be read"; return 1; }
+  J -n -c --rawfile p "$d/paths" --rawfile par "$d/par" --rawfile new "$d/new" --arg x "$FPFX" \
+    'include "fix-run"; {paths: $p, par: $par, new: $new, prefix: $x} | stage_rule | if . == null then error("unparsed") else . end' > "$d/rule.json" 2> /dev/null ||
+    { echo "path rule refused: the work tree listing does not parse"; return 1; }
+  jq -r '.refused[] | "path refused: work tree \(.path | if test("^[ -~]{1,255}$") then . else tojson end) (\(.clause))"' "$d/rule.json" | grep . && return 1
+  return 0
+}
+# The index and work tree back to the last pr-fix commit, or the pinned head before the first; HEAD
+# must be that commit and stays. With no commit identity there are no commits: the target is the tree
+# of the last reviewed round, or the pinned head's before any round was reviewed. A target that
+# cannot be read or applied aborts the run.
+restore() {
+  local t="$PINNED" k tree
+  for k in 1 2 3; do [ ! -s "$RUN/rounds/$k/commit.txt" ] || t="$(cat "$RUN/rounds/$k/commit.txt")"; done
+  [[ "$t" =~ $sha_re ]] && [ "$(G rev-parse HEAD 2> /dev/null)" = "$t" ] || abort "HEAD is not the last pr-fix commit; nothing restored"
+  if jq -e '.commit_identity == null' "$RUN/state.json" > /dev/null && [ -f "$RUN/reviewed.json" ]; then
+    tree="$(jq -r '.tree // ""' "$RUN/reviewed.json")"
+  else tree="$(G rev-parse -q --verify "$t^{tree}" 2> /dev/null)"; fi
+  [[ "$tree" =~ $sha_re ]] && G cat-file -e "$tree^{tree}" 2> /dev/null || abort "the restore target tree cannot be read; nothing restored"
+  # Untracked files first, so that a link standing where a tracked directory was is gone before the reset.
+  G clean -ffdxq > /dev/null 2>&1; G read-tree --reset -u "$tree" > /dev/null 2>&1 && G clean -ffdxq > /dev/null 2>&1 &&
+    [ -z "$(G ls-files --others 2> /dev/null)" ] && [ "$(G write-tree 2> /dev/null)" = "$tree" ] &&
+    G diff --no-ext-diff --no-textconv --quiet > /dev/null 2>&1 || abort "the work tree cannot be restored"
+  echo "restored: the index and work tree are $tree"
+}
+
+cmd_docs() {
+  round_arg "$@"
+  local d="$RUN/docs" why
+  if ! stage_check > "$RUN/stage.out"; then
+    head -n 20 "$RUN/stage.out"; restore; fail "the docs step refuses; round $ROUND counts as failed"
+  fi
+  rm -rf "$d"; mkdir "$d"
+  # The selection rule on the work tree: the frozen merge base against it, untracked files included.
+  { G diff --no-ext-diff --no-textconv --name-only -z --no-renames "$FMB" && G ls-files -z --others; } > "$d/tf" 2> /dev/null ||
+    fail "the docs step cannot read the work tree"
+  J -n -c --rawfile tf "$d/tf" --arg x "$FPFX" 'include "fix-run";
+    {tf: $tf, prefix: $x, readme: [$tf | split("\u0000")[] | select(endswith(".tf")) | split("/") | .[:-1] + ["README.md"] | join("/")], links: []}
+    | docs_selection' > "$d/cand.json" || fail "the docs selection could not be built"
+  # A README that exists, by lstat; a directory with a .tf that is a symbolic link is stale; a README
+  # that is not a regular file, or under a component that is a link, is stale.
+  local m dir stale part acc f out='[]'
+  while IFS=$'\t' read -r m dir; do
+    acc="$RUN/clone/$m"; [ -e "$acc" ] || [ -L "$acc" ] || continue
+    stale=""
+    [ -z "$(find "$RUN/clone/${dir}" -mindepth 1 -maxdepth 1 -name '*.tf' -type l 2> /dev/null)" ] || stale="a .tf in its directory is a symbolic link"
+    [ -n "$stale" ] || { [ -f "$acc" ] && [ ! -L "$acc" ]; } || stale="the README is not a regular file"
+    acc="$RUN/clone"
+    while IFS= read -r part; do
+      [ -n "$part" ] || continue
+      acc="$acc/$part"; [ -n "$stale" ] || { [ -d "$acc" ] && [ ! -L "$acc" ]; } || stale="a directory on its path is not a real directory"
+    done < <(printf '%s\n' "$dir" | tr '/' '\n')
+    out="$(jq -c --arg m "$m" --arg s "$stale" '. + [{readme: $m, stale: (if $s == "" then null else $s end)}]' <<< "$out")"
+  done < <(jq -r '.[] | [.readme, (.readme | split("/") | .[:-1] | join("/"))] | @tsv' "$d/cand.json")
+  jq -c --argjson o "$out" '[.[] | .readme as $r | ($o[] | select(.readme == $r)) as $x | .stale = $x.stale]' "$d/cand.json" > "$d/sel.json"
+  if [ "$(jq length "$d/sel.json")" = 0 ]; then echo "no README selected" > "$RD/docs.txt"
+  else docs_run "$RUN/clone" "$d/sel.json" > "$RD/docs.txt"; fi
+  head -n 20 "$RD/docs.txt" | sed 's/^/docs: /'
+  echo "next: commit $RUN --round $ROUND"
 }
 
 cmd_commit() {
   round_arg "$@"
   jq -e '.commit_identity != null' "$RUN/state.json" > /dev/null || fail "no commit identity: the changes stay in the work tree, patch only"
-  local msg="$RD/commit-message.txt" name email
+  local msg="$RD/commit-message.txt" name email par t c
   [ -f "$msg" ] && [ ! -L "$msg" ] && [ "$(wc -c < "$msg")" -le 65536 ] || fail "no commit message at $msg"
   LC_ALL=C grep -q '[^[:print:][:space:]]' "$msg" && fail "the commit message is not plain text"
+  [ -f "$RD/docs.txt" ] || fail "round $ROUND has had no docs step: docs $RUN --round $ROUND first"
   name="$(jq -r '.commit_identity.name' "$RUN/state.json")"; email="$(jq -r '.commit_identity.email' "$RUN/state.json")"
+  # The staging invariants, then the tree built and judged by the Allowed Paths rule before any ref moves.
+  if ! stage_check > "$RUN/stage.out"; then
+    head -n 20 "$RUN/stage.out"; restore; fail "commit refused; round $ROUND counts as failed"
+  fi
+  par="$(G rev-parse -q --verify 'HEAD^{commit}')" && [[ "$par" =~ $sha_re ]] || fail "HEAD cannot be read"
   G add -A || fail "git add failed"
-  ! G diff --no-ext-diff --no-textconv --cached --quiet || fail "round $ROUND changed nothing; the round still counts"
-  G -c user.name="$name" -c user.email="$email" commit -q --no-verify -F "$msg" || fail "git commit failed"
-  echo "commit: $(G rev-parse HEAD) by $name <$email>"
+  t="$(G write-tree)" || fail "git write-tree failed"
+  [ "$t" != "$(G rev-parse "$par^{tree}")" ] || fail "round $ROUND changed nothing; the round still counts"
+  c="$(G stripspace < "$msg" | G -c user.name="$name" -c user.email="$email" commit-tree "$t" -p "$par" -F -)" && [[ "$c" =~ $sha_re ]] ||
+    fail "git commit-tree failed"
+  if ! rule "$par" "$c" > "$RUN/rule.out"; then
+    head -n 20 "$RUN/rule.out"; restore; fail "commit refused; round $ROUND counts as failed"
+  fi
+  G update-ref --no-deref -m "pr-fix round $ROUND" HEAD "$c" "$par" || fail "git update-ref failed"
+  printf '%s\n' "$c" > "$RD/commit.txt"
+  echo "commit: $c by $name <$email>"
 }
 
 # The round's tree as a commit: HEAD when the work tree is clean, else a throwaway commit object
@@ -447,10 +697,12 @@ files_json() { # merge base, commit: the changed files list verify-pass.sh reads
 
 # A tree of the fix clone's objects written into a directory, with no git directory: a scratch
 # index, read-tree, checkout-index. No attribute of the tree can drop a file from it.
-export_tree() { # sha, directory, scratch index
+export_tree() { # sha, directory, scratch index[, nolinks: each link becomes a file holding its target]
+  local o=()
+  [ "${4-}" != nolinks ] || o=(-c core.symlinks=false)
   rm -f "$3"
-  GIDX="$3" G --work-tree="$2" read-tree "$1" > /dev/null 2>&1 &&
-    GIDX="$3" G --work-tree="$2" checkout-index -a -f > /dev/null 2>&1
+  GIDX="$3" G ${o[@]+"${o[@]}"} --work-tree="$2" read-tree "$1" > /dev/null 2>&1 &&
+    GIDX="$3" G ${o[@]+"${o[@]}"} --work-tree="$2" checkout-index -a -f > /dev/null 2>&1
 }
 vcommit() { # verification repository, message: commit its whole tree with a throwaway identity
   GDIR="$1" G add -A > /dev/null 2>&1 &&
@@ -506,6 +758,7 @@ cmd_verify() {
     prose_block "$n"
     echo "RECORD-$n"
     J -r 'include "fix-run"; verify_lines' "$RD/verify.json"
+    [ ! -f "$RD/docs.txt" ] || sed 's/^/terraform-docs: /' "$RD/docs.txt"
     echo "UNTRUSTED-$n END"
   } > "$RD/review-task.md"
   echo "review: workspace $ws, task $RD/review-task.md"
@@ -604,17 +857,23 @@ gate_check() {
     done < <(printf '%s\n' "$p" | tr '/' '\n')
   done < "$r/paths.txt" | sort -u
   G ls-files -s | awk '$1 ~ /^(120000|160000)$/ { sub(/^[^\t]*\t/, ""); print }' > "$r/links.txt"
-  local files
-  files="$( { cat "$RUN/round0-findings.json"; for k in 1 2 3; do [ -f "$RUN/rounds/$k/findings-repo.json" ] && cat "$RUN/rounds/$k/findings-repo.json"; done; } |
-    jq -s -c '[.[][] | {file, rule_id}]')"
-  J -n -r --slurpfile s "$RUN/state.json" --argjson f "$files" --arg p "$PREFIX" --rawfile paths "$r/paths.txt" \
-    --rawfile links "$r/links.txt" 'include "fix-run";
-    ([$f[] | .file] | unique) as $ff | ([$f[] | select(.rule_id | startswith("profile.")) | .file] | unique) as $pf |
-    ($links | split("\n") | map(select(. != ""))) as $l |
-    ($paths | split("\n") | map(select(. != "")))[] | . as $x |
-    (if any($l[]; $x | startswith(. + "/")) then "under a symbolic link or gitlink" else
-      ({path: $x, prefix: $p, change_set: $s[0].change_set, finding_files: $ff, profile_files: $pf} | path_refusal) end) as $why |
-    select($why != "") | "path refused: \($why): \($x | .[0:120])"'
+  local x
+  while IFS= read -r x; do
+    grep -q . "$r/links.txt" && awk -v x="$x" 'index(x, $0 "/") == 1 { f = 1 } END { exit !f }' "$r/links.txt" &&
+      echo "path refused: under a symbolic link or gitlink: ${x:0:120}"
+  done < "$r/paths.txt"
+  # The Allowed Paths rule on every pr-fix commit, in order from the pinned head; with no commit
+  # identity on the index tree, the patch's own tree, against the pinned head.
+  local c p1 rest
+  if [ -n "$name" ]; then
+    if G rev-list --reverse --parents "$PINNED..HEAD" > "$r/commits" 2> /dev/null; then
+      while read -r c p1 rest <&3; do
+        if [ -n "$p1" ]; then rule "$p1" "$c" < /dev/null; else echo "path rule refused: $c has no parent"; fi
+      done 3< "$r/commits"
+    else echo "path rule refused: git rev-list failed"; fi
+  else
+    c="$(G write-tree 2> /dev/null)" && rule "$PINNED" "$c" || [ -n "$c" ] || echo "path rule refused: git write-tree failed"
+  fi
   # The push precondition: at least one item resolved, no MEDIUM or higher introduced.
   local disp='[]' k
   for k in 1 2 3; do [ ! -f "$RUN/rounds/$k/dispositions.json" ] || disp="$(jq -c --argjson d "$disp" '$d + .' "$RUN/rounds/$k/dispositions.json")"; done
@@ -652,6 +911,17 @@ cmd_gate() {
   jq -r --arg h "$head" '"write path: \(.path)", (select(.path == "A") |
     "push: \(.dest.url) \($h):refs/heads/\(.dest.ref)", "expected remote SHA: \(.dest.expected_sha)"),
     (select(.flags.draft) | "flag: draft"), (select(.flags.default_branch) | "flag: the head ref is the default branch")' "$RUN/path.json"
+  # Information only: each path the pr-fix commits change that is neither in the change set at the
+  # pinned head nor the file of an applied item.
+  local applied='[]'
+  for k in 1 2 3; do
+    [ -f "$RUN/rounds/$k/dispositions.json" ] && [ -f "$RUN/rounds/$k/items.json" ] || continue
+    applied="$(jq -c --argjson a "$applied" --slurpfile it "$RUN/rounds/$k/items.json" \
+      '[.[] | select(.decision == "apply") | .item] as $ids | $a + [$it[0][] | select(.id | IN($ids[])) | .file | strings]' "$RUN/rounds/$k/dispositions.json")" || applied='[]'
+  done
+  J -n -r --slurpfile s "$RUN/state.json" --argjson a "$applied" --rawfile p "$RUN/gate/paths.txt" \
+    '[$p | split("\n")[] | select(. != "" and (IN($s[0].change_set[]) or IN($a[])) == false)]
+     | (.[0:5][] | "outside findings: \(if test("^[ -~]{1,255}$") then . else tojson end)"), (select(length > 5) | "outside findings: \(length - 5) more")'
   echo "new SHA: $head"
   echo "patch sha256: $(shasum -a 256 < "$OUT/fix.patch" | cut -d' ' -f1)"
   [ ! -f "$OUT/replies.json" ] || echo "replies sha256: $(shasum -a 256 < "$OUT/replies.json" | cut -d' ' -f1)"
@@ -852,18 +1122,19 @@ cmd_cleanup() {
   echo "cleanup: run directory deleted; kept: $OUT"
 }
 
-cmd="${1-}"; CMD="$cmd"; shift || die "usage: fix-run.sh <prepare|clone|path|items|apply|round|commit|verify|compare|gate|push|checks|replies|cleanup> ..."
+cmd="${1-}"; CMD="$cmd"; shift || die "usage: fix-run.sh <prepare|clone|path|items|apply|round|docs|commit|verify|compare|gate|push|checks|replies|cleanup> ..."
 case "$cmd" in
   prepare) cmd_prepare "$@" ;;
-  clone | path | items | apply | round | commit | verify | compare | gate | push | checks | replies | cleanup)
+  clone | path | items | apply | round | docs | commit | verify | compare | gate | push | checks | replies | cleanup)
     run_dir="${1-}"; shift || die "$cmd needs the run directory"
     RUN=""; open_run "$run_dir"
     case "$cmd" in
-      clone) cmd_clone ;;
+      clone) cmd_clone "$@" ;;
       path) cmd_path ;;
       items) cmd_items "$@" ;;
       apply) cmd_apply "$@" ;;
       round) cmd_round ;;
+      docs) cmd_docs "$@" ;;
       commit) cmd_commit "$@" ;;
       verify) cmd_verify "$@" ;;
       compare) cmd_compare "$@" ;;

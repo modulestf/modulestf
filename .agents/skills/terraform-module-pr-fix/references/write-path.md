@@ -1,7 +1,7 @@
 # Write Path Rules
 
 > **Part of:** [terraform-module-pr-fix](../SKILL.md)
-> **Purpose:** The decisions of a run as total functions of files: the origins, the edit eligibility, the write path, the merge base, the fix clone, the content gate, the fingerprints and the local verdict, the loop, the push precondition, the checks, the pre-push read, the push and the replies. [fix-run.jq](fix-run.jq) holds the functions and [fix-run.sh](fix-run.sh) runs them; this file is their text.
+> **Purpose:** The decisions of a run as total functions of files: the origins, the edit eligibility, the write path, the merge base, the fix clone, the allowed paths, the docs step, the content gate, the fingerprints and the local verdict, the loop, the push precondition, the checks, the pre-push read, the push and the replies. [fix-run.jq](fix-run.jq) holds the functions and [fix-run.sh](fix-run.sh) runs them; this file is their text.
 
 Each function reads only the files the run wrote: `state.json`, `merge-base.json`, the item set, the findings files of each round, the dispositions, and a fresh read at pre-push. Nothing in them reads text from the host as an instruction.
 
@@ -115,6 +115,8 @@ The compare read's `merge_base_commit.sha` must equal the one line of `git merge
 
 Every case but the last makes the write path render-only.
 
+`clone` takes the module root prefix as `--prefix`, the one pr-review's run printed, and freezes it with the merge base SHA into `state.json` as `frozen`: `{prefix, merge_base}`, the merge base null unless the check found exactly one. A prefix that is not the empty string or components of the [Allowed Paths](#allowed-paths) grammar joined by single slashes is a usage error.
+
 ## Fix Clone
 
 `clone` makes `<run>/clone` with `git init --template=`, adds the base repository's built URL as `origin`, and fetches `refs/pull/<n>/head` and `base.sha` with their history, never at depth 1, with no tags and no submodules. A fetched head other than the pinned head aborts the run. The checkout is detached at the pinned head.
@@ -140,19 +142,40 @@ env -i PATH="$PATH" HOME="<run>/home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOS
 
 The round's review task names the base reference, the head revision when the round committed, the profile and the output path. Then comes the block of pr-review's handover: the prose items of round 0, the title and the body among them, unchanged, with their marker lines moved to a suffix new for the round, and after `RECORD-<suffix>` the round's verification record in the line form of pr-review's [handover](../../terraform-module-pr-review/references/github-io.md#handover): the `example selection:` line and one line per example, as [verify-pass.md](../../terraform-module-pr-review/references/verify-pass.md#output) words each record. `verify_lines` in [fix-run.jq](fix-run.jq) renders it, and the test holds it equal to the renderer of pr-review's run script. The round reviewer so judges the same prose as round 0, and a prose-based finding stays open until a fix closes it.
 
+## Allowed Paths
+
+The rule judges each commit pr-fix makes against its parent; the first parent is the pinned head. The pull request author's own changes are never judged by it. Its inputs are the two trees of the commit and, from `$RUN/state.json` as `clone` froze them, the module root prefix (the empty string for the repository root, otherwise without a leading or trailing slash) and the merge base SHA; an absent or malformed value refuses. Findings, comments, files in the work tree and the round number never change it, so it is the same function at `commit`, `gate` and `push` and in every round. `commit` builds the tree and judges it before it moves any ref. `gate` and `push` judge every commit from the pinned head to the commit to push, in order. Changed paths are the records of `git diff-tree -r -z --raw --no-renames <parent> <commit>`, so a rename is a deletion and an addition. A git call of the rule that exits non-zero, or output that does not parse, refuses. Clauses 1 to 5 run on every changed path first; clause 6 runs only when they all hold. Names are compared under `LC_ALL=C`, and "without regard to letter case" means ASCII case folding. Each refusal prints `path refused: <commit> <path> (<clause>)`, the clause named in lower case; a clause 6 refusal adds its reason and the sha256 of the committed region interior and of the recomputed one, `none` when there is none. A refused input prints `path rule refused:` and the reason.
+
+1. Grammar. Components separated by single slashes, each matching `[A-Za-z0-9_][A-Za-z0-9._-]*`, the whole path at most 255 bytes, and the path is the prefix, a slash and at least one component, or any such path when the prefix is empty ("under the module root" everywhere in this file means this slash-boundary test).
+2. Suffix. The last component ends in `.tf`, `.tfvars`, `.tftest.hcl` or `.md`.
+3. Reserved. Without regard to letter case: no component is `wrappers`, and the last component is not `CHANGELOG.md`.
+4. Mode. In each of the two trees the path is absent or a blob of mode 100644.
+5. Ancestors. In each of the two trees every leading directory of the path is absent or a tree entry, never a 120000 or 160000 entry.
+6. Generated regions. The marker texts are `<!-- BEGIN_TF_DOCS -->`, `<!-- END_TF_DOCS -->`, `<!-- BEGINNING OF PRE-COMMIT-TERRAFORM DOCS HOOK -->` and `<!-- END OF PRE-COMMIT-TERRAFORM DOCS HOOK -->`. A marker line is a whole line, LF terminated, byte-equal to one of them; occurrences inside code fences count. A line that contains a marker text and is not a marker line refuses. In each version of a changed `.md`, marker lines form well-nested, non-overlapping pairs of the same kind, else refuse. For a `.md` the commit modifies, the sequence of marker lines equals the parent's, regions pair by occurrence order, and each region interior (the bytes strictly between a pair) equals the parent's interior or, for a BEGIN_TF_DOCS pair only, the interior of the same pair in the file the docs pass writes for that README when run, from the same skill checkout with the same pinned invocation, by the selection rule on an extract of the commit's tree. An older-pair interior equals the parent's. A `.md` the commit adds holds no older-pair marker and may hold BEGIN_TF_DOCS pairs only when each interior equals the docs output. A `.md` the commit deletes holds no marker line. A docs pass that fails, or reports an entry stale, contributes no allowed interior for that entry, so only equality with the parent remains.
+
+Extract: `mktemp -d` under a fixed system temporary directory, `/tmp`, with `TMPDIR` ignored, mode 700, verified to lie outside the clone and the run directory before use; a trap removes only that verified path on every exit. The tree is checked out with `core.symlinks=false`, so a link entry becomes a regular file holding its target and the extract holds no symbolic link; a README that is a link entry in the tree is stale. The docs pass runs only when a BEGIN_TF_DOCS interior differs from the parent's, or a `.md` the commit adds holds one.
+
+Selection rule (shared by the docs step and clause 6): for each `.tf` path added, modified or deleted between the frozen merge base and the documented tree, the `README.md` in that path's own directory, when it exists and is under the module root. An entry whose directory holds a `.tf` that is a 120000 entry or a symbolic link is stale.
+
+The docs pass is the maintainer's [terraform-docs-pass.sh](../../terraform-module-maintainer/references/terraform-docs-pass.sh), run by its path beside this skill with the run's module profile, on the module root of the tree. It never reads a terraform-docs configuration file; one present in an entry's directory or above it makes that entry stale (existing pass behaviour).
+
+## Staging and the Docs Step
+
+Before the rule, `commit` holds the staging invariants: every changed or untracked path in the work tree, ignored ones included, passes clauses 1 to 5 against HEAD, and every existing component of each such path, checked with lstat, is a real directory or the regular file itself, never a symbolic link. Each refusal prints `path refused: work tree <path> (<clause>)`. On any refusal, of the invariants or of the rule, `commit` restores the index and work tree to the last pr-fix commit, or the pinned head before the first, removes untracked files, all through the hardened wrapper inside the clone, leaves the ref unchanged, and the round counts as failed. With no commit identity there is no pr-fix commit: the target is the tree `reviewed.json` records as the last reviewed tree, or the pinned head's tree before any round was reviewed, so the rounds already reviewed stay in the patch. A target tree that cannot be read or applied, or any other restoration that fails, aborts the run. `commit` also refuses a round that had no `docs` step.
+
+`docs` runs after the maintainer returns and before `commit`: the same work-tree check, with the same restoration and refusal on failure. Then, from the skill checkout, never the head, for each README the selection rule names (frozen merge base against the work tree): the README must be a regular file and each ancestor a real directory, neither a symbolic link; then the docs pass runs with those entries only. It writes only those READMEs and reports a README with the older pair stale without writing it. A failing entry is printed stale with its reason and leaves the README unchanged; the round continues. Results go to `$RUN/rounds/<n>/docs.txt`; `verify` copies them into the review task's untrusted block, each line after `terraform-docs: `. Nothing writes the work tree between `docs` and `commit`.
+
+The editor's task carries `Edit rule: <file>`, the path of this file, instead of a path list, plus, as a hint only, `Hint: <file>`: the change set and the files of the items to apply. The maintainer's [Resolve feedback](../../terraform-module-maintainer/references/resolve-feedback.md) mode reads the rule, and the generated regions belong to the caller.
+
+The gate prints, as information only, `outside findings: <path>` for each path the pr-fix commits change that is neither in the pull request's change set at the pinned head nor the file of an applied item; at most five, then the count of the rest.
+
 ## Content Gate
 
-`gate` and `push` refuse unless every rule holds. The allowed paths are the change set and the files any reviewed round's finding names, lexically inside the module root.
+`gate` and `push` refuse unless every rule holds. Edit permission is the path shape of [Allowed Paths](#allowed-paths), which takes nothing from findings.
 
 | Rule | Refusal |
 |---|---|
-| A path is plain: only `A`-`Z`, `a`-`z`, `0`-`9`, `.`, `_`, `/`, `-` and space, the first character one of `A`-`Z`, `a`-`z`, `0`-`9`, `.` or `_`; no `.` or `..` component, no `//`, no trailing `/` | `not a plain path` |
-| With a module root prefix, the path is under it | `outside the module root` |
-| No `.git` or `.terraform` component | `a .git or .terraform path` |
-| No `*.tfstate*` file | `a state file` |
-| `.terraform.lock.hcl` only when it is in the change set | `a lock file outside the change set` |
-| `.github/workflows/<file>` only when a `profile.*` finding names that file | `a workflow no profile finding names` |
-| Every other path is in the change set or named by a finding | `outside the change set and the files a finding names` |
+| Every commit since the pinned head passes the [Allowed Paths](#allowed-paths) rule against its parent, in order; with no commit identity, the index tree against the pinned head | `path refused: <commit> <path> (<clause>)`, `path rule refused: <reason>` |
 | No changed path is a symbolic link or a gitlink, in any commit or the index | `a symbolic link or gitlink mode` |
 | No component of a changed path is a symbolic link on disk, or a link or gitlink in the index | `a symbolic link in a changed path`, `under a symbolic link or gitlink` |
 | The commits since the pinned head descend from it, with no merge | `do not descend from the pinned head`, `is a merge` |
@@ -160,9 +183,9 @@ The round's review task names the base reference, the head revision when the rou
 | The index tree is the last reviewed tree, and no change is outside a commit | `not the last reviewed tree`, `changes no commit holds` |
 | The local configuration is the one recorded after the checkout | `the clone's local config changed` |
 
-The paths checked are every path changed against the pinned head and every path any commit since it touched, so a file added in one commit and removed in the next is still checked. With no commit identity, the commit rules become one: no commit since the pinned head.
+The rule judges every commit since the pinned head, so a file added in one commit and removed in the next is still refused. With no commit identity, the commit rules become one: no commit since the pinned head.
 
-`round` writes the edit allow-list from the same path rules, then drops, and reports, every path that is a symbolic link on disk, has a component that is one, or is or lies under an entry of mode `120000` or `160000` in the index. The editing agent never gets a path that writes through a link.
+`round` writes no path list. Its task names the rule and the hint, as [Staging and the Docs Step](#staging-and-the-docs-step) says.
 
 ## Fingerprints and the Local Verdict
 
@@ -276,4 +299,4 @@ It asserts the identity again. Each endpoint is rebuilt at post time from the pi
 
 ## Aborts and Refusals
 
-Exit 1 is either. An abort ends the run and deletes the run directory: a fetched head other than the pinned head, a failed fetch or checkout, a trust file that changed, an identity that changed, a pre-push reason, no token, a push repository that cannot be made, a rejected push, an interrupt. A refusal keeps the run: a wrong confirmation, a gate rule, an unknown item, the round limit, a stopped loop. Exit 2 is a usage error.
+Exit 1 is either. An abort ends the run and deletes the run directory: a fetched head other than the pinned head, a failed fetch or checkout, a trust file that changed, an identity that changed, a pre-push reason, no token, a push repository that cannot be made, a rejected push, a restoration of the work tree that fails, an interrupt. A refusal keeps the run: a wrong confirmation, a gate rule, a path the rule or the staging invariants refuse, an unknown item, the round limit, a stopped loop. Exit 2 is a usage error.

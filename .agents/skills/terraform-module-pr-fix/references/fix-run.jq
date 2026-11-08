@@ -170,20 +170,83 @@ def checks_class:
     end
   end;
 
-# --- The content gate ------------------------------------------------------------------------
+# --- Allowed paths ---------------------------------------------------------------------------
 
-# Input {path, prefix, change_set, finding_files, profile_files}: "" when allowed, else the reason.
-def path_refusal:
-  .path as $p | .prefix as $x | ($p | split("/")) as $parts | .change_set as $cs | .finding_files as $ff | .profile_files as $pf |
-  if ($p | test("^[A-Za-z0-9._][A-Za-z0-9._/ -]*$") | not) or ($p | test("(^|/)\\.\\.?(/|$)|//|/$")) then "not a plain path"
-  elif $x != "" and ($p | startswith($x + "/") | not) then "outside the module root"
-  elif any($parts[]; . == ".git" or . == ".terraform") then "a .git or .terraform path"
-  elif ($parts[-1] | test("\\.tfstate")) then "a state file"
-  elif $parts[-1] == ".terraform.lock.hcl" and ($p | IN($cs[]) | not) then "a lock file outside the change set"
-  elif ($p | startswith(".github/workflows/")) then
-    (if ($p | IN($pf[])) then "" else "a workflow no profile finding names" end)
-  elif ($p | IN($cs[], $ff[])) then ""
-  else "outside the change set and the files a finding names" end;
+def path_grammar: test("^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$") and length <= 255;
+# The module root prefix as clone froze it: the empty string, or the grammar's components.
+def prefix_ok: type == "string" and (. == "" or path_grammar);
+# Under the module root: the slash-boundary test.
+def under($prefix): $prefix == "" or startswith($prefix + "/");
+
+# Clauses 1 to 3 of write-path.md, Allowed Paths, on one path: "" when they hold, else the clause.
+def path_clause($prefix):
+  if (path_grammar | not) or (under($prefix) | not) then "grammar"
+  elif (test("\\.(tf|tfvars|md)$|\\.tftest\\.hcl$") | not) then "suffix"
+  elif (split("/") | any(.[]; ascii_downcase == "wrappers")) or (split("/") | .[-1] | ascii_downcase) == "changelog.md" then "reserved"
+  else "" end;
+
+# The entries of `git ls-tree -r -t -z --full-tree` as {path: mode}; null when a record does not parse.
+def tree_modes:
+  if . == "" then [] else split("\u0000") | if .[-1] != "" then null else .[:-1] end end
+  | if . == null then null else
+      [.[] | index("\t") as $i | select($i != null) | {m: .[0:$i], p: .[$i + 1:]}
+       | select((.m | test("^[0-7]{6} (blob|tree|commit) [0-9a-f]{40,64}$")) and .p != "")] as $e
+      | if ($e | length) != length then null else ($e | map({(.p): .m[0:6]}) | add // {}) end
+    end;
+# The records of `git diff-tree -r -z --raw --no-renames` as [{path, om, nm}]; null when one does not parse.
+def raw_records:
+  if . == "" then [] else split("\u0000") | if (length % 2) != 1 or .[-1] != "" then null else .[:-1] end end
+  | if . == null then null else
+      [range(0; length; 2) as $i | {meta: .[$i], path: .[$i + 1]}
+       | (.meta | capture("^:(?<om>[0-7]{6}) (?<nm>[0-7]{6}) [0-9a-f]{40,64} [0-9a-f]{40,64} [ADMT]$")) as $c
+       | select(.path != "") | {path, om: $c.om, nm: $c.nm}] as $r
+      | if ($r | length) != (length / 2) then null else $r end
+    end;
+
+# Clauses 1 to 5 on records [{path, om, nm}] between the parent tree $a and the new tree $b, both
+# {path: mode}. Output {refused: [{path, clause}], md: [{path, om, nm}]}: md, the .md paths clause 6
+# judges, only when nothing is refused.
+def clauses($a; $b; $x):
+  [.[] | .path as $p
+   | ($p | path_clause($x)) as $c
+   | (if $c != "" then $c
+      elif any(.om, .nm; IN("000000", "100644") | not) then "mode"
+      elif any($p | split("/") | range(1; length) as $i | .[0:$i] | join("/") | ($a[.], $b[.]); . != null and . != "040000") then "ancestors"
+      else "" end) as $why
+   | {path: $p, om, nm, clause: $why}]
+  | {refused: map(select(.clause != "") | {path, clause}),
+     md: (if all(.[]; .clause == "") then map(select(.path | endswith(".md")) | {path, om, nm}) else [] end)};
+
+# Input {raw, par, new, prefix}: the git output of one commit against its parent. null when an
+# input does not parse or the prefix is malformed.
+def path_rule:
+  (.raw | raw_records) as $r | (.par | tree_modes) as $a | (.new | tree_modes) as $b | .prefix as $x |
+  if $r == null or $a == null or $b == null or ($x | prefix_ok | not) then null else $r | clauses($a; $b; $x) end;
+
+# The staging invariants: input {paths, par, new, prefix}, paths the NUL-separated changed and
+# untracked paths of the work tree, new the work tree as a listing in ls-tree form (the paths and
+# their existing components, by lstat). The same clauses 1 to 5.
+def stage_rule:
+  (.par | tree_modes) as $a | (.new | tree_modes) as $b | .prefix as $x |
+  if $a == null or $b == null or ($x | prefix_ok | not) then null
+  else [.paths | split("\u0000")[] | select(. != "")] | unique | map({path: ., om: ($a[.] // "000000"), nm: ($b[.] // "000000")})
+    | clauses($a; $b; $x) end;
+
+# The selection rule, shared by the docs step and clause 6. Input {tf, readme, links, prefix}: tf
+# the NUL-separated paths changed between the frozen merge base and the documented tree, readme the
+# README.md paths that exist in that tree, links the directories that hold a .tf that is a link.
+# Output [{readme, entry, dir, label, stale}]: entry is the README relative to the module root, dir
+# its directory in the docs pass's form ("." for the module root).
+def docs_selection:
+  .prefix as $x | .readme as $r | .links as $l |
+  [.tf | split("\u0000")[] | select(endswith(".tf")) | (split("/") | .[:-1] | join("/")) as $d
+   | (if $d == "" then "README.md" else $d + "/README.md" end) as $m
+   | select(($m | under($x)) and ($m | IN($r[])))
+   | {readme: $m, d: $d}] | unique_by(.readme)
+  | map((if $x == "" then .readme else .readme[($x | length) + 1:] end) as $e
+    | (if $e == "README.md" then "." else $e[0:-10] end) as $dir
+    | {readme, entry: $e, dir: $dir, label: (if ($dir | test("^[ -~]{1,200}$")) then $dir else "an unprintable path" end),
+       stale: (if (.d | IN($l[])) then "a .tf in its directory is a symbolic link" else null end)});
 
 # --- Captured state --------------------------------------------------------------------------
 
