@@ -100,7 +100,7 @@ It runs the content gate and the [Push Precondition](write-path.md#push-precondi
 
 ## Step 11
 
-Show the gate: the diff (`$OUT/fix.patch`), the disposition table, the verdict, the author identity, the destination URL and branch, the expected remote SHA, the new SHA and the patch digest (`new SHA:` and `patch sha256:`), and the flags. Ask once whether to push, and wait. Only a new user message after the gate that names the push, the branch and the new SHA confirms it. Then, with `<owner>/<repo>#<number>` the pull request of the user's original request:
+Show the gate: the diff (`$OUT/fix.patch`), the disposition table, the verdict, the author identity, the destination URL and branch, the expected remote SHA, the new SHA and the patch digest (`new SHA:` and `patch sha256:`), the reply drafts' digest (`replies sha256:`), and the flags. Ask once whether to push, and wait. Only a new user message after the gate that names the push, the branch and the new SHA confirms it. Take each argument from its source, as [Push](write-path.md#push) lists them: `--target` from the user's original request; `--confirm-branch` and `--confirm-head` from that confirmation, a short SHA in it expanded only when it is a prefix of the gate's `new SHA:` line; `--expect-sha` and `--confirm-patch` from the gate's lines the user saw. Then:
 
 ```
 fix-run.sh push "$RUN" --target <owner>/<repo>#<number> --confirm-branch <ref> --expect-sha <pinned head> \
@@ -120,11 +120,14 @@ Right after the push the checks are pending, and the run says not finished yet. 
 Each of these needs its own confirmation, from a new user message that names the action:
 
 - **Post the review.** Run pr-review again on the pull request, now at the pushed SHA: `review-run.sh prepare` without `--render-only`, the steps of its depth, the reviewer, the assessment and `render`, then its Rule 1 and its Step 12 write. This skill never posts a review itself.
-- **Post the replies.** Show each draft of `$OUT/replies.json` with the item it answers. Each `<sha>` in a draft becomes the pushed SHA when it is posted. Then:
+- **Post the replies.** Show each draft of `$OUT/replies.json` with the item it answers. Each `<sha>` in a draft becomes the confirmed new SHA when it is posted. Take `--target` from the user's original request, `--confirm-head` from the new SHA the user confirmed for the push, `--confirm-replies` from the gate's `replies sha256:` line the user saw, and `--confirm-items` from the user's confirmation of the replies. Then:
 
 ```
-fix-run.sh replies "$RUN" --target <owner>/<repo>#<number> --file "$OUT/replies.json" --confirm-items <id>,<id>
+fix-run.sh replies "$RUN" --target <owner>/<repo>#<number> --file "$OUT/replies.json" \
+  --confirm-head <new SHA> --confirm-replies <replies sha256> --confirm-items <id>,<id>
 ```
+
+It refuses drafts whose digest differs and a pull request whose live head is not the confirmed SHA.
 
 It runs pr-review's leak scan and at-mention step on each body and posts each to the endpoint it rebuilds from the pinned state ([Replies](write-path.md#replies)).
 

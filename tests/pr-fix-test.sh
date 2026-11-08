@@ -208,6 +208,12 @@ retrust() {
 }
 CG() { env -i PATH="$PATH" HOME="$HOME" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$REALGIT" -C "$RUN/clone" "$@"; }
 GATE() { fr gate "$RUN" > "$TMP/gate.last" 2>&1; }
+LIVE() { api repos/o/r/pulls/7 "$(PR_JSON ".head.sha = \"$(CG rev-parse HEAD)\" | ${1:-.}")"; } # GitHub's view after the push
+REPLIES() { # file, items [overrides]: replies confirmed with the target, the new SHA and the file's digest
+  local f="$1" i="$2"; shift 2
+  fr replies "$RUN" --target o/r#7 --file "$f" --confirm-items "$i" --confirm-head "$(sed -n 's/^new SHA: //p' "$TMP/gate.last")" \
+    --confirm-replies "$(shasum -a 256 < "$f" | cut -d' ' -f1)" "$@"
+}
 PUSH() { # [overrides]: a push confirmed with the target, the branch and the gate's new SHA and patch digest
   fr push "$RUN" --target o/r#7 --confirm-branch feat --expect-sha "$H" \
     --confirm-head "$(sed -n 's/^new SHA: //p' "$TMP/gate.last")" --confirm-patch "$(sed -n 's/^patch sha256: //p' "$TMP/gate.last")" "$@"
@@ -442,10 +448,10 @@ t_e2e() {
   pages repos/o/r/issues/7/comments '[[{"id": 702, "user": {"id": 5, "login": "eve", "type": "User"}, "body": "new"}]]'
   PUSH > "$TMP/push.out" 2>&1 || { cat "$TMP/push.out"; return 1; }
   local new; new="$(CG rev-parse HEAD)"
-  [ "$(RG --git-dir="$REM/o/r.git" rev-parse refs/heads/feat)" = "$new" ] && grep -q "^remote ref: $new" "$TMP/push.out" || return 1
+  [ "$(RG --git-dir="$REM/o/r.git" rev-parse refs/heads/feat)" = "$new" ] && grep -q "^remote ref: $new" "$TMP/push.out" || return 1; LIVE
   local pl; pl="$(grep ' push ' "$TMP/git-argv.log")"
   [ "$(printf '%s\n' "$pl" | wc -l | tr -d ' ')" = 1 ] &&
-    printf '%s\n' "$pl" | grep -qF -- "-c core.hooksPath=/dev/null -c credential.helper= -c credential.helper=!gh auth git-credential -c http.followRedirects=false push --no-follow-tags --recurse-submodules=no https://github.com/o/r.git $new:refs/heads/feat" &&
+    printf '%s\n' "$pl" | grep -qF -- "-c core.hooksPath=/dev/null -c credential.helper= -c credential.helper=!gh auth git-credential -c http.followRedirects=false -c http.proxy= -c http.sslVerify=true -c http.extraHeader= push --no-follow-tags --recurse-submodules=no https://github.com/o/r.git $new:refs/heads/feat" &&
     ! printf '%s\n' "$pl" | grep -qE -- '--force|--force-with-lease|--tags|--mirror|\+' || { echo "push argv: $pl"; return 1; }
   grep -q '^checks: pending' "$TMP/push.out" || return 1
   # Right after the push the new SHA has no checks, and the pinned head had one: not finished.
@@ -461,19 +467,19 @@ t_e2e() {
   fr checks "$RUN" | grep -q '^checks: not finished, a checks read failed' || return 1
   # Replies: only ids of the frozen set with a pinned endpoint, each confirmed.
   printf '[{"item": "C-999", "body": "x"}]\n' > "$TMP/r1.json"
-  fr replies "$RUN" --target o/r#7 --file "$TMP/r1.json" --confirm-items C-999 > "$TMP/r.out" 2>&1 && return 1
+  REPLIES "$TMP/r1.json" C-999 > "$TMP/r.out" 2>&1 && return 1
   grep -q 'not an open reply target' "$TMP/r.out" || return 1
   printf '[{"item": "F-001", "body": "x"}]\n' > "$TMP/r1.json"
-  fr replies "$RUN" --target o/r#7 --file "$TMP/r1.json" --confirm-items F-001 > /dev/null 2>&1 && return 1
+  REPLIES "$TMP/r1.json" F-001 > /dev/null 2>&1 && return 1
   jq -n '[{item: "T-602", body: "Fixed in <sha>: thanks @alice, it\u0027s \"done\" $(x)."}]' > "$TMP/r2.json"
-  fr replies "$RUN" --target o/r#7 --file "$TMP/r2.json" --confirm-items T-601 > /dev/null 2>&1 && return 1
-  fr replies "$RUN" --target o/r#7 --file "$TMP/r2.json" --confirm-items T-602 > "$TMP/r.out" 2>&1 || { cat "$TMP/r.out"; return 1; }
+  REPLIES "$TMP/r2.json" T-601 > /dev/null 2>&1 && return 1
+  REPLIES "$TMP/r2.json" T-602 > "$TMP/r.out" 2>&1 || { cat "$TMP/r.out"; return 1; }
   grep -qF 'repos/o/r/pulls/7/comments/601/replies {"body":"Fixed in '"$new"': thanks `@alice`, it'"'"'s \"done\" $(x)."}' "$FX/posted.log" || { cat "$FX/posted.log"; return 1; }
-  fr replies "$RUN" --target o/r#7 --file "$TMP/r2.json" --confirm-items T-602 > /dev/null 2>&1 && { echo "posted twice"; return 1; }
+  REPLIES "$TMP/r2.json" T-602 > /dev/null 2>&1 && { echo "posted twice"; return 1; }
   printf '[{"item": "C-701", "body": "see /Users/bob/x"}]\n' > "$TMP/r3.json"
-  fr replies "$RUN" --target o/r#7 --file "$TMP/r3.json" --confirm-items C-701 > /dev/null 2>&1 && return 1
+  REPLIES "$TMP/r3.json" C-701 > /dev/null 2>&1 && return 1
   printf '[{"item": "C-701", "body": "the key is %s-aws"}]\n' "$CANARY" > "$TMP/r3.json"
-  fr replies "$RUN" --target o/r#7 --file "$TMP/r3.json" --confirm-items C-701 > "$TMP/r.out" 2>&1 && return 1
+  REPLIES "$TMP/r3.json" C-701 > "$TMP/r.out" 2>&1 && return 1
   grep -q 'leak scan: the value of AWS_SECRET_ACCESS_KEY in C-701' "$TMP/r.out" || { cat "$TMP/r.out"; return 1; }
   fr cleanup "$RUN" > /dev/null && [ ! -e "$RUN" ] && [ -d "$OUT" ]
 }
@@ -678,11 +684,11 @@ t_endpoint_unit() { # S-002: endpoints from the pinned state and the id alone
 }
 t_endpoint_unit; check "replies: the endpoint is rebuilt from the pinned state and the item id" $?
 t_endpoint() { # S-002: a tampered endpoint in the item set is never used, even behind a trust bypass
-  fx_default; reviewed_run && GATE && PUSH > /dev/null 2>&1 || return 1
+  fx_default; reviewed_run && GATE && PUSH > /dev/null 2>&1 || return 1; LIVE
   chmod u+w "$RUN/items.json"; jq 'map(if .id == "C-701" then .reply = "repos/evil/x/issues/1/comments" else . end)' "$RUN/items.json" > "$TMP/i.json" &&
     cat "$TMP/i.json" > "$RUN/items.json"; retrust; : > "$FX/posted.log"
   printf '[{"item": "C-701", "body": "Not changed."}]\n' > "$TMP/r.json"
-  fr replies "$RUN" --target o/r#7 --file "$TMP/r.json" --confirm-items C-701 > "$TMP/t.out" 2>&1 || { cat "$TMP/t.out"; return 1; }
+  REPLIES "$TMP/r.json" C-701 > "$TMP/t.out" 2>&1 || { cat "$TMP/t.out"; return 1; }
   grep -q '^repos/o/r/issues/7/comments ' "$FX/posted.log" && ! grep -q evil "$FX/posted.log" && fr cleanup "$RUN" > /dev/null
 }
 t_endpoint; check "replies: a tampered item endpoint is ignored" $?
@@ -727,9 +733,9 @@ t_auth() { # F-007: gh auth status must succeed, a token alone is not enough
 t_auth; check "push: a failing gh auth status aborts before git" $?
 t_locked() { # F-007: no reply on a locked pull request
   fx_default; api repos/o/r/pulls/7 "$(PR_JSON '.locked = true')"
-  reviewed_run && GATE && PUSH > /dev/null 2>&1 || return 1
+  reviewed_run && GATE && PUSH > /dev/null 2>&1 || return 1; LIVE ".locked = true"
   printf '[{"item": "C-701", "body": "Not changed."}]\n' > "$TMP/r.json"; : > "$FX/posted.log"
-  fr replies "$RUN" --target o/r#7 --file "$TMP/r.json" --confirm-items C-701 > "$TMP/t.out" 2>&1 && return 1
+  REPLIES "$TMP/r.json" C-701 > "$TMP/t.out" 2>&1 && return 1
   grep -q 'cannot comment' "$TMP/t.out" && [ ! -s "$FX/posted.log" ] && fr cleanup "$RUN" > /dev/null
 }
 t_locked; check "replies: refused on a locked pull request" $?
@@ -788,14 +794,14 @@ t_confirm_patch() { # SN-001: the patch must have the digest the confirmation na
 }
 t_confirm_patch; check "push: a patch digest other than the confirmed one is refused; the gate prints the new SHA and the digest" $?
 t_target_replies() { # SN-002: replies need the target of the user's request, and a rewritten state.json does not redirect them
-  fx_default; reviewed_run && GATE && PUSH > /dev/null 2>&1 || return 1
+  fx_default; reviewed_run && GATE && PUSH > /dev/null 2>&1 || return 1; LIVE
   printf '[{"item": "C-701", "body": "Not changed."}]\n' > "$TMP/r.json"; : > "$FX/posted.log"
   fr replies "$RUN" --file "$TMP/r.json" --confirm-items C-701 > "$TMP/t.out" 2>&1 && return 1
   grep -q -- '--target must be' "$TMP/t.out" || return 1
   fr replies "$RUN" --target o/r#8 --file "$TMP/r.json" --confirm-items C-701 > "$TMP/t.out" 2>&1 && return 1
   grep -q 'not the pull request this run pinned' "$TMP/t.out" || return 1
   chmod u+w "$RUN/state.json"; jq '.repo = "evil/x"' "$RUN/state.json" > "$TMP/s.json" && cat "$TMP/s.json" > "$RUN/state.json"; retrust
-  fr replies "$RUN" --target o/r#7 --file "$TMP/r.json" --confirm-items C-701 > "$TMP/t.out" 2>&1 && return 1
+  REPLIES "$TMP/r.json" C-701 > "$TMP/t.out" 2>&1 && return 1
   [ ! -s "$FX/posted.log" ] && fr cleanup "$RUN" > /dev/null
 }
 t_target_replies; check "replies: --target required and equal to the pinned pull request; a rewritten state.json posts nothing" $?
@@ -819,9 +825,9 @@ t_jq17() { # N-001: the reply leak scan under jq 1.7, the version macOS and ubun
   [ -x /usr/bin/jq ] && /usr/bin/jq --version 2> /dev/null | grep -q '^jq-1\.7' && j17=/usr/bin/jq
   [ -n "$j17" ] || { echo "skip: no jq 1.7 at /usr/bin/jq"; return 0; }
   mkdir -p "$TMP/jq17"; ln -sfn "$j17" "$TMP/jq17/jq"
-  fx_default; reviewed_run && GATE && PUSH > /dev/null 2>&1 || return 1
+  fx_default; reviewed_run && GATE && PUSH > /dev/null 2>&1 || return 1; LIVE
   printf '[{"item": "C-701", "body": "Not changed, thanks @carol."}]\n' > "$TMP/r.json"; : > "$FX/posted.log"
-  PATH="$TMP/jq17:$PATH" fr replies "$RUN" --target o/r#7 --file "$TMP/r.json" --confirm-items C-701 > "$TMP/t.out" 2>&1 || { cat "$TMP/t.out"; return 1; }
+  PATH="$TMP/jq17:$PATH" REPLIES "$TMP/r.json" C-701 > "$TMP/t.out" 2>&1 || { cat "$TMP/t.out"; return 1; }
   grep -qF '{"body":"Not changed, thanks `@carol`."}' "$FX/posted.log" && fr cleanup "$RUN" > /dev/null
 }
 t_jq17; check "replies: the leak scan and the at-mention wrap run under jq 1.7" $?
@@ -861,6 +867,32 @@ t_trust_rounds() { # N-004: a compared round's files join the trust record
   grep -q 'a trust file differs from its recorded digest' "$TMP/t.out" && [ ! -e "$RUN" ]
 }
 t_trust_rounds; check "trust files: a compared round's dispositions join the record; an edit aborts the next command" $?
+
+t_replies_confirm() { # SN-003: replies post only the drafts the gate showed, and only to a fix that is live
+  fx_default; reviewed_run || return 1
+  printf '[{"item": "C-701", "body": "Not changed: the check is right."}]\n' > "$RUN/rounds/1/replies.json"
+  GATE && grep -qE '^replies sha256: [0-9a-f]{64}$' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  local rd new; rd="$(sed -n 's/^replies sha256: //p' "$TMP/gate.last")"; new="$(sed -n 's/^new SHA: //p' "$TMP/gate.last")"
+  [ "$rd" = "$(shasum -a 256 < "$OUT/replies.json" | cut -d' ' -f1)" ] || return 1
+  cp "$OUT/replies.json" "$TMP/drafts.json"; : > "$FX/posted.log"
+  # Before the push, a faked pushed.json does not stand in for the head GitHub reports.
+  jq -n --arg s "$new" '{sha: $s, ref: "feat", remote_ok: true}' > "$RUN/pushed.json"
+  fr replies "$RUN" --target o/r#7 --file "$OUT/replies.json" --confirm-items C-701 --confirm-head "$new" --confirm-replies "$rd" > "$TMP/t.out" 2>&1 && return 1
+  grep -q "the pull request's head is not the confirmed SHA" "$TMP/t.out" && [ ! -s "$FX/posted.log" ] || { cat "$TMP/t.out"; return 1; }
+  rm -f "$RUN/pushed.json"; PUSH > /dev/null 2>&1 || return 1; LIVE
+  # A detached process rewrites the drafts after the gate.
+  jq '.[0].body = "attacker text"' "$TMP/drafts.json" > "$OUT/replies.json"
+  fr replies "$RUN" --target o/r#7 --file "$OUT/replies.json" --confirm-items C-701 --confirm-head "$new" --confirm-replies "$rd" > "$TMP/t.out" 2>&1 && return 1
+  grep -q 'the replies file differs from the digest the confirmation names' "$TMP/t.out" && [ ! -s "$FX/posted.log" ] || { cat "$TMP/t.out"; return 1; }
+  fr replies "$RUN" --target o/r#7 --file "$OUT/replies.json" --confirm-items C-701 --confirm-replies "$rd" > "$TMP/t.out" 2>&1 && return 1
+  grep -q -- '--confirm-head must be' "$TMP/t.out" || return 1
+  cp "$TMP/drafts.json" "$OUT/replies.json"
+  fr replies "$RUN" --target o/r#7 --file "$OUT/replies.json" --confirm-items C-701 --confirm-head "$new" --confirm-replies "$rd" > "$TMP/t.out" 2>&1 ||
+    { cat "$TMP/t.out"; return 1; }
+  grep -qF 'repos/o/r/issues/7/comments {"body":"Not changed: the check is right."}' "$FX/posted.log" && ! grep -q attacker "$FX/posted.log" &&
+    fr cleanup "$RUN" > /dev/null
+}
+t_replies_confirm; check "replies: the drafts' digest and the live head must match the confirmation; a faked pushed.json or rewritten drafts post nothing" $?
 
 # --- Negative self-check: each mutation of a temp copy must make its named case fail. ------------
 
@@ -919,6 +951,9 @@ mutate "the leak scan set bound to its last term" 's/\(\(\[ \{name: "the run dir
 mutate "the round record as JSON" 's/J -r .include "fix-run"; verify_lines. "\$RD\/verify\.json"/jq -c "{selection, dirs}" "\$RD\/verify.json"/' t_e2e
 mutate "the verification tree kept on an interrupt" 's/interrupted"; delete_vtree; delete_run/interrupted"; delete_run/' t_interrupt
 mutate "a compared round left out of the trust record" 's/\[ ! -f "\$RUN\/rounds\/\$k\/review\.json" \] \|\| list=/false \&\& list=/' t_trust_rounds
+mutate "the replies digest not checked" 's/\[\[ "\$cr" =~ \^\[0-9a-f\]\{64\}\$ \]\] && \[ "\$\(shasum -a 256 < "\$f" \| cut -d. . -f1\)" = "\$cr" \] \|\|/true ||/' t_replies_confirm
+mutate "replies trust a local pushed.json" 's/live="\$\(gh api "repos\/\$TREPO\/pulls\/\$TNUM" --jq .\.head\.sha. 2> \/dev\/null\)" \|\| live=""/live="\$(jq -r .sha "\$RUN\/pushed.json" 2> \/dev\/null)"/' t_replies_confirm
+mutate "the push without the http hardening" 's/ -c http\.proxy= -c http\.sslVerify=true -c http\.extraHeader= \\\n/ \\\n/' t_e2e
 
 echo
 if [ "$fails" -eq 0 ]; then echo "pr-fix: all checks hold"; else echo "pr-fix: $fails failed"; exit 1; fi

@@ -654,6 +654,7 @@ cmd_gate() {
     (select(.flags.draft) | "flag: draft"), (select(.flags.default_branch) | "flag: the head ref is the default branch")' "$RUN/path.json"
   echo "new SHA: $head"
   echo "patch sha256: $(shasum -a 256 < "$OUT/fix.patch" | cut -d' ' -f1)"
+  [ ! -f "$OUT/replies.json" ] || echo "replies sha256: $(shasum -a 256 < "$OUT/replies.json" | cut -d' ' -f1)"
   echo "patch: $OUT/fix.patch"
 }
 
@@ -737,7 +738,8 @@ cmd_push() {
   # No force, no lease, no tags, no submodules; the URL is built from pinned names.
   err="$("${GHENV[@]}" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
     GIT_NO_REPLACE_OBJECTS=1 GIT_PAGER=cat git --no-pager -C "$pg" -c core.hooksPath=/dev/null -c credential.helper= -c credential.helper='!gh auth git-credential' \
-    -c http.followRedirects=false push --no-follow-tags --recurse-submodules=no "$url" "$sha:refs/heads/$ref" 2>&1)" || {
+    -c http.followRedirects=false -c http.proxy= -c http.sslVerify=true -c http.extraHeader= \
+    push --no-follow-tags --recurse-submodules=no "$url" "$sha:refs/heads/$ref" 2>&1)" || {
     local class=other
     case "$err" in
       *GH006* | *"protected branch"*) class="protected branch" ;;
@@ -774,18 +776,25 @@ cmd_checks() {
 }
 
 cmd_replies() {
-  local f="" ids="" tg=""
+  local f="" ids="" tg="" ch="" cr=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --file) f="${2-}"; shift 2 || die "--file needs a value" ;;
       --confirm-items) ids="${2-}"; shift 2 || die "--confirm-items needs a value" ;;
       --target) tg="${2-}"; shift 2 || die "--target needs a value" ;;
+      --confirm-head) ch="${2-}"; shift 2 || die "--confirm-head needs a value" ;;
+      --confirm-replies) cr="${2-}"; shift 2 || die "--confirm-replies needs a value" ;;
       *) die "unexpected argument" ;;
     esac
   done
   target_check "$tg"
-  jq -e '.remote_ok' "$RUN/pushed.json" > /dev/null 2>&1 || fail "replies follow a push whose remote ref matched"
-  [ -f "$f" ] && jq -e 'type == "array" and length > 0 and all(.[]; (.item | type == "string") and (.body | type == "string" and length > 0 and length <= 65536))' \
+  [[ "$ch" =~ $sha_re ]] || fail "--confirm-head must be the new SHA the user confirmed"
+  # The drafts as the gate showed them: a private copy, hashed before any change, then only the copy is read.
+  [ -f "$f" ] && [ ! -L "$f" ] && cp -- "$f" "$RUN/replies.in" || fail "the replies file cannot be read"
+  f="$RUN/replies.in"
+  [[ "$cr" =~ ^[0-9a-f]{64}$ ]] && [ "$(shasum -a 256 < "$f" | cut -d' ' -f1)" = "$cr" ] ||
+    fail "the replies file differs from the digest the confirmation names"
+  jq -e 'type == "array" and length > 0 and all(.[]; (.item | type == "string") and (.body | type == "string" and length > 0 and length <= 65536))' \
     "$f" > /dev/null 2>&1 || fail "the replies file is not a list of {item, body}"
   [ "$(jq -r '[.[].item] | sort | join(",")' "$f")" = "$(printf '%s' "$ids" | tr ',' '\n' | LC_ALL=C sort | paste -sd , -)" ] ||
     fail "the confirmation does not name exactly the items of the replies file"
@@ -797,10 +806,13 @@ cmd_replies() {
     | select(([$it[0][] | select(.id == $i and .reply != null)] | length) == 0 or ($i | IN($posted | split("\n")[])))
     | .item[0:40]' "$f")"
   [ -z "$bad" ] || fail "not an open reply target of the frozen set: $(printf '%s' "$bad" | head -n 3 | paste -sd ' ' -)"
-  # The <sha> placeholder becomes the pushed SHA; then pr-review's leak scan and at-mention wrap.
-  local psha leak
-  psha="$(jq -r '.sha' "$RUN/pushed.json")"
-  jq --arg sha "$psha" 'map(.body |= gsub("<sha>"; $sha))' "$f" > "$RUN/replies.tmp" || fail "the replies cannot be read"
+  # The fix is live: the pull request's head on GitHub, read now, is the SHA the user confirmed.
+  # No local file such as pushed.json stands in for it.
+  local live leak
+  live="$(gh api "repos/$TREPO/pulls/$TNUM" --jq '.head.sha' 2> /dev/null)" || live=""
+  [ "$live" = "$ch" ] || fail "the pull request's head is not the confirmed SHA; nothing posted"
+  # The <sha> placeholder becomes that SHA; then pr-review's leak scan and at-mention wrap.
+  jq --arg sha "$ch" 'map(.body |= gsub("<sha>"; $sha))' "$f" > "$RUN/replies.tmp" || fail "the replies cannot be read"
   leak="$(jq -n -r -L "$PRR" --arg run "$RUN" --arg home "${HOME-}" --arg pwd "${PWD-}" --arg tmp "${TMPDIR-}" \
     --slurpfile r "$RUN/replies.tmp" 'include "render-comment";
     (([ {name: "the run directory", v: $run}, {name: "HOME", v: $home}, {name: "PWD", v: $pwd}, {name: "TMPDIR", v: $tmp} ]

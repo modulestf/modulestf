@@ -30,7 +30,7 @@ Later commands trust these files of the run: `state.json`, `commit-identity.json
 - Every other command but `cleanup` recomputes the digests first and aborts on any difference.
 - `verify` keeps the digests in its own process across the pass and aborts when any file changed during it.
 
-A process that the verification starts can leave its process group, find the run by name and rewrite the record too, so digests on disk are defence in depth, never the binding. The binding is the value the user confirmed and passes back: the push takes `--target`, `--confirm-head` and `--confirm-patch` ([Push](#push)), and the replies take `--target` ([Replies](#replies)).
+A process that the verification starts can leave its process group, find the run by name and rewrite the record too, so digests on disk are defence in depth, never the binding. The binding is the value the user confirmed and passes back: the push takes `--target`, `--confirm-head` and `--confirm-patch` ([Push](#push)), and the replies take `--target`, `--confirm-head` and `--confirm-replies` ([Replies](#replies)).
 
 ## Captured State
 
@@ -230,15 +230,15 @@ Comments are not read again, so new comment traffic never aborts. Then `gh auth 
 
 ## Push
 
-`gate` prints the new SHA, the clone's head, and the SHA-256 of `fix.patch`, the diff from the pinned head to that SHA. `push` takes, each from a new user message after the gate that names the push, the branch and the new SHA, or from the original request:
+`gate` prints `new SHA:`, the clone's head; `patch sha256:`, the SHA-256 of `fix.patch`, the diff from the pinned head to that SHA; `expected remote SHA:`, the pinned head; and, when there are reply drafts, `replies sha256:`. The user sees these lines, then confirms in a new message that names the push, the branch and the new SHA. Each argument has one source:
 
-| Argument | Must equal |
-|---|---|
-| `--target <owner>/<repo>#<n>` | The pull request of the user's original request, which must be the pinned one (repository compared without case) |
-| `--confirm-branch` | The destination ref |
-| `--expect-sha` | The pinned head, the remote ref's expected value |
-| `--confirm-head` | The clone's head, whose tree must be the last reviewed tree |
-| `--confirm-patch` | The SHA-256 of the diff from the pinned head to `--confirm-head`, recomputed |
+| Argument | Source | Must equal |
+|---|---|---|
+| `--target <owner>/<repo>#<n>` | The user's original request | The pinned pull request (repository compared without case) |
+| `--confirm-branch` | The user's confirmation | The destination ref |
+| `--confirm-head` | The user's confirmation; a short SHA there is expanded only when it is a prefix of the gate's `new SHA:` line, else the confirmation does not count | The clone's head, whose tree must be the last reviewed tree |
+| `--expect-sha` | The gate's `expected remote SHA:` line shown to the user | The pinned head, the remote ref's expected value |
+| `--confirm-patch` | The gate's `patch sha256:` line shown to the user | The SHA-256 of the diff from the pinned head to `--confirm-head`, recomputed |
 
 Any one missing or different is a refusal, and the run is kept. So a commit made after the gate is never pushed, even by a process that rewrote the run's files. `push` re-runs the content gate and the push precondition, asserts the identity a second time, as pr-review's [Rule 4](../../terraform-module-pr-review/SKILL.md#rule-4-identity-is-asserted-twice), and runs the pre-push read of the target, so a destination that is not that pull request's head aborts. It then pushes the confirmed SHA from a new bare repository, `<run>/push.git`, made with `git init --bare --template=`. Its configuration must hold only `core.*` keys, checked once before and once immediately before the push command; it fetches the one commit from the fix clone through the wrapper, and must then hold exactly that SHA. So no key of the fix clone, such as `url.<x>.pushInsteadOf`, reaches the push:
 
@@ -247,6 +247,7 @@ env -i PATH="$PATH" HOME="$HOME" [GH_CONFIG_DIR="$GH_CONFIG_DIR"] GIT_CONFIG_GLO
   GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GIT_NO_REPLACE_OBJECTS=1 GIT_PAGER=cat \
   git --no-pager -C <run>/push.git -c core.hooksPath=/dev/null -c credential.helper= \
   -c credential.helper='!gh auth git-credential' -c http.followRedirects=false \
+  -c http.proxy= -c http.sslVerify=true -c http.extraHeader= \
   push --no-follow-tags --recurse-submodules=no <built url> <sha>:refs/heads/<ref>
 ```
 
@@ -254,15 +255,24 @@ No force, no lease, no tags, no submodules, no other ref. The SHA is the clone's
 
 ## Replies
 
-`gate` writes `$OUT/replies.json`, the reply drafts of every round, the latest draft per item.
+`gate` writes `$OUT/replies.json`, the reply drafts of every round, the latest draft per item, and prints its SHA-256 as `replies sha256:`.
 
-`replies` posts a reply drafts file, `[{"item", "body"}]`, after its own confirmation. `--confirm-items` must name exactly the items of the file. It refuses unless the push happened and its remote ref matched; the pull request is not locked and the base is not archived; and every item is a comment item of the frozen set that was not posted before. Then, for each body:
+`replies` posts a reply drafts file, `[{"item", "body"}]`, after its own confirmation. It takes:
 
-1. Every `<sha>` placeholder becomes the pushed SHA.
+| Argument | Source | Must equal |
+|---|---|---|
+| `--target <owner>/<repo>#<n>` | The user's original request | The pinned pull request |
+| `--confirm-head` | The new SHA the user confirmed for the push | The pull request's head on GitHub, read now with `gh api repos/<target>/pulls/<n>` |
+| `--confirm-replies` | The gate's `replies sha256:` line shown to the user | The SHA-256 of the file, taken from a private copy before any change; only that copy is read after |
+| `--confirm-items` | The user's confirmation of the replies | Exactly the items of the file |
+
+So drafts rewritten after the gate are never posted, and no local file, such as `pushed.json`, stands in for the push: the fix must be live. It also refuses unless the pull request is not locked and the base is not archived, and every item is a comment item of the frozen set that was not posted before. Then, for each body:
+
+1. Every `<sha>` placeholder becomes the confirmed SHA, which the live head equals.
 2. pr-review's whole [leak scan](../../terraform-module-pr-review/references/comment-format.md#leak-scan) runs on it, with the same functions of `render-comment.jq`: the run directory, `HOME`, `PWD` and `TMPDIR`, the path prefixes, the token shapes, and the value of every secret-named environment variable of 12 characters or more. A match refuses the file and names the pattern and the item.
 3. pr-review's [at-mention step](../../terraform-module-pr-review/references/comment-format.md#at-mentions) wraps every bare at-mention in a code span; one left outside a span refuses the file.
 
-`replies` takes `--target <owner>/<repo>#<n>`, the pull request of the user's original request; it must equal the pinned repository and number. It asserts the identity again. Each endpoint is rebuilt at post time from the pinned `state.json` and the item id, never read from the item set, and must match `^repos/<target repo>/(pulls/<n>/comments/[0-9]+/replies|issues/<n>/comments)$` for the target, so a rewritten `state.json` cannot send a reply elsewhere. Each body is posted with `jq -n --arg body` piped to `gh api -X POST <endpoint> --input -`. A failed post stops: it may have landed, so the comments are read before any retry.
+It asserts the identity again. Each endpoint is rebuilt at post time from the pinned `state.json` and the item id, never read from the item set, and must match `^repos/<target repo>/(pulls/<n>/comments/[0-9]+/replies|issues/<n>/comments)$` for the target, so a rewritten `state.json` cannot send a reply elsewhere. Each body is posted with `jq -n --arg body` piped to `gh api -X POST <endpoint> --input -`. A failed post stops: it may have landed, so the comments are read before any retry.
 
 ## Aborts and Refusals
 
