@@ -1,3 +1,12 @@
+# [0.5.0](https://github.com/modulestf/modulestf/compare/v0.4.2...v0.5.0) (2026-11-08)
+
+
+### Features
+
+* terraform-module-pr-fix, review and finish a pull request ([#123](https://github.com/modulestf/modulestf/issues/123)) ([3f25b34](https://github.com/modulestf/modulestf/commit/3f25b34a74ba0c5abe5f86706b184aac387ce9eb))
+
+
+
 ## [0.4.2](https://github.com/modulestf/modulestf/compare/v0.4.1...v0.4.2) (2026-11-08)
 
 
