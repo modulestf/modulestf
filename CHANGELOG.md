@@ -1,3 +1,12 @@
+## [0.5.1](https://github.com/modulestf/modulestf/compare/v0.5.0...v0.5.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* **pr-fix:** judge each commit by a path rule and add a terraform-docs step ([#126](https://github.com/modulestf/modulestf/issues/126)) ([e528bd8](https://github.com/modulestf/modulestf/commit/e528bd8522d356835baf933a8698d7b244d8c684))
+
+
+
 # [0.5.0](https://github.com/modulestf/modulestf/compare/v0.4.2...v0.5.0) (2026-11-08)
 
 
