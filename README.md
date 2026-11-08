@@ -23,9 +23,16 @@ Agent skills that review reusable Terraform modules against a written profile of
 
 The pull request review calls the reviewer, and both call `change-scope`. The rules of the module family live in a profile: [`terraform-aws-modules`](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md).
 
+Two more skills are work in progress and not usable yet. Each refuses every request and points you to the maintainer:
+
+- [`terraform-module-issue`](.agents/skills/terraform-module-issue/SKILL.md): will turn a GitHub issue into a module change and a pull request.
+- [`terraform-module-create`](.agents/skills/terraform-module-create/SKILL.md): will create a new module repository from a profile.
+
+How the skills fit together, and which skills come next: [docs/skills-architecture.md](docs/skills-architecture.md).
+
 ## Quick start
 
-1. Install the skills as the `modulestf` plugin from the [antonbabenko/agent-plugins](https://github.com/antonbabenko/agent-plugins) marketplace. It holds all four skills; the three Terraform skills link into each other, so they ship together.
+1. Install the skills as the `modulestf` plugin from the [antonbabenko/agent-plugins](https://github.com/antonbabenko/agent-plugins) marketplace. It holds all four skills and the two work in progress skeletons; the Terraform skills link into each other, so they ship together.
 
    ```text
    # Claude Code
@@ -36,7 +43,7 @@ The pull request review calls the reviewer, and both call `change-scope`. The ru
    codex plugin marketplace add antonbabenko/agent-plugins
    ```
 
-   Or copy or symlink all four directories under `.agents/skills/` side by side into your agent's skills directory: `~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex. `change-scope` also works alone.
+   Or copy or symlink all the directories under `.agents/skills/` side by side into your agent's skills directory: `~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex. `change-scope` also works alone.
 
    ```bash
    git clone https://github.com/modulestf/modulestf.git
