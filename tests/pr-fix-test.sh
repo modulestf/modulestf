@@ -886,6 +886,11 @@ t_replies_confirm() { # SN-003: replies post only the drafts the gate showed, an
   grep -q 'the replies file differs from the digest the confirmation names' "$TMP/t.out" && [ ! -s "$FX/posted.log" ] || { cat "$TMP/t.out"; return 1; }
   fr replies "$RUN" --target o/r#7 --file "$OUT/replies.json" --confirm-items C-701 --confirm-replies "$rd" > "$TMP/t.out" 2>&1 && return 1
   grep -q -- '--confirm-head must be' "$TMP/t.out" || return 1
+  # A hand-made file with one item twice is refused even when its digest and items match.
+  jq '. + .' "$TMP/drafts.json" > "$OUT/replies.json"
+  fr replies "$RUN" --target o/r#7 --file "$OUT/replies.json" --confirm-items C-701,C-701 --confirm-head "$new" \
+    --confirm-replies "$(shasum -a 256 < "$OUT/replies.json" | cut -d' ' -f1)" > "$TMP/t.out" 2>&1 && return 1
+  grep -q 'with distinct items' "$TMP/t.out" && [ ! -s "$FX/posted.log" ] || { cat "$TMP/t.out"; return 1; }
   cp "$TMP/drafts.json" "$OUT/replies.json"
   fr replies "$RUN" --target o/r#7 --file "$OUT/replies.json" --confirm-items C-701 --confirm-head "$new" --confirm-replies "$rd" > "$TMP/t.out" 2>&1 ||
     { cat "$TMP/t.out"; return 1; }

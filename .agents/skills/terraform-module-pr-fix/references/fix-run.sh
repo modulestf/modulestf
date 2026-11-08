@@ -797,8 +797,8 @@ cmd_replies() {
   data="${data%x}"
   [[ "$cr" =~ ^[0-9a-f]{64}$ ]] && [ "$(printf '%s' "$data" | shasum -a 256 | cut -d' ' -f1)" = "$cr" ] ||
     fail "the replies file differs from the digest the confirmation names"
-  printf '%s' "$data" | jq -e 'type == "array" and length > 0 and all(.[]; (.item | type == "string") and (.body | type == "string" and length > 0 and length <= 65536))' \
-    > /dev/null 2>&1 || fail "the replies file is not a list of {item, body}"
+  printf '%s' "$data" | jq -e 'type == "array" and length > 0 and all(.[]; (.item | type == "string") and (.body | type == "string" and length > 0 and length <= 65536)) and (map(.item) | unique | length) == length' \
+    > /dev/null 2>&1 || fail "the replies file is not a list of {item, body} with distinct items"
   [ "$(printf '%s' "$data" | jq -r '[.[].item] | sort | join(",")')" = "$(printf '%s' "$ids" | tr ',' '\n' | LC_ALL=C sort | paste -sd , -)" ] ||
     fail "the confirmation does not name exactly the items of the replies file"
   jq -e '.pr.locked == false and .base_repo.archived == false' "$RUN/state.json" > /dev/null || fail "the token user cannot comment here"

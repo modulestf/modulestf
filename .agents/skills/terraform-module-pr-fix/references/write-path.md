@@ -257,7 +257,7 @@ No force, no lease, no tags, no submodules, no other ref. The SHA is the clone's
 
 `gate` writes `$OUT/replies.json`, the reply drafts of every round, the latest draft per item, and prints its SHA-256 as `replies sha256:`.
 
-`replies` posts a reply drafts file, `[{"item", "body"}]`, after its own confirmation. It takes:
+`replies` posts a reply drafts file, `[{"item", "body"}]` with each item once, after its own confirmation. It takes:
 
 | Argument | Source | Must equal |
 |---|---|---|
