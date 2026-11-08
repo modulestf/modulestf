@@ -646,7 +646,7 @@ t_out() {
   case "$RUN" in "$TMPDIR"/pr-fix.??????) ;; *) return 1 ;; esac
   fr cleanup "$RUN" > /dev/null
   new_run; case "$OUT" in "$TMPDIR"/pr-fix-out.??????) ;; *) return 1 ;; esac
-  [ "$(stat -f %Lp "$OUT" 2> /dev/null || stat -c %a "$OUT")" = 700 ] && fr cleanup "$RUN" > /dev/null && [ -d "$OUT" ]
+  [ "$(stat -c %a "$OUT" 2> /dev/null || stat -f %Lp "$OUT")" = 700 ] && fr cleanup "$RUN" > /dev/null && [ -d "$OUT" ]
 }
 t_out; check "output directory: a symbolic link, a symlinked parent, inside a work tree, not empty, relative refused; the default is 0700 and kept" $?
 t_cleanup() {
