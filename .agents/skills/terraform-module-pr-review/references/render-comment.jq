@@ -410,6 +410,7 @@ def texts: {
   "checks-pass": "Checks pass.",
   "checks-fail": "Checks fail.",
   "checks-unknown": "Checks: unknown.",
+  "checks-unknown-jobless": "Checks: unknown, as a workflow ended without starting a job.",
   "mergeability-pass": "Mergeable.",
   "mergeability-fail": "Not mergeable.",
   "mergeability-unknown": "Mergeability: unknown.",
@@ -439,12 +440,15 @@ def texts: {
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
   "behaviour-trigger": "- Behaviour change at {location} ({category}): not verified.",
   "behaviour-trigger-groups": "- {count} behaviour changes not verified: {categories}.",
+  "behaviour-trigger-invalid": "- Behaviour change at {location} ({category}): not verified (the head does not validate in any example).",
+  "behaviour-trigger-groups-invalid": "- {count} behaviour changes not verified (the head does not validate in any example): {categories}.",
   "behaviour-capped": "- {count} more behaviour changes over the classifier cap: not verified.",
   "behaviour-claim": "- Claim {claim_id} from the description: not verified.",
   "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "thread-match": "- {location}: this review has a finding at the same path and line.",
   "thread-no-match": "- {location}: this review has no finding at the same path and line.",
   "todo-lead-block": "To make this mergeable, resolve each checklist item below and push.",
+  "todo-lead-closed": "This pull request is closed. If it is reopened, resolve each checklist item below and push to make it mergeable.",
   "todo-lead-4": "This review is incomplete, so a later run may add items. The items below are known.",
   "todo-lead-7": "Nothing blocks merge. The items below are optional.",
   "todo-lead-0": "This change is breaking. Merge it in the next major release. To merge it sooner, restore compatibility with the fixes named below. Any checklist items below also block merge.",
@@ -475,6 +479,7 @@ def texts: {
   "todo-gaps-many": "{count} checks could not run; see Checks that could not run.",
   "refuse-band": "a `compat.claim-contradicts-analysis` finding is rated above the band of the `compat.*` code finding that refutes it, or has none; send it back to the reviewer",
   "fix-fold": "Fix for each location ({count})",
+  "fix-shared": "Fix for each location above: {fix}",
   "behaviour-evidence-tested": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {tested} tested by the unit tests, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "behaviour-evidence-reported": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "compact-validate-all": "`validate` passed in all {count} examples; {planned} were planned.",
@@ -582,12 +587,20 @@ def locs($p): map(loc($p)) | join(", ");
 def folds($p): (.entries | length) >= 3
   and all(.items[]; all(.summary, .suggested_fix, loc($p); test("</?details|\n"; "i") | not));
 
+# Grouping rule 8: several entries whose suggested_fix is one text, byte for byte, print it once.
+def shared_fix: (.entries | length) >= 2 and ([.entries[][0].suggested_fix] | unique | length) == 1;
+def shared_fix_line: tx("fix-shared"; {fix: .entries[0][0].suggested_fix});
+
 def full_group($p):
   (.items | length) as $n
   | if $n == 1 or (.entries | length) == 1 then
       .entries[0] as $e
       | "- `\(.rule)`\(if $n == 1 then "" else " (\($n))" end) - \($e | locs($p)) - \($e[0].summary)\n"
         + "  - Fix: \($e[0].suggested_fix)"
+    elif shared_fix then
+      "- `\(.rule)` (\($n)):"
+      + ([.entries[] | "\n  - \(locs($p)) - \(.[0].summary)"] | join(""))
+      + "\n  - \(shared_fix_line)"
     elif folds($p) then
       "- `\(.rule)` (\($n)):"
       + ([.entries[] | "\n  - \(locs($p)) - \(.[0].summary)"] | join(""))
@@ -601,7 +614,8 @@ def full_group($p):
 
 def collapsed_group($p):
   "<details><summary><code>\(.rule)</code> (\(.items | length))</summary>\n\n"
-  + ([.entries[] | "- \(locs($p)) - \(.[0].summary)\n  - Fix: \(.[0].suggested_fix)"] | join("\n"))
+  + (if shared_fix then [.entries[] | "- \(locs($p)) - \(.[0].summary)"] + ["- " + shared_fix_line]
+     else [.entries[] | "- \(locs($p)) - \(.[0].summary)\n  - Fix: \(.[0].suggested_fix)"] end | join("\n"))
   + "\n\n</details>";
 
 # Consecutive groups in full form one list; a collapsed block, and a group whose Fix block
@@ -612,7 +626,7 @@ def join_blocks:
     else {s: (.s + (if .k == "full" and ($b.k | IN("full", "fold")) then "\n" else "\n\n" end) + $b.t), k: $b.k} end)
   | .s;
 
-def full_block($p): {k: (if folds($p) then "fold" else "full" end), t: full_group($p)};
+def full_block($p): {k: (if folds($p) and (shared_fix | not) then "fold" else "full" end), t: full_group($p)};
 
 # --- Collapsing Findings. $rule is the ladder rule, $limit the threshold (10).
 
@@ -687,9 +701,10 @@ def todo_items($l; $rule; $p; $gaps):
              elif $gaps > 1 then [{box: false, quiet: true, t: tx("todo-gaps-many"; {count: $gaps})}] else [] end)
         end));
 
-def todo_md($rule; $items):
+# $closed: the pull request is closed and not merged, so the block lead says what applies on a reopen.
+def todo_md($rule; $items; $closed):
   tx(if $rule == 0 then "todo-lead-0" elif $rule == 4 then "todo-lead-4" elif $rule == 7 then "todo-lead-7"
-       else "todo-lead-block" end)
+       elif $closed then "todo-lead-closed" else "todo-lead-block" end)
     + (if $items == [] then "" else "\n\n" + ($items | map((if .box then "- [ ] " else "- " end) + .t) | join("\n")) end);
 
 # findings.json: the order the body shows them, the seven fields, the path repository-relative.
@@ -768,12 +783,17 @@ def gap_lines($h; $run; $b; $p; $cov):
             else ([tx(if ($all | length) == 1 then "unplanned-group-one" else "unplanned-group-many" end; {count: ($all | length), reason: $r})]
                   + [$shown[] | select(.reason == $r) | tx("unplanned-name"; {dir})] | join("\n")) end ])
      + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end) end)
-  + ($b | if . == null then []
+  # Every selected example ran validate at the head and none passed: the trigger lines say so. A
+  # verification gap other than a merge base re-run means validate did not run there, so no clause.
+  + ((($run.examples // {count: 0} | .count > 0 and .validated == 0)
+      and all($run.verify_gaps[]; .reason | startswith("merge base "))) as $invalid
+  | (if $invalid then "-invalid" else "" end) as $why
+  | $b | if . == null then []
      elif .status == "not-run" then [tx("behaviour-not-run"; {reason})]
      else [ ([.triggers[] | select(.state == "unverifiable" and (ci_gated | not))]
-             | if length <= 5 then .[] | tx("behaviour-trigger"; trigger_at($p))
+             | if length <= 5 then .[] | tx("behaviour-trigger" + $why; trigger_at($p))
                # More than five: one line counting them per category; the locations are noise.
-               else tx("behaviour-trigger-groups"; {count: length, categories: (group_by(.category)
+               else tx("behaviour-trigger-groups" + $why; {count: length, categories: (group_by(.category)
                       | sort_by(-length, .[0].category) | map("\(length) \(.[0].category)") | join(", "))}) end),
             (.capped | select(. > 0) | tx("behaviour-capped"; {count: .})),
             (.claims[] | select(.state == "unverifiable") | tx("behaviour-claim"; {claim_id})) ] end);
@@ -823,7 +843,9 @@ def signals_of($h): $h.signals
 def state_lines($h; $c):
   (signals_of($h) + {checks: $c.signal}) as $g
   | (if any($g[]; . == "fail" or . == "unknown" or . == "not-applicable") then
-      [ [tx("checks-" + $g.checks), tx("mergeability-" + $g.mergeability),
+      # A job-less run makes the signal unknown; the phrase says so, as the job-less lines below detail it.
+      [ [tx("checks-" + $g.checks + (if $g.checks == "unknown" and $c.accepted and ($c.jobless // []) != [] then "-jobless" else "" end)),
+         tx("mergeability-" + $g.mergeability),
          tx("review-decision-" + $g.review_decision),
          (if $g.threads == "unknown" then tx("threads-unknown")
           elif $h.unresolved_threads != [] then tx("threads-unresolved"; {count: ($h.unresolved_threads | length)})
@@ -1063,7 +1085,7 @@ def render($in):
      + evidence_lines($b)
      + tests_lines($in.run.tests; $b)
      # Rule 7 reached by covered skips alone has no optional item to list.
-     + (if $v.rule == 8 or $quiet or ($cov != [] and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items)] end)
+     + (if $v.rule == 8 or $quiet or ($cov != [] and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items; $h.state.state == "closed" and ($h.state.merged | not))] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
      # Covered skips leave no gap, so section 5 then holds only their witness lines, which no
      # check that could not run describes.
