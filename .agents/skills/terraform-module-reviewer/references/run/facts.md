@@ -34,3 +34,4 @@ From the task's `Provider fact sheets: <dir>` line, for the types the need list 
 - `<ns>/<name>/<version>/index.json` gives each `<resource|data>:<type>` as `sheet`, `absent` or `page`. A `sheet` with `same_as` naming a version is read from that version's sheet, whose `versions:` line lists every version it covers: never fetched.
 - Deep: `missing.json` lists the types with no sheet and their versions. Only those go to the fetch helper.
 - A type that is `page` at any version reads pages at all of them, through the fetch helper, never in the run's own context.
+- A latest version's sheet may end with an `introduced:` section: the first version that has each path, from its `since` line. Only an `unresolved` line, or an argument with no line of its own (the section's `since: <n> more paths unresolved overflow` count line stands for it), goes to the fetch helper ([Introduced versions](../large-changes.md#budget)).

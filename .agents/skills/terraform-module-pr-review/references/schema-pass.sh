@@ -35,6 +35,14 @@ CAP_DEPTH=1048576
 MAX_PROVIDERS=32
 MAX_PROVIDER_VERSIONS=96
 MAX_TYPES=1000
+# The introduced versions: paths bisected per type, and bisect downloads per provider, which
+# also count toward MAX_PROVIDER_VERSIONS. Past either: "unresolved overflow".
+MAX_SINCE_PATHS=16
+MAX_SINCE_DOWNLOADS=12
+# The introduced sections' own byte cap per run, outside the sheet caps, and the wall-clock
+# deadline of the whole search, which SCHEMA_SINCE_SECONDS may lower or raise (digits only).
+MAX_SINCE_BYTES=8192
+MAX_SINCE_SECONDS=120
 CAP_SUMS=4096
 CAP_MANIFEST=16384
 CAP_VERSIONS=2097152
@@ -341,6 +349,38 @@ awk '{ print $2, $3, $4 }' "$WORK/types" | sort -u -k3,3 -k2,2 -k1,1 > "$WORK/ta
 awk -v m="$MAX_TYPES" 'NR <= m' "$WORK/tall" > "$WORK/tkeep"
 [ "$(wc -l < "$WORK/tall")" -le "$MAX_TYPES" ] || note overflow
 
+# One provider version's schema from the mirror into an empty directory: the three assets,
+# the checksums, the manifest, the decompressed size and the JSON shape, as schema-pass.md
+# gives them. Leaves the schema as schema.json; prints nothing when every check passed,
+# else one reason code.
+get_schema() { # provider, version, directory
+  local prov="$1" ver="$2" d="$3" ns="${1%%/*}" name="${1#*/}" sf base a f cap r n l
+  sf="${ns}_${name}-${ver}.schema.json.gz"
+  base="https://github.com/$MODULESTF_SCHEMA_MIRROR/releases/download/${ns}_${name}-v${ver}"
+  for a in "SHA256SUMS $CAP_SUMS" "manifest.json $CAP_MANIFEST" "$sf $CAP_GZ"; do
+    f="${a% *}" cap="${a#* }"
+    if ! r="$(fetch "$base/$f" "$d/$f" "$cap" "$MIRROR_HOSTS")"; then
+      case "$r" in not_found) r=not_in_mirror ;; cap_exceeded) [ "$f" = "$sf" ] && r=schema_too_large ;; esac
+      echo "$r"; return
+    fi
+  done
+  # The exact lines for the schema and the manifest, each once, checked by sha256sum.
+  : > "$d/sums"
+  for f in "$sf" manifest.json; do
+    n="$(awk -v a="$f" '{ x = $0; sub(/^[^ ]* [ *]?/, "", x); if (x == a) c++ } END { print c + 0 }' "$d/SHA256SUMS")"
+    l="$(grep -xE "[0-9a-f]{64}  $(printf '%s' "$f" | sed 's/[.]/\\./g')" "$d/SHA256SUMS")"
+    [ "$n" = 1 ] && [ "$(printf '%s\n' "$l" | grep -c .)" = 1 ] && printf '%s\n' "$l" >> "$d/sums" || { echo checksum; return; }
+  done
+  (cd "$d" && sha256 --strict -c sums > /dev/null 2>&1) || { echo checksum; return; }
+  jq -e --arg p "$prov" --arg v "$ver" --arg f "$sf" 'type == "object" and .provider == $p and .version == $v and .file == $f
+    and (.format_version | type == "string" and test("^([0-9]+)\\.[0-9]+$") and (split(".")[0] == "1"))' \
+    "$d/manifest.json" > /dev/null 2>&1 || { echo manifest; return; }
+  gzip -dc -- "$d/$sf" 2> /dev/null | head -c $((CAP_SCHEMA + 1)) > "$d/schema.json"
+  [ "${PIPESTATUS[0]}" = 0 ] && [ "$(wc -c < "$d/schema.json")" -le "$CAP_SCHEMA" ] || { echo schema_too_large; return; }
+  jq -e --arg k "registry.terraform.io/$prov" '(.format_version | type == "string" and test("^([0-9]+)\\.[0-9]+$") and (split(".")[0] == "1"))
+    and (.provider_schemas | type == "object" and keys == [$k])' "$d/schema.json" > /dev/null 2>&1 || echo json_shape
+}
+
 # 4. Each provider version: download, check, render, all in its own staging directory.
 : > "$WORK/pvok"
 : > "$WORK/status"
@@ -355,38 +395,7 @@ while read -r -u 3 prov ver; do
   d="$WORK/dl" st="$WORK/stage/$ns/$name/$ver"
   rm -rf "$d" && mkdir -p "$d" "$st" || exit 1
   sf="${ns}_${name}-${ver}.schema.json.gz"
-  base="https://github.com/$MODULESTF_SCHEMA_MIRROR/releases/download/${ns}_${name}-v${ver}"
-  bad=""
-  for a in "SHA256SUMS $CAP_SUMS" "manifest.json $CAP_MANIFEST" "$sf $CAP_GZ"; do
-    f="${a% *}" cap="${a#* }"
-    if ! r="$(fetch "$base/$f" "$d/$f" "$cap" "$MIRROR_HOSTS")"; then
-      case "$r" in not_found) r=not_in_mirror ;; cap_exceeded) [ "$f" = "$sf" ] && r=schema_too_large ;; esac
-      bad="$r"; break
-    fi
-  done
-  if [ -z "$bad" ]; then
-    # The exact lines for the schema and the manifest, each once, checked by sha256sum.
-    : > "$d/sums"
-    for f in "$sf" manifest.json; do
-      n="$(awk -v a="$f" '{ x = $0; sub(/^[^ ]* [ *]?/, "", x); if (x == a) c++ } END { print c + 0 }' "$d/SHA256SUMS")"
-      l="$(grep -xE "[0-9a-f]{64}  $(printf '%s' "$f" | sed 's/[.]/\\./g')" "$d/SHA256SUMS")"
-      [ "$n" = 1 ] && [ "$(printf '%s\n' "$l" | grep -c .)" = 1 ] && printf '%s\n' "$l" >> "$d/sums" || bad=checksum
-    done
-    [ -n "$bad" ] || (cd "$d" && sha256 --strict -c sums > /dev/null 2>&1) || bad=checksum
-  fi
-  if [ -z "$bad" ]; then
-    jq -e --arg p "$prov" --arg v "$ver" --arg f "$sf" 'type == "object" and .provider == $p and .version == $v and .file == $f
-      and (.format_version | type == "string" and test("^([0-9]+)\\.[0-9]+$") and (split(".")[0] == "1"))' \
-      "$d/manifest.json" > /dev/null 2>&1 || bad=manifest
-  fi
-  if [ -z "$bad" ]; then
-    gzip -dc -- "$d/$sf" 2> /dev/null | head -c $((CAP_SCHEMA + 1)) > "$d/schema.json"
-    [ "${PIPESTATUS[0]}" = 0 ] && [ "$(wc -c < "$d/schema.json")" -le "$CAP_SCHEMA" ] || bad=schema_too_large
-  fi
-  if [ -z "$bad" ]; then
-    jq -e --arg k "registry.terraform.io/$prov" '(.format_version | type == "string" and test("^([0-9]+)\\.[0-9]+$") and (split(".")[0] == "1"))
-      and (.provider_schemas | type == "object" and keys == [$k])' "$d/schema.json" > /dev/null 2>&1 || bad=json_shape
-  fi
+  bad="$(get_schema "$prov" "$ver" "$d")"
   # The handoff's block schemas for this version, every type; a malformed part leaves the
   # version out of the handoff, and the fact sheets go on.
   if [ -z "$bad" ] && [ -n "$HANDOFF" ] && [ -z "$hwhy" ]; then
@@ -512,6 +521,74 @@ if [ -n "$MODE" ]; then
       jq -c --arg k "$kind:${file%.facts}" --arg v "$keep" '.same_as[$k] = $v' "$ix" > "$ix.n" && mv "$ix.n" "$ix" || exit 1
     done
   done < "$WORK/same"
+fi
+
+# 5b. The introduced versions. For each type with a sheet at both the latest version and
+# the declared minimum of a directory, every attribute or block path at the latest and not
+# at the minimum gets the lowest stable version that has it: a bisection over the
+# candidates between the two, presence assumed monotone. Every version already staged is an
+# observation; a bisect download is read as in step 4 and never published. A path ends with
+# the lowest version that has it next to a version that does not, or unresolved with a
+# reason. The result is the sorted introduced section of the latest version's sheet.
+sheet_paths() { # sheet file -> the dotted paths of its attributes and blocks, sorted
+  awk 'h < 1 { if ($0 == "") h = 1; next } $0 == "" { exit }
+    { match($0, /^ */); d = RLENGTH / 2; s = substr($0, RLENGTH + 1)
+      if (s ~ /^(attr|block) /) { split(s, w, " "); n = w[2] } else { n = s; sub(/:.*/, "", n) }
+      p[d] = n; q = p[0]; for (i = 1; i <= d; i++) q = q "." p[i]; print q }' "$1" | LC_ALL=C sort -u
+}
+sheet_file() { # provider, version, kind, type -> the staged file holding that sheet, or nothing
+  local st="$WORK/stage/$1/$2" cat=resources h
+  [ "$3" = resource ] || cat=data-sources
+  if [ -f "$st/$cat/$4.facts" ]; then echo "$st/$cat/$4.facts"; return; fi
+  h="$(jq -r --arg k "$3:$4" '.same_as[$k] // empty' "$st/index.json" 2> /dev/null)"
+  [[ "$h" =~ $ver_re ]] && [ -f "$WORK/stage/$1/$h/$cat/$4.facts" ] && echo "$WORK/stage/$1/$h/$cat/$4.facts"
+}
+observe() { # kind:type, version, file of the paths it has -> one observation per target of the type
+  awk -v t="$1" -v v="$2" -v n="$(vnum ${2//./ })" 'FILENAME == ARGV[1] { h[$0] = 1; next }
+    index($0, t ":") == 1 { print $0, n, v, ((substr($0, length(t) + 2) in h) ? 1 : 0) }' "$3" "$WORK/s-tgt" >> "$WORK/s-obs"
+}
+# Per target: the lowest version observed with the path (P) and the highest below it
+# without (A). An observation without it above P is non_monotone. Adjacent candidates end
+# the search; else the next probe is the candidate halfway between.
+since_state() { # candidates file -> "<key> done <x.y.z>", "<key> fail <reason>" or "<key> probe <x.y.z>"
+  awk 'FILENAME == ARGV[1] { n++; cv[n] = $2; ix[$1] = n; next }
+    FILENAME == ARGV[2] { fr[$1] = $2; next }
+    FILENAME == ARGV[3] { if (!($2 in ix)) next; k = $1; m[k]++; ov[k, m[k]] = $2; op[k, m[k]] = $4
+      if ($4 == 1 && (!(k in P) || $2 + 0 < P[k] + 0)) P[k] = $2; next }
+    { k = $1
+      if (k in fr) { print k, "fail", fr[k]; next }
+      if (!(k in P)) { print k, "fail", "non_monotone"; next }
+      A = ""; bad = 0
+      for (i = 1; i <= m[k]; i++) if (op[k, i] == 0) {
+        if (ov[k, i] + 0 > P[k] + 0) bad = 1
+        else if (A == "" || ov[k, i] + 0 > A + 0) A = ov[k, i]
+      }
+      if (bad || A == "") print k, "fail", "non_monotone"
+      else if (ix[P[k]] - ix[A] == 1) print k, "done", cv[ix[P[k]]]
+      else print k, "probe", cv[int((ix[A] + ix[P[k]]) / 2)] }' "$1" "$WORK/s-fail" "$WORK/s-obs" "$WORK/s-tgt"
+}
+probe() { # provider, version -> observations of every target type at it; prints a reason on failure
+  local prov="$1" v="$2" d="$WORK/dl" r want hd kind type status b64
+  rm -rf "$d" && mkdir -p "$d" || exit 1
+  r="$(get_schema "$prov" "$v" "$d")"
+  [ -z "$r" ] || { rm -rf "$d"; echo "$r"; return 1; }
+  hd="$(sha256 "$d/${prov%%/*}_${prov#*/}-$v.schema.json.gz" | cut -d ' ' -f 1)"
+  echo "$prov $v $hd" >> "$WORK/probed"
+  want="$(tr ':' ' ' < "$WORK/s-types" | jq -R -c -s 'split("\n") | map(select(. != "") | split(" "))')"
+  hd="$(jq -n -c --arg p "$prov" --arg v "$v" --arg s "$hd" '{provider: $p, version: $v, schema_sha256: $s}')"
+  jq -r --arg key "registry.terraform.io/$prov" --argjson want "$want" --argjson head "$hd" -f "$FACTS_JQ" \
+    "$d/schema.json" > "$d/rendered" 2> /dev/null || { rm -rf "$d"; echo json_shape; return 1; }
+  while read -r kind type status b64; do
+    case "$status" in
+      sheet) printf '%s' "$b64" | base64 -d > "$d/sheet" 2> /dev/null && sheet_paths "$d/sheet" > "$d/have" || status=miss ;;
+      absent) : > "$d/have" ;;
+    esac
+    # A type this version cannot be read for observes nothing: its targets that need it fail.
+    if [ "$status" = sheet ] || [ "$status" = absent ]; then observe "$kind:$type" "$v" "$d/have"; else echo "$v $kind:$type json_shape" >> "$WORK/s-vfail"; fi
+  done < "$d/rendered"
+  rm -rf "$d"
+}
+if [ -n "$MODE" ]; then
   if [ "$MODE" = deep ]; then
     # Deep's caps bound the disk: types in name order, each with all its sheets or none;
     # a type that does not fit is page at every version, the next one may still fit.
@@ -553,6 +630,100 @@ if [ -n "$MODE" ]; then
   bytes="$(find "$WORK/stage" -type f -name '*.facts' -exec cat -- {} + | wc -c | tr -d ' ')"
   if [ "$MODE" = focused ]; then
     [ "$sheets" -le "$MAX_SHEETS" ] && [ "$bytes" -le "$MAX_SHEET_BYTES" ] || escalate overflow
+  fi
+fi
+
+# Here, after every sheet cap: the sections are outside them, so no line escalates a focused
+# run or makes a deep run partial.
+: > "$WORK/since-want"
+: > "$WORK/since"
+: > "$WORK/probed"
+tried=0 late=""
+[[ "${SCHEMA_SINCE_SECONDS:-}" =~ ^[0-9]{1,5}$ ]] && MAX_SINCE_SECONDS="$SCHEMA_SINCE_SECONDS"
+since_start="$(date +%s)"
+if [ -n "$MODULESTF_SCHEMA_MIRROR" ]; then
+  # "<provider> <latest> <kind> <type> <path>": the paths new at a directory's latest.
+  while read -r dir prov st latest min _; do
+    [ "$st" = ok ] && [ "$min" != - ] && [ "$min" != "$latest" ] || continue
+    awk -v d="$dir" -v p="$prov" '$1 == d && $2 == p { print $3, $4 }' "$WORK/types" | while read -r kind type; do
+      l="$(sheet_file "$prov" "$latest" "$kind" "$type")" m="$(sheet_file "$prov" "$min" "$kind" "$type")"
+      [ -n "$l" ] && [ -n "$m" ] || continue
+      sheet_paths "$m" > "$WORK/p-min"
+      sheet_paths "$l" | LC_ALL=C comm -23 - "$WORK/p-min" | sed "s|^|$prov $latest $kind $type |"
+    done
+  done < "$WORK/resolved" | LC_ALL=C sort -u > "$WORK/since-want"
+  left=$((MAX_PROVIDER_VERSIONS - $(wc -l < "$WORK/pv")))
+  while read -r -u 3 prov; do
+    awk -v p="$prov" '$1 == p { print $3 ":" $4 ":" $5 }' "$WORK/since-want" | LC_ALL=C sort -u > "$WORK/s-all"
+    [ -s "$WORK/s-all" ] || continue
+    : > "$WORK/s-tgt"; : > "$WORK/s-obs"; : > "$WORK/s-fail"; : > "$WORK/s-vfail"
+    # The first MAX_SINCE_PATHS paths of each type, by name, are bisected; the rest are only
+    # counted in the section's summary line ("more").
+    awk -F: -v m="$MAX_SINCE_PATHS" -v t="$WORK/s-tgt" '++n[$1 ":" $2] <= m { print > t; next } { print $0, "more" }' "$WORK/s-all" >> "$WORK/s-fail"
+    cut -d: -f1,2 "$WORK/s-all" | LC_ALL=C sort -u > "$WORK/s-types"
+    # The versions already read: a sheet gives its paths, absent gives none, page nothing.
+    while read -r p v; do
+      [ "$p" = "$prov" ] || continue
+      while IFS=: read -r kind type; do
+        f="$(sheet_file "$prov" "$v" "$kind" "$type")"
+        if [ -n "$f" ]; then
+          sheet_paths "$f" > "$WORK/s-have"
+        elif [ "$(jq -r --arg k "$kind:$type" '.types[$k] // ""' "$WORK/stage/$prov/$v/index.json" 2> /dev/null)" = absent ]; then
+          : > "$WORK/s-have"
+        else
+          continue
+        fi
+        observe "$kind:$type" "$v" "$WORK/s-have"
+      done < "$WORK/s-types"
+    done < "$WORK/pvok"
+    cand="$WORK/cand-${prov%%/*}-${prov#*/}"
+    used=0
+    while :; do
+      since_state "$cand" > "$WORK/s-state"
+      nx="$(awk '$2 == "probe" { print $1, $3; exit }' "$WORK/s-state")"
+      [ -n "$nx" ] || break
+      k="${nx% *}" v="${nx#* }"
+      r="$(awk -v v="$v" -v t="${k%:*}" '$1 == v && ($2 == "*" || $2 == t) { print $3; exit }' "$WORK/s-vfail")"
+      if [ -n "$r" ]; then echo "$k $r" >> "$WORK/s-fail"; continue; fi
+      [ $(($(date +%s) - since_start)) -lt "$MAX_SINCE_SECONDS" ] || late=1
+      if [ -n "$late" ] || [ "$used" -ge "$MAX_SINCE_DOWNLOADS" ] || [ "$left" -le 0 ]; then
+        awk '$2 == "probe" { print $1, "overflow" }' "$WORK/s-state" >> "$WORK/s-fail"
+        continue
+      fi
+      used=$((used + 1)) left=$((left - 1)) tried=$((tried + 1))
+      r="$(probe "$prov" "$v")" || echo "$v * ${r:-json_shape}" >> "$WORK/s-vfail"
+    done
+    awk -v p="$prov" '$2 == "done" { print p, $1, $3; next } { print p, $1, "unresolved", $3 }' "$WORK/s-state" >> "$WORK/since"
+    awk -v p="$prov" 'FILENAME == ARGV[1] { k[$1] = 1; next } !($1 in k) { print p, $1, "unresolved", $2 }' "$WORK/s-tgt" "$WORK/s-fail" >> "$WORK/since"
+  done 3< "$WORK/order"
+  # The introduced section, appended to the sheet that holds each latest version's sheet.
+  awk 'FILENAME == ARGV[1] { k = $1 " " $2; $1 = ""; $2 = ""; sub(/^  /, ""); r[k] = $0; next }
+    { print $1, $2, $3, $4, $5, r[$1 " " $3 ":" $4 ":" $5] }' "$WORK/since" "$WORK/since-want" | while read -r prov latest kind type path res; do
+    f="$(sheet_file "$prov" "$latest" "$kind" "$type")"
+    [ -n "$f" ] && [ -n "$res" ] && echo "${f#"$WORK/stage/"} since: $path $res"
+  done | LC_ALL=C sort -u |
+    # The byte bound, in sheet and path order: one line per path while the since lines so
+    # far, itself included, total at most MAX_SINCE_BYTES. The first line that does not fit
+    # stops the lines of every later path; those, and the paths past MAX_SINCE_PATHS, are
+    # counted in one fixed line per sheet, last in its section.
+    awk -v m="$MAX_SINCE_BYTES" -v cf="$WORK/since-count" '
+      !($1 in seen) { seen[$1] = 1; ord[++nf] = $1 }
+      { n++; l = $0; sub(/^[^ ]* /, "", l)
+        if ($NF == "more" || shut || t + length(l) + 1 > m) { if ($NF != "more") shut = 1; c[$1]++; u++; next }
+        if ($4 == "unresolved") u++
+        t += length(l) + 1; out[$1] = out[$1] $0 "\n" }
+      END { for (i = 1; i <= nf; i++) { f = ord[i]; printf "%s", out[f]; if (c[f]) print f, "since:", c[f], "more paths unresolved overflow" }
+        print n + 0, u + 0 > cf }' > "$WORK/since-lines"
+  cut -d ' ' -f 1 "$WORK/since-lines" | uniq | while IFS= read -r f; do
+    { echo; echo "introduced:"; awk -v f="$f" '$1 == f { $1 = ""; sub(/^ /, ""); print }' "$WORK/since-lines"; } >> "$WORK/stage/$f" || exit 1
+  done || exit 1
+  read -r n u < "$WORK/since-count" || n=0 u=0
+  [ "$n" = 0 ] || echo "schema pass: introduced $n paths, $u unresolved, $tried bisect downloads"
+  [ -z "$late" ] || echo "schema pass: introduced deadline of $MAX_SINCE_SECONDS s passed, open paths unresolved overflow"
+fi
+
+if [ -n "$MODE" ]; then
+  if [ "$MODE" = focused ]; then
     echo "schema pass: focused, mirror $TRUSTED_MIRROR, $sheets sheets, $bytes bytes"
   elif [ -s "$WORK/reasons" ]; then
     echo "schema pass: deep partial $(head -n 1 "$WORK/reasons" | tr '_' '-'), $sheets sheets, $bytes bytes, $(jq '.missing | length' "$WORK/missing.json") types without a sheet"
@@ -565,6 +736,11 @@ if [ -n "$MODE" ]; then
     ns="${prov%%/*}" name="${prov#*/}"
     echo "schema pass: source $TRUSTED_MIRROR ${ns}_${name}-v$ver $(jq -r .schema_sha256 "$WORK/stage/$ns/$name/$ver/index.json")"
   done < "$WORK/pvok"
+  # A bisect download is a version read too, unless step 4 already read it.
+  awk 'FILENAME == ARGV[1] { s[$1 " " $2] = 1; next } !(($1 " " $2) in s) && !d[$1 " " $2]++' "$WORK/pvok" "$WORK/probed" |
+    while read -r prov ver sha; do
+      echo "schema pass: source $TRUSTED_MIRROR ${prov%%/*}_${prov#*/}-v$ver $sha"
+    done
 fi
 
 # 6. Publish: each staged provider version moves whole; then versions.json; then the
