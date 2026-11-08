@@ -699,7 +699,7 @@ t_cleanup() {
 }
 t_cleanup; check "cleanup: only a resolved run directory of the template is deleted" $?
 
-# --- 13. Trust files, reply endpoints, the allow-list, the push repository, git safety ---------
+# --- 13. Trust files, reply endpoints, the push repository, git safety ----------------------------
 
 t_attack() { # S-001: provider code that rewrites the clone's config and its recorded keys
   fx_default; reviewed_run || return 1
@@ -796,6 +796,22 @@ t_replies_merge() { # F-001: every round's reply drafts, the latest per item
   fr cleanup "$RUN" > /dev/null
 }
 t_replies_merge; check "gate: the reply drafts of every round, the latest per item" $?
+t_noident_restore() { # with no commit identity a refusal restores the last reviewed tree, not the pinned head
+  fx_default; mv "$HOME/.gitconfig" "$HOME/.gitconfig.off"; new_run; mv "$HOME/.gitconfig.off" "$HOME/.gitconfig"
+  round0 "$OUT" "$ROUND0B"; fr clone "$RUN" > /dev/null 2>&1 && fr items "$RUN" --review "$OUT/round-0" --handover "$OUT/handover-task.md" > /dev/null 2>&1 &&
+    fr round "$RUN" > /dev/null || return 1
+  fix_edit; fr docs "$RUN" --round 1 > /dev/null || return 1
+  jq -n --argjson f "$ROUND0B" '[$f[1]]' > "$TMP/f1.json"
+  fr compare "$RUN" --round 1 --findings "$TMP/f1.json" > "$TMP/t.out" 2>&1 && grep -q '^loop: the next round may start' "$TMP/t.out" || { cat "$TMP/t.out"; return 1; }
+  fr round "$RUN" > /dev/null || return 1
+  printf x > "$RUN/clone/Makefile"; printf '\n# round 2\n' >> "$RUN/clone/main.tf"
+  fr docs "$RUN" --round 2 > "$TMP/t.out" 2>&1 && return 1
+  grep -qx 'path refused: work tree Makefile (suffix)' "$TMP/t.out" && [ ! -e "$RUN/clone/Makefile" ] && grep -q 'description = "Size."' "$RUN/clone/variables.tf" &&
+    ! grep -q 'round 2' "$RUN/clone/main.tf" && [ "$(CG rev-parse HEAD)" = "$H" ] || { cat "$TMP/t.out"; return 1; }
+  fr gate "$RUN" > "$TMP/t.out" 2>&1 || { cat "$TMP/t.out"; return 1; }
+  grep -q '^write path: B' "$TMP/t.out" && grep -q 'Size\.' "$OUT/fix.patch" && fr cleanup "$RUN" > /dev/null
+}
+t_noident_restore; check "commit identity unset: a round 2 refusal restores round 1's reviewed tree, and the gate passes on it" $?
 
 # --- 14. Writes bound to the user's confirmation; the record form; interrupts; round trust ------
 
@@ -996,6 +1012,19 @@ craft() { # parent, then "add <mode> <path> <content>" or "rm <path>": a commit 
   CG -c user.name="Pat Owner" -c user.email=pat@example.com commit-tree "$(CGI write-tree)" -p "$par" -m crafted
 }
 
+no_extract_left() { # no extract made since $TMP/x0 remains
+  # No extract remains; one that does is removed here, so a mutated copy leaves nothing behind either.
+  local left; left="$(nx | comm -13 "$TMP/x0" -)"
+  # Only an extract that holds this test's own example is removed; any other new one is reported, never touched.
+  if [ -n "$left" ]; then
+    printf 'variable "mtls" {\n  type = bool\n}\n' > "$TMP/mtls.tf"
+    printf '%s\n' "$left" | while IFS= read -r x; do
+      if cmp -s "$x/tree/examples/mtls/main.tf" "$TMP/mtls.tf"; then chmod -R u+w "$x"; rm -rf -- "$x"; echo "an extract directory remains: removed $x"
+      else echo "a new extract directory that is not this test's: $x"; fi
+    done
+    return 1
+  fi
+}
 t_pilot_() { # the live pilot's case: a provider floor in versions.tf, a new example, the root README regenerated
   nx > "$TMP/x0"
   pilot_run "$PH" || return 1
@@ -1016,11 +1045,10 @@ t_pilot_() { # the live pilot's case: a provider floor in versions.tf, a new exa
   GATE || { cat "$TMP/gate.last"; return 1; }
   grep -qx 'outside findings: versions.tf' "$TMP/gate.last" && grep -qx 'outside findings: examples/mtls/main.tf' "$TMP/gate.last" &&
     ! grep -q 'outside findings: variables.tf' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  no_extract_left || return 1
   PUSH > "$TMP/p.out" 2>&1 || { cat "$TMP/p.out"; return 1; }
   [ "$(RG --git-dir="$REM/o/r.git" rev-parse refs/heads/feat)" = "$(CG rev-parse HEAD)" ] || return 1
-  # No extract remains; one that does is removed here, so a mutated copy leaves nothing behind either.
-  local left; left="$(nx | comm -13 "$TMP/x0" -)"
-  [ -z "$left" ] || { printf '%s\n' "$left" | while IFS= read -r x; do chmod -R u+w "$x"; rm -rf -- "$x"; done; echo "an extract directory remains"; return 1; }
+  no_extract_left || return 1
   fr cleanup "$RUN" > /dev/null
 }
 t_pilot() { pilot t_pilot_; }
@@ -1054,6 +1082,7 @@ t_markers_() { # clause 6 at the commit: each refusal restores the work tree and
   printf 'try\n' > "$RUN/rounds/1/commit-message.txt"
   local cases=(
     "grep -vxF '$E1' modules/a/README.md > x; cat x > modules/a/README.md; rm x|modules/a/README.md|unpaired or nested markers"
+    "printf 'Notes\n\n%s\nedited\n%s\n' '$B2' '$E2' > NOTES.md|NOTES.md|an older-pair interior differs from the parent's"
     "printf '# a\n\n%s\nold\n%s\n' '$E1' '$B1' > modules/a/README.md|modules/a/README.md|unpaired or nested markers"
     "printf '# a\n\n%s\n%s\nold\n%s\n%s\n' '$B1' '$B1' '$E1' '$E1' > modules/a/README.md|modules/a/README.md|unpaired or nested markers"
     "printf 'Notes\n\n%s\nhook text\n' '$B2' > NOTES.md|NOTES.md|unpaired or nested markers"
@@ -1061,17 +1090,21 @@ t_markers_() { # clause 6 at the commit: each refusal restores the work tree and
     "printf '# a, see %s\n\n%s\nold\n%s\n' '$B1' '$B1' '$E1' > modules/a/README.md|modules/a/README.md|a marker text outside a marker line"
     "printf '# a\n\n%s\nold\n%s\n%s\nnew\n%s\n' '$B1' '$E1' '$B1' '$E1' > modules/a/README.md|modules/a/README.md|the marker lines differ from the parent's"
     "printf '# a\n\n%s\nhand\n%s\n' '$B1' '$E1' > modules/a/README.md|modules/a/README.md|a BEGIN_TF_DOCS interior equals neither the parent's nor the docs output, interior sha256 [0-9a-f]\{64\}, recomputed sha256 none"
-    "printf 'Notes\n\n%s\nedited\n%s\n' '$B2' '$E2' > NOTES.md|NOTES.md|an older-pair interior differs from the parent's"
     "mkdir -p docs; printf '%s\nx\n%s\n' '$B2' '$E2' > docs/old.md|docs/old.md|an added file holds the older pair"
     "mkdir -p docs; printf '%s\nx\n%s\n' '$B1' '$E1' > docs/new.md|docs/new.md|a BEGIN_TF_DOCS interior equals neither"
     "rm modules/a/README.md|modules/a/README.md|a deleted file holds a marker line")
-  local c cmd path why
+  local c cmd path why n=0
   for c in "${cases[@]}"; do
-    cmd="${c%%|*}"; why="${c##*|}"; path="${c#*|}"; path="${path%%|*}"
+    cmd="${c%%|*}"; why="${c##*|}"; path="${c#*|}"; path="${path%%|*}"; n=$((n + 1))
     ( cd "$RUN/clone" && eval "$cmd" ) || { echo "setup: $cmd"; return 1; }
-    fr docs "$RUN" --round 1 > "$TMP/d.out" 2>&1 || { echo "docs refused: $cmd"; cat "$TMP/d.out"; return 1; }
+    # The docs step on the first case only: it regenerates the root README, which is then not judged
+    # while another .md refuses. The rule never reads the docs step's results, so later cases skip it.
+    if [ "$n" = 1 ]; then
+      fr docs "$RUN" --round 1 > "$TMP/d.out" 2>&1 && grep -qx 'docs: regenerated .' "$TMP/d.out" || { echo "docs: $cmd"; cat "$TMP/d.out"; return 1; }
+    fi
     fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 && { echo "committed: $cmd"; return 1; }
-    grep -q "^path refused: [0-9a-f]\{40\} $path (generated regions) $why" "$TMP/c.out" || { echo "case: $cmd"; cat "$TMP/c.out"; return 1; }
+    grep -q "^path refused: [0-9a-f]\{40\} $path (generated regions) $why" "$TMP/c.out" && [ "$(grep -c '^path refused:' "$TMP/c.out")" = 1 ] ||
+      { echo "case: $cmd"; cat "$TMP/c.out"; return 1; }
     [ "$(CG rev-parse HEAD)" = "$PH" ] && clean_tree || { echo "not restored: $cmd"; return 1; }
   done
   fr cleanup "$RUN" > /dev/null
@@ -1125,9 +1158,14 @@ t_history() { # a forbidden path added in one pr-fix commit and removed in the n
 }
 t_history; check "allowed paths: a forbidden path, a 100755 .tf and a .tf under a link or gitlink, added then removed, are refused at gate and push" $?
 
-t_stage_() { # the staging invariants at the docs step and before the commit; each refusal restores
+t_stage_() { # the staging invariants before the commit and at the docs step; each refusal restores
   pilot_run "$PH" || return 1
   local x
+  # Before the commit, on a change made after the docs step.
+  size_fix; fr docs "$RUN" --round 1 > /dev/null 2>&1 || return 1
+  printf x > "$RUN/clone/Makefile"
+  fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 && return 1
+  grep -qxF 'path refused: work tree Makefile (suffix)' "$TMP/c.out" && [ "$(CG rev-parse HEAD)" = "$PH" ] && clean_tree || { cat "$TMP/c.out"; return 1; }
   for x in "chmod +x main.tf:main.tf (mode)" "printf x > Makefile:Makefile (suffix)" "ln -s main.tf link.tf:link.tf (mode)" \
     "mkdir -p wrappers; printf x > wrappers/w.tf:wrappers/w.tf (reserved)" "mkdir -p .github; printf x > .github/x.tf:.github/x.tf (grammar)" \
     "mv modules/a modules/real; ln -s real modules/a:modules/a/README.md (ancestors)"; do
@@ -1136,11 +1174,6 @@ t_stage_() { # the staging invariants at the docs step and before the commit; ea
     grep -qxF "path refused: work tree ${x#*:}" "$TMP/d.out" && [ "$(CG rev-parse HEAD)" = "$PH" ] && clean_tree &&
       [ -d "$RUN/clone/modules/a" ] && [ ! -L "$RUN/clone/modules/a" ] || { echo "case: $x"; cat "$TMP/d.out"; return 1; }
   done
-  # The same check before the commit, on a change made after the docs step.
-  size_fix; fr docs "$RUN" --round 1 > /dev/null 2>&1 || return 1
-  printf x > "$RUN/clone/Makefile"
-  fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 && return 1
-  grep -qxF 'path refused: work tree Makefile (suffix)' "$TMP/c.out" && [ "$(CG rev-parse HEAD)" = "$PH" ] && clean_tree || { cat "$TMP/c.out"; return 1; }
   fr cleanup "$RUN" > /dev/null
 }
 t_stage() { pilot t_stage_; }
@@ -1188,11 +1221,8 @@ t_frozen() { # an absent or malformed frozen prefix or merge base refuses
     GATE && { echo "gate passed: $e"; return 1; }
     grep -qx 'path rule refused: the frozen module root prefix or merge base is absent or malformed' "$TMP/gate.last" || { echo "$e"; cat "$TMP/gate.last"; return 1; }
   done
-  rm -f "$TMP/state.good"; fr cleanup "$RUN" > /dev/null
-  # At the docs step too, before the first commit.
-  new_run; round0 "$OUT"; fr clone "$RUN" > /dev/null 2>&1 && fr items "$RUN" --review "$OUT/round-0" --handover "$OUT/handover-task.md" > /dev/null 2>&1 &&
-    fr round "$RUN" > /dev/null 2>&1 || return 1
-  chmod u+w "$RUN/state.json"; jq 'del(.frozen)' "$RUN/state.json" > "$TMP/s.json" && cat "$TMP/s.json" > "$RUN/state.json"; retrust
+  rm -f "$TMP/state.good"
+  # At the docs step too, in the same run.
   fr docs "$RUN" --round 1 > "$TMP/d.out" 2>&1 && return 1
   grep -q 'frozen module root prefix or merge base' "$TMP/d.out" && fr cleanup "$RUN" > /dev/null
 }
@@ -1294,6 +1324,8 @@ mutate "a linked .tf not stale" 's/\] \|\| stale="a \.tf in its directory is a s
 mutate "the extract kept" 's/case "\$\{XTREE-\}" in \/tmp\/pr-fix-extract\.\?\?\?\?\?\?\)/case "\${XTREE-}" in \/nonexistent)/' t_pilot
 mutate "the outside findings flag dropped" 's/"outside findings: \\\(if test/"flag: \\(if test/' t_pilot
 mutate "the docs results not in the review task" 's/    \[ ! -f "\$RD\/docs\.txt" \] \|\| sed [^\n]*\n//' t_pilot
+mutate "the patch-only restore to the pinned head" 's/  if jq -e \x27\.commit_identity == null\x27 "\$RUN\/state\.json" > \/dev\/null && \[ -f "\$RUN\/reviewed\.json" \]; then/  if false; then/' t_noident_restore
+mutate "a file not judged printed as a refusal" 's/\[ "\$r" = ok \] \|\| \[ "\$r" = need \] && continue/[ "\$r" = ok ] \&\& continue/' t_markers
 mutate "the push without the http hardening" 's/ -c http\.proxy= -c http\.sslVerify=true -c http\.extraHeader= \\\n/ \\\n/' t_e2e
 
 echo
