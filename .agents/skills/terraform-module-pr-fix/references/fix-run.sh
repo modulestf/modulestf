@@ -789,44 +789,46 @@ cmd_replies() {
   done
   target_check "$tg"
   [[ "$ch" =~ $sha_re ]] || fail "--confirm-head must be the new SHA the user confirmed"
-  # The drafts as the gate showed them: a private copy, hashed before any change, then only the copy is read.
-  [ -f "$f" ] && [ ! -L "$f" ] && cp -- "$f" "$RUN/replies.in" || fail "the replies file cannot be read"
-  f="$RUN/replies.in"
-  [[ "$cr" =~ ^[0-9a-f]{64}$ ]] && [ "$(shasum -a 256 < "$f" | cut -d' ' -f1)" = "$cr" ] ||
+  # The drafts as the gate showed them, read once into memory and hashed there. Every later step
+  # reads only that copy, so no file rewritten after the hash changes what is posted.
+  [ -f "$f" ] && [ ! -L "$f" ] || fail "the replies file cannot be read"
+  local data
+  data="$(cat -- "$f" && printf x)" || fail "the replies file cannot be read"
+  data="${data%x}"
+  [[ "$cr" =~ ^[0-9a-f]{64}$ ]] && [ "$(printf '%s' "$data" | shasum -a 256 | cut -d' ' -f1)" = "$cr" ] ||
     fail "the replies file differs from the digest the confirmation names"
-  jq -e 'type == "array" and length > 0 and all(.[]; (.item | type == "string") and (.body | type == "string" and length > 0 and length <= 65536))' \
-    "$f" > /dev/null 2>&1 || fail "the replies file is not a list of {item, body}"
-  [ "$(jq -r '[.[].item] | sort | join(",")' "$f")" = "$(printf '%s' "$ids" | tr ',' '\n' | LC_ALL=C sort | paste -sd , -)" ] ||
+  printf '%s' "$data" | jq -e 'type == "array" and length > 0 and all(.[]; (.item | type == "string") and (.body | type == "string" and length > 0 and length <= 65536))' \
+    > /dev/null 2>&1 || fail "the replies file is not a list of {item, body}"
+  [ "$(printf '%s' "$data" | jq -r '[.[].item] | sort | join(",")')" = "$(printf '%s' "$ids" | tr ',' '\n' | LC_ALL=C sort | paste -sd , -)" ] ||
     fail "the confirmation does not name exactly the items of the replies file"
   jq -e '.pr.locked == false and .base_repo.archived == false' "$RUN/state.json" > /dev/null || fail "the token user cannot comment here"
   # Only ids of the frozen set, each with its pinned endpoint, each once.
   touch "$RUN/posted.txt"
   local bad
-  bad="$(jq -r --slurpfile it "$RUN/items.json" --rawfile posted "$RUN/posted.txt" '.[] | .item as $i
+  bad="$(printf '%s' "$data" | jq -r --slurpfile it "$RUN/items.json" --rawfile posted "$RUN/posted.txt" '.[] | .item as $i
     | select(([$it[0][] | select(.id == $i and .reply != null)] | length) == 0 or ($i | IN($posted | split("\n")[])))
-    | .item[0:40]' "$f")"
+    | .item[0:40]')"
   [ -z "$bad" ] || fail "not an open reply target of the frozen set: $(printf '%s' "$bad" | head -n 3 | paste -sd ' ' -)"
   # The fix is live: the pull request's head on GitHub, read now, is the SHA the user confirmed.
   # No local file such as pushed.json stands in for it.
-  local live leak
+  local live leak out final
   live="$(gh api "repos/$TREPO/pulls/$TNUM" --jq '.head.sha' 2> /dev/null)" || live=""
   [ "$live" = "$ch" ] || fail "the pull request's head is not the confirmed SHA; nothing posted"
-  # The <sha> placeholder becomes that SHA; then pr-review's leak scan and at-mention wrap.
-  jq --arg sha "$ch" 'map(.body |= gsub("<sha>"; $sha))' "$f" > "$RUN/replies.tmp" || fail "the replies cannot be read"
-  leak="$(jq -n -r -L "$PRR" --arg run "$RUN" --arg home "${HOME-}" --arg pwd "${PWD-}" --arg tmp "${TMPDIR-}" \
-    --slurpfile r "$RUN/replies.tmp" 'include "render-comment";
-    (([ {name: "the run directory", v: $run}, {name: "HOME", v: $home}, {name: "PWD", v: $pwd}, {name: "TMPDIR", v: $tmp} ]
+  # The <sha> placeholder becomes that SHA; then pr-review's leak scan and at-mention wrap, all in memory.
+  out="$(printf '%s' "$data" | jq --arg sha "$ch" 'map(.body |= gsub("<sha>"; $sha))')" || fail "the replies cannot be read"
+  leak="$(printf '%s' "$out" | jq -r -L "$PRR" --arg run "$RUN" --arg home "${HOME-}" --arg pwd "${PWD-}" --arg tmp "${TMPDIR-}" \
+    'include "render-comment"; . as $r
+    | (([ {name: "the run directory", v: $run}, {name: "HOME", v: $home}, {name: "PWD", v: $pwd}, {name: "TMPDIR", v: $tmp} ]
        | map(select(.v != "" and .v != "/")))
     + [ "/home/", "/Users/", "/tmp/", "/var/folders/", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_" | {name: ., v: .} ]
     + [ $ENV | to_entries[] | select((.key | test("TOKEN|KEY|SECRET|PASSWORD|PAT")) and (.value | length >= 12))
         | {name: "the value of \(.key)", v: .value} ]) as $lits
-    | leak_hit([$r[0][] | {text: .body, src: .item}]; $lits; []) | if . then "\(.pattern) in \(.src)" else "" end')" ||
+    | leak_hit([$r[] | {text: .body, src: .item}]; $lits; []) | if . then "\(.pattern) in \(.src)" else "" end')" ||
     fail "the leak scan failed"
   [ -z "$leak" ] || fail "leak scan: $leak; nothing posted"
-  jq -L "$PRR" 'include "render-comment"; map(.body |= wrap_mentions)' "$RUN/replies.tmp" > "$RUN/replies.json" &&
-    jq -e -L "$PRR" 'include "render-comment"; all(.[]; .body | bare_mention | not)' "$RUN/replies.json" > /dev/null ||
+  final="$(printf '%s' "$out" | jq -L "$PRR" 'include "render-comment"; map(.body |= wrap_mentions)')" &&
+    printf '%s' "$final" | jq -e -L "$PRR" 'include "render-comment"; all(.[]; .body | bare_mention | not)' > /dev/null ||
     fail "an at-mention is left outside a code span; nothing posted"
-  f="$RUN/replies.json"
   assert_identity
   local id ep body n=0
   while IFS= read -r id; do
@@ -836,11 +838,11 @@ cmd_replies() {
     [[ "$ep" =~ ^repos/([^/]+/[^/]+)/(pulls/([0-9]+)/comments/[0-9]+/replies|issues/([0-9]+)/comments)$ ]] &&
       [ "$(lower "${BASH_REMATCH[1]}")" = "$(lower "$TREPO")" ] && [ "${BASH_REMATCH[3]}${BASH_REMATCH[4]}" = "$TNUM" ] ||
       fail "no pinned reply endpoint for $id; nothing more posted"
-    body="$(jq -r --arg i "$id" '.[] | select(.item == $i) | .body' "$f")"
+    body="$(printf '%s' "$final" | jq -r --arg i "$id" '.[] | select(.item == $i) | .body')"
     jq -n --arg body "$body" '{body: $body}' | gh api -X POST "$ep" --input - > /dev/null 2>&1 ||
       fail "the reply to $id failed and may have landed; read the comments before any retry"
     printf '%s\n' "$id" >> "$RUN/posted.txt"; n=$((n + 1))
-  done < <(jq -r '.[].item' "$f")
+  done < <(printf '%s' "$final" | jq -r '.[].item')
   echo "replies: $n posted"
 }
 

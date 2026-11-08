@@ -263,7 +263,7 @@ No force, no lease, no tags, no submodules, no other ref. The SHA is the clone's
 |---|---|---|
 | `--target <owner>/<repo>#<n>` | The user's original request | The pinned pull request |
 | `--confirm-head` | The new SHA the user confirmed for the push | The pull request's head on GitHub, read now with `gh api repos/<target>/pulls/<n>` |
-| `--confirm-replies` | The gate's `replies sha256:` line shown to the user | The SHA-256 of the file, taken from a private copy before any change; only that copy is read after |
+| `--confirm-replies` | The gate's `replies sha256:` line shown to the user | The SHA-256 of the file, read once into memory before any change; every later step reads only that in-memory copy |
 | `--confirm-items` | The user's confirmation of the replies | Exactly the items of the file |
 
 So drafts rewritten after the gate are never posted, and no local file, such as `pushed.json`, stands in for the push: the fix must be live. It also refuses unless the pull request is not locked and the base is not archived, and every item is a comment item of the frozen set that was not posted before. Then, for each body:

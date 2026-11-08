@@ -951,7 +951,7 @@ mutate "the leak scan set bound to its last term" 's/\(\(\[ \{name: "the run dir
 mutate "the round record as JSON" 's/J -r .include "fix-run"; verify_lines. "\$RD\/verify\.json"/jq -c "{selection, dirs}" "\$RD\/verify.json"/' t_e2e
 mutate "the verification tree kept on an interrupt" 's/interrupted"; delete_vtree; delete_run/interrupted"; delete_run/' t_interrupt
 mutate "a compared round left out of the trust record" 's/\[ ! -f "\$RUN\/rounds\/\$k\/review\.json" \] \|\| list=/false \&\& list=/' t_trust_rounds
-mutate "the replies digest not checked" 's/\[\[ "\$cr" =~ \^\[0-9a-f\]\{64\}\$ \]\] && \[ "\$\(shasum -a 256 < "\$f" \| cut -d. . -f1\)" = "\$cr" \] \|\|/true ||/' t_replies_confirm
+mutate "the replies digest not checked" 's/\[\[ "\$cr" =~ \^\[0-9a-f\]\{64\}\$ \]\] && \[ "\$\(printf .%s. "\$data" \| shasum -a 256 \| cut -d. . -f1\)" = "\$cr" \] \|\|/true ||/' t_replies_confirm
 mutate "replies trust a local pushed.json" 's/live="\$\(gh api "repos\/\$TREPO\/pulls\/\$TNUM" --jq .\.head\.sha. 2> \/dev\/null\)" \|\| live=""/live="\$(jq -r .sha "\$RUN\/pushed.json" 2> \/dev\/null)"/' t_replies_confirm
 mutate "the push without the http hardening" 's/ -c http\.proxy= -c http\.sslVerify=true -c http\.extraHeader= \\\n/ \\\n/' t_e2e
 
