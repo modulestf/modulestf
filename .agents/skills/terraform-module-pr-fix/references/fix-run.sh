@@ -566,7 +566,8 @@ regions_check() { # clause 6 on the .md paths the rule left; the docs pass on an
   while IFS=$'\t' read -r om nm p; do
     k=$((k + 1))
     r="$(cat "$d/r$k")"
-    [ "$r" = ok ] && continue
+    # ok, or not judged: a file still waiting for the docs output when another one refused first.
+    [ "$r" = ok ] || [ "$r" = need ] && continue
     bad=1
     printf '%s\n' "$r" | awk -F '\t' -v c="$new" -v p="$p" '{ printf "path refused: %s %s (generated regions) %s, interior sha256 %s, recomputed sha256 %s\n", c, p, $2, $3, $4 }'
   done < "$d/md.tsv"
