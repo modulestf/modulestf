@@ -1,3 +1,12 @@
+## [0.5.2](https://github.com/modulestf/modulestf/compare/v0.5.1...v0.5.2) (2026-11-09)
+
+
+### Bug Fixes
+
+* **pr-fix:** count only findings the fix could cause, and regenerate wrapper versions.tf ([#128](https://github.com/modulestf/modulestf/issues/128)) ([f67020f](https://github.com/modulestf/modulestf/commit/f67020f3948199f828a8c98322d42b74c887604f))
+
+
+
 ## [0.5.1](https://github.com/modulestf/modulestf/compare/v0.5.0...v0.5.1) (2026-11-08)
 
 
