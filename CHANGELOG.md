@@ -1,3 +1,12 @@
+# [0.7.0](https://github.com/modulestf/modulestf/compare/v0.6.0...v0.7.0) (2026-11-09)
+
+
+### Features
+
+* **pr-review:** Propose a confirmed unlock before posting to a locked pull request ([#131](https://github.com/modulestf/modulestf/issues/131)) ([36f89f2](https://github.com/modulestf/modulestf/commit/36f89f2b3636b62b8ed29a79e9ca8250b1a4f854)), closes [terraform-aws-modules/terraform-aws-cloudfront#210](https://github.com/terraform-aws-modules/terraform-aws-cloudfront/issues/210)
+
+
+
 # [0.6.0](https://github.com/modulestf/modulestf/compare/v0.5.2...v0.6.0) (2026-11-09)
 
 
