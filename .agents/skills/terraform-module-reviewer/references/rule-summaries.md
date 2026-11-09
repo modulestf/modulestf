@@ -33,7 +33,7 @@
 | `examples.argument-undemonstrated` | The change adds an argument inside a block an example already sets, but no example sets the new argument. Users copying the examples never see it in use. |
 | `examples.custom-input-required` | An example needs `-var`, a var file or a manual edit before `terraform apply` runs, such as a required variable with no value. Examples must apply as written; credentials do not count. |
 | `examples.disabled-call-missing` | The complete example has no `module "disabled"` call with `create = false`. The terraform-aws-modules layout requires that call in every complete example. |
-| `examples.docs-incomplete` | An example lacks its `README.md`, the documentation markers that README needs, or documents its outputs thinly. Users browsing the examples get an incomplete reference. |
+| `examples.docs-incomplete` | An example lacks its `README.md` or the documentation markers that README needs, documents its outputs thinly, or keeps README prose that lists features but omits one the change added. Users browsing the examples get an incomplete reference. |
 | `examples.example-broken` | After the change an example cannot init, validate, plan or apply as written, for example an unsatisfied one-of or a value the AWS API rejects. Users who copy it hit the failure. |
 | `examples.example-broken-at-base` | An example fails, but the same failure already happens before the change. It is reported as older breakage to fix in a separate change and does not count against this one. |
 | `examples.feature-undemonstrated` | A feature the change adds, such as a new resource, nested or dynamic block, or an argument in a block no example sets, appears in no example. Users get no working configuration to copy. |
@@ -55,6 +55,7 @@
 | `profile.required-file-missing` | A new module lacks a file the terraform-aws-modules layout requires, such as `LICENSE`, a profile dotfile, one of the five workflows, or `examples/basic` and `examples/complete`. |
 | `profile.template-drift` | A profile-owned static file such as `.editorconfig`, `.releaserc.json` or a workflow differs from its family template with no stated reason. Version pins are not compared. |
 | `profile.title-misspelling` | A word in the pull request title misspells an identifier the diff uses, such as `atribut` for `attribute`. The title becomes the commit message and `CHANGELOG.md` entry, so the typo stays. |
+| `profile.title-truncated` | The pull request title ends with an ellipsis that cuts off a word or identifier, as when a forge shortens a long subject. The title becomes the commit message and `CHANGELOG.md` entry, so the cut stays. |
 | `profile.title-uninformative` | The pull request title names no capability, fix or surface from the diff, such as `feat: Update module`. It becomes the `CHANGELOG.md` entry, which then tells readers nothing. |
 | `profile.unrelated-change-bundled` | A `feat` change also edits `.tf` files in a module directory that takes no part in the feature. That edit ships under the wrong release entry and is reverted if the feature is. |
 | `review.check-not-run` | A check could not finish, for example because provider documentation was unreachable or a named file was missing. The review reports the gap and the rules left undecided, and never counts it as a pass. |

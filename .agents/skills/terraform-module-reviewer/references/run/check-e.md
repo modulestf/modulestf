@@ -27,6 +27,7 @@ When any row below applies: [Reads, Fails When and Severity](../check-e-profile.
 | `profile.required-file-missing` | The task is a new module, or the change adds a submodule or example, or deletes or renames a file. | none | [engine](../engine/check-e-profile.md#profilerequired-file-missing) |
 | `profile.template-drift` | The change adds or edits a file the templates map lists. | none | [engine](../engine/check-e-profile.md#profiletemplate-drift) |
 | `profile.title-misspelling` | The task carries the title the change will be released under. | none | [Check E](../check-e-profile.md#reads-fails-when-and-severity) |
+| `profile.title-truncated` | The task carries the title the change will be released under. | none | [Check E](../check-e-profile.md#reads-fails-when-and-severity) |
 | `profile.title-uninformative` | The task carries the title the change will be released under. | none | [Check E](../check-e-profile.md#reads-fails-when-and-severity) |
 | `profile.unrelated-change-bundled` | The title's type is `feat` and the change edits a `.tf` file. | none | [Check E](../check-e-profile.md#reads-fails-when-and-severity) |
 

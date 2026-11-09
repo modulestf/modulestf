@@ -72,7 +72,7 @@ A value in this table makes only the rules in its row not applicable. `mtf-facts
 |--------|---------------------------|
 | `partitions: fixed` | `structure.arn-partition-hardcoded` |
 | `examples: none` | `examples.disabled-call-missing`, `examples.submodule-missing`, `examples.versions-missing`, `examples.feature-undemonstrated`, `examples.argument-undemonstrated` |
-| `release: none` | `profile.commit-type-mismatch`, `profile.title-uninformative`, `profile.title-misspelling`, `profile.unrelated-change-bundled`, `profile.changelog-handwritten`, `profile.release-config-changed`, `profile.owner-identifier`, `profile.provider-meta-missing`, `profile.migration-notes-misplaced`, `profile.template-drift` |
+| `release: none` | `profile.commit-type-mismatch`, `profile.title-uninformative`, `profile.title-misspelling`, `profile.title-truncated`, `profile.unrelated-change-bundled`, `profile.changelog-handwritten`, `profile.release-config-changed`, `profile.owner-identifier`, `profile.provider-meta-missing`, `profile.migration-notes-misplaced`, `profile.template-drift` |
 
 `profile.required-file-missing` is not gated by `examples: none`: such a profile empties its `example` and `example-dirs` instead. `consumers: in-repo` gates no rule. It only feeds the downgrade below.
 
