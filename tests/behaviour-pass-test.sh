@@ -140,7 +140,7 @@ jq -n '[{id: "F-001", rule_id: "structure.argument-order", severity: "LOW", file
   summary: "Empty strings in `var.vpc_security_group_ids` now reach the provider.", suggested_fix: "no code change: none.", source: "llm"}]' > "$TMP/findings.json"
 jq -n --arg h "$HEAD" --arg b "$BASE" '{format: 1, repo: "example/terraform-aws-rds-aurora", number: 556,
   head_sha: $h, base_sha: $b, merge_base: $b, prefix: "",
-  state: {state: "open", merged: false, draft: false, base_is_default: true, self_authored: false},
+  state: {state: "open", merged: false, draft: false, base_is_default: true, self_authored: false, locked: false, lock_reason: null},
   signals: {threads: "pass", review_decision: "none", mergeability: "pass"}, own_review: null,
   could_not_run: [], unresolved_threads: [],
   conversation: {path: "graphql", omitted: null, considered: 0, bot_considered: 0, counts: {}, notes: []},

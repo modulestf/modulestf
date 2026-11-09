@@ -11,7 +11,9 @@
     "merged": false,
     "draft": false,
     "base_is_default": true,
-    "self_authored": false
+    "self_authored": false,
+    "locked": false,
+    "lock_reason": null
   },
   "signals": {
     "threads": "pass",
