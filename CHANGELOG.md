@@ -1,3 +1,12 @@
+# [0.6.0](https://github.com/modulestf/modulestf/compare/v0.5.2...v0.6.0) (2026-11-09)
+
+
+### Features
+
+* Add profile.title-truncated and catch stale example README prose ([#130](https://github.com/modulestf/modulestf/issues/130)) ([8de1a56](https://github.com/modulestf/modulestf/commit/8de1a56218b74df63906e179f7499a0a31fcc9a9)), closes [terraform-aws-modules/terraform-aws-cloudfront#210](https://github.com/terraform-aws-modules/terraform-aws-cloudfront/issues/210)
+
+
+
 ## [0.5.2](https://github.com/modulestf/modulestf/compare/v0.5.1...v0.5.2) (2026-11-09)
 
 
