@@ -68,14 +68,15 @@ Start a round, then hand it to the maintainer:
 fix-run.sh round "$RUN"
 ```
 
-Start one subagent with the `terraform-module-maintainer` skill, in its Resolve feedback mode. Its prompt is the text of `$RUN/rounds/<n>/task.md`, whole and unchanged, and one reply line asking for the paths the task names and a short summary only. The task carries `Review loop: caller`, `Commit: one commit per round`, `Verification: caller`, `Edit rule:` with the path of [write-path.md](write-path.md), a hint file with the change set and the files of the items to apply, the items to apply and the items to draft only. The maintainer edits only paths the [Allowed Paths](write-path.md#allowed-paths) rule allows, leaves every generated region to the caller, writes the commit message, the disposition table and the reply drafts to the paths the task names, and runs no git or terraform command. Then the docs step and the commit:
+Start one subagent with the `terraform-module-maintainer` skill, in its Resolve feedback mode. Its prompt is the text of `$RUN/rounds/<n>/task.md`, whole and unchanged, and one reply line asking for the paths the task names and a short summary only. The task carries `Review loop: caller`, `Commit: one commit per round`, `Verification: caller`, `Edit rule:` with the path of [write-path.md](write-path.md), a hint file with the change set and the files of the items to apply, the items to apply and the items to draft only. The maintainer edits only paths the [Allowed Paths](write-path.md#allowed-paths) rule allows, leaves every generated region to the caller, writes the commit message, the disposition table and the reply drafts to the paths the task names, and runs no git or terraform command. Then the wrappers step, the docs step and the commit:
 
 ```
+fix-run.sh wrappers "$RUN" --round <n>
 fix-run.sh docs "$RUN" --round <n>
 fix-run.sh commit "$RUN" --round <n>
 ```
 
-`docs` checks the work tree, then runs the maintainer's terraform-docs pass from this skill's checkout on the READMEs the selection rule names, as [Staging and the Docs Step](write-path.md#staging-and-the-docs-step) says, and prints each README regenerated or stale. `commit` checks the work tree again, builds the commit and judges it by the rule before it moves the ref. A refusal of either restores the work tree to the last commit and the round counts as failed.
+`wrappers` checks the work tree, then rewrites each wrapper `versions.tf` from its module's `versions.tf` as [Wrapper Versions](write-path.md#wrapper-versions) says, and prints each pair `updated`, `unchanged`, `skipped`, `not-convention` or `stale` with its reason. `docs` checks the work tree, then runs the maintainer's terraform-docs pass from this skill's checkout on the READMEs the selection rule names, as [Staging and the Docs Step](write-path.md#staging-and-the-docs-step) says, and prints each README regenerated or stale. `commit` checks the work tree again, builds the commit and judges it by the rule and the wrappers' out-of-date check before it moves the ref. A refusal of any of them restores the work tree to the last commit and the round counts as failed.
 
 Every attempt counts as a round, a failed one included. When the user names another item with "apply" in a new message while the loop runs, run `fix-run.sh apply "$RUN" --item <id>` before the next round. Once the loop stopped, `apply` refuses: no round reopens.
 
@@ -91,7 +92,7 @@ Start one subagent with the `terraform-module-reviewer` skill, read-only. Its wo
 fix-run.sh compare "$RUN" --round <n> --findings "$RUN/rounds/<n>/findings.json"
 ```
 
-It prints the local verdict, the open count, every introduced tuple and the loop decision of [Loop](write-path.md#loop). When it says the next round may start, go back to Step 7. When it says stop, go to Step 10.
+It prints the local verdict, the open count, every introduced tuple, each `unattributed:` finding and the loop decision of [Loop](write-path.md#loop). The verdict, the open set and the loop read only the findings the fix could have caused, as [Fingerprints and the Local Verdict](write-path.md#fingerprints-and-the-local-verdict) says. When it says the next round may start, go back to Step 7. When it says stop, go to Step 10.
 
 ## Step 10
 
@@ -99,11 +100,11 @@ It prints the local verdict, the open count, every introduced tuple and the loop
 fix-run.sh gate "$RUN"
 ```
 
-It runs the content gate and the [Push Precondition](write-path.md#push-precondition), writes `$OUT/fix.patch`, the disposition tables, `$OUT/replies.json` with the reply drafts of every round, the latest per item, and the last findings, and prints the diff stat, the verdict, the author, the write path, the destination URL and branch, the expected remote SHA, the draft and default-branch flags, and an `outside findings: <path>` flag for each changed path that is neither in the change set nor the file of an applied item. On a refusal it prints every reason. On path B the run ends here with the patch.
+It runs the content gate and the [Push Precondition](write-path.md#push-precondition), writes `$OUT/fix.patch`, the disposition tables, `$OUT/replies.json` with the reply drafts of every round, the latest per item, and the last findings, and prints the diff stat, the verdict, the author, the write path, the destination URL and branch, the expected remote SHA, the draft and default-branch flags, an `outside findings: <path>` flag for each changed path that is neither in the change set nor the file of an applied item, a `not-convention: <path>` line for each wrapper pair that fails the convention test, and an `unattributed:` line for each finding of the last round the fix did not cause. On a refusal it prints every reason. On path B the run ends here with the patch.
 
 ## Step 11
 
-Show the gate: the diff (`$OUT/fix.patch`), the disposition table, the verdict, the author identity, the destination URL and branch, the expected remote SHA, the new SHA and the patch digest (`new SHA:` and `patch sha256:`), the reply drafts' digest (`replies sha256:`), and the flags, each `outside findings:` path among them as information only. Ask once whether to push, and wait. Only a new user message after the gate that names the push, the branch and the new SHA confirms it. Take each argument from its source, as [Push](write-path.md#push) lists them: `--target` from the user's original request; `--confirm-branch` and `--confirm-head` from that confirmation, a short SHA in it expanded only when it is a prefix of the gate's `new SHA:` line; `--expect-sha` and `--confirm-patch` from the gate's lines the user saw. Then:
+Show the gate: the diff (`$OUT/fix.patch`), the disposition table, the verdict, the author identity, the destination URL and branch, the expected remote SHA, the new SHA and the patch digest (`new SHA:` and `patch sha256:`), the reply drafts' digest (`replies sha256:`), and the flags, each `outside findings:`, `not-convention:` and `unattributed:` line among them as information only. Ask once whether to push, and wait. Only a new user message after the gate that names the push, the branch and the new SHA confirms it. Take each argument from its source, as [Push](write-path.md#push) lists them: `--target` from the user's original request; `--confirm-branch` and `--confirm-head` from that confirmation, a short SHA in it expanded only when it is a prefix of the gate's `new SHA:` line; `--expect-sha` and `--confirm-patch` from the gate's lines the user saw. Then:
 
 ```
 fix-run.sh push "$RUN" --target <owner>/<repo>#<number> --confirm-branch <ref> --expect-sha <pinned head> \

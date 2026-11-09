@@ -143,7 +143,8 @@ def decisions: IN("apply", "reject", "unverified", "already-addressed", "duplica
 def loop_decision:
   .history as $h | ($h | length - 1) as $n | $h[$n] as $now |
   ([range(0; [$n - 1, 0] | max) | . as $k | msub($h[$k]; $h[$k + 1])[]] | unique) as $closed |
-  if .verdict == "clean" or .verdict == "nits" then {stop: true, finished_review: true, reason: "the local verdict is \(.verdict)"}
+  if .verdict == "clean" or .verdict == "nits" then {stop: true, finished_review: true,
+    reason: "the local verdict is \(.verdict): finished among attributable findings, \(.unattributed // 0) unattributed"}
   elif .nonactionable then {stop: true, finished_review: false, reason: "every open item is non-actionable"}
   elif $n >= 1 and any($now[]; IN($closed[])) then {stop: true, finished_review: false, reason: "no progress: a closed item reappears"}
   elif $n >= 1 and ((($now | length) >= ($h[$n - 1] | length)) or (msub($now; $h[$n - 1]) | length) > 0)
@@ -178,6 +179,25 @@ def prefix_ok: type == "string" and (. == "" or path_grammar);
 # Under the module root: the slash-boundary test.
 def under($prefix): $prefix == "" or startswith($prefix + "/");
 
+# The directory of a path: the bytes before its last slash, or "" when it has none.
+def dir_of: rindex("/") as $i | if $i == null then "" else .[0:$i] end;
+# The NUL-separated output of git diff-tree --name-only as module-relative paths.
+def module_paths($x): [split("\u0000")[] | select(. != "" and under($x)) | if $x == "" then . else .[($x | length) + 1:] end];
+# Attribution (write-path.md, Fingerprints and the Local Verdict). Input {findings, pinned, changed,
+# prefix}: findings the round's list with module-relative files, pinned the pinned head's list,
+# repository-relative, changed the round's changed paths, module-relative. Output {attributable,
+# unattributed}, both repository-relative. A5 comes first, so a malformed file never reaches A2.
+def attribution:
+  .prefix as $x | .changed as $ch | [.pinned[] | [.rule_id, .file, addr]] as $pk |
+  [.findings[] | .file as $f |
+    ( ($f != "." and ($f | path_grammar | not))
+      or ($f | IN($ch[]))
+      or ($f != "" and $f != "." and (($f | dir_of) as $d | any($ch[]; endswith(".tf") and dir_of == $d)))
+      or ([.rule_id, fp($x)[1], addr] | IN($pk[]))
+      or (.severity | IN("HIGH", "CRITICAL")) ) as $a
+    | {a: $a, f: (.file = fp($x)[1])}]
+  | {attributable: map(select(.a) | .f), unattributed: map(select(.a | not) | .f)};
+
 # Clauses 1 to 3 of write-path.md, Allowed Paths, on one path: "" when they hold, else the clause.
 def path_clause($prefix):
   if (path_grammar | not) or (under($prefix) | not) then "grammar"
@@ -204,11 +224,13 @@ def raw_records:
     end;
 
 # Clauses 1 to 5 on records [{path, om, nm}] between the parent tree $a and the new tree $b, both
-# {path: mode}. Output {refused: [{path, clause}], md: [{path, om, nm}]}: md, the .md paths clause 6
-# judges, only when nothing is refused.
-def clauses($a; $b; $x):
+# {path: mode}. $e lists the mapped wrappers the caller found to meet clause 3's exception; only a
+# modified record of one passes clause 3. Output {refused: [{path, clause}], md: [{path, om, nm}]}:
+# md, the .md paths clause 6 judges, only when nothing is refused.
+def clauses($a; $b; $x; $e):
   [.[] | .path as $p
-   | ($p | path_clause($x)) as $c
+   | ($p | path_clause($x)) as $c0
+   | (if $c0 == "reserved" and ($p | IN($e[])) and .om != "000000" and .nm != "000000" then "" else $c0 end) as $c
    | (if $c != "" then $c
       elif any(.om, .nm; IN("000000", "100644") | not) then "mode"
       elif any($p | split("/") | range(1; length) as $i | .[0:$i] | join("/") | ($a[.], $b[.]); . != null and . != "040000") then "ancestors"
@@ -217,29 +239,30 @@ def clauses($a; $b; $x):
   | {refused: map(select(.clause != "") | {path, clause}),
      md: (if all(.[]; .clause == "") then map(select(.path | endswith(".md")) | {path, om, nm}) else [] end)};
 
-# Input {raw, par, new, prefix}: the git output of one commit against its parent. null when an
-# input does not parse or the prefix is malformed.
+# Input {raw, par, new, prefix, except}: the git output of one commit against its parent, and the
+# wrappers clause 3 excepts. null when an input does not parse or the prefix is malformed.
 def path_rule:
-  (.raw | raw_records) as $r | (.par | tree_modes) as $a | (.new | tree_modes) as $b | .prefix as $x |
-  if $r == null or $a == null or $b == null or ($x | prefix_ok | not) then null else $r | clauses($a; $b; $x) end;
+  (.raw | raw_records) as $r | (.par | tree_modes) as $a | (.new | tree_modes) as $b | .prefix as $x | (.except // []) as $e |
+  if $r == null or $a == null or $b == null or ($x | prefix_ok | not) then null else $r | clauses($a; $b; $x; $e) end;
 
 # The staging invariants: input {paths, par, new, prefix}, paths the NUL-separated changed and
 # untracked paths of the work tree, new the work tree as a listing in ls-tree form (the paths and
-# their existing components, by lstat). The same clauses 1 to 5.
+# their existing components, by lstat), except the wrappers clause 3 excepts. The same clauses 1 to 5.
 def stage_rule:
-  (.par | tree_modes) as $a | (.new | tree_modes) as $b | .prefix as $x |
+  (.par | tree_modes) as $a | (.new | tree_modes) as $b | .prefix as $x | (.except // []) as $e |
   if $a == null or $b == null or ($x | prefix_ok | not) then null
   else [.paths | split("\u0000")[] | select(. != "")] | unique | map({path: ., om: ($a[.] // "000000"), nm: ($b[.] // "000000")})
-    | clauses($a; $b; $x) end;
+    | clauses($a; $b; $x; $e) end;
 
 # The selection rule, shared by the docs step and clause 6. Input {tf, readme, links, prefix}: tf
 # the NUL-separated paths changed between the frozen merge base and the documented tree, readme the
 # README.md paths that exist in that tree, links the directories that hold a .tf that is a link.
 # Output [{readme, entry, dir, label, stale}]: entry is the README relative to the module root, dir
-# its directory in the docs pass's form ("." for the module root).
+# its directory in the docs pass's form ("." for the module root). Wrapper paths are not selected.
 def docs_selection:
   .prefix as $x | .readme as $r | .links as $l |
-  [.tf | split("\u0000")[] | select(endswith(".tf")) | (split("/") | .[:-1] | join("/")) as $d
+  [.tf | split("\u0000")[] | select(endswith(".tf") and (split("/") | any(.[]; ascii_downcase == "wrappers") | not))
+   | (split("/") | .[:-1] | join("/")) as $d
    | (if $d == "" then "README.md" else $d + "/README.md" end) as $m
    | select(($m | under($x)) and ($m | IN($r[])))
    | {readme: $m, d: $d}] | unique_by(.readme)

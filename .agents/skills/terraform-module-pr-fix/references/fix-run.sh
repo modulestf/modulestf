@@ -10,6 +10,7 @@
 #   fix-run.sh items <run> --review <dir>   the frozen item set from the state and round 0
 #   fix-run.sh apply <run> --item <id>   the user named an item to apply
 #   fix-run.sh round <run>               starts the next round: its items, edit rule and task
+#   fix-run.sh wrappers <run> --round <n>   the staging check and the wrapper versions.tf files
 #   fix-run.sh docs <run> --round <n>    the staging check and the terraform-docs pass on the work tree
 #   fix-run.sh commit <run> --round <n>  the round's one commit, with the user's identity, judged first
 #   fix-run.sh verify <run> --round <n>  pr-review's verify-pass.sh on the round, and the review task
@@ -361,8 +362,8 @@ last_reviewed() { # the latest round with a review, or 0
   for k in 1 2 3; do [ -f "$RUN/rounds/$k/review.json" ] && n=$k; done
   echo "$n"
 }
-findings_at() { # round: its findings, repository-relative
-  if [ "$1" = 0 ]; then cat "$RUN/round0-findings.json"; else cat "$RUN/rounds/$1/findings-repo.json"; fi
+findings_at() { # round: its findings, repository-relative; from round 1 on, the attributable ones
+  if [ "$1" = 0 ]; then cat "$RUN/round0-findings.json"; else jq '.attributable' "$RUN/rounds/$1/review.json"; fi
 }
 
 cmd_round() {
@@ -413,7 +414,7 @@ cmd_round() {
   } > "$RD/task.md"
   echo "round $n: $(jq 'length' "$RD/items.json") items, $(jq '[.[] | select(.apply)] | length' "$RD/items.json") to apply"
   echo "task: $RD/task.md"
-  echo "next: the maintainer, then: docs $RUN --round $n, then: commit $RUN --round $n"
+  echo "next: the maintainer, then: wrappers $RUN --round $n, then: docs $RUN --round $n, then: commit $RUN --round $n"
 }
 
 # --- Allowed Paths (write-path.md): the rule, the extract, the docs pass, the staging check -----
@@ -528,8 +529,11 @@ rule() {
   G diff-tree -r -z --raw --no-renames "$par" "$new" > "$d/raw" 2> /dev/null || { echo "path rule refused: $new: git diff-tree failed"; return 1; }
   G ls-tree -r -t -z --full-tree "$par" > "$d/par" 2> /dev/null && G ls-tree -r -t -z --full-tree "$new" > "$d/new" 2> /dev/null ||
     { echo "path rule refused: $new: git ls-tree failed"; return 1; }
-  J -n -c --rawfile raw "$d/raw" --rawfile par "$d/par" --rawfile new "$d/new" --arg x "$FPFX" \
-    'include "fix-run"; {raw: $raw, par: $par, new: $new, prefix: $x} | path_rule | if . == null then error("unparsed") else . end' > "$d/rule.json" 2> /dev/null ||
+  # The mapped wrappers clause 3 excepts in this commit: the changed paths are every second record.
+  local ex
+  perl -0ne 'print if $. % 2 == 0' "$d/raw" > "$d/names" && ex="$(wrap_except "$new" "$d/names")" || ex='[]'
+  J -n -c --rawfile raw "$d/raw" --rawfile par "$d/par" --rawfile new "$d/new" --arg x "$FPFX" --argjson e "$ex" \
+    'include "fix-run"; {raw: $raw, par: $par, new: $new, prefix: $x, except: $e} | path_rule | if . == null then error("unparsed") else . end' > "$d/rule.json" 2> /dev/null ||
     { echo "path rule refused: $new: the git output does not parse"; return 1; }
   if jq -e '.refused | length > 0' "$d/rule.json" > /dev/null; then
     jq -r --arg c "$new" '.refused[] | "path refused: \($c) \(.path | if test("^[ -~]{1,255}$") then . else tojson end) (\(.clause))"' "$d/rule.json"
@@ -576,7 +580,8 @@ regions_check() { # clause 6 on the .md paths the rule left; the docs pass on an
 
 # The staging invariants (write-path.md, Staging and the Docs Step): every changed or untracked path
 # of the work tree passes clauses 1 to 5 against HEAD, and no existing component of it, by lstat, is
-# a symbolic link. Prints every refusal.
+# a symbolic link. Clause 3 takes its exception on the work tree; with "pre", the wrappers step's own
+# check also takes that step's allowance. Prints every refusal.
 STAGE_PL='use strict; use warnings; local $/ = "\0"; my %k; my $z = "0" x 40;
 sub kind { my @s = lstat($_[0]); return "" unless @s; return "120000 blob" if -l _; return "040000 tree" if -d _;
   return ($s[2] & 0100 ? "100755" : "100644") . " blob" if -f _; return "000001 blob"; }
@@ -592,8 +597,9 @@ stage_check() {
   { G diff --no-ext-diff --no-textconv --name-only -z --no-renames HEAD && G ls-files -z --others; } > "$d/paths" 2> /dev/null &&
     G ls-tree -r -t -z --full-tree HEAD > "$d/par" 2> /dev/null || { echo "path rule refused: the work tree cannot be read"; return 1; }
   (cd "$RUN/clone" && perl -e "$STAGE_PL" < "$d/paths" > "$d/new") || { echo "path rule refused: the work tree cannot be read"; return 1; }
-  J -n -c --rawfile p "$d/paths" --rawfile par "$d/par" --rawfile new "$d/new" --arg x "$FPFX" \
-    'include "fix-run"; {paths: $p, par: $par, new: $new, prefix: $x} | stage_rule | if . == null then error("unparsed") else . end' > "$d/rule.json" 2> /dev/null ||
+  local ex; ex="$(stage_except "${1-}" "$d/paths")" || ex='[]'
+  J -n -c --rawfile p "$d/paths" --rawfile par "$d/par" --rawfile new "$d/new" --arg x "$FPFX" --argjson e "$ex" \
+    'include "fix-run"; {paths: $p, par: $par, new: $new, prefix: $x, except: $e} | stage_rule | if . == null then error("unparsed") else . end' > "$d/rule.json" 2> /dev/null ||
     { echo "path rule refused: the work tree listing does not parse"; return 1; }
   jq -r '.refused[] | "path refused: work tree \(.path | if test("^[ -~]{1,255}$") then . else tojson end) (\(.clause))"' "$d/rule.json" | grep . && return 1
   return 0
@@ -615,6 +621,184 @@ restore() {
     [ -z "$(G ls-files --others 2> /dev/null)" ] && [ "$(G write-tree 2> /dev/null)" = "$tree" ] &&
     G diff --no-ext-diff --no-textconv --quiet > /dev/null 2>&1 || abort "the work tree cannot be restored"
   echo "restored: the index and work tree are $tree"
+}
+
+# --- Wrapper versions.tf (write-path.md, Wrapper Versions) ------------------------------------
+
+# derive and the wrappers step's work on one pair. "derive <file>" prints derive(file) and exits 0,
+# or exits 3 when derive is undefined. "step <wrapper> <module> <baseline file> <conv> <guard>", run
+# in the clone, prints the step's one result for the pair: the safety checks, then the convention
+# test and the author-edit guard as the caller decided them from git, then derive and the write.
+WRAP_PL='
+use strict; use warnings; use Fcntl qw(O_RDONLY O_RDWR O_NOFOLLOW O_NONBLOCK);
+sub closes { my $d = 0; for my $c (split //, shift) { $d++ if $c eq "["; return 0 if $c eq "]" && --$d < 0 } return $d == 0 }
+sub derive {
+  my $s = shift;
+  return undef if length($s) > 65536 || $s !~ /\n\z/ || $s =~ /[^\x20-\x7e\t\n]/ || index($s, "<<") >= 0;
+  my @l = split /\n/, $s, -1; pop @l;
+  my ($o, $i) = ("", 0);
+  while ($i < @l) {
+    my $x = $l[$i++]; $o .= "$x\n";
+    next unless $x =~ /^([ \t]*)provider_meta "[^"]*" \{$/;
+    my ($ind, $closed) = ($1, 0);
+    while ($i < @l) {
+      my $y = $l[$i++];
+      if ($y eq "$ind}") { $o .= "$y\n"; $closed = 1; last }
+      return undef if $y =~ /[{}]/;
+      if ($y =~ m{^[ \t]*(#|//|$)}) { $o .= "$y\n"; next }
+      my ($t) = $y =~ /^[ \t]*([A-Za-z0-9_-]+)/;
+      my $ua = defined $t && ($t eq "user_agent" || $t eq "module_name");
+      if ($ua && $y =~ /^[ \t]*(user_agent|module_name) *= *\[[ \t]*$/) {
+        while (1) { return undef if $i >= @l; my $z = $l[$i++]; return undef if $z =~ /[{}]/; last if $z =~ /^[ \t]*\]/ }
+        next;
+      }
+      return undef unless $y =~ /^[ \t]*[A-Za-z_][A-Za-z0-9_-]* *= *(\S.*)$/;
+      my $v = $1;
+      return undef if index($v, "[") >= 0 && !($ua && closes($v));
+      $o .= "$y\n" unless $ua;
+    }
+    return undef unless $closed;
+  }
+  return $o;
+}
+sub slurp { open(my $h, "<:raw", shift) or return undef; local $/; my $s = <$h>; return defined $s ? $s : "" }
+sub rd { my $h = shift; sysseek($h, 0, 0) or return undef; my ($s, $b) = (""); while (1) { my $n = sysread($h, $b, 65536); return undef unless defined $n; last unless $n; $s .= $b } return $s }
+sub real_dirs { my @c = split m{/}, shift; pop @c; my $a = ""; for (@c) { $a = $a eq "" ? $_ : "$a/$_"; return 0 if -l $a || !-d _ } return 1 }
+if ($ARGV[0] eq "derive") { my $s = slurp($ARGV[1]); my $d = defined $s ? derive($s) : undef; exit 3 unless defined $d; print $d; exit 0 }
+my (undef, $w, $m, $bf, $conv, $guard) = @ARGV;
+sub out { print "$_[0] $w", (defined $_[1] ? " $_[1]" : ""), "\n"; exit 0 }
+out("stale", "link on its path") unless real_dirs($w) && real_dirs($m);
+my ($wh, $mh);
+sysopen($wh, $w, O_RDWR | O_NOFOLLOW | O_NONBLOCK) or out("stale", -l $w ? "link on its path" : "not a regular file");
+sysopen($mh, $m, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) or out("stale", -l $m ? "link on its path" : "not a regular file");
+for my $h ($wh, $mh) { my @s = stat($h); out("stale", "not a regular file") unless @s && -f _; out("stale", "hard link") unless $s[3] == 1 }
+my ($base, $cur) = (slurp($bf), rd($wh));
+out("stale", "changed by hand") unless defined $base && defined $cur && $cur eq $base;
+out("not-convention") unless $conv eq "yes";
+out("stale", "author edit") unless $guard eq "yes";
+my $mod = rd($mh); my $d = defined $mod ? derive($mod) : undef;
+out("stale", "derive undefined") unless defined $d;
+out("unchanged") if $d eq $cur;
+# The one write: through the descriptor the checks ran on, never by a path.
+truncate($wh, 0) && sysseek($wh, 0, 0) && (syswrite($wh, $d) // -1) == length($d) or out("stale", "write failed");
+out("updated");'
+WRAP_RE='^wrappers/([A-Za-z0-9_][A-Za-z0-9._-]*/)?versions\.tf$'
+wmod() { # repository-relative path: the module file a mapped wrapper comes from; 1 when it is not mapped
+  local p="$1"
+  if [ -n "$FPFX" ]; then case "$p" in "$FPFX"/*) p="${p#"$FPFX"/}" ;; *) return 1 ;; esac; fi
+  [[ "$p" =~ $WRAP_RE ]] || return 1
+  if [ "$p" = wrappers/versions.tf ]; then p=versions.tf; else p="modules/${p#wrappers/}"; fi
+  printf '%s\n' "${FPFX:+$FPFX/}$p"
+}
+entry_at() { # tree, path: its ls-tree entry, empty when absent, "error" when git fails
+  G ls-tree -z "$1" -- "$2" 2> /dev/null | tr '\0' '\n' || echo error
+}
+blob_at() { # tree, path, file: the blob of a 100644 entry into the file; 1 when absent, of another mode or under a link
+  local e re=$'^100644 blob ([0-9a-f]{40,64})\t(.*)$'
+  e="$(entry_at "$1" "$2")"
+  [[ "$e" =~ $re ]] && [ "${BASH_REMATCH[2]}" = "$2" ] && G cat-file blob "${BASH_REMATCH[1]}" > "$3" 2> /dev/null
+}
+derive_to() { perl -e "$WRAP_PL" derive "$1" > "$2"; } # file, out: 0 when derive is defined
+wrap_derived() { # tree, wrapper, module: the wrapper's blob there equals derive of the module's blob there
+  local d="$RUN/wrap"
+  blob_at "$1" "$3" "$d/tm" && derive_to "$d/tm" "$d/tm.d" && blob_at "$1" "$2" "$d/tw" && cmp -s "$d/tm.d" "$d/tw"
+}
+pair_conv_guard() { # wrapper, module: CONV, the convention test at the frozen merge base, and GUARD, the author-edit guard at the pinned head
+  local w="$1" m="$2" d="$RUN/wrap"
+  CONV=no; GUARD=no
+  blob_at "$FMB" "$m" "$d/mbm" && derive_to "$d/mbm" "$d/mbm.d" && blob_at "$FMB" "$w" "$d/mbw" && cmp -s "$d/mbm.d" "$d/mbw" && CONV=yes
+  blob_at "$PINNED" "$w" "$d/pw" &&
+    { { blob_at "$FMB" "$w" "$d/mbw" && cmp -s "$d/pw" "$d/mbw"; } ||
+      { blob_at "$PINNED" "$m" "$d/pm" && derive_to "$d/pm" "$d/pm.d" && cmp -s "$d/pw" "$d/pm.d"; }; } && GUARD=yes
+  return 0
+}
+wrap_except() { # tree, file of NUL-separated changed paths: the mapped wrappers clause 3's exception holds for there, as JSON
+  local t="$1" p m wl=()
+  mkdir -p "$RUN/wrap"
+  while IFS= read -r -d '' p; do
+    m="$(wmod "$p")" || continue
+    wrap_derived "$t" "$p" "$m" || continue
+    pair_conv_guard "$p" "$m"; [ "$CONV" = yes ] && [ "$GUARD" = yes ] && wl+=("$p")
+  done < "$2"
+  jq -n -c '$ARGS.positional' --args ${wl[@]+"${wl[@]}"}
+}
+wt_tree() { # the work tree as a tree object, through a scratch index; the clone's index is not touched
+  local i="$RUN/wt.idx" t
+  rm -f "$i"
+  GIDX="$i" G read-tree HEAD > /dev/null 2>&1 && GIDX="$i" G add -A > /dev/null 2>&1 && t="$(GIDX="$i" G write-tree)" || { rm -f "$i"; return 1; }
+  rm -f "$i"; printf '%s\n' "$t"
+}
+baseline_tree() { # the last reviewed tree, or the pinned head's before any review
+  local t; t="$(jq -r '.tree // ""' "$RUN/reviewed.json" 2> /dev/null)"
+  [[ "$t" =~ $sha_re ]] || t="$(G rev-parse "$PINNED^{tree}")"
+  printf '%s\n' "$t"
+}
+stage_except() { # [pre], file of NUL-separated paths: the mapped wrappers among them that clause 3 lets pass in the work tree
+  local p m wt="" base="" wl=() d="$RUN/wrap"
+  mkdir -p "$d"
+  while IFS= read -r -d '' p; do
+    m="$(wmod "$p")" || continue
+    [ -n "$wt" ] || wt="$(wt_tree)" || return 1
+    pair_conv_guard "$p" "$m"; [ "$CONV" = yes ] && [ "$GUARD" = yes ] || continue
+    if wrap_derived "$wt" "$p" "$m"; then wl+=("$p"); continue; fi
+    [ "${1-}" = pre ] || continue
+    # The wrappers step's allowance: a wrapper equal to its baseline.
+    [ -n "$base" ] || base="$(baseline_tree)"
+    blob_at "$wt" "$p" "$d/sw" && blob_at "$base" "$p" "$d/sb" && cmp -s "$d/sw" "$d/sb" && wl+=("$p")
+  done < "$2"
+  jq -n -c '$ARGS.positional' --args ${wl[@]+"${wl[@]}"}
+}
+wrap_pairs() { # trees...: the mapped wrapper paths that exist in any of them, NUL-separated; "error" when a listing fails
+  local t p
+  for t in "$@"; do G ls-tree -r -z --name-only "$t" -- "${FPFX:+$FPFX/}wrappers" 2> /dev/null || printf 'error\0'; done |
+    LC_ALL=C sort -zu | while IFS= read -r -d '' p; do
+      if [ "$p" = error ]; then printf 'error\0'; elif wmod "$p" > /dev/null; then printf '%s\0' "$p"; fi
+    done
+}
+in_scope() { # tree, wrapper, module: either file differs between the pinned head and the tree
+  [ "$(entry_at "$PINNED" "$2")" != "$(entry_at "$1" "$2")" ] || [ "$(entry_at "$PINNED" "$3")" != "$(entry_at "$1" "$3")" ]
+}
+# The out-of-date check: each pair in scope that passes the convention test and the author-edit guard
+# has its wrapper equal to derive of its module in the tree. Prints each refusal; a pair in scope that
+# fails the convention test goes to the information file.
+wrap_check() { # tree, information file
+  local t="$1" p m
+  frozen || { echo "$FROZEN_NO"; return 0; }
+  mkdir -p "$RUN/wrap"
+  while IFS= read -r -d '' p; do
+    [ "$p" != error ] || { echo "path rule refused: the wrappers cannot be listed"; continue; }
+    m="$(wmod "$p")" && in_scope "$t" "$p" "$m" || continue
+    pair_conv_guard "$p" "$m"
+    if [ "$CONV" != yes ]; then printf 'not-convention: %s\n' "$p" >> "$2"
+    elif [ "$GUARD" = yes ] && ! wrap_derived "$t" "$p" "$m"; then printf 'wrapper out of date: %s\n' "$p"; fi
+  done < <(wrap_pairs "$FMB" "$PINNED" "$t")
+}
+
+cmd_wrappers() {
+  round_arg "$@"
+  if ! stage_check pre > "$RUN/stage.out"; then
+    head -n 20 "$RUN/stage.out"; restore; fail "the wrappers step refuses; round $ROUND counts as failed"
+  fi
+  local d="$RUN/wrap" base wt p m r
+  rm -rf "$d"; mkdir "$d"
+  base="$(baseline_tree)" && wt="$(wt_tree)" || fail "the wrappers step cannot read the trees"
+  : > "$RD/wrappers.txt"
+  while IFS= read -r -d '' p; do
+    [ "$p" != error ] || fail "the wrappers step cannot list the baseline tree"
+    m="$(wmod "$p")" || continue
+    if ! in_scope "$wt" "$p" "$m"; then r="skipped $p"
+    elif ! blob_at "$base" "$p" "$d/bw" || ! blob_at "$base" "$m" "$d/bm"; then r="stale $p not a blob at the baseline"
+    else
+      pair_conv_guard "$p" "$m"
+      r="$(cd "$RUN/clone" && perl -e "$WRAP_PL" step "$p" "$m" "$d/bw" "$CONV" "$GUARD")" || r="stale $p the step failed"
+    fi
+    printf '%s\n' "$r" >> "$RD/wrappers.txt"
+  done < <(wrap_pairs "$base")
+  [ -s "$RD/wrappers.txt" ] || echo "no wrapper pair" > "$RD/wrappers.txt"
+  # After the step: each pair in scope that passes both tests is up to date, or commit refuses.
+  wt="$(wt_tree)" && wrap_check "$wt" /dev/null >> "$RD/wrappers.txt"
+  head -n 20 "$RD/wrappers.txt" | sed 's/^/wrappers: /'
+  echo "next: docs $RUN --round $ROUND"
 }
 
 cmd_docs() {
@@ -671,6 +855,10 @@ cmd_commit() {
   c="$(G stripspace < "$msg" | G -c user.name="$name" -c user.email="$email" commit-tree "$t" -p "$par" -F -)" && [[ "$c" =~ $sha_re ]] ||
     fail "git commit-tree failed"
   if ! rule "$par" "$c" > "$RUN/rule.out"; then
+    head -n 20 "$RUN/rule.out"; restore; fail "commit refused; round $ROUND counts as failed"
+  fi
+  wrap_check "$t" /dev/null > "$RUN/rule.out"
+  if [ -s "$RUN/rule.out" ]; then
     head -n 20 "$RUN/rule.out"; restore; fail "commit refused; round $ROUND counts as failed"
   fi
   G update-ref --no-deref -m "pr-fix round $ROUND" HEAD "$c" "$par" || fail "git update-ref failed"
@@ -758,19 +946,20 @@ cmd_verify() {
     prose_block "$n"
     echo "RECORD-$n"
     J -r 'include "fix-run"; verify_lines' "$RD/verify.json"
+    [ ! -f "$RD/wrappers.txt" ] || sed 's/^/wrappers: /' "$RD/wrappers.txt"
     [ ! -f "$RD/docs.txt" ] || sed 's/^/terraform-docs: /' "$RD/docs.txt"
     echo "UNTRUSTED-$n END"
   } > "$RD/review-task.md"
   echo "review: workspace $ws, task $RD/review-task.md"
 }
 
-open_set() { # round: its open set (write-path.md, Loop), from its findings and the dispositions so far
+open_set() { # round [findings file]: its open set (write-path.md, Loop), from its attributable findings and the dispositions so far
   local k closed='[]' disp='[]'
   for k in 1 2 3; do
     [ "$k" -le "$1" ] && [ -f "$RUN/rounds/$k/dispositions.json" ] &&
       disp="$(jq -c --argjson d "$disp" '$d + .' "$RUN/rounds/$k/dispositions.json")"
   done
-  findings_at "$1" > "$RUN/f.tmp"
+  if [ -n "${2-}" ]; then cat "$2"; else findings_at "$1"; fi > "$RUN/f.tmp"
   eligible_items > "$RUN/e.tmp"
   J -c -n --slurpfile f "$RUN/f.tmp" --slurpfile e "$RUN/e.tmp" --argjson d "$disp" 'include "fix-run";
     ([$d[] | {(.item): .decision}] | add // {}) as $last |
@@ -792,31 +981,41 @@ cmd_compare() {
   J --arg p "$PREFIX" 'include "fix-run"; map(.file = (fp($p)[1]))' "$f" > "$RD/findings-repo.json"
   local head tree hist=() k
   G add -A > /dev/null 2>&1; tree="$(G write-tree)"; head="$(G rev-parse HEAD)"
+  # Attribution: the round's changed paths are those between the pinned head and the judged tree.
+  G diff-tree -r -z --name-only --no-renames "$PINNED" "$tree" > "$RD/changed" 2> /dev/null || fail "the round's changed paths cannot be read"
+  J -n --slurpfile f "$f" --slurpfile pin "$RUN/round0-findings.json" --rawfile c "$RD/changed" --arg p "$PREFIX" 'include "fix-run";
+    {findings: $f[0], pinned: $pin[0], changed: ($c | module_paths($p)), prefix: $p} | attribution' > "$RD/attribution.json" ||
+    fail "the attribution could not be built"
+  jq '.attributable' "$RD/attribution.json" > "$RD/attributable.json"
   for k in 0 1 2 3; do
     [ "$k" -lt "$ROUND" ] || break
     [ "$k" = 0 ] || [ -f "$RUN/rounds/$k/review.json" ] || continue
     hist+=("$(open_set "$k")")
   done
-  hist+=("$(open_set "$ROUND")")
+  hist+=("$(open_set "$ROUND" "$RD/attributable.json")")
   # Non-actionable: every open finding's item was decided without an edit, and every open comment item waits.
   local disp='[]'; [ ! -f "$RD/dispositions.json" ] || disp="$(cat "$RD/dispositions.json")"
   J -n --argjson h "$(printf '%s\n' "${hist[@]}" | jq -s -c .)" --argjson round "$ROUND" --argjson limit "$LIMIT" \
-    --slurpfile now "$RD/findings-repo.json" --slurpfile pin "$RUN/round0-findings.json" --slurpfile it "$RD/items.json" \
+    --slurpfile all "$RD/findings-repo.json" --slurpfile at "$RD/attribution.json" --slurpfile pin "$RUN/round0-findings.json" --slurpfile it "$RD/items.json" \
     --argjson d "$disp" --arg head "$head" --arg tree "$tree" 'include "fix-run";
     ([$d[] | {(.item): .decision}] | add // {}) as $dec |
     ([$it[0][] | select(.fingerprint) | {(.fingerprint): ($dec[.id] // "")}] | add // {}) as $byfp |
     ($h[-1] | length > 0 and all(.[]; if startswith("item:") then ($dec[.[5:]] // "") != ""
        else (($byfp[.] // "") | . != "" and . != "apply") end)) as $na |
-    ($now[0] | verdict) as $v |
+    $at[0].attributable as $now | ($now | verdict) as $v |
     {round: $round, head: $head, tree: $tree, verdict: $v,
-     fingerprints: [$now[0][] | fp("")], open: $h[-1],
-     introduced: introduced([$pin[0][] | fp("")]; [$now[0][] | fp("")]),
-     decision: ({history: $h, round: $round, limit: $limit, verdict: $v, nonactionable: $na} | loop_decision)}' > "$RD/review.json" ||
+     fingerprints: [$all[0][] | fp("")], open: $h[-1],
+     attributable: $now, unattributed: $at[0].unattributed,
+     introduced: introduced([$pin[0][] | fp("")]; [$now[] | fp("")]),
+     decision: ({history: $h, round: $round, limit: $limit, verdict: $v, nonactionable: $na,
+       unattributed: ($at[0].unattributed | length)} | loop_decision)}' > "$RD/review.json" ||
     fail "the comparison could not be built"
   jq '{round, head, tree}' "$RD/review.json" > "$RUN/reviewed.json"
   trust_record
-  jq -r '"round \(.round): verdict \(.verdict), \(.open | length) open, \(.introduced | length) introduced",
+  jq -r --arg rj "$RD/review.json" '"round \(.round): verdict \(.verdict), \(.open | length) open, \(.introduced | length) introduced",
     (.introduced[0:20][] | "  introduced: \(.[0]) \(.[1]) \(.[2]) \(.[3])"),
+    (.unattributed[0:10][] | "unattributed: \(.rule_id) \(.file) \(.severity)"),
+    (.unattributed | select(length > 10) | "unattributed: \(length - 10) more in \($rj)"),
     "loop: " + (if .decision.stop then "stop, " else "" end) + .decision.reason' "$RD/review.json"
 }
 
@@ -874,14 +1073,20 @@ gate_check() {
   else
     c="$(G write-tree 2> /dev/null)" && rule "$PINNED" "$c" || [ -n "$c" ] || echo "path rule refused: git write-tree failed"
   fi
+  # The wrappers of the tree to push, the committed one or with no commit identity the index tree:
+  # each pair in scope that passes both tests is derived from its module.
+  : > "$r/info.txt"
+  if [ -n "$name" ]; then c="$(G rev-parse -q --verify 'HEAD^{tree}' 2> /dev/null)"; else c="$(G write-tree 2> /dev/null)"; fi
+  if [[ "$c" =~ $sha_re ]]; then wrap_check "$c" "$r/info.txt"; else echo "path rule refused: the tree to push cannot be read"; fi
+  jq -r '.unattributed[] | "unattributed: \(.rule_id) \(.file) \(.severity)"' "$RUN/rounds/$last/review.json" >> "$r/info.txt"
   # The push precondition: at least one item resolved, no MEDIUM or higher introduced.
   local disp='[]' k
   for k in 1 2 3; do [ ! -f "$RUN/rounds/$k/dispositions.json" ] || disp="$(jq -c --argjson d "$disp" '$d + .' "$RUN/rounds/$k/dispositions.json")"; done
-  J -n -r --slurpfile pin "$RUN/round0-findings.json" --slurpfile now "$RUN/rounds/$last/findings-repo.json" --argjson d "$disp" 'include "fix-run";
-    [$pin[0][] | fp("") | tojson] as $a | [$now[0][] | fp("") | tojson] as $b |
+  J -n -r --slurpfile pin "$RUN/round0-findings.json" --slurpfile v "$RUN/rounds/$last/review.json" --argjson d "$disp" 'include "fix-run";
+    $v[0].attributable as $now | [$pin[0][] | fp("") | tojson] as $a | [$now[] | fp("") | tojson] as $b |
     (if (msub($a; $b) | length) == 0 and ([$d[] | select(.decision == "apply" and (.item | test("^[TCV]-")))] | length) == 0
      then "no item is resolved" else empty end),
-    (introduced([$pin[0][] | fp("")]; [$now[0][] | fp("")])[] | "introduced: \(.[0]) \(.[1]) \(.[3])")'
+    (introduced([$pin[0][] | fp("")]; [$now[] | fp("")])[] | "introduced: \(.[0]) \(.[1]) \(.[3])")'
 }
 
 cmd_gate() {
@@ -905,8 +1110,11 @@ cmd_gate() {
     printf '%s\n' "$why" | head -n 20
     fail "the gate refuses; the patch is $OUT/fix.patch"
   fi
-  G diff --cached --stat --no-ext-diff --no-textconv "$PINNED" | tail -n 12
+  G diff --cached --stat --no-ext-diff --no-textconv "$PINNED" | tail -n 8
   jq -r '"verdict: \(.verdict) at round \(.round)"' "$RUN/rounds/$last/review.json"
+  # Information only: the pairs that fail the convention test and the unattributed findings.
+  local ni; ni="$(wc -l < "$RUN/gate/info.txt" | tr -d ' ')"
+  if [ "$ni" -le 6 ]; then cat "$RUN/gate/info.txt"; else head -n 5 "$RUN/gate/info.txt"; echo "information: $((ni - 5)) more lines in $RUN/gate/info.txt"; fi
   jq -r '"author: " + (if .commit_identity then "\(.commit_identity.name) <\(.commit_identity.email)>" else "none, patch only" end)' "$RUN/state.json"
   jq -r --arg h "$head" '"write path: \(.path)", (select(.path == "A") |
     "push: \(.dest.url) \($h):refs/heads/\(.dest.ref)", "expected remote SHA: \(.dest.expected_sha)"),
@@ -1122,10 +1330,10 @@ cmd_cleanup() {
   echo "cleanup: run directory deleted; kept: $OUT"
 }
 
-cmd="${1-}"; CMD="$cmd"; shift || die "usage: fix-run.sh <prepare|clone|path|items|apply|round|docs|commit|verify|compare|gate|push|checks|replies|cleanup> ..."
+cmd="${1-}"; CMD="$cmd"; shift || die "usage: fix-run.sh <prepare|clone|path|items|apply|round|wrappers|docs|commit|verify|compare|gate|push|checks|replies|cleanup> ..."
 case "$cmd" in
   prepare) cmd_prepare "$@" ;;
-  clone | path | items | apply | round | docs | commit | verify | compare | gate | push | checks | replies | cleanup)
+  clone | path | items | apply | round | wrappers | docs | commit | verify | compare | gate | push | checks | replies | cleanup)
     run_dir="${1-}"; shift || die "$cmd needs the run directory"
     RUN=""; open_run "$run_dir"
     case "$cmd" in
@@ -1134,6 +1342,7 @@ case "$cmd" in
       items) cmd_items "$@" ;;
       apply) cmd_apply "$@" ;;
       round) cmd_round ;;
+      wrappers) cmd_wrappers "$@" ;;
       docs) cmd_docs "$@" ;;
       commit) cmd_commit "$@" ;;
       verify) cmd_verify "$@" ;;
