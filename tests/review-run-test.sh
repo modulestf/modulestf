@@ -1114,6 +1114,8 @@ cp "$TMP/rr-keep" "$RR"
 # Updated for Rule 3's exception that removes a conversation lock, with Steps 11 and 12 proposing and
 # doing the unlock, and Rule 5's list of plan pass limits left to plan-pass.md, Limits, to keep
 # SKILL.md under 16384 bytes.
+# Updated for Step 11 proposing the unlock only when a post is proposed, and Step 12's retry
+# repeating the head, lock and identity checks without a second unlock.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1122,7 +1124,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=16f07b0ddc01
+want=f59d0666d61b
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"
