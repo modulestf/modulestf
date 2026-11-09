@@ -1012,10 +1012,10 @@ cmd_compare() {
     fail "the comparison could not be built"
   jq '{round, head, tree}' "$RD/review.json" > "$RUN/reviewed.json"
   trust_record
-  jq -r '"round \(.round): verdict \(.verdict), \(.open | length) open, \(.introduced | length) introduced",
+  jq -r --arg rj "$RD/review.json" '"round \(.round): verdict \(.verdict), \(.open | length) open, \(.introduced | length) introduced",
     (.introduced[0:20][] | "  introduced: \(.[0]) \(.[1]) \(.[2]) \(.[3])"),
     (.unattributed[0:10][] | "unattributed: \(.rule_id) \(.file) \(.severity)"),
-    (.unattributed | select(length > 10) | "unattributed: \(length - 10) more"),
+    (.unattributed | select(length > 10) | "unattributed: \(length - 10) more in \($rj)"),
     "loop: " + (if .decision.stop then "stop, " else "" end) + .decision.reason' "$RD/review.json"
 }
 
@@ -1078,8 +1078,7 @@ gate_check() {
   : > "$r/info.txt"
   if [ -n "$name" ]; then c="$(G rev-parse -q --verify 'HEAD^{tree}' 2> /dev/null)"; else c="$(G write-tree 2> /dev/null)"; fi
   if [[ "$c" =~ $sha_re ]]; then wrap_check "$c" "$r/info.txt"; else echo "path rule refused: the tree to push cannot be read"; fi
-  jq -r '(.unattributed[0:10][] | "unattributed: \(.rule_id) \(.file) \(.severity)"),
-    (.unattributed | select(length > 10) | "unattributed: \(length - 10) more")' "$RUN/rounds/$last/review.json" >> "$r/info.txt"
+  jq -r '.unattributed[] | "unattributed: \(.rule_id) \(.file) \(.severity)"' "$RUN/rounds/$last/review.json" >> "$r/info.txt"
   # The push precondition: at least one item resolved, no MEDIUM or higher introduced.
   local disp='[]' k
   for k in 1 2 3; do [ ! -f "$RUN/rounds/$k/dispositions.json" ] || disp="$(jq -c --argjson d "$disp" '$d + .' "$RUN/rounds/$k/dispositions.json")"; done
