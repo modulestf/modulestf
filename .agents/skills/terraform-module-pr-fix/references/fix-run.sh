@@ -239,6 +239,7 @@ cmd_prepare() {
   jq -r '"identity: \(.token.login // "unknown") (\(.token.type // "unknown"))" + (if .ci then ", CI set" else "" end)' "$RUN/state.json"
   jq -r 'if .commit_identity == null then "commit identity: none, patch only" else "commit identity: \(.commit_identity.name) <\(.commit_identity.email)>" end' "$RUN/state.json"
   jq -r '"pull request: \(.repo)#\(.number), head \(.pr.head.sha // "unknown"), \(.pr.state // "unknown")" + (if .pr.draft then ", draft" else "" end)' "$RUN/state.json"
+  jq -r 'select(.pr.locked == true) | "locked: yes (\(.pr.active_lock_reason // "none")), posting replies needs an unlock first; the push is not affected"' "$RUN/state.json"
   jq -r '"reads failed: " + (if (.failed | length) == 0 then "none" else (.failed | join(", ")) end)' "$RUN/state.json"
   jq -r '"comments: \(.comments | length), changed files: \(.change_set | length)"' "$RUN/state.json"
   echo "next: review round 0 with pr-review render-only, then: clone $RUN"
@@ -1133,6 +1134,7 @@ cmd_gate() {
   echo "new SHA: $head"
   echo "patch sha256: $(shasum -a 256 < "$OUT/fix.patch" | cut -d' ' -f1)"
   [ ! -f "$OUT/replies.json" ] || echo "replies sha256: $(shasum -a 256 < "$OUT/replies.json" | cut -d' ' -f1)"
+  [ ! -f "$OUT/replies.json" ] || jq -r 'select(.pr.locked == true) | "locked: yes (\(.pr.active_lock_reason // "none")); unlock first, a separate action before the replies: gh api -X DELETE repos/\(.repo)/issues/\(.number)/lock; without it each reply fails with 422 Issue is locked; the unlock needs write access and is a visible change on the repository"' "$RUN/state.json"
   echo "patch: $OUT/fix.patch"
 }
 
@@ -1254,10 +1256,11 @@ cmd_checks() {
 }
 
 cmd_replies() {
-  local f="" ids="" tg="" ch="" cr=""
+  local f="" ids="" tg="" ch="" cr="" cu=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --file) f="${2-}"; shift 2 || die "--file needs a value" ;;
+      --confirm-unlock) cu="${2-}"; shift 2 || die "--confirm-unlock needs a value" ;;
       --confirm-items) ids="${2-}"; shift 2 || die "--confirm-items needs a value" ;;
       --target) tg="${2-}"; shift 2 || die "--target needs a value" ;;
       --confirm-head) ch="${2-}"; shift 2 || die "--confirm-head needs a value" ;;
@@ -1266,6 +1269,9 @@ cmd_replies() {
     esac
   done
   target_check "$tg"
+  [ -z "$cu" ] || [ "$cu" = "$tg" ] || fail "--confirm-unlock must name the target the user confirmed the unlock for"
+  # One unlock per run: the record is written before the DELETE, so a failed or repeated unlock is never retried.
+  [ -z "$cu" ] || [ ! -e "$RUN/unlock.txt" ] || fail "this run attempted its one unlock already; a further unlock needs a new run; nothing posted"
   [[ "$ch" =~ $sha_re ]] || fail "--confirm-head must be the new SHA the user confirmed"
   # The drafts as the gate showed them, read once into memory and hashed there. Every later step
   # reads only that copy, so no file rewritten after the hash changes what is posted.
@@ -1279,7 +1285,7 @@ cmd_replies() {
     > /dev/null 2>&1 || fail "the replies file is not a list of {item, body} with distinct items"
   [ "$(printf '%s' "$data" | jq -r '[.[].item] | sort | join(",")')" = "$(printf '%s' "$ids" | tr ',' '\n' | LC_ALL=C sort | paste -sd , -)" ] ||
     fail "the confirmation does not name exactly the items of the replies file"
-  jq -e '.pr.locked == false and .base_repo.archived == false' "$RUN/state.json" > /dev/null || fail "the token user cannot comment here"
+  jq -e '.base_repo.archived == false' "$RUN/state.json" > /dev/null || fail "the token user cannot comment here"
   # Only ids of the frozen set, each with its pinned endpoint, each once.
   touch "$RUN/posted.txt"
   local bad
@@ -1290,8 +1296,14 @@ cmd_replies() {
   # The fix is live: the pull request's head on GitHub, read now, is the SHA the user confirmed.
   # No local file such as pushed.json stands in for it.
   local live leak out final
-  live="$(gh api "repos/$TREPO/pulls/$TNUM" --jq '.head.sha' 2> /dev/null)" || live=""
-  [ "$live" = "$ch" ] || fail "the pull request's head is not the confirmed SHA; nothing posted"
+  live="$(gh api "repos/$TREPO/pulls/$TNUM" --jq '.head.sha + " " + (.locked | tostring)' 2> /dev/null)" || live=""
+  [ "${live% *}" = "$ch" ] || fail "the pull request's head is not the confirmed SHA; nothing posted"
+  # A locked conversation refuses every reply with 422; only an unlock the user confirmed by name lifts it.
+  case "${live##* }" in
+    false) ;;
+    true) [ -n "$cu" ] || fail "the pull request is locked: the replies need the unlock first, confirmed by name (--confirm-unlock); nothing posted" ;;
+    *) fail "the lock cannot be read; nothing posted" ;;
+  esac
   # The <sha> placeholder becomes that SHA; then pr-review's leak scan and at-mention wrap, all in memory.
   out="$(printf '%s' "$data" | jq --arg sha "$ch" 'map(.body |= gsub("<sha>"; $sha))')" || fail "the replies cannot be read"
   leak="$(printf '%s' "$out" | jq -r -L "$PRR" --arg run "$RUN" --arg home "${HOME-}" --arg pwd "${PWD-}" --arg tmp "${TMPDIR-}" \
@@ -1308,19 +1320,39 @@ cmd_replies() {
     printf '%s' "$final" | jq -e -L "$PRR" 'include "render-comment"; all(.[]; .body | bare_mention | not)' > /dev/null ||
     fail "an at-mention is left outside a code span; nothing posted"
   assert_identity
-  local id ep body n=0
+  local id ep body err n=0 k ids_a=() eps_a=()
+  # Every endpoint is rebuilt from the pinned state, never read from the item set, and must name the
+  # pull request of the user's own request; all are checked before the unlock and any post.
   while IFS= read -r id; do
-    # The endpoint is rebuilt from the pinned state, never read from the item set, and must name
-    # the pull request of the user's own request.
     ep="$(J -r -n --slurpfile s "$RUN/state.json" --arg i "$id" 'include "fix-run"; $s[0] | reply_endpoint($i) // ""')"
     [[ "$ep" =~ ^repos/([^/]+/[^/]+)/(pulls/([0-9]+)/comments/[0-9]+/replies|issues/([0-9]+)/comments)$ ]] &&
       [ "$(lower "${BASH_REMATCH[1]}")" = "$(lower "$TREPO")" ] && [ "${BASH_REMATCH[3]}${BASH_REMATCH[4]}" = "$TNUM" ] ||
-      fail "no pinned reply endpoint for $id; nothing more posted"
-    body="$(printf '%s' "$final" | jq -r --arg i "$id" '.[] | select(.item == $i) | .body')"
-    jq -n --arg body "$body" '{body: $body}' | gh api -X POST "$ep" --input - > /dev/null 2>&1 ||
-      fail "the reply to $id failed and may have landed; read the comments before any retry"
-    printf '%s\n' "$id" >> "$RUN/posted.txt"; n=$((n + 1))
+      fail "no pinned reply endpoint for $id; nothing posted"
+    ids_a+=("$id"); eps_a+=("$ep")
   done < <(printf '%s' "$final" | jq -r '.[].item')
+  # The confirmed unlock: the lock re-read now, the record written, then one DELETE to the target,
+  # never retried or re-locked. A read that fails or holds no lock is no answer: nothing is posted.
+  local lk=false
+  [ -n "$cu" ] && lk="$(gh api "repos/$TREPO/pulls/$TNUM" --jq '.locked' 2> /dev/null)"
+  case "$lk" in
+    false) ;;
+    true)
+      printf '%s %s\n' "$TREPO#$TNUM" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$RUN/unlock.txt" || fail "the unlock record cannot be written; nothing posted"
+      err="$(gh api -X DELETE "repos/$TREPO/issues/$TNUM/lock" 2>&1 > /dev/null)" ||
+        fail "the unlock failed: $(printf '%s' "$err" | head -n 1 | cut -c1-200); nothing retried, no reply posted"
+      echo "unlocked: $TREPO#$TNUM" ;;
+    *) fail "the lock cannot be read; nothing posted" ;;
+  esac
+  for k in "${!ids_a[@]}"; do
+    id="${ids_a[$k]}"; ep="${eps_a[$k]}"
+    body="$(printf '%s' "$final" | jq -r --arg i "$id" '.[] | select(.item == $i) | .body')"
+    err="$(jq -n --arg body "$body" '{body: $body}' | gh api -X POST "$ep" --input - 2>&1 > /dev/null)" || {
+      case "$err" in *"Issue is locked"*)
+        if [ -e "$RUN/unlock.txt" ]; then fail "the reply to $id: 422 Issue is locked, nothing landed; nothing retried; a further unlock needs a new run"
+        else fail "the reply to $id: 422 Issue is locked, nothing landed; nothing retried; offer the unlock, one --confirm-unlock in this run"; fi ;; esac
+      fail "the reply to $id failed and may have landed; read the comments before any retry"; }
+    printf '%s\n' "$id" >> "$RUN/posted.txt"; n=$((n + 1))
+  done
   echo "replies: $n posted"
 }
 

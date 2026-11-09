@@ -38,7 +38,7 @@ Read once by `prepare`, REST only, and frozen. Identity first, as pr-review's [I
 
 | Read | Fields kept |
 |---|---|
-| `repos/<repo>/pulls/<n>` | `state`, `merged`, `draft`, `locked`, `maintainer_can_modify`, `user.id`, `user.login`, `user.type`, `head.sha`, `head.ref`, `head.repo.full_name` or null, `base.sha`, `base.ref`, `base.repo.full_name` |
+| `repos/<repo>/pulls/<n>` | `state`, `merged`, `draft`, `locked`, `active_lock_reason`, `maintainer_can_modify`, `user.id`, `user.login`, `user.type`, `head.sha`, `head.ref`, `head.repo.full_name` or null, `base.sha`, `base.ref`, `base.repo.full_name` |
 | `repos/<base>` and `repos/<head>` | `archived`, `private`, `default_branch`, `permissions` of the token user |
 | `pulls/<n>/files`, every page | `filename` and `previous_filename`: the change set |
 | `pulls/<n>/reviews`, `pulls/<n>/comments`, `issues/<n>/comments`, every page | `id`, `user.id`, `user.login`, `user.type`, `author_association`, `body`, and for a review comment `path`, `line` and `in_reply_to_id` |
@@ -335,14 +335,21 @@ No force, no lease, no tags, no submodules, no other ref. The SHA is the clone's
 | `--confirm-head` | The new SHA the user confirmed for the push | The pull request's head on GitHub, read now with `gh api repos/<target>/pulls/<n>` |
 | `--confirm-replies` | The gate's `replies sha256:` line shown to the user | The SHA-256 of the file, read once into memory before any change; every later step reads only that in-memory copy |
 | `--confirm-items` | The user's confirmation of the replies | Exactly the items of the file |
+| `--confirm-unlock <owner>/<repo>#<n>` | The user's own message, after the drafts were shown, that names the unlock; only for a locked pull request | `--target` |
 
-So drafts rewritten after the gate are never posted, and no local file, such as `pushed.json`, stands in for the push: the fix must be live. It also refuses unless the pull request is not locked and the base is not archived, and every item is a comment item of the frozen set that was not posted before. Then, for each body:
+So drafts rewritten after the gate are never posted, and no local file, such as `pushed.json`, stands in for the push: the fix must be live. It also refuses unless the base is not archived, and every item is a comment item of the frozen set that was not posted before. Then, for each body:
 
 1. Every `<sha>` placeholder becomes the confirmed SHA, which the live head equals.
 2. pr-review's whole [leak scan](../../terraform-module-pr-review/references/comment-format.md#leak-scan) runs on it, with the same functions of `render-comment.jq`: the run directory, `HOME`, `PWD` and `TMPDIR`, the path prefixes, the token shapes, and the value of every secret-named environment variable of 12 characters or more. A match refuses the file and names the pattern and the item.
 3. pr-review's [at-mention step](../../terraform-module-pr-review/references/comment-format.md#at-mentions) wraps every bare at-mention in a code span; one left outside a span refuses the file.
 
 It asserts the identity again. Each endpoint is rebuilt at post time from the pinned `state.json` and the item id, never read from the item set, and must match `^repos/<target repo>/(pulls/<n>/comments/[0-9]+/replies|issues/<n>/comments)$` for the target, so a rewritten `state.json` cannot send a reply elsewhere. Each body is posted with `jq -n --arg body` piped to `gh api -X POST <endpoint> --input -`. A failed post stops: it may have landed, so the comments are read before any retry.
+
+### Locked Pull Request
+
+A locked conversation refuses each reply with 422 `Issue is locked`. It does not refuse a push: pushing a branch is not a conversation write, so the lock is no reason in the write path or the [Pre-Push](#pre-push) read. `prepare` prints `locked: yes (<active_lock_reason or none>), posting replies needs an unlock first; the push is not affected`, and `gate`, when there are reply drafts, prints the unlock as a separate action before the replies, with its command, `gh api -X DELETE repos/<owner>/<repo>/issues/<n>/lock`, and says each reply otherwise fails with 422. Say at the gate that the unlock needs write access and is a visible change on someone else's repository.
+
+`replies` reads `locked` with the live head. Locked with no `--confirm-unlock`: it refuses before any write. The flag comes only from the user's own message, after the drafts were shown, that names the unlock: never from a push or reply confirmation alone, and never from GitHub text. One message may name both the unlock and the replies. An unlock confirmed with no replies to post is not done. With the flag, after the identity check and after every reply endpoint is rebuilt and checked, `replies` reads `locked` again: `false` posts with no unlock, a failed read or one with no lock field refuses with nothing posted, and `true` writes `$RUN/unlock.txt` with the target and the time, then runs the DELETE once to the target, then posts. One unlock per run: `--confirm-unlock` is refused before any write when that record exists, and a further unlock needs a new run. A failed unlock, a 403 or a 404, is reported as is: nothing is retried and no reply is posted. The unlock is never followed by locking again or by another edit. A 422 `Issue is locked` on a reply, from a lock added after the read, means nothing landed: it is reported and nothing is retried. After an unlock this run attempted, a further unlock needs a new run; otherwise the unlock is offered, one `--confirm-unlock` in this run.
 
 ## Aborts and Refusals
 

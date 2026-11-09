@@ -13,7 +13,7 @@ Parse the pull request reference as pr-review's [inputs.md](../../terraform-modu
 fix-run.sh prepare --repo <owner>/<repo> --pr <number> [--out <dir>] [--module-profile <id>]
 ```
 
-It makes the run directory and the output directory under the rules of [Run and Output Directories](write-path.md#run-and-output-directories), and prints `RUN=`, `OUT=`, the identity, the commit identity, the pull request, the reads that failed and the counts. A refused output directory ends the run with its reason.
+It makes the run directory and the output directory under the rules of [Run and Output Directories](write-path.md#run-and-output-directories), and prints `RUN=`, `OUT=`, the identity, the commit identity, the pull request, for a locked one the lock line, the reads that failed and the counts. A refused output directory ends the run with its reason.
 
 ## Step 1
 
@@ -100,7 +100,7 @@ It prints the local verdict, the open count, every introduced tuple, each `unatt
 fix-run.sh gate "$RUN"
 ```
 
-It runs the content gate and the [Push Precondition](write-path.md#push-precondition), writes `$OUT/fix.patch`, the disposition tables, `$OUT/replies.json` with the reply drafts of every round, the latest per item, and the last findings, and prints the diff stat, the verdict, the author, the write path, the destination URL and branch, the expected remote SHA, the draft and default-branch flags, an `outside findings: <path>` flag for each changed path that is neither in the change set nor the file of an applied item, a `not-convention: <path>` line for each wrapper pair that fails the convention test, and an `unattributed:` line for each finding of the last round the fix did not cause. On a refusal it prints every reason. On path B the run ends here with the patch.
+It runs the content gate and the [Push Precondition](write-path.md#push-precondition), writes `$OUT/fix.patch`, the disposition tables, `$OUT/replies.json` with the reply drafts of every round, the latest per item, and the last findings, and prints the diff stat, the verdict, the author, the write path, the destination URL and branch, the expected remote SHA, the draft and default-branch flags, an `outside findings: <path>` flag for each changed path that is neither in the change set nor the file of an applied item, a `not-convention: <path>` line for each wrapper pair that fails the convention test, an `unattributed:` line for each finding of the last round the fix did not cause, and, for a locked pull request with reply drafts, the `locked:` line with the unlock command. On a refusal it prints every reason. On path B the run ends here with the patch.
 
 ## Step 11
 
@@ -124,18 +124,19 @@ Right after the push the checks are pending, and the run says not finished yet. 
 Each of these needs its own confirmation, from a new user message that names the action:
 
 - **Post the review.** Run pr-review again on the pull request, now at the pushed SHA: `review-run.sh prepare` without `--render-only`, the steps of its depth, the reviewer, the assessment and `render`, then its Rule 1 and its Step 12 write. This skill never posts a review itself.
-- **Post the replies.** Show each draft of `$OUT/replies.json` with the item it answers. Each `<sha>` in a draft becomes the confirmed new SHA when it is posted. Take `--target` from the user's original request, `--confirm-head` from the new SHA the user confirmed for the push, `--confirm-replies` from the gate's `replies sha256:` line the user saw, and `--confirm-items` from the user's confirmation of the replies. Then:
+- **Post the replies.** Show each draft of `$OUT/replies.json` with the item it answers. Each `<sha>` in a draft becomes the confirmed new SHA when it is posted. Take `--target` from the user's original request, `--confirm-head` from the new SHA the user confirmed for the push, `--confirm-replies` from the gate's `replies sha256:` line the user saw, and `--confirm-items` from the user's confirmation of the replies. For a locked pull request, `locked: yes` in `prepare` and `gate`, also propose the unlock as a separate action listed before the replies, with its exact command, `gh api -X DELETE repos/<owner>/<repo>/issues/<number>/lock`, and say that without it each reply fails with 422 `Issue is locked`, and that the unlock needs write access and is a visible change on someone else's repository. Only the user's own message after the drafts were shown that names the unlock confirms it; then add `--confirm-unlock <owner>/<repo>#<number>` ([Locked Pull Request](write-path.md#locked-pull-request)). An unlock confirmed with no replies to post is not done. A run makes at most one unlock. Then:
 
 ```
 fix-run.sh replies "$RUN" --target <owner>/<repo>#<number> --file "$OUT/replies.json" \
-  --confirm-head <new SHA> --confirm-replies <replies sha256> --confirm-items <id>,<id>
+  --confirm-head <new SHA> --confirm-replies <replies sha256> --confirm-items <id>,<id> \
+  [--confirm-unlock <owner>/<repo>#<number>]
 ```
 
-It refuses drafts whose digest differs and a pull request whose live head is not the confirmed SHA.
+It refuses drafts whose digest differs, a pull request whose live head is not the confirmed SHA, and a locked one without `--confirm-unlock`. A failed unlock posts nothing and is not retried. A 422 `Issue is locked` on a reply means nothing landed: report it and retry nothing. After an unlock this run attempted, a further unlock needs a new run; otherwise offer the unlock, one `--confirm-unlock` in this run.
 
 It runs pr-review's leak scan and at-mention step on each body and posts each to the endpoint it rebuilds from the pinned state ([Replies](write-path.md#replies)).
 
-Never merge, resolve a thread, or edit the title or the body. The run ends with:
+Never merge, resolve a thread, or edit the title, the body or the lock, but for the confirmed unlock. The run ends with:
 
 ```
 fix-run.sh cleanup "$RUN"

@@ -279,7 +279,7 @@ def repo_of: if . == null then null else {full_name, archived, private, default_
 def state_of:
   {format: 1, repo, number, failed, token: (.token | if . == null then null else {id, login, type} end),
    ci, commit_identity: .commit,
-   pr: (.pr | {state, merged, draft, locked, maintainer_can_modify, user: user_of,
+   pr: (.pr | {state, merged, draft, locked, active_lock_reason, maintainer_can_modify, user: user_of,
      head: {sha: .head.sha, ref: .head.ref, repo: (if .head.repo == null then null else {full_name: .head.repo.full_name} end)},
      base: {sha: .base.sha, ref: .base.ref, repo: {full_name: .base.repo.full_name}}}),
    base_repo: (.base | repo_of), head_repo: (.head | repo_of),
