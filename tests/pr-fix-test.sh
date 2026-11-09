@@ -1332,6 +1332,270 @@ t_restore_fail_() { # a restoration that fails aborts the run
 t_restore_fail() { pilot t_restore_fail_; }
 t_restore_fail; check "allowed paths: a restoration that fails aborts the run" $?
 
+# --- 16. Wrapper versions.tf: derive, the wrappers step, the clause 3 exception -------------------
+
+WFX="$SRC/tests/pr-fix-fixture" # recorded upstream: each module's versions.tf and its wrappers/versions.tf
+WPL() { sed -n "/^WRAP_PL='\$/,/^out(\"updated\");'\$/p" "$FR" | sed "1s/^WRAP_PL='//;\$s/'\$//"; } # the script's perl
+dv() { perl -e "$(WPL)" derive "$1"; } # file: derive on stdout; exit 3 when undefined
+t_derive() {
+  local r d="$TMP/dv" c n=0 PM_='terraform {\n  provider_meta "aws" {\n' END_='  }\n}\n'
+  mkdir -p "$d"
+  for r in terraform-aws-cloudfront terraform-aws-s3-bucket terraform-aws-vpc; do
+    dv "$WFX/$r/versions.tf" | cmp -s - "$WFX/$r/wrappers/versions.tf" || { echo "fixture: $r"; return 1; }
+    dv "$WFX/$r/wrappers/versions.tf" | cmp -s - "$WFX/$r/wrappers/versions.tf" || { echo "a wrapper is its own derive: $r"; return 1; }
+  done
+  # Deleted: a same-line user_agent, a module_name, an aligned bracket. Kept verbatim: an indented
+  # comment, an aligned single-line attribute, a // comment, a blank line, lines outside the block.
+  printf "${PM_}"'    # a comment\n    other   =   "x"\n\n    // x\n    user_agent = ["x"]\n    module_name = "m"\n    user_agent   =   [\n      "a",\n    ]\n'"${END_}"'user_agent = "outside"\n' > "$d/in.tf"
+  printf "${PM_}"'    # a comment\n    other   =   "x"\n\n    // x\n'"${END_}"'user_agent = "outside"\n' > "$d/want.tf"
+  dv "$d/in.tf" | cmp -s - "$d/want.tf" || { echo deleted; dv "$d/in.tf"; return 1; }
+  # A near-miss spelling that matches the single-line form is that form, so it is deleted.
+  printf "${PM_}"'    user_agent="x" # x\n'"${END_}" > "$d/nm.tf"; printf "${PM_}${END_}" > "$d/nmw.tf"
+  dv "$d/nm.tf" | cmp -s - "$d/nmw.tf" || { echo near-miss; return 1; }
+  # Undefined: a heredoc anywhere, a CR, an unterminated block, a } inside an open bracket, a nested
+  # block, an unclosed same-line or multi-line bracket, near-miss attributes, a [ in another value, no
+  # final LF, a byte outside ASCII.
+  for c in 'terraform {\n  x = <<EOT\n  y\n  EOT\n}\n' "${PM_}"'    # see <<EOF\n'"${END_}" 'terraform {\r\n}\n' \
+    "${PM_}"'    other = "x"\n' "${PM_}"'    user_agent = [\n  }\n}\n' "${PM_}"'    nested {\n    }\n'"${END_}" \
+    "${PM_}"'    user_agent = ["x"\n'"${END_}" "${PM_}"'    user_agent = [\n      "x"\n' "${PM_}"'    user_agent: "x"\n'"${END_}" \
+    "${PM_}"'    user_agent\n'"${END_}" "${PM_}"'    module_name = [ "x"\n'"${END_}" "${PM_}"'    other = ["x"]\n'"${END_}" 'terraform {}' 'x = "caf\303\251"\n'; do
+    n=$((n + 1)); printf "$c" > "$d/u$n.tf"
+    dv "$d/u$n.tf" > /dev/null; [ $? = 3 ] || { echo "defined: case $n"; return 1; }
+  done
+  # Over 64 KiB is undefined; exactly 64 KiB is defined.
+  perl -e 'print "#" x 65535, "\n"' > "$d/big.tf"
+  [ "$(wc -c < "$d/big.tf" | tr -d ' ')" = 65536 ] && dv "$d/big.tf" > /dev/null || { echo "64 KiB"; return 1; }
+  printf '\n' >> "$d/big.tf"; dv "$d/big.tf" > /dev/null; [ $? = 3 ] || { echo "over 64 KiB"; return 1; }
+}
+t_derive; check "wrappers: derive equals the recorded wrapper of cloudfront, s3-bucket and vpc; deletes user_agent and module_name, keeps comments and aligned attributes; undefined on a heredoc, a CR, an unterminated block, a } in an open bracket, a nested block, an unclosed bracket, a near-miss" $?
+
+st() { # setup (run in the workspace), expected result [, convention, guard]: the step's perl on one pair
+  local d="$TMP/st"; chmod -R u+w "$d" 2> /dev/null; rm -rf "$d" "$TMP/st-base" "$TMP/st-hl"; mkdir -p "$d/wrappers"
+  perl -pe 's/>= 6.28"/>= 6.50"/' "$WFX/terraform-aws-vpc/versions.tf" > "$d/versions.tf"
+  cp "$WFX/terraform-aws-vpc/wrappers/versions.tf" "$d/wrappers/versions.tf"; cp "$d/wrappers/versions.tf" "$TMP/st-base"
+  ( cd "$d" && eval "$1" ) || return 1
+  local r; r="$(cd "$d" && perl -e "$(WPL)" step wrappers/versions.tf versions.tf "$TMP/st-base" "${3:-yes}" "${4:-yes}")"
+  [ "$r" = "$2" ] || { echo "$1: $r"; return 1; }
+}
+t_step() {
+  local w=wrappers/versions.tf
+  st : "updated $w" && perl -pe 's/>= 6.28"/>= 6.50"/' "$WFX/terraform-aws-vpc/wrappers/versions.tf" | cmp -s - "$TMP/st/$w" &&
+  st 'cp versions.tf x; perl -pe "s/6.50/6.28/" x > versions.tf' "unchanged $w" &&
+  st 'rm wrappers/versions.tf; ln -s ../versions.tf wrappers/versions.tf' "stale $w link on its path" &&
+  st 'mv versions.tf real.tf; ln -s real.tf versions.tf' "stale $w link on its path" &&
+  st 'mv wrappers w2; ln -s w2 wrappers' "stale $w link on its path" &&
+  st 'ln wrappers/versions.tf ../st-hl' "stale $w hard link" && cmp -s "$TMP/st-hl" "$TMP/st-base" && cmp -s "$TMP/st/$w" "$TMP/st-base" &&
+  st 'ln versions.tf ../st-hl' "stale $w hard link" &&
+  st 'rm versions.tf; mkdir versions.tf' "stale $w not a regular file" &&
+  st 'rm versions.tf; mkfifo versions.tf' "stale $w not a regular file" &&
+  st 'rm versions.tf' "stale $w not a regular file" &&
+  st 'printf "# x\n" >> wrappers/versions.tf' "stale $w changed by hand" &&
+  st : "not-convention $w" no yes && st : "stale $w author edit" yes no &&
+  st 'printf "x = <<EOT\ny\nEOT\n" >> versions.tf' "stale $w derive undefined" && cmp -s "$TMP/st/$w" "$TMP/st-base" &&
+  # A link ancestor of the module file.
+  local d="$TMP/st"; st 'mkdir -p real/sub; cp versions.tf real/sub/versions.tf; mkdir modules; ln -s ../real/sub modules/sub; mkdir -p wrappers/sub; cp wrappers/versions.tf wrappers/sub/versions.tf' "updated $w" &&
+  [ "$(cd "$d" && perl -e "$(WPL)" step wrappers/sub/versions.tf modules/sub/versions.tf "$TMP/st-base" yes yes)" = "stale wrappers/sub/versions.tf link on its path" ]
+}
+t_step; check "wrappers: the step's pair work: a link, a link ancestor, a hard link with the other file untouched, a directory, a fifo, a missing module, a hand edit, the convention test, the author-edit guard, derive undefined, unchanged, updated" $?
+
+# The wrapped module: versions.tf files and their wrappers from the recorded fixtures, a wrapper
+# README with a generated region, a submodule, and heads for the cases below.
+WM="$WORK/wrapped"
+RG init -q "$WM"
+mkdir -p "$WM/examples/complete" "$WM/modules/sub" "$WM/wrappers/sub"
+cp "$WFX/terraform-aws-cloudfront/versions.tf" "$WM/versions.tf"; cp "$WFX/terraform-aws-cloudfront/wrappers/versions.tf" "$WM/wrappers/versions.tf"
+cp "$WFX/terraform-aws-s3-bucket/versions.tf" "$WM/modules/sub/versions.tf"; cp "$WFX/terraform-aws-s3-bucket/wrappers/versions.tf" "$WM/wrappers/sub/versions.tf"
+printf 'resource "null_resource" "this" {}\n' > "$WM/main.tf"
+printf 'variable "name" {\n  type = string\n}\n' > "$WM/variables.tf"
+printf 'resource "null_resource" "sub" {}\n' > "$WM/modules/sub/main.tf"
+printf 'module "wrapper" {\n  source = "../"\n}\n' > "$WM/wrappers/main.tf"
+printf '# wrapper\n\n%s\nold\n%s\n' "$B1" "$E1" > "$WM/wrappers/README.md"
+printf 'module "this" {\n  source = "../.."\n  name   = "x"\n}\n' > "$WM/examples/complete/main.tf"
+printf '# module\n' > "$WM/README.md"
+RG -C "$WM" add -A; RG -C "$WM" commit -qm base; WB="$(RG -C "$WM" rev-parse HEAD)"
+wsize() { printf 'variable "name" {\n  type = string\n}\n\nvariable "size" {\n  type = number\n}\n' > "$WM/variables.tf"; RG -C "$WM" commit -qam head; }
+RG -C "$WM" checkout -q -b feat; wsize; WH="$(RG -C "$WM" rev-parse HEAD)"
+# A base whose wrapper keeps the user agent, so it is not derive of its module: not-convention.
+RG -C "$WM" checkout -q -b nc "$WB"; cp "$WM/versions.tf" "$WM/wrappers/versions.tf"; RG -C "$WM" commit -qam nc; WB2="$(RG -C "$WM" rev-parse HEAD)"
+wsize; WH2="$(RG -C "$WM" rev-parse HEAD)"
+# Heads that change the wrapper by hand, make it a link, or make the module file a link.
+RG -C "$WM" checkout -q -b author "$WH"; printf '# local change\n' >> "$WM/wrappers/versions.tf"; RG -C "$WM" commit -qam author; WA="$(RG -C "$WM" rev-parse HEAD)"
+RG -C "$WM" checkout -q -b wlink "$WH"; rm "$WM/wrappers/versions.tf"; ln -s ../versions.tf "$WM/wrappers/versions.tf"
+RG -C "$WM" add -A; RG -C "$WM" commit -qm wlink; WL="$(RG -C "$WM" rev-parse HEAD)"
+RG -C "$WM" checkout -q -b mlink "$WH"; mv "$WM/versions.tf" "$WM/versions.real.tf"; ln -s versions.real.tf "$WM/versions.tf"
+RG -C "$WM" add -A; RG -C "$WM" commit -qm mlink; WK="$(RG -C "$WM" rev-parse HEAD)"
+RG -C "$WM" checkout -q feat
+ROUND0C="$(jq -c '. + [{"id": "F-003", "rule_id": "structure.variable-validation", "severity": "MEDIUM", "file": "variables.tf", "line": 5,
+  "summary": "`variable \"size\"` has no validation.", "suggested_fix": "In `variable \"size\"`, add a validation."}]' <<< "$ROUND0B")"
+
+wrap_run() { # base, head [round 0 findings]: prepare, clone, items and round 1 on the wrapped module; NOID=1 for path B
+  use "$WM" "$1" "$2"; fx_default
+  echo '[]' > "$TMP/empty.json"
+  if [ -n "${NOID-}" ]; then mv "$HOME/.gitconfig" "$HOME/.gitconfig.off"; new_run; mv "$HOME/.gitconfig.off" "$HOME/.gitconfig"; else new_run; fi
+  round0 "$OUT" "${3:-$ROUND0}"
+  fr clone "$RUN" > /dev/null 2>&1 && fr items "$RUN" --review "$OUT/round-0" --handover "$OUT/handover-task.md" > /dev/null 2>&1 &&
+    fr round "$RUN" > /dev/null 2>&1 && printf 'fix\n' > "$RUN/rounds/1/commit-message.txt"
+}
+raise() { perl -pi -e "s/>= $2\"/>= $3\"/" "$RUN/clone/$1"; } # file, old floor, new floor
+want() { perl -pe "s/>= $2\"/>= $3\"/" "$WFX/$1/wrappers/versions.tf"; } # fixture repository, old, new: the wrapper derive gives
+fnum() { jq -c --argjson f "$1" -n "[\$f[$2]]"; } # findings, index list: a findings file's content
+next_round() { # round n: start it and give it a commit message
+  fr round "$RUN" > /dev/null 2>&1 && printf 'fix\n' > "$RUN/rounds/$1/commit-message.txt"
+}
+cmpw() { cmp -s "$RUN/clone/$1" -; } # wrapper path: equal to stdin
+
+t_wrap_pilot_() { # path A: the floor raise rewrites both wrappers; a revert restores one; the gate and the push pass
+  wrap_run "$WB" "$WH" "$ROUND0B" || return 1
+  raise versions.tf 6.46 6.50; raise modules/sub/versions.tf 6.44 6.50
+  fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 || { cat "$TMP/w.out"; return 1; }
+  grep -qx 'wrappers: updated wrappers/versions.tf' "$TMP/w.out" && grep -qx 'wrappers: updated wrappers/sub/versions.tf' "$TMP/w.out" &&
+    want terraform-aws-cloudfront 6.46 6.50 | cmpw wrappers/versions.tf && want terraform-aws-s3-bucket 6.44 6.50 | cmpw wrappers/sub/versions.tf ||
+    { cat "$TMP/w.out"; return 1; }
+  # The wrapper README is not in the docs selection.
+  fr docs "$RUN" --round 1 > "$TMP/d.out" 2>&1 && ! grep -q wrappers "$TMP/d.out" || { cat "$TMP/d.out"; return 1; }
+  fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 || { cat "$TMP/c.out"; return 1; }
+  fnum "$ROUND0B" 1 > "$TMP/f1.json"
+  fr compare "$RUN" --round 1 --findings "$TMP/f1.json" > "$TMP/c.out" 2>&1 && grep -qx 'loop: the next round may start' "$TMP/c.out" || { cat "$TMP/c.out"; return 1; }
+  fr verify "$RUN" --round 1 > "$TMP/v.out" 2>&1 && grep -qx 'wrappers: updated wrappers/versions.tf' "$RUN/rounds/1/review-task.md" || { cat "$TMP/v.out"; return 1; }
+  # Round 2 reverts the root module: its wrapper comes back; the submodule's stays.
+  next_round 2 && CG show "$H:versions.tf" > "$RUN/clone/versions.tf" || return 1
+  fr wrappers "$RUN" --round 2 > "$TMP/w.out" 2>&1 && grep -qx 'wrappers: updated wrappers/versions.tf' "$TMP/w.out" &&
+    grep -qx 'wrappers: unchanged wrappers/sub/versions.tf' "$TMP/w.out" && cmpw wrappers/versions.tf < "$WFX/terraform-aws-cloudfront/wrappers/versions.tf" ||
+    { cat "$TMP/w.out"; return 1; }
+  fr docs "$RUN" --round 2 > /dev/null 2>&1 && fr commit "$RUN" --round 2 > "$TMP/c.out" 2>&1 &&
+    fr compare "$RUN" --round 2 --findings "$TMP/empty.json" > /dev/null 2>&1 || { cat "$TMP/c.out"; return 1; }
+  GATE && ! grep -q 'out of date\|not-convention' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  # Out of date at the gate: a commit that changes the submodule's module file alone.
+  local c1 c2; c1="$(CG rev-parse HEAD)"
+  c2="$(craft "$c1" "add 100644 modules/sub/versions.tf $(CG show "$c1:modules/sub/versions.tf" | perl -pe 's/6.50/6.60/' | sed 's/$/\\n/' | tr -d '\n')")" &&
+    CG update-ref --no-deref HEAD "$c2" || return 1
+  GATE && return 1
+  grep -qx 'wrapper out of date: wrappers/sub/versions.tf' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  CG update-ref --no-deref HEAD "$c1" && GATE && PUSH > "$TMP/p.out" 2>&1 || { cat "$TMP/gate.last" "$TMP/p.out"; return 1; }
+  [ "$(RG --git-dir="$REM/o/r.git" rev-parse refs/heads/feat)" = "$c1" ] && fr cleanup "$RUN" > /dev/null
+}
+t_wrap_pilot() { pilot t_wrap_pilot_; }
+t_wrap_pilot; check "wrappers: a floor raise rewrites wrappers/versions.tf and a submodule wrapper, verify carries the results, a revert restores the wrapper, the gate refuses a module change without its wrapper and the push passes" $?
+
+t_wrap_notconv_() { # a pair that fails the convention test: no write, no refusal, listed at the gate
+  wrap_run "$WB2" "$WH2" || return 1
+  raise versions.tf 6.46 6.50
+  fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 && grep -qx 'wrappers: not-convention wrappers/versions.tf' "$TMP/w.out" &&
+    CG show "$H:wrappers/versions.tf" | cmpw wrappers/versions.tf || { cat "$TMP/w.out"; return 1; }
+  fr docs "$RUN" --round 1 > /dev/null 2>&1 && fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 &&
+    fr compare "$RUN" --round 1 --findings "$TMP/empty.json" > /dev/null 2>&1 || { cat "$TMP/c.out"; return 1; }
+  GATE && grep -qx 'not-convention: wrappers/versions.tf' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_wrap_notconv() { pilot t_wrap_notconv_; }
+t_wrap_notconv; check "wrappers: a pair that fails the convention test is not written, does not refuse, and is listed at the gate" $?
+
+t_wrap_author_() { # an author-customized wrapper at the pinned head: neither the step nor a hand edit replaces it
+  wrap_run "$WB" "$WA" || return 1
+  raise versions.tf 6.46 6.50; want terraform-aws-cloudfront 6.46 6.50 > "$RUN/clone/wrappers/versions.tf"
+  fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 && return 1
+  grep -qx 'path refused: work tree wrappers/versions.tf (reserved)' "$TMP/w.out" && [ "$(CG rev-parse HEAD)" = "$H" ] && clean_tree || { cat "$TMP/w.out"; return 1; }
+  raise versions.tf 6.46 6.50
+  fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 && grep -qx 'wrappers: stale wrappers/versions.tf author edit' "$TMP/w.out" &&
+    CG show "$H:wrappers/versions.tf" | cmpw wrappers/versions.tf || { cat "$TMP/w.out"; return 1; }
+  fr docs "$RUN" --round 1 > /dev/null 2>&1 && fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 || { cat "$TMP/c.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_wrap_author() { pilot t_wrap_author_; }
+t_wrap_author; check "wrappers: an author-customized wrapper is reported stale by the step and a hand edit of it is refused" $?
+
+t_wrap_refusals_() { # path A refusals, each restoring the work tree; then a hand edit equal to derive
+  wrap_run "$WB" "$WH" || return 1
+  local c n=0 w=wrappers/versions.tf
+  want terraform-aws-cloudfront 6.46 6.50 > "$TMP/exp.tf"
+  # Staging refusals: a hand-written wrapper not equal to derive, an added wrapper, a wrapper main.tf, a deeper path.
+  for c in "raise versions.tf 6.46 6.50; cp $TMP/exp.tf clone/$w; printf '# hand\n' >> clone/$w|$w" \
+    "mkdir -p clone/modules/new clone/wrappers/new; cp clone/versions.tf clone/modules/new/versions.tf; cp clone/$w clone/wrappers/new/versions.tf|wrappers/new/versions.tf" \
+    "printf '# x\n' >> clone/wrappers/main.tf|wrappers/main.tf" "mkdir -p clone/wrappers/sub/x; cp clone/$w clone/wrappers/sub/x/versions.tf|wrappers/sub/x/versions.tf"; do
+    ( cd "$RUN" && eval "${c%%|*}" ) || return 1
+    fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 && { echo "passed: $c"; return 1; }
+    grep -qxF "path refused: work tree ${c##*|} (reserved)" "$TMP/w.out" && [ "$(CG rev-parse HEAD)" = "$H" ] && clean_tree || { echo "$c"; cat "$TMP/w.out"; return 1; }
+  done
+  # derive undefined: the step writes nothing and commit refuses the wrapper as out of date.
+  for c in 'printf "locals {\n  x = <<-EOT\n    y\n  EOT\n}\n" >> clone/versions.tf' \
+    'perl -pi -e "s/^    user_agent = \\[\$/    nested {\n    }\n    user_agent = [/" clone/versions.tf' \
+    'raise versions.tf 6.46 6.50; perl -pi -e "s/\n/\r\n/" clone/versions.tf' \
+    'perl -0pi -e "s/    user_agent = \\[\n[^\n]*\n    \\]\n/    user_agent = [\"x\"\n/" clone/versions.tf' \
+    'perl -0pi -e "s/    user_agent = \\[\n[^\n]*\n    \\]\n/    user_agent: \"x\"\n/" clone/versions.tf'; do
+    n=$((n + 1)); ( cd "$RUN" && eval "$c" ) || return 1
+    fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 && grep -qx "wrappers: stale $w derive undefined" "$TMP/w.out" &&
+      cmpw "$w" < "$WFX/terraform-aws-cloudfront/wrappers/versions.tf" || { echo "case $n"; cat "$TMP/w.out"; return 1; }
+    [ "$n" != 1 ] || fr docs "$RUN" --round 1 > /dev/null 2>&1 || return 1
+    fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 && { echo "committed: case $n"; return 1; }
+    grep -qx "wrapper out of date: $w" "$TMP/c.out" && [ "$(CG rev-parse HEAD)" = "$H" ] && clean_tree || { echo "case $n"; cat "$TMP/c.out"; return 1; }
+  done
+  # A hard-linked wrapper: reported, the other file untouched, then refused at commit.
+  raise versions.tf 6.46 6.50; rm -f "$TMP/hl"; ln "$RUN/clone/$w" "$TMP/hl"
+  fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 && grep -qx "wrappers: stale $w hard link" "$TMP/w.out" &&
+    cmp -s "$TMP/hl" "$WFX/terraform-aws-cloudfront/wrappers/versions.tf" || { cat "$TMP/w.out"; return 1; }
+  fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 && return 1
+  grep -qx "wrapper out of date: $w" "$TMP/c.out" || { cat "$TMP/c.out"; return 1; }
+  rm -f "$TMP/hl"
+  # Edited by hand before the step, equal to derive: reported, nothing written, and commit takes it.
+  raise versions.tf 6.46 6.50; cp "$TMP/exp.tf" "$RUN/clone/$w"
+  fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 && grep -qx "wrappers: stale $w changed by hand" "$TMP/w.out" || { cat "$TMP/w.out"; return 1; }
+  fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 && CG show "HEAD:$w" | cmp -s - "$TMP/exp.tf" || { cat "$TMP/c.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_wrap_refusals() { pilot t_wrap_refusals_; }
+t_wrap_refusals; check "wrappers: a hand-written wrapper not equal to derive, an added wrapper, a wrapper main.tf and a deeper path are refused; a heredoc, a nested block, CRLF, an unclosed bracket and a near-miss leave the wrapper out of date at commit; a hard link is reported with the other file untouched; a hand edit is reported" $?
+
+t_wrap_links_() { # a wrapper or module file that is a link at the pinned head
+  wrap_run "$WB" "$WL" || return 1
+  raise versions.tf 6.46 6.50
+  fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 && grep -qx 'wrappers: stale wrappers/versions.tf not a blob at the baseline' "$TMP/w.out" &&
+    [ -L "$RUN/clone/wrappers/versions.tf" ] || { cat "$TMP/w.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+  # An unchanged module file inherited from the pinned head that is a link: a wrapper written from its target is refused.
+  wrap_run "$WB" "$WK" || return 1
+  raise versions.real.tf 6.46 6.50; dv "$RUN/clone/versions.real.tf" > "$RUN/clone/wrappers/versions.tf"
+  fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 && return 1
+  grep -qx 'path refused: work tree wrappers/versions.tf (reserved)' "$TMP/w.out" || { cat "$TMP/w.out"; return 1; }
+  raise versions.real.tf 6.46 6.50
+  fr wrappers "$RUN" --round 1 > "$TMP/w.out" 2>&1 && grep -qx 'wrappers: skipped wrappers/versions.tf' "$TMP/w.out" || { cat "$TMP/w.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_wrap_links() { pilot t_wrap_links_; }
+t_wrap_links; check "wrappers: a wrapper that is a link at the pinned head is stale; a wrapper written from a module file that is a link is refused" $?
+
+t_wrap_b_outdated_() { # path B: the index tree's wrapper out of date is refused at the gate; the step then makes it pass
+  NOID=1 wrap_run "$WB" "$WH" "$ROUND0B" || return 1
+  raise versions.tf 6.46 6.50
+  fr docs "$RUN" --round 1 > /dev/null 2>&1 && fnum "$ROUND0B" 1 > "$TMP/f1.json" &&
+    fr compare "$RUN" --round 1 --findings "$TMP/f1.json" > "$TMP/c.out" 2>&1 && grep -qx 'loop: the next round may start' "$TMP/c.out" || { cat "$TMP/c.out"; return 1; }
+  GATE && return 1
+  grep -qx 'wrapper out of date: wrappers/versions.tf' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  next_round 2 && fr wrappers "$RUN" --round 2 > "$TMP/w.out" 2>&1 && grep -qx 'wrappers: updated wrappers/versions.tf' "$TMP/w.out" || { cat "$TMP/w.out"; return 1; }
+  fr docs "$RUN" --round 2 > /dev/null 2>&1 && fr compare "$RUN" --round 2 --findings "$TMP/empty.json" > /dev/null 2>&1 || return 1
+  GATE && grep -q '^write path: B' "$TMP/gate.last" && grep -q '^+++ b/wrappers/versions.tf' "$OUT/fix.patch" || { cat "$TMP/gate.last"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_wrap_b_outdated() { pilot t_wrap_b_outdated_; }
+t_wrap_b_outdated; check "wrappers: on path B an out-of-date wrapper is refused at the gate, and the step's update passes it" $?
+
+t_wrap_b_seq_() { # path B: two rounds that raise the same module, then a full revert; each round's wrapper is the next one's baseline
+  NOID=1 wrap_run "$WB" "$WH" "$ROUND0C" || return 1
+  local k floors=("" "6.46 6.50" "6.50 6.60") keep=("" "1,2" "2" "")
+  for k in 1 2 3; do
+    [ "$k" = 1 ] || next_round "$k" || return 1
+    if [ "$k" = 3 ]; then CG show "$H:versions.tf" > "$RUN/clone/versions.tf"; else raise versions.tf ${floors[$k]}; fi
+    fr wrappers "$RUN" --round "$k" > "$TMP/w.out" 2>&1 && grep -qx 'wrappers: updated wrappers/versions.tf' "$TMP/w.out" || { echo "round $k"; cat "$TMP/w.out"; return 1; }
+    if [ "$k" = 3 ]; then cmpw wrappers/versions.tf < "$WFX/terraform-aws-cloudfront/wrappers/versions.tf"
+    else want terraform-aws-cloudfront 6.46 "${floors[$k]#* }" | cmpw wrappers/versions.tf; fi || { echo "wrapper at round $k"; return 1; }
+    if [ "$k" = 3 ]; then echo '[]'; else fnum "$ROUND0C" "${keep[$k]}"; fi > "$TMP/f$k.json"
+    fr docs "$RUN" --round "$k" > /dev/null 2>&1 && fr compare "$RUN" --round "$k" --findings "$TMP/f$k.json" > "$TMP/c.out" 2>&1 || { cat "$TMP/c.out"; return 1; }
+  done
+  grep -q '^loop: stop, the local verdict is clean' "$TMP/c.out" && GATE || { cat "$TMP/c.out" "$TMP/gate.last"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_wrap_b_seq() { pilot t_wrap_b_seq_; }
+t_wrap_b_seq; check "wrappers: on path B two rounds raise the same module and a third reverts it; each writes derive of its round's module, and the gate passes" $?
+
 # --- Negative self-check: each mutation of a temp copy must make its named case fail. ------------
 
 oc=0
@@ -1423,6 +1687,10 @@ mutate "attribution without A5 (a malformed path)" 's/\( \(\$f != "\." and \(\$f
 mutate "A3 at the same severity only" 's/\[\.pinned\[\] \| \[\.rule_id, \.file, addr\]\] as \$pk/[.pinned[] | [.rule_id, .file, addr, .severity]] as \$pk/; s/\[\.rule_id, fp\(\$x\)\[1\], addr\] \| IN\(\$pk\[\]\)/[.rule_id, fp(\$x)[1], addr, .severity] | IN(\$pk[])/' t_attrib
 mutate "the severity left out of the count" 's/def introduced\(\$pin; \$now\):\n  \(\$pin \| counts\) as \$a/def introduced(\$pin; \$now):\n  (\$pin | map(.[0:3] + ["MEDIUM"]) | counts) as \$a/' t_attrib
 mutate "the verdict from every finding" 's/\$at\[0\]\.attributable as \$now \| \(\$now \| verdict\) as \$v/\$all[0] as \$now | (\$now | verdict) as \$v/' t_unattr
+mutate "the wrapper equality test dropped" 's/blob_at "\$1" "\$2" "\$d\/tw" && cmp -s "\$d\/tm\.d" "\$d\/tw"/blob_at "\$1" "\$2" "\$d\/tw" \&\& true/' t_wrap_refusals
+mutate "the convention test dropped" 's/  blob_at "\$FMB" "\$m" "\$d\/mbm" && derive_to "\$d\/mbm" "\$d\/mbm\.d" && blob_at "\$FMB" "\$w" "\$d\/mbw" && cmp -s "\$d\/mbm\.d" "\$d\/mbw" && CONV=yes/  CONV=yes/' t_wrap_notconv
+mutate "the author-edit guard dropped" 's/; \}; \} && GUARD=yes/; }; }; GUARD=yes/' t_wrap_author
+mutate "the out-of-date check dropped" 's/then printf .wrapper out of date: %s\\n. "\$p"; fi/then :; fi/' t_wrap_b_outdated
 
 echo
 if [ "$fails" -eq 0 ]; then echo "pr-fix: all checks hold"; else echo "pr-fix: $fails failed"; exit 1; fi
