@@ -1,3 +1,12 @@
+# [0.8.0](https://github.com/modulestf/modulestf/compare/v0.7.0...v0.8.0) (2026-11-09)
+
+
+### Features
+
+* **pr-fix:** Propose a confirmed unlock before replies on a locked pull request ([#134](https://github.com/modulestf/modulestf/issues/134)) ([82c8052](https://github.com/modulestf/modulestf/commit/82c805236bdedfba5ffe6a63dd4ed67d14d3b616))
+
+
+
 # [0.7.0](https://github.com/modulestf/modulestf/compare/v0.6.0...v0.7.0) (2026-11-09)
 
 
