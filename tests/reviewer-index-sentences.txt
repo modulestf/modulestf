@@ -232,6 +232,6 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 +	references/check-e-profile.md	|
 +	references/check-e-profile.md	| `profile.title-truncated` | `no code change:` | The full title, given in full, with the cut tail restored, such as by joining the body's leading fragment.
 +	references/check-e-profile.md	Length alone is no finding.
-+	references/check-d-examples.md	- An example's `.tf` changes add a feature that its `README.md` prose outside the markers does not name (`examples.docs-incomplete`, LOW).
-+	references/check-d-examples.md	Prose that names each feature, however briefly, is no finding.
++	references/check-d-examples.md	- Example `README.md` prose outside the markers lists features, and the change adds one it omits (`examples.docs-incomplete`, LOW); viewer mTLS does not name origin mTLS.
++	references/check-d-examples.md	Generic prose is no finding.
 +	references/check-d-examples.md	For prose the change left stale, rewrite the named sentences outside the markers to describe what the example now demonstrates.
