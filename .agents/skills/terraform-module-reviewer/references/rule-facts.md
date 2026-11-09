@@ -74,6 +74,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `profile.required-file-missing` | none | - | - | never | tool | path | newly-introduced | no | root, submodule, example | tool-findings, file-index | MEDIUM | - | - |
 | `profile.template-drift` | none | - | - | never | candidate | path | touched-block | no | root | candidates, file-index | MEDIUM, LOW | lead | lead |
 | `profile.title-misspelling` | none | - | - | never | llm | path | any-file-in-area | yes | root | none | MEDIUM | - | - |
+| `profile.title-truncated` | none | - | - | never | llm | path | any-file-in-area | yes | root | none | MEDIUM | - | - |
 | `profile.title-uninformative` | none | - | - | never | llm | path | any-file-in-area | yes | root | none | MEDIUM | - | - |
 | `profile.unrelated-change-bundled` | none | - | - | never | llm | config-semantic | touched-block | yes | root, submodule | interface-diff | LOW | - | - |
 | `review.check-not-run` | none | - | - | never | llm | path | any-file-in-area | yes | root, submodule, example | area-rules | MEDIUM | - | - |
