@@ -132,7 +132,7 @@ fix-run.sh replies "$RUN" --target <owner>/<repo>#<number> --file "$OUT/replies.
   [--confirm-unlock <owner>/<repo>#<number>]
 ```
 
-It refuses drafts whose digest differs, a pull request whose live head is not the confirmed SHA, and a locked one without `--confirm-unlock`. A failed unlock posts nothing and is not retried. A 422 `Issue is locked` on a reply means nothing landed: report it and retry nothing. A further unlock, after either, needs a new run.
+It refuses drafts whose digest differs, a pull request whose live head is not the confirmed SHA, and a locked one without `--confirm-unlock`. A failed unlock posts nothing and is not retried. A 422 `Issue is locked` on a reply means nothing landed: report it and retry nothing. After an unlock this run attempted, a further unlock needs a new run; otherwise offer the unlock, one `--confirm-unlock` in this run.
 
 It runs pr-review's leak scan and at-mention step on each body and posts each to the endpoint it rebuilds from the pinned state ([Replies](write-path.md#replies)).
 

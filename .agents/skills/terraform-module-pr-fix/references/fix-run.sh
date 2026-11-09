@@ -1331,18 +1331,25 @@ cmd_replies() {
     ids_a+=("$id"); eps_a+=("$ep")
   done < <(printf '%s' "$final" | jq -r '.[].item')
   # The confirmed unlock: the lock re-read now, the record written, then one DELETE to the target,
-  # never retried or re-locked.
-  if [ -n "$cu" ] && [ "$(gh api "repos/$TREPO/pulls/$TNUM" --jq '.locked' 2> /dev/null)" = true ]; then
-    printf '%s %s\n' "$TREPO#$TNUM" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$RUN/unlock.txt" || fail "the unlock record cannot be written; nothing posted"
-    err="$(gh api -X DELETE "repos/$TREPO/issues/$TNUM/lock" 2>&1 > /dev/null)" ||
-      fail "the unlock failed: $(printf '%s' "$err" | head -n 1 | cut -c1-200); nothing retried, no reply posted"
-    echo "unlocked: $TREPO#$TNUM"
-  fi
+  # never retried or re-locked. A read that fails or holds no lock is no answer: nothing is posted.
+  local lk=false
+  [ -n "$cu" ] && lk="$(gh api "repos/$TREPO/pulls/$TNUM" --jq '.locked' 2> /dev/null)"
+  case "$lk" in
+    false) ;;
+    true)
+      printf '%s %s\n' "$TREPO#$TNUM" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$RUN/unlock.txt" || fail "the unlock record cannot be written; nothing posted"
+      err="$(gh api -X DELETE "repos/$TREPO/issues/$TNUM/lock" 2>&1 > /dev/null)" ||
+        fail "the unlock failed: $(printf '%s' "$err" | head -n 1 | cut -c1-200); nothing retried, no reply posted"
+      echo "unlocked: $TREPO#$TNUM" ;;
+    *) fail "the lock cannot be read; nothing posted" ;;
+  esac
   for k in "${!ids_a[@]}"; do
     id="${ids_a[$k]}"; ep="${eps_a[$k]}"
     body="$(printf '%s' "$final" | jq -r --arg i "$id" '.[] | select(.item == $i) | .body')"
     err="$(jq -n --arg body "$body" '{body: $body}' | gh api -X POST "$ep" --input - 2>&1 > /dev/null)" || {
-      case "$err" in *"Issue is locked"*) fail "the reply to $id: 422 Issue is locked, nothing landed; nothing retried; a further unlock needs a new run" ;; esac
+      case "$err" in *"Issue is locked"*)
+        if [ -e "$RUN/unlock.txt" ]; then fail "the reply to $id: 422 Issue is locked, nothing landed; nothing retried; a further unlock needs a new run"
+        else fail "the reply to $id: 422 Issue is locked, nothing landed; nothing retried; offer the unlock, one --confirm-unlock in this run"; fi ;; esac
       fail "the reply to $id failed and may have landed; read the comments before any retry"; }
     printf '%s\n' "$id" >> "$RUN/posted.txt"; n=$((n + 1))
   done

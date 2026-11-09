@@ -893,6 +893,30 @@ t_locked_reread() { # unlocked between the two reads: no DELETE, the replies pos
   [ "$(DELS)" = 0 ] && [ "$(wc -l < "$FX/posted.log" | tr -d ' ')" = 1 ] && fr cleanup "$RUN" > /dev/null
 }
 t_locked_reread; check "locked: the lock read again before the DELETE; unlocked by then, no DELETE runs" $?
+t_locked_noread() { # a second read that fails or holds no lock is no answer: no DELETE, nothing posted
+  locked_run && LIVE "$LK" || return 1
+  local pf="$FX/api/repos/o/r/pulls/7.json" s
+  for s in "$(jq -c 'del(.locked)' "$pf")" 'not json'; do
+    rm -f "$pf.seen"; printf '%s\n' "$s" > "$pf.second"
+    UL && return 1
+    grep -q 'the lock cannot be read; nothing posted' "$TMP/t.out" && [ "$(DELS)" = 0 ] && [ ! -s "$FX/posted.log" ] && [ ! -e "$RUN/unlock.txt" ] ||
+      { cat "$TMP/t.out"; return 1; }
+  done
+  fr cleanup "$RUN" > /dev/null
+}
+t_locked_noread; check "locked: a second lock read that fails or holds no lock field posts nothing and runs no DELETE" $?
+t_locked_late() { # locked after the first read, no flag: no second read, no DELETE; the 422 offers the unlock
+  fx_default; reviewed_run || return 1
+  printf '[{"item": "C-701", "body": "Not changed."}]\n' > "$RUN/rounds/1/replies.json"
+  GATE || { cat "$TMP/gate.last"; return 1; }
+  printf '[{"item": "C-701", "body": "Not changed."}]\n' > "$TMP/r.json"; : > "$FX/posted.log"; : > "$FX/gh-argv.log"
+  LIVE; printf '%s\n' "$(jq -c "$LK" "$FX/api/repos/o/r/pulls/7.json")" > "$FX/api/repos/o/r/pulls/7.json.second"
+  touch "$FX/post-locked"; REPLIES "$TMP/r.json" C-701 > "$TMP/t.out" 2>&1 && return 1; rm -f "$FX/post-locked"
+  grep -q '422 Issue is locked, nothing landed; nothing retried; offer the unlock, one --confirm-unlock in this run' "$TMP/t.out" &&
+    [ "$(DELS)" = 0 ] && [ ! -s "$FX/posted.log" ] || { cat "$TMP/t.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_locked_late; check "locked: a lock added after the first read, with no flag, runs no DELETE, and its 422 offers the unlock in this run" $?
 t_locked_endpoint() { # a bad pinned endpoint is found before the unlock, so the pull request stays locked
   locked_run && LIVE "$LK" || return 1
   chmod u+w "$RUN/state.json"; jq '.comments |= map(select(.id != 701))' "$RUN/state.json" > "$TMP/s.json" && cat "$TMP/s.json" > "$RUN/state.json"; retrust
@@ -1699,12 +1723,13 @@ mutate "replace objects honoured" 's/GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=
 mutate "a diff without --no-textconv" 's/G diff --no-ext-diff --no-textconv --cached --name-only/G diff --no-ext-diff --cached --name-only/' t_e2e
 mutate "gh auth status dropped" 's/"\$\{GHENV\[\@\]\}" gh auth status --hostname github\.com > \/dev\/null 2>&1 &&\n    //' t_auth
 mutate "the locked check dropped" 's/true\) \[ -n "\$cu" \] \|\| fail "the pull request is locked/true) true || fail "the pull request is locked/' t_locked
-mutate "a failed unlock not stopping the replies" 's/\|\|\n      fail "the unlock failed: [^\n]*/|| true/' t_locked
+mutate "a failed unlock not stopping the replies" 's/\|\|\n        fail "the unlock failed: [^\n]*/|| true/' t_locked
 mutate "the one-unlock record not checked" 's/\[ ! -e "\$RUN\/unlock\.txt" \] \|\|/true ||/' t_locked_422
 mutate "--confirm-unlock not bound to the target" 's/\[ "\$cu" = "\$tg" \] \|\|/true ||/' t_locked
-mutate "the lock not read again before the DELETE" 's/\[ "\$\(gh api "repos\/\$TREPO\/pulls\/\$TNUM" --jq .\.locked. 2> \/dev\/null\)" = true \]/true/' t_locked_reread
+mutate "the lock not read again before the DELETE" 's/lk="\$\(gh api "repos\/\$TREPO\/pulls\/\$TNUM" --jq .\.locked. 2> \/dev\/null\)"/lk=true/' t_locked_reread
+mutate "the second lock read without the flag check" 's/\[ -n "\$cu" \] && lk=/lk=/' t_locked_late
 mutate "the 422 not matched" 's/\*"Issue is locked"\*\)/*"no such text"*)/' t_locked_422
-mutate "the endpoints checked after the unlock" 's/(  while IFS= read -r id; do\n    ep="[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n    ids_a\+=\("\$id"\); eps_a\+=\("\$ep"\)\n  done < <\(printf [^\n]*\n)(.*?\n  fi\n)/$2$1/s' t_locked_endpoint
+mutate "the endpoints checked after the unlock" 's/(  while IFS= read -r id; do\n    ep="[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n    ids_a\+=\("\$id"\); eps_a\+=\("\$ep"\)\n  done < <\(printf [^\n]*\n)(.*?\n  esac\n)/$2$1/s' t_locked_endpoint
 mutate "non-actionable never stops" 's/elif \.nonactionable then/elif false then/' t_nonact
 mutate "only the last round of reply drafts" 's/\|\| rs\+=\(/|| rs=(/' t_replies_merge
 mutate "the <sha> placeholder kept" 's/gsub\("<sha>"; \$sha\)/./' t_e2e
