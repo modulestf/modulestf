@@ -197,17 +197,25 @@ A finding's fingerprint is `(rule_id, file, block address, severity)`. `file` is
 | nits | LOW only |
 | open | Any MEDIUM, HIGH or CRITICAL |
 
-A tuple is introduced when its severity is MEDIUM or higher and its count at the new head is above its count at the pinned head. Counting is by multiset, so a second finding with the same tuple and no address is introduced, and so is a LOW finding raised to MEDIUM.
+A finding of a round counts against the fix only when the fix could have caused it. Attribution reads the reviewer's module-relative `file`, before the module root prefix is applied; `.` there is the module-level sentinel. The round's changed paths are those that differ between the pinned head and the round's judged tree (the committed tree, or the index tree on path B), from `git diff-tree -r -z --no-renames`, both sides, made module-relative. The directory of a path is the bytes before its last slash, or the empty string when it has none. A5 is evaluated first. A finding is attributable when any of these holds:
+
+- A1. Its file is a changed path.
+- A2. Its file is non-empty, not `.`, and its directory equals the directory of a changed path ending in `.tf`.
+- A3. Its `(rule_id, file, block address)` occurs among the pinned head's findings, at any severity, the file compared repository-relative.
+- A4. Its severity is HIGH or CRITICAL.
+- A5. Its file is not exactly `.` and fails the path grammar with an empty prefix: an empty file, a leading slash, an empty, `.` or `..` component, or any other grammar failure. Such a file is attributable and never reaches A2.
+
+Otherwise it is unattributed. A tuple `(rule_id, file, block address, severity)` with severity MEDIUM or higher is introduced when its count among the round's attributable findings is above its count among all of the pinned head's findings. Counting is by multiset, so a second finding with the same tuple and no address is introduced, and so is a LOW finding raised to MEDIUM. The local verdict, the open set and every [Loop](#loop) row read attributable findings only. Comment items are frozen at `prepare` and unchanged. `compare` and `gate` list each unattributed finding as `unattributed: <rule_id> <file> <severity>`, the file repository-relative, and the gate prints them at Step 11. pr-review's final review still reports every finding.
 
 ## Loop
 
-The loop belongs to this skill: the neutral reviewer reviews the pinned merge base against the new head after each round. A round's open set is the fingerprints of its MEDIUM or higher findings, with the ids of the eligible comment items that no disposition so far has closed (`apply`, `already-addressed`, `duplicate`, `reject`, `out-of-scope` close an item). Round 0 is the pinned head.
+The loop belongs to this skill: the neutral reviewer reviews the pinned merge base against the new head after each round. A round's open set is the fingerprints of its attributable MEDIUM or higher findings, with the ids of the eligible comment items that no disposition so far has closed (`apply`, `already-addressed`, `duplicate`, `reject`, `out-of-scope` close an item). Round 0 is the pinned head.
 
 After round n, the first row that holds decides:
 
 | Row | When | Result |
 |---|---|---|
-| 1 | The local verdict is clean or nits | Stop, the review is finished |
+| 1 | The local verdict is clean or nits | Stop, the review is finished: `finished among attributable findings, <n> unattributed` |
 | 2 | The open set is not empty, and every open finding's item was decided with something other than `apply`, and every open comment item has a decision | Stop: every open item is non-actionable |
 | 3 | An item closed between two earlier rounds is open again | Stop: no progress |
 | 4 | The open set is not strictly smaller than the previous reviewed round's, as a multiset contained in it | Stop: no progress |
@@ -220,8 +228,10 @@ After round n, the first row that holds decides:
 
 Part of `gate` and `push`, after the content gate:
 
-- At least one item is resolved: a fingerprint of the pinned head, of any severity, is gone from the last reviewed round, or a disposition applied a comment item.
+- At least one item is resolved: a fingerprint of the pinned head, of any severity, is gone from the last reviewed round's attributable findings, or a disposition applied a comment item.
 - No tuple is introduced.
+
+An unattributed finding never stops the loop and never blocks the push.
 
 ## Checks
 

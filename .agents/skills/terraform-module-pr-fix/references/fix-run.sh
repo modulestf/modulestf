@@ -361,8 +361,8 @@ last_reviewed() { # the latest round with a review, or 0
   for k in 1 2 3; do [ -f "$RUN/rounds/$k/review.json" ] && n=$k; done
   echo "$n"
 }
-findings_at() { # round: its findings, repository-relative
-  if [ "$1" = 0 ]; then cat "$RUN/round0-findings.json"; else cat "$RUN/rounds/$1/findings-repo.json"; fi
+findings_at() { # round: its findings, repository-relative; from round 1 on, the attributable ones
+  if [ "$1" = 0 ]; then cat "$RUN/round0-findings.json"; else jq '.attributable' "$RUN/rounds/$1/review.json"; fi
 }
 
 cmd_round() {
@@ -764,13 +764,13 @@ cmd_verify() {
   echo "review: workspace $ws, task $RD/review-task.md"
 }
 
-open_set() { # round: its open set (write-path.md, Loop), from its findings and the dispositions so far
+open_set() { # round [findings file]: its open set (write-path.md, Loop), from its attributable findings and the dispositions so far
   local k closed='[]' disp='[]'
   for k in 1 2 3; do
     [ "$k" -le "$1" ] && [ -f "$RUN/rounds/$k/dispositions.json" ] &&
       disp="$(jq -c --argjson d "$disp" '$d + .' "$RUN/rounds/$k/dispositions.json")"
   done
-  findings_at "$1" > "$RUN/f.tmp"
+  if [ -n "${2-}" ]; then cat "$2"; else findings_at "$1"; fi > "$RUN/f.tmp"
   eligible_items > "$RUN/e.tmp"
   J -c -n --slurpfile f "$RUN/f.tmp" --slurpfile e "$RUN/e.tmp" --argjson d "$disp" 'include "fix-run";
     ([$d[] | {(.item): .decision}] | add // {}) as $last |
@@ -792,31 +792,41 @@ cmd_compare() {
   J --arg p "$PREFIX" 'include "fix-run"; map(.file = (fp($p)[1]))' "$f" > "$RD/findings-repo.json"
   local head tree hist=() k
   G add -A > /dev/null 2>&1; tree="$(G write-tree)"; head="$(G rev-parse HEAD)"
+  # Attribution: the round's changed paths are those between the pinned head and the judged tree.
+  G diff-tree -r -z --name-only --no-renames "$PINNED" "$tree" > "$RD/changed" 2> /dev/null || fail "the round's changed paths cannot be read"
+  J -n --slurpfile f "$f" --slurpfile pin "$RUN/round0-findings.json" --rawfile c "$RD/changed" --arg p "$PREFIX" 'include "fix-run";
+    {findings: $f[0], pinned: $pin[0], changed: ($c | module_paths($p)), prefix: $p} | attribution' > "$RD/attribution.json" ||
+    fail "the attribution could not be built"
+  jq '.attributable' "$RD/attribution.json" > "$RD/attributable.json"
   for k in 0 1 2 3; do
     [ "$k" -lt "$ROUND" ] || break
     [ "$k" = 0 ] || [ -f "$RUN/rounds/$k/review.json" ] || continue
     hist+=("$(open_set "$k")")
   done
-  hist+=("$(open_set "$ROUND")")
+  hist+=("$(open_set "$ROUND" "$RD/attributable.json")")
   # Non-actionable: every open finding's item was decided without an edit, and every open comment item waits.
   local disp='[]'; [ ! -f "$RD/dispositions.json" ] || disp="$(cat "$RD/dispositions.json")"
   J -n --argjson h "$(printf '%s\n' "${hist[@]}" | jq -s -c .)" --argjson round "$ROUND" --argjson limit "$LIMIT" \
-    --slurpfile now "$RD/findings-repo.json" --slurpfile pin "$RUN/round0-findings.json" --slurpfile it "$RD/items.json" \
+    --slurpfile all "$RD/findings-repo.json" --slurpfile at "$RD/attribution.json" --slurpfile pin "$RUN/round0-findings.json" --slurpfile it "$RD/items.json" \
     --argjson d "$disp" --arg head "$head" --arg tree "$tree" 'include "fix-run";
     ([$d[] | {(.item): .decision}] | add // {}) as $dec |
     ([$it[0][] | select(.fingerprint) | {(.fingerprint): ($dec[.id] // "")}] | add // {}) as $byfp |
     ($h[-1] | length > 0 and all(.[]; if startswith("item:") then ($dec[.[5:]] // "") != ""
        else (($byfp[.] // "") | . != "" and . != "apply") end)) as $na |
-    ($now[0] | verdict) as $v |
+    $at[0].attributable as $now | ($now | verdict) as $v |
     {round: $round, head: $head, tree: $tree, verdict: $v,
-     fingerprints: [$now[0][] | fp("")], open: $h[-1],
-     introduced: introduced([$pin[0][] | fp("")]; [$now[0][] | fp("")]),
-     decision: ({history: $h, round: $round, limit: $limit, verdict: $v, nonactionable: $na} | loop_decision)}' > "$RD/review.json" ||
+     fingerprints: [$all[0][] | fp("")], open: $h[-1],
+     attributable: $now, unattributed: $at[0].unattributed,
+     introduced: introduced([$pin[0][] | fp("")]; [$now[] | fp("")]),
+     decision: ({history: $h, round: $round, limit: $limit, verdict: $v, nonactionable: $na,
+       unattributed: ($at[0].unattributed | length)} | loop_decision)}' > "$RD/review.json" ||
     fail "the comparison could not be built"
   jq '{round, head, tree}' "$RD/review.json" > "$RUN/reviewed.json"
   trust_record
   jq -r '"round \(.round): verdict \(.verdict), \(.open | length) open, \(.introduced | length) introduced",
     (.introduced[0:20][] | "  introduced: \(.[0]) \(.[1]) \(.[2]) \(.[3])"),
+    (.unattributed[0:10][] | "unattributed: \(.rule_id) \(.file) \(.severity)"),
+    (.unattributed | select(length > 10) | "unattributed: \(length - 10) more"),
     "loop: " + (if .decision.stop then "stop, " else "" end) + .decision.reason' "$RD/review.json"
 }
 
@@ -874,14 +884,17 @@ gate_check() {
   else
     c="$(G write-tree 2> /dev/null)" && rule "$PINNED" "$c" || [ -n "$c" ] || echo "path rule refused: git write-tree failed"
   fi
+  : > "$r/info.txt"
+  jq -r '(.unattributed[0:10][] | "unattributed: \(.rule_id) \(.file) \(.severity)"),
+    (.unattributed | select(length > 10) | "unattributed: \(length - 10) more")' "$RUN/rounds/$last/review.json" >> "$r/info.txt"
   # The push precondition: at least one item resolved, no MEDIUM or higher introduced.
   local disp='[]' k
   for k in 1 2 3; do [ ! -f "$RUN/rounds/$k/dispositions.json" ] || disp="$(jq -c --argjson d "$disp" '$d + .' "$RUN/rounds/$k/dispositions.json")"; done
-  J -n -r --slurpfile pin "$RUN/round0-findings.json" --slurpfile now "$RUN/rounds/$last/findings-repo.json" --argjson d "$disp" 'include "fix-run";
-    [$pin[0][] | fp("") | tojson] as $a | [$now[0][] | fp("") | tojson] as $b |
+  J -n -r --slurpfile pin "$RUN/round0-findings.json" --slurpfile v "$RUN/rounds/$last/review.json" --argjson d "$disp" 'include "fix-run";
+    $v[0].attributable as $now | [$pin[0][] | fp("") | tojson] as $a | [$now[] | fp("") | tojson] as $b |
     (if (msub($a; $b) | length) == 0 and ([$d[] | select(.decision == "apply" and (.item | test("^[TCV]-")))] | length) == 0
      then "no item is resolved" else empty end),
-    (introduced([$pin[0][] | fp("")]; [$now[0][] | fp("")])[] | "introduced: \(.[0]) \(.[1]) \(.[3])")'
+    (introduced([$pin[0][] | fp("")]; [$now[] | fp("")])[] | "introduced: \(.[0]) \(.[1]) \(.[3])")'
 }
 
 cmd_gate() {
@@ -905,8 +918,11 @@ cmd_gate() {
     printf '%s\n' "$why" | head -n 20
     fail "the gate refuses; the patch is $OUT/fix.patch"
   fi
-  G diff --cached --stat --no-ext-diff --no-textconv "$PINNED" | tail -n 12
+  G diff --cached --stat --no-ext-diff --no-textconv "$PINNED" | tail -n 8
   jq -r '"verdict: \(.verdict) at round \(.round)"' "$RUN/rounds/$last/review.json"
+  # Information only: the unattributed findings.
+  local ni; ni="$(wc -l < "$RUN/gate/info.txt" | tr -d ' ')"
+  if [ "$ni" -le 6 ]; then cat "$RUN/gate/info.txt"; else head -n 5 "$RUN/gate/info.txt"; echo "information: $((ni - 5)) more lines in $RUN/gate/info.txt"; fi
   jq -r '"author: " + (if .commit_identity then "\(.commit_identity.name) <\(.commit_identity.email)>" else "none, patch only" end)' "$RUN/state.json"
   jq -r --arg h "$head" '"write path: \(.path)", (select(.path == "A") |
     "push: \(.dest.url) \($h):refs/heads/\(.dest.ref)", "expected remote SHA: \(.dest.expected_sha)"),

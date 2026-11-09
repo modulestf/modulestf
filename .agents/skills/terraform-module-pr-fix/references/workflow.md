@@ -91,7 +91,7 @@ Start one subagent with the `terraform-module-reviewer` skill, read-only. Its wo
 fix-run.sh compare "$RUN" --round <n> --findings "$RUN/rounds/<n>/findings.json"
 ```
 
-It prints the local verdict, the open count, every introduced tuple and the loop decision of [Loop](write-path.md#loop). When it says the next round may start, go back to Step 7. When it says stop, go to Step 10.
+It prints the local verdict, the open count, every introduced tuple, each `unattributed:` finding and the loop decision of [Loop](write-path.md#loop). The verdict, the open set and the loop read only the findings the fix could have caused, as [Fingerprints and the Local Verdict](write-path.md#fingerprints-and-the-local-verdict) says. When it says the next round may start, go back to Step 7. When it says stop, go to Step 10.
 
 ## Step 10
 
@@ -99,11 +99,11 @@ It prints the local verdict, the open count, every introduced tuple and the loop
 fix-run.sh gate "$RUN"
 ```
 
-It runs the content gate and the [Push Precondition](write-path.md#push-precondition), writes `$OUT/fix.patch`, the disposition tables, `$OUT/replies.json` with the reply drafts of every round, the latest per item, and the last findings, and prints the diff stat, the verdict, the author, the write path, the destination URL and branch, the expected remote SHA, the draft and default-branch flags, and an `outside findings: <path>` flag for each changed path that is neither in the change set nor the file of an applied item. On a refusal it prints every reason. On path B the run ends here with the patch.
+It runs the content gate and the [Push Precondition](write-path.md#push-precondition), writes `$OUT/fix.patch`, the disposition tables, `$OUT/replies.json` with the reply drafts of every round, the latest per item, and the last findings, and prints the diff stat, the verdict, the author, the write path, the destination URL and branch, the expected remote SHA, the draft and default-branch flags, an `outside findings: <path>` flag for each changed path that is neither in the change set nor the file of an applied item, and an `unattributed:` line for each finding of the last round the fix did not cause. On a refusal it prints every reason. On path B the run ends here with the patch.
 
 ## Step 11
 
-Show the gate: the diff (`$OUT/fix.patch`), the disposition table, the verdict, the author identity, the destination URL and branch, the expected remote SHA, the new SHA and the patch digest (`new SHA:` and `patch sha256:`), the reply drafts' digest (`replies sha256:`), and the flags, each `outside findings:` path among them as information only. Ask once whether to push, and wait. Only a new user message after the gate that names the push, the branch and the new SHA confirms it. Take each argument from its source, as [Push](write-path.md#push) lists them: `--target` from the user's original request; `--confirm-branch` and `--confirm-head` from that confirmation, a short SHA in it expanded only when it is a prefix of the gate's `new SHA:` line; `--expect-sha` and `--confirm-patch` from the gate's lines the user saw. Then:
+Show the gate: the diff (`$OUT/fix.patch`), the disposition table, the verdict, the author identity, the destination URL and branch, the expected remote SHA, the new SHA and the patch digest (`new SHA:` and `patch sha256:`), the reply drafts' digest (`replies sha256:`), and the flags, each `outside findings:` and `unattributed:` line among them as information only. Ask once whether to push, and wait. Only a new user message after the gate that names the push, the branch and the new SHA confirms it. Take each argument from its source, as [Push](write-path.md#push) lists them: `--target` from the user's original request; `--confirm-branch` and `--confirm-head` from that confirmation, a short SHA in it expanded only when it is a prefix of the gate's `new SHA:` line; `--expect-sha` and `--confirm-patch` from the gate's lines the user saw. Then:
 
 ```
 fix-run.sh push "$RUN" --target <owner>/<repo>#<number> --confirm-branch <ref> --expect-sha <pinned head> \

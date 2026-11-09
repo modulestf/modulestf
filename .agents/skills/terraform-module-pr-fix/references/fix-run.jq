@@ -143,7 +143,8 @@ def decisions: IN("apply", "reject", "unverified", "already-addressed", "duplica
 def loop_decision:
   .history as $h | ($h | length - 1) as $n | $h[$n] as $now |
   ([range(0; [$n - 1, 0] | max) | . as $k | msub($h[$k]; $h[$k + 1])[]] | unique) as $closed |
-  if .verdict == "clean" or .verdict == "nits" then {stop: true, finished_review: true, reason: "the local verdict is \(.verdict)"}
+  if .verdict == "clean" or .verdict == "nits" then {stop: true, finished_review: true,
+    reason: "the local verdict is \(.verdict): finished among attributable findings, \(.unattributed // 0) unattributed"}
   elif .nonactionable then {stop: true, finished_review: false, reason: "every open item is non-actionable"}
   elif $n >= 1 and any($now[]; IN($closed[])) then {stop: true, finished_review: false, reason: "no progress: a closed item reappears"}
   elif $n >= 1 and ((($now | length) >= ($h[$n - 1] | length)) or (msub($now; $h[$n - 1]) | length) > 0)
@@ -177,6 +178,25 @@ def path_grammar: test("^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]
 def prefix_ok: type == "string" and (. == "" or path_grammar);
 # Under the module root: the slash-boundary test.
 def under($prefix): $prefix == "" or startswith($prefix + "/");
+
+# The directory of a path: the bytes before its last slash, or "" when it has none.
+def dir_of: rindex("/") as $i | if $i == null then "" else .[0:$i] end;
+# The NUL-separated output of git diff-tree --name-only as module-relative paths.
+def module_paths($x): [split("\u0000")[] | select(. != "" and under($x)) | if $x == "" then . else .[($x | length) + 1:] end];
+# Attribution (write-path.md, Fingerprints and the Local Verdict). Input {findings, pinned, changed,
+# prefix}: findings the round's list with module-relative files, pinned the pinned head's list,
+# repository-relative, changed the round's changed paths, module-relative. Output {attributable,
+# unattributed}, both repository-relative. A5 comes first, so a malformed file never reaches A2.
+def attribution:
+  .prefix as $x | .changed as $ch | [.pinned[] | [.rule_id, .file, addr]] as $pk |
+  [.findings[] | .file as $f |
+    ( ($f != "." and ($f | path_grammar | not))
+      or ($f | IN($ch[]))
+      or ($f != "" and $f != "." and (($f | dir_of) as $d | any($ch[]; endswith(".tf") and dir_of == $d)))
+      or ([.rule_id, fp($x)[1], addr] | IN($pk[]))
+      or (.severity | IN("HIGH", "CRITICAL")) ) as $a
+    | {a: $a, f: (.file = fp($x)[1])}]
+  | {attributable: map(select(.a) | .f), unattributed: map(select(.a | not) | .f)};
 
 # Clauses 1 to 3 of write-path.md, Allowed Paths, on one path: "" when they hold, else the clause.
 def path_clause($prefix):

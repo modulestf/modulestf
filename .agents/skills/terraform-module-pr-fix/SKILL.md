@@ -68,7 +68,7 @@ This skill owns the review loop: the maintainer gets `Review loop: caller` and m
 | 3 | pr-review render-only to `<out>/round-0`; `clone`; `items`; ask once which items to apply; `apply` |
 | 7, 6, 9 | Per round: `round`; maintainer; `docs`; `commit`; `verify`; reviewer; `compare` |
 | 10 | `gate` |
-| 11 | Show the gate, with its `outside findings:` flags; confirm; `push`; `checks` |
+| 11 | Show the gate, with its `outside findings:` and `unattributed:` lines; confirm; `push`; `checks` |
 | 12 | Confirm and post the review through pr-review; confirm and `replies`; `cleanup` |
 
 ## Read When
@@ -76,7 +76,7 @@ This skill owns the review loop: the maintainer gets `Review loop: caller` and m
 | File | Read when |
 |---|---|
 | [workflow.md](references/workflow.md) | Every run: the steps and their commands |
-| [write-path.md](references/write-path.md) | A command's decision: the write path, origins, the allowed paths, the docs step, the gate, the loop, the checks, the push |
+| [write-path.md](references/write-path.md) | A command's decision: the write path, origins, the allowed paths, the docs step, the gate, attribution and the loop, the checks, the push |
 | [terraform-module-pr-review](../terraform-module-pr-review/SKILL.md), [review-run.md](../terraform-module-pr-review/references/review-run.md), [github-io.md](../terraform-module-pr-review/references/github-io.md) | Step 3 and Step 12: the review, its rules and its write |
 | [resolve-feedback.md](../terraform-module-maintainer/references/resolve-feedback.md) | Step 7: what the maintainer does with the round's task |
 | [terraform-module-reviewer](../terraform-module-reviewer/SKILL.md), [findings-schema.md](../terraform-module-reviewer/references/findings-schema.md) | Step 9: the round's review and its findings |
