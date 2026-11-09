@@ -587,7 +587,10 @@ cmd_run() {
        merge_base: (if $mb == "" then null else $mb end), prefix: $prefix,
        state: {state: $meta.state, merged: ($meta.merged == true), draft: ($meta.draft == true),
                base_is_default: ($meta.base.ref == $meta.base.repo.default_branch),
-               self_authored: ($meta.user.login == $login)},
+               self_authored: ($meta.user.login == $login),
+               locked: ($meta.locked == true),
+               lock_reason: (if $meta.locked == true and ($meta.active_lock_reason
+                 | IN("off-topic", "too heated", "resolved", "spam")) then $meta.active_lock_reason else null end)},
        signals: {threads: $t[0].signal, review_decision: $d[0].review_decision,
                  mergeability: (if $meta.state == "closed" then "not-applicable"
                                 elif $m == true then "pass" elif $m == false then "fail" else "unknown" end)},

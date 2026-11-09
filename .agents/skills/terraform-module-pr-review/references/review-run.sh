@@ -382,6 +382,7 @@ summary_lines() {
     "out of scope: checks \(.checks_out_of_scope | join(",") | if . == "" then "none" else . end), examples \(.examples_out_of_scope | length)",
     "behaviour: \(.behaviour), plan: \(.plan)",
     (if .new_module then "base: no file under the module root, reviewed as a new module" else empty end),
+    (if .state.locked then "locked: yes (\(.state.lock_reason // "none")), posting needs an unlock first" else empty end),
     "next: " + (if .triage then "handover, reviewer, render"
       else "claims, evidence, handover, reviewer, render" end)' "$RUN/index.json"
 }

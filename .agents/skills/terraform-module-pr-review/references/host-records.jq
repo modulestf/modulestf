@@ -284,9 +284,13 @@ def valid_host($head):
   and (.head_sha | sha) and .head_sha == $head and (.base_sha | sha)
   and (.merge_base == null or (.merge_base | sha))
   and (.prefix == "" or (.prefix | plain_path))
-  and (.state | type == "object" and keys == ["base_is_default", "draft", "merged", "self_authored", "state"]
+  and (.state | type == "object"
+       and keys == ["base_is_default", "draft", "lock_reason", "locked", "merged", "self_authored", "state"]
        and (.state | IN("open", "closed")) and (.merged | type == "boolean") and (.draft | type == "boolean")
-       and (.base_is_default | type == "boolean") and (.self_authored | type == "boolean"))
+       and (.base_is_default | type == "boolean") and (.self_authored | type == "boolean")
+       # The conversation lock feeds only the unlock proposal of github-io.md, Writing.
+       and (.locked | type == "boolean")
+       and (.lock_reason == null or (.locked and (.lock_reason | IN("off-topic", "too heated", "resolved", "spam")))))
   and (.signals | type == "object" and keys == ["mergeability", "review_decision", "threads"]
        and (.threads | IN("pass", "unknown"))
        and (.review_decision | IN("pass", "fail", "unknown", "none"))

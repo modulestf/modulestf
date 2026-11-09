@@ -37,6 +37,7 @@ The example selection and plan coverage change the files a host exchanges with t
 - The run file may carry `examples`, `{"count": M, "validated": K}`: the examples of `verify.json` whose `reason` is `verified`, not `skipped-version-bump` or `skipped-symlink`, and how many of them passed `validate` at the head (`[.dirs[] | select(.reason == "verified")] | {count: length, validated: (map(select(.head.validate == 0)) | length)}`). A host that wants the COMPACT tier of [comment-format.md](comment-format.md) sends it; one that omits it is safe and always gets STANDARD.
 - The run file may carry `plan_mode`, `laptop` or `runner`: the plan pass mode of the plan record, `runner` for a hosted plan job. A gate hit is a cause the COMPACT tier admits only with `laptop`; with `runner` or no `plan_mode` it forces STANDARD.
 - The run file's `coverage` may carry `covered_skips`, `skip_head_sha` and `skip_base_sha`, together or not at all: the output of skip-coverage.sh. A host that does not run it leaves them out and gets today's verdict; one of the wrong shape is refused ([verdict.md](verdict.md#covered-safety-gate-skips)).
+- `host.json` `state` carries `locked`, a boolean, and `lock_reason`, a GitHub lock reason or null; `host-pass.sh check` refuses a state without them.
 ## Plan Record
 
 `plan-hosted.json` is the hosted plan job's record, described in [plan-pass.md](plan-pass.md#hosted-runner). It is accepted only when all of these hold, and otherwise refused with the reason in brackets:
@@ -143,12 +144,12 @@ A hosted task with no such line drops nothing: Step 7 reads `commits/<headRefOid
 
 ## Host Facts
 
-Each field of `host.json` is an input to [verdict.md](verdict.md#the-ladder) or a line of [comment-format.md](comment-format.md#section-order), and nothing else:
+Each field of `host.json` is an input to [verdict.md](verdict.md#the-ladder) or a line of [comment-format.md](comment-format.md#section-order), and nothing else, except the lock in `state`:
 
 | Field | Input |
 |-------|-------|
 | `signals.threads`, `signals.review_decision`, `signals.mergeability` | The Threads, Review decision and Mergeability signals, values as [verdict.md](verdict.md#host-signals) names them. A closed or merged pull request has mergeability `not-applicable`, since there is no merge left to compute, and only such a pull request may carry it |
-| `state` | The draft, closed or merged and self-authored clamps |
+| `state` | The draft, closed or merged and self-authored clamps. `locked` is the pull request's `locked`, a boolean, and `lock_reason` its `active_lock_reason` when locked and one of `off-topic`, `too heated`, `resolved` or `spam`, else null. The lock is neither a verdict input nor a line of the body: it gives `prepare`'s `locked:` line and the unlock proposal of [github-io.md](github-io.md#writing), since a locked conversation refuses the write. A commit target has no host records and no lock |
 | `own_review` | The posting login's latest non-comment review. Its reviews are left out of `signals.review_decision` in every run, render-only included, since the body can still be posted later by that login and then replaces the earlier review |
 | `could_not_run` | Section 5, one line each: `patch-unavailable` with its path, made repository-relative with the prefix; `thread-resolution-unknown`; `prose-truncated`, one entry per item class that was cut, `item` `body`, `thread`, `title` or `issue` in that order with `omitted` the bytes cut across that class (an older record carries `kind` alone); `threads-over-count` with how many thread comments did not travel. Each is an unknown at ladder rule 4 |
 | `unresolved_threads` | Section 7, one line per thread, its path already repository-relative as the host read it, and ladder rule 5 when the list is not empty |

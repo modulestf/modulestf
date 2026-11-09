@@ -17,6 +17,8 @@
 #   - the closing issues' text: kind=issue items by origin, the 4000 byte cut and its entry, one issue
 #     named twice read once, and a cross-repository reference, a third issue or a failed read adding nothing;
 #   - a failed validate at light escalates, a schema escalation at focused escalates;
+#   - a locked pull request: prepare's lock line, the lock in host.json and index.json, and a body
+#     byte for byte the unlocked one, with a negative self-check on the lock line;
 #   - the pr-review SKILL.md workflow move: the sentence multiset of SKILL.md and
 #     references/workflow.md and references/inputs.md is the pinned one, navigation excluded,
 #     and SKILL.md and the run guide stay within their size targets.
@@ -1058,6 +1060,39 @@ check "a base holding the module: no new module, the diff and the merge base cro
      grep -q '^Diff: ' "$RUN/handover/task.md" && grep -q '^Merge base: ' "$RUN/handover/task.md" && ! grep -q '^base: ' "$TMP/p.out"; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 
+# --- 5b. A locked pull request: prepare prints one line and index.json carries the lock; the body
+# renders byte for byte as the unlocked one, since a lock changes neither the verdict nor the body.
+mkrepo widget; ghfiles open false APPROVED
+lockrun() { # out directory; renders the light run end to end
+  prep --render-only; full; run_rr handover "$RUN" > /dev/null; render_to "$1"
+}
+lockrun "$TMP/render-unlocked"
+check "lock: an unlocked pull request prints no lock line and records locked false" \
+  "$(! grep -q '^locked: ' "$TMP/p.out" && [ "$(q "$RUN/index.json" '.state.locked == false and .state.lock_reason == null')" = 0 ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+jq '.locked = true | .active_lock_reason = "resolved"' "$GHD/meta" > "$TMP/meta-l" && cp "$TMP/meta-l" "$GHD/meta"
+lockrun "$TMP/render-locked"
+check "lock: prepare prints the lock line with its reason" \
+  "$(grep -qx 'locked: yes (resolved), posting needs an unlock first' "$TMP/p.out" && [ "$(lines_ok "$TMP/p.out")" = 0 ]; echo $?)"
+check "lock: host.json and index.json carry the lock" \
+  "$([ "$(q "$RUN/host/host.json" '.state.locked == true and .state.lock_reason == "resolved"')" = 0 ] &&
+     [ "$(q "$RUN/index.json" '.state.locked == true and .state.lock_reason == "resolved"')" = 0 ]; echo $?)"
+check "lock: the body is byte for byte the unlocked render" \
+  "$([ -s "$TMP/render-locked/comment.md" ] && cmp -s "$TMP/render-unlocked/comment.md" "$TMP/render-locked/comment.md"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+jq '.active_lock_reason = null' "$GHD/meta" > "$TMP/meta-l" && cp "$TMP/meta-l" "$GHD/meta"
+prep --render-only
+check "lock: a lock with no reason prints none" "$(grep -qx 'locked: yes (none), posting needs an unlock first' "$TMP/p.out"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+# Negative self-check: review-run.sh without the lock line prints none for a locked pull request.
+cp "$RR" "$TMP/rr-keep"
+perl -ni -e 'print unless /posting needs an unlock first/' "$RR"
+prep --render-only
+check "self-check: the lock line, removed from review-run.sh, is missed" \
+  "$(! cmp -s "$RR" "$TMP/rr-keep" && ! grep -q '^locked: ' "$TMP/p.out" && [ -n "$RUN" ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+cp "$TMP/rr-keep" "$RR"
+
 # --- 6. The SKILL.md move: SKILL.md, references/workflow.md and references/inputs.md hold the pinned
 # sentence multiset; the router's own text is headings, tables and block quotes only.
 # Sentences: the text of both files with fenced blocks, headings, table rows and block quotes
@@ -1076,6 +1111,9 @@ run_rr cleanup "$RUN" > /dev/null
 # sentences of Rules 2 and 3 shortened to keep SKILL.md under 16384 bytes.
 # Updated for the description that routes a fix and push to terraform-module-pr-fix, with two
 # sentences of Rules 1 and 3 shortened to keep SKILL.md under 16384 bytes.
+# Updated for Rule 3's exception that removes a conversation lock, with Steps 11 and 12 proposing and
+# doing the unlock, and Rule 5's list of plan pass limits left to plan-pass.md, Limits, to keep
+# SKILL.md under 16384 bytes.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1084,7 +1122,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=9c4dbdf68b14
+want=16f07b0ddc01
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"

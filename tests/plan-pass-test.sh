@@ -1217,13 +1217,33 @@ check "issue item: the pull request author's issue is change-author, number and 
 check "issue item: another author's issue is other, an empty body adds no blank line" \
   "$([ "$(ii '{number: 2, title: "T", body: "", user: {typename: "User", id: 12, login: "a"}}')" = '{"kind":"issue","origin":"other","text":"#2 T"}' ]; echo $?)"
 HV="{\"format\":1,\"repo\":\"o/r\",\"number\":1,\"head_sha\":\"$HH\",\"base_sha\":\"$HH\",\"merge_base\":null,\"prefix\":\"\",
-  \"state\":{\"state\":\"open\",\"merged\":false,\"draft\":false,\"base_is_default\":true,\"self_authored\":false},
+  \"state\":{\"state\":\"open\",\"merged\":false,\"draft\":false,\"base_is_default\":true,\"self_authored\":false,\"locked\":false,\"lock_reason\":null},
   \"signals\":{\"threads\":\"pass\",\"review_decision\":\"none\",\"mergeability\":\"pass\"},\"own_review\":null,
   \"could_not_run\":[],\"unresolved_threads\":[],
   \"conversation\":{\"path\":\"graphql\",\"omitted\":null,\"considered\":0,\"bot_considered\":0,\"counts\":{},\"notes\":[]},
   \"related\":{\"status\":\"ok\",\"open_unlinked\":[],\"sidebar_not_read\":false}}"
 hv() { printf '%s' "$HV" | jq -c "$1" | jq -r -L "${PP%/*}" --arg h "$HH" 'include "host-records"; valid_host($h)'; }
 check "host.json: the base object is valid" "$([ "$(hv .)" = true ]; echo $?)"
+check "host.json: a locked pull request with a reason, or with none, is valid" \
+  "$([ "$(hv '.state.locked = true | .state.lock_reason = "resolved"')" = true ] && [ "$(hv '.state.locked = true')" = true ]; echo $?)"
+check "host.json: a lock that is not a boolean is refused" \
+  "$([ "$(hv '.state.locked = "true"')" = false ] && [ "$(hv '.state.locked = null')" = false ]; echo $?)"
+check "host.json: a state without the lock is refused" "$([ "$(hv 'del(.state.locked)')" = false ]; echo $?)"
+check "host.json: a lock reason outside GitHub's set, or on an unlocked pull request, is refused" \
+  "$([ "$(hv '.state.locked = true | .state.lock_reason = "x"')" = false ] && [ "$(hv '.state.lock_reason = "spam"')" = false ]; echo $?)"
+# Negative self-check: a host-records.jq without the boolean test passes a string lock.
+mkdir -p "$TMP/hr-mut"
+perl -pe 's/and \(\.locked \| type == "boolean"\)/and true/' "${PP%/*}/host-records.jq" > "$TMP/hr-mut/host-records.jq"
+check "self-check: the lock's boolean test, removed, lets a string lock through" \
+  "$(! cmp -s "${PP%/*}/host-records.jq" "$TMP/hr-mut/host-records.jq" &&
+     [ "$(printf '%s' "$HV" | jq -c '.state.locked = "true"' | jq -r -L "$TMP/hr-mut" --arg h "$HH" 'include "host-records"; valid_host($h)')" = true ]; echo $?)"
+# host-pass.sh records the lock from the metadata read, its reason only from GitHub's closed set.
+LJ="$(sed -n '/locked: (\$meta.locked == true),$/,/else null end)},$/p' "${PP%/*}/host-pass.sh" | sed 's/^ *//; s/},$//')"
+lk() { jq -c -n --argjson meta "$1" "{$LJ}"; }
+check "host-pass: the lock and its reason come from the metadata" \
+  "$([ "$(lk '{"locked": true, "active_lock_reason": "too heated"}')" = '{"locked":true,"lock_reason":"too heated"}' ] &&
+     [ "$(lk '{"locked": true, "active_lock_reason": "a `x` reason"}')" = '{"locked":true,"lock_reason":null}' ] &&
+     [ "$(lk '{"active_lock_reason": "spam"}')" = '{"locked":false,"lock_reason":null}' ]; echo $?)"
 check "host.json: prose-truncated with its item and bytes is valid" \
   "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 200}, {kind: "prose-truncated", item: "thread", omitted: 1}]')" = true ]; echo $?)"
 check "host.json: prose-truncated of an issue is valid" "$([ "$(hv '.could_not_run = [{kind: "prose-truncated", item: "issue", omitted: 7}]')" = true ]; echo $?)"

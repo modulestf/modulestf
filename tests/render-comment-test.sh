@@ -43,7 +43,7 @@ list() {
 host() { # name [, jq update] -> host.json path
   jq -n --arg h "$HEAD" --arg b "$BASE" '{format: 1, repo: "example/terraform-aws-thing", number: 7,
     head_sha: $h, base_sha: $b, merge_base: $b, prefix: "",
-    state: {state: "open", merged: false, draft: false, base_is_default: true, self_authored: false},
+    state: {state: "open", merged: false, draft: false, base_is_default: true, self_authored: false, locked: false, lock_reason: null},
     signals: {threads: "pass", review_decision: "none", mergeability: "pass"}, own_review: null,
     could_not_run: [], unresolved_threads: [],
     conversation: {path: "graphql", omitted: null, considered: 0, bot_considered: 0, counts: {}, notes: []},
@@ -2051,8 +2051,12 @@ if git -C "$SRC" cat-file -e b3f74cf^{commit} 2> /dev/null; then
   done
   # The checks file grew a jobless key later; the depth property does not depend on the host pass.
   cp "$REF/host-pass.sh" "$OLD/host-pass.sh"
+  # The lock in host.json's state came later and is no render input; the old scripts read the host
+  # file without it.
   t_same() { # render args: the same body from the old scripts and the new
-    local keep="$RCU"; RCU="$OLD/render-comment.sh"; render "$@"; local a="$O/comment.md" s1="$ST"
+    local keep="$RCU" oh="$TMP/old-host-$oc.json"
+    jq 'del(.state.locked, .state.lock_reason)' "${2:-$HOST}" > "$oh"
+    RCU="$OLD/render-comment.sh"; render "$1" "$oh" "${@:3}"; local a="$O/comment.md" s1="$ST"
     RCU="$keep"; render "$@"; [ "$s1" = 0 ] && [ "$ST" = 0 ] && cmp -s "$a" "$O/comment.md"
   }
   t_same "$NONE"; check "depth absent: nothing open renders as before, byte for byte" $?
