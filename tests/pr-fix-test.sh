@@ -101,11 +101,11 @@ case "$1" in
   api) shift ;;
   *) exit 1 ;;
 esac
-ep=""; q=""; post=false; slurp=false
+ep=""; q=""; post=false; del=false; slurp=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --jq) q="$2"; shift 2 ;;
-    -X) [ "$2" = POST ] && post=true; shift 2 ;;
+    -X) [ "$2" = POST ] && post=true; [ "$2" = DELETE ] && del=true; shift 2 ;;
     --input) shift 2 ;;
     --paginate) shift ;;
     --slurp) slurp=true; shift ;;
@@ -113,8 +113,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 ep="${ep%%\?*}"
+# The unlock: recorded in posted.log, so the order of the writes shows; delete-fail answers 403.
+if [ "$del" = true ]; then
+  [ ! -f "$FX/delete-fail" ] || { echo "gh: Must have admin rights to Repository. (HTTP 403)" >&2; exit 1; }
+  printf 'DELETE %s\n' "$ep" >> "$FX/posted.log"; exit 0
+fi
 if [ "$post" = true ]; then
   [ ! -f "$FX/post-fail" ] || exit 1
+  [ ! -f "$FX/post-locked" ] || { echo "gh: Issue is locked (HTTP 422)" >&2; exit 1; }
   { printf '%s ' "$ep"; jq -c .; } >> "$FX/posted.log"; echo '{}'; exit 0
 fi
 if [[ "$ep" =~ ^repos/([^/]+/[^/]+)/git/ref/heads/(.+)$ ]]; then
@@ -123,6 +129,8 @@ if [[ "$ep" =~ ^repos/([^/]+/[^/]+)/git/ref/heads/(.+)$ ]]; then
 else
   f="$FX/api/$ep.json"; [ -f "$f" ] || exit 1
   out="$(cat "$f")"
+  # A fixture with a .second file answers its first read from the fixture and every later read from .second.
+  if [ -f "$f.second" ]; then [ ! -f "$f.seen" ] || out="$(cat "$f.second")"; touch "$f.seen"; fi
   # A paginated fixture holds its pages; without --slurp gh prints them one after another.
   [ "$slurp" = true ] || [ ! -f "$f.pages" ] || out="$(jq -c '.[]' "$f")"
 fi
@@ -180,7 +188,7 @@ mkbare() { # owner/repo: a bare copy with main, feat and refs/pull/7/head
 
 # --- Fixtures -------------------------------------------------------------------------------
 
-api() { mkdir -p "$(dirname "$FX/api/$1.json")"; printf '%s\n' "$2" > "$FX/api/$1.json"; rm -f "$FX/api/$1.json.pages"; }
+api() { mkdir -p "$(dirname "$FX/api/$1.json")"; printf '%s\n' "$2" > "$FX/api/$1.json"; rm -f "$FX/api/$1.json.pages" "$FX/api/$1.json.second" "$FX/api/$1.json.seen"; }
 pages() { api "$1" "$2"; touch "$FX/api/$1.json.pages"; }
 PR_JSON() { # the pull request read; jq edits as the argument
   jq -n -c --arg h "$H" --arg b "$B" '{number: 7, state: "open", merged: false, draft: false, locked: false,
@@ -191,7 +199,7 @@ PR_JSON() { # the pull request read; jq edits as the argument
 REPO_JSON() { jq -n -c '{full_name: "o/r", archived: false, private: false, default_branch: "main",
   permissions: {admin: false, maintain: false, push: true, pull: true}}' | jq -c "${1:-.}"; }
 fx_default() {
-  rm -rf "$FX/api" "$FX/auth-ok" "$FX/token" "$FX/post-fail"; mkdir -p "$FX/api"
+  rm -rf "$FX/api" "$FX/auth-ok" "$FX/token" "$FX/post-fail" "$FX/post-locked" "$FX/delete-fail"; mkdir -p "$FX/api"
   touch "$FX/auth-ok"; printf 'gho_test\n' > "$FX/token"
   mkbare o/r
   api user '{"id": 42, "login": "bob", "type": "User"}'
@@ -833,14 +841,66 @@ t_auth() { # F-007: gh auth status must succeed, a token alone is not enough
   grep -q 'gh holds no github.com token' "$TMP/t.out" && ! grep -q ' push ' "$TMP/git-argv.log"
 }
 t_auth; check "push: a failing gh auth status aborts before git" $?
-t_locked() { # F-007: no reply on a locked pull request
-  fx_default; api repos/o/r/pulls/7 "$(PR_JSON '.locked = true')"
-  reviewed_run && GATE && PUSH > /dev/null 2>&1 || return 1; LIVE ".locked = true"
-  printf '[{"item": "C-701", "body": "Not changed."}]\n' > "$TMP/r.json"; : > "$FX/posted.log"
-  REPLIES "$TMP/r.json" C-701 > "$TMP/t.out" 2>&1 && return 1
-  grep -q 'cannot comment' "$TMP/t.out" && [ ! -s "$FX/posted.log" ] && fr cleanup "$RUN" > /dev/null
+LK='.locked = true | .active_lock_reason = "too heated"'
+locked_run() { # a reviewed, gated run on a locked pull request, live at the new SHA, one reply drafted
+  fx_default; api repos/o/r/pulls/7 "$(PR_JSON "$LK")"
+  reviewed_run || return 1
+  printf '[{"item": "C-701", "body": "Not changed."}]\n' > "$RUN/rounds/1/replies.json"
+  GATE || { cat "$TMP/gate.last"; return 1; }
+  printf '[{"item": "C-701", "body": "Not changed."}]\n' > "$TMP/r.json"; : > "$FX/posted.log"; : > "$FX/gh-argv.log"
 }
-t_locked; check "replies: refused on a locked pull request" $?
+UL() { REPLIES "$TMP/r.json" C-701 --confirm-unlock o/r#7 > "$TMP/t.out" 2>&1; } # replies with the confirmed unlock
+DELS() { grep -c -- '-X DELETE' "$FX/gh-argv.log"; }
+t_locked() { # reported, pushed as usual, refused without the flag; a failed unlock posts nothing and is not retried
+  locked_run || return 1
+  grep -qx 'locked: yes (too heated), posting replies needs an unlock first; the push is not affected' <<< "$P" || { echo "$P"; return 1; }
+  grep -qxF 'locked: yes (too heated); unlock first, a separate action before the replies: gh api -X DELETE repos/o/r/issues/7/lock; without it each reply fails with 422 Issue is locked; the unlock needs write access and is a visible change on the repository' "$TMP/gate.last" ||
+    { cat "$TMP/gate.last"; return 1; }
+  # The push is not a conversation write: the lock changes nothing on its path.
+  PUSH > "$TMP/t.out" 2>&1 && [ "$(RG --git-dir="$REM/o/r.git" rev-parse refs/heads/feat)" = "$(CG rev-parse HEAD)" ] || { cat "$TMP/t.out"; return 1; }
+  LIVE "$LK"; : > "$FX/gh-argv.log"
+  REPLIES "$TMP/r.json" C-701 > "$TMP/t.out" 2>&1 && return 1
+  grep -q 'the replies need the unlock first' "$TMP/t.out" && [ ! -s "$FX/posted.log" ] && [ "$(DELS)" = 0 ] || { cat "$TMP/t.out"; return 1; }
+  REPLIES "$TMP/r.json" C-701 --confirm-unlock o/r#8 > "$TMP/t.out" 2>&1 && return 1
+  [ ! -s "$FX/posted.log" ] && [ "$(DELS)" = 0 ] || return 1
+  touch "$FX/delete-fail"; UL && return 1; rm -f "$FX/delete-fail"
+  grep -q 'the unlock failed: .*HTTP 403.*no reply posted' "$TMP/t.out" && [ "$(DELS)" = 1 ] && [ ! -s "$FX/posted.log" ] || { cat "$TMP/t.out"; return 1; }
+  # One unlock per run: the same flag again is refused before any write.
+  UL && return 1
+  grep -q 'a further unlock needs a new run' "$TMP/t.out" && [ "$(DELS)" = 1 ] && [ ! -s "$FX/posted.log" ] || { cat "$TMP/t.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_locked; check "locked: reported at prepare and the gate, the push unaffected, replies refused before any write without the confirmed unlock or with another target, a failed unlock posts nothing and the flag again runs no second DELETE" $?
+t_locked_422() { # a 422 on a reply: nothing landed, nothing retried, and no second unlock in the run
+  locked_run && LIVE "$LK" || return 1
+  touch "$FX/post-locked"; UL && return 1; rm -f "$FX/post-locked"
+  grep -q '422 Issue is locked, nothing landed; nothing retried; a further unlock needs a new run' "$TMP/t.out" && [ "$(DELS)" = 1 ] || { cat "$TMP/t.out"; return 1; }
+  : > "$FX/posted.log"; UL && return 1
+  grep -q 'a further unlock needs a new run' "$TMP/t.out" && [ "$(DELS)" = 1 ] && [ ! -s "$FX/posted.log" ] && fr cleanup "$RUN" > /dev/null
+}
+t_locked_422; check "locked: a 422 on a reply is reported as nothing landed, and the flag again runs no second DELETE" $?
+t_locked_ok() { # with the confirmed unlock: one DELETE, then the replies
+  locked_run && LIVE "$LK" || return 1
+  UL || { cat "$TMP/t.out"; return 1; }
+  [ "$(sed -n 1p "$FX/posted.log")" = 'DELETE repos/o/r/issues/7/lock' ] && [ "$(wc -l < "$FX/posted.log" | tr -d ' ')" = 2 ] &&
+    grep -q '^repos/o/r/issues/7/comments ' "$FX/posted.log" && [ "$(DELS)" = 1 ] && fr cleanup "$RUN" > /dev/null
+}
+t_locked_ok; check "locked: with the confirmed unlock, one DELETE and then the replies" $?
+t_locked_reread() { # unlocked between the two reads: no DELETE, the replies posted
+  locked_run && LIVE "$LK" || return 1
+  printf '%s\n' "$(jq -c '.locked = false' "$FX/api/repos/o/r/pulls/7.json")" > "$FX/api/repos/o/r/pulls/7.json.second"
+  UL || { cat "$TMP/t.out"; return 1; }
+  [ "$(DELS)" = 0 ] && [ "$(wc -l < "$FX/posted.log" | tr -d ' ')" = 1 ] && fr cleanup "$RUN" > /dev/null
+}
+t_locked_reread; check "locked: the lock read again before the DELETE; unlocked by then, no DELETE runs" $?
+t_locked_endpoint() { # a bad pinned endpoint is found before the unlock, so the pull request stays locked
+  locked_run && LIVE "$LK" || return 1
+  chmod u+w "$RUN/state.json"; jq '.comments |= map(select(.id != 701))' "$RUN/state.json" > "$TMP/s.json" && cat "$TMP/s.json" > "$RUN/state.json"; retrust
+  UL && return 1
+  grep -q 'no pinned reply endpoint for C-701' "$TMP/t.out" && [ "$(DELS)" = 0 ] && [ ! -s "$FX/posted.log" ] || { cat "$TMP/t.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_locked_endpoint; check "locked: an endpoint that cannot be rebuilt refuses before the unlock" $?
 t_nonact() { # F-007: every open item decided without an edit stops the loop as non-actionable
   fx_default; new_run; round0 "$OUT"; fr clone "$RUN" > /dev/null 2>&1 && fr items "$RUN" --review "$OUT/round-0" --handover "$OUT/handover-task.md" > /dev/null 2>&1 &&
     fr round "$RUN" > /dev/null || return 1
@@ -1638,7 +1698,13 @@ mutate "the push from the fix clone" 's/git --no-pager -C "\$pg" -c core\.hooksP
 mutate "replace objects honoured" 's/GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1/GIT_NO_LAZY_FETCH=1/' t_replace
 mutate "a diff without --no-textconv" 's/G diff --no-ext-diff --no-textconv --cached --name-only/G diff --no-ext-diff --cached --name-only/' t_e2e
 mutate "gh auth status dropped" 's/"\$\{GHENV\[\@\]\}" gh auth status --hostname github\.com > \/dev\/null 2>&1 &&\n    //' t_auth
-mutate "the locked check dropped" 's/jq -e \x27\.pr\.locked == false and \.base_repo\.archived == false\x27/jq -e true/' t_locked
+mutate "the locked check dropped" 's/true\) \[ -n "\$cu" \] \|\| fail "the pull request is locked/true) true || fail "the pull request is locked/' t_locked
+mutate "a failed unlock not stopping the replies" 's/\|\|\n      fail "the unlock failed: [^\n]*/|| true/' t_locked
+mutate "the one-unlock record not checked" 's/\[ ! -e "\$RUN\/unlock\.txt" \] \|\|/true ||/' t_locked_422
+mutate "--confirm-unlock not bound to the target" 's/\[ "\$cu" = "\$tg" \] \|\|/true ||/' t_locked
+mutate "the lock not read again before the DELETE" 's/\[ "\$\(gh api "repos\/\$TREPO\/pulls\/\$TNUM" --jq .\.locked. 2> \/dev\/null\)" = true \]/true/' t_locked_reread
+mutate "the 422 not matched" 's/\*"Issue is locked"\*\)/*"no such text"*)/' t_locked_422
+mutate "the endpoints checked after the unlock" 's/(  while IFS= read -r id; do\n    ep="[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n    ids_a\+=\("\$id"\); eps_a\+=\("\$ep"\)\n  done < <\(printf [^\n]*\n)(.*?\n  fi\n)/$2$1/s' t_locked_endpoint
 mutate "non-actionable never stops" 's/elif \.nonactionable then/elif false then/' t_nonact
 mutate "only the last round of reply drafts" 's/\|\| rs\+=\(/|| rs=(/' t_replies_merge
 mutate "the <sha> placeholder kept" 's/gsub\("<sha>"; \$sha\)/./' t_e2e
@@ -1654,7 +1720,7 @@ mutate "the round record as JSON" 's/J -r .include "fix-run"; verify_lines. "\$R
 mutate "the verification tree kept on an interrupt" 's/interrupted"; delete_xtree; delete_vtree; delete_run/interrupted"; delete_xtree; delete_run/' t_interrupt
 mutate "a compared round left out of the trust record" 's/\[ ! -f "\$RUN\/rounds\/\$k\/review\.json" \] \|\| list=/false \&\& list=/' t_trust_rounds
 mutate "the replies digest not checked" 's/\[\[ "\$cr" =~ \^\[0-9a-f\]\{64\}\$ \]\] && \[ "\$\(printf .%s. "\$data" \| shasum -a 256 \| cut -d. . -f1\)" = "\$cr" \] \|\|/true ||/' t_replies_confirm
-mutate "replies trust a local pushed.json" 's/live="\$\(gh api "repos\/\$TREPO\/pulls\/\$TNUM" --jq .\.head\.sha. 2> \/dev\/null\)" \|\| live=""/live="\$(jq -r .sha "\$RUN\/pushed.json" 2> \/dev\/null)"/' t_replies_confirm
+mutate "replies trust a local pushed.json" 's/live="\$\(gh api "repos\/\$TREPO\/pulls\/\$TNUM" --jq .\.head\.sha \+ " " \+ \(\.locked \| tostring\). 2> \/dev\/null\)" \|\| live=""/live="\$(jq -r \x27.sha + " false"\x27 "\$RUN\/pushed.json" 2> \/dev\/null)"/' t_replies_confirm
 mutate "clause 1 (grammar) dropped" 's/if \(path_grammar \| not\) or \(under\(\$prefix\) \| not\) then "grammar"/if false then "grammar"/' t_clauses
 mutate "clause 2 (suffix) dropped" 's/elif \(test\("[^\n]*"\) \| not\) then "suffix"/elif false then "suffix"/' t_clauses
 mutate "clause 3 (reserved) dropped" 's/elif \(split\("\/"\) \| any[^\n]* then "reserved"/elif false then "reserved"/' t_clauses
