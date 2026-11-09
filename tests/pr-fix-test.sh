@@ -253,11 +253,11 @@ fix_edit() { # the maintainer's round: a fix the edit rule allows, a message and
   printf 'fix: document size\n\nF-001 apply\n' > "$RUN/rounds/1/commit-message.txt"
   printf '[{"item": "F-001", "decision": "apply"}, {"item": "T-601", "decision": "apply"}]\n' > "$RUN/rounds/1/dispositions.json"
 }
-reviewed_run() { # a run through round 1, committed and compared clean
-  new_run; round0 "$OUT"
+reviewed_run() { # [round 0 findings, round 1 findings]: a run through round 1, committed and compared, clean by default
+  new_run; round0 "$OUT" "${1:-$ROUND0}"
   fr clone "$RUN" > "$TMP/clone.out" 2>&1 && fr items "$RUN" --review "$OUT/round-0" --handover "$OUT/handover-task.md" > /dev/null 2>&1 &&
     fr round "$RUN" > /dev/null 2>&1 && fix_edit && fr docs "$RUN" --round 1 > /dev/null 2>&1 && fr commit "$RUN" --round 1 > /dev/null 2>&1 &&
-    echo '[]' > "$TMP/empty.json" && fr compare "$RUN" --round 1 --findings "$TMP/empty.json" > "$TMP/compare.out" 2>&1
+    echo '[]' > "$TMP/empty.json" && fr compare "$RUN" --round 1 --findings "${2:-$TMP/empty.json}" > "$TMP/compare.out" 2>&1
 }
 
 # --- 1. Write path rows (write-path.md, Write path) --------------------------------------------
@@ -352,6 +352,42 @@ t_intro() {
   [ "$(JL -r -n 'include "fix-run"; [] | verdict')" = clean ]
 }
 t_intro; check "fingerprints: an address-less second MEDIUM and a severity raise are introduced, a moved line is not; clean, nits, open" $?
+
+# --- 4b. Attribution (write-path.md, Fingerprints and the Local Verdict) --------------------------
+
+fnd() { jq -n -c --arg r "$1" --arg s "$2" --arg f "$3" '{id: "F-100", rule_id: $r, severity: $s, file: $f, line: 1, summary: "s", suggested_fix: "f"}'; }
+att() { # finding, pinned findings, changed paths [, prefix]: "a <file>" when attributable, "u <file>" when not
+  JL -r -n --argjson f "$1" --argjson p "$2" --argjson c "$3" --arg x "${4:-}" 'include "fix-run";
+    {findings: [$f], pinned: $p, changed: $c, prefix: $x} | attribution | (.attributable[] | "a \(.file)"), (.unattributed[] | "u \(.file)")'
+}
+t_attrib() {
+  local v='["variables.tf"]'
+  # A2: an unchanged main.tf beside a changed variables.tf, at the root and in a submodule; an unchanged directory is not.
+  [ "$(att "$(fnd structure.x MEDIUM main.tf)" '[]' "$v")" = "a main.tf" ] &&
+  [ "$(att "$(fnd structure.x MEDIUM modules/a/main.tf)" '[]' '["modules/a/variables.tf"]')" = "a modules/a/main.tf" ] &&
+  [ "$(att "$(fnd structure.x MEDIUM modules/b/main.tf)" '[]' '["variables.tf", "modules/a/variables.tf"]')" = "u modules/b/main.tf" ] &&
+  # A1: the file itself changed; A2 counts a changed .tf only.
+  [ "$(att "$(fnd docs.x MEDIUM docs/x.md)" '[]' '["docs/x.md"]')" = "a docs/x.md" ] &&
+  [ "$(att "$(fnd docs.x MEDIUM docs/y.md)" '[]' '["docs/x.md"]')" = "u docs/y.md" ] &&
+  # A4: a HIGH at the module level; a MEDIUM there is unattributed, with and without a prefix.
+  [ "$(att "$(fnd prose.x HIGH .)" '[]' "$v")" = "a ." ] &&
+  [ "$(att "$(fnd prose.x MEDIUM .)" '[]' "$v")" = "u ." ] &&
+  [ "$(att "$(fnd prose.x MEDIUM .)" '[]' "$v" modules/x)" = "u modules/x" ] &&
+  # A5: an empty file, which A2 would not take, and malformed paths.
+  [ "$(att "$(fnd structure.x MEDIUM '')" '[]' "$v")" = "a " ] &&
+  [ "$(att "$(fnd structure.x MEDIUM 'x//y.tf')" '[]' "$v")" = "a x//y.tf" ] &&
+  [ "$(att "$(fnd structure.x MEDIUM './main.tf')" '[]' '[]')" = "a ./main.tf" ] &&
+  # A3: a pinned tuple at any severity, compared repository-relative.
+  [ "$(att "$(fnd structure.x MEDIUM main.tf)" "[$(fnd structure.x LOW main.tf)]" '["modules/b/x.md"]')" = "a main.tf" ] &&
+  [ "$(att "$(fnd structure.x MEDIUM main.tf)" "[$(fnd structure.x LOW modules/x/main.tf)]" '[]' modules/x)" = "a modules/x/main.tf" ] &&
+  # The count: a pinned LOW raised to MEDIUM on an unchanged file is introduced.
+  [ "$(JL -c -n --argjson p "[$(fnd structure.x LOW main.tf)]" --argjson f "[$(fnd structure.x MEDIUM main.tf)]" 'include "fix-run";
+      ({findings: $f, pinned: $p, changed: [], prefix: ""} | attribution) as $r | introduced([$p[] | fp("")]; [$r.attributable[] | fp("")])')" = \
+    '[["structure.x","main.tf","","MEDIUM"]]' ] &&
+  # The changed paths: under the prefix, made module-relative, a sibling directory left out.
+  [ "$(JL -c -n 'include "fix-run"; "modules/x/a.tf\u0000modules/xy/b.tf\u0000c.tf\u0000" | module_paths("modules/x")')" = '["a.tf"]' ]
+}
+t_attrib; check "attribution: A1 to A5 with A5 first, an unchanged main.tf beside a changed variables.tf at the root and in a submodule, an unchanged directory, a HIGH and a MEDIUM at the module level, an empty and a malformed file, a pinned LOW raised to MEDIUM" $?
 
 # --- 5. Loop stops -----------------------------------------------------------------------------
 
@@ -579,6 +615,36 @@ t_loop_e2e() { # round 1 leaves the finding open and adds one: no progress stops
 }
 t_loop_e2e; check "loop end to end: no progress stops, an introduced MEDIUM and no resolved item block the gate" $?
 
+TITLE='[{"id": "F-009", "rule_id": "prose.title-typo", "severity": "MEDIUM", "file": ".", "line": 1, "summary": "The title has a typo.", "suggested_fix": "Fix the title."}]'
+t_unattr() { # the cloudfront case: a finding on the title, which the fix did not cause, neither stops the loop nor blocks the push
+  fx_default; printf '%s\n' "$TITLE" > "$TMP/fu.json"
+  reviewed_run "$ROUND0" "$TMP/fu.json" || { cat "$TMP/compare.out"; return 1; }
+  grep -qx 'loop: stop, the local verdict is clean: finished among attributable findings, 1 unattributed' "$TMP/compare.out" &&
+    grep -qx 'unattributed: prose.title-typo . MEDIUM' "$TMP/compare.out" && grep -q '^round 1: verdict clean, 0 open, 0 introduced$' "$TMP/compare.out" ||
+    { cat "$TMP/compare.out"; return 1; }
+  GATE || { cat "$TMP/gate.last"; return 1; }
+  grep -qx 'unattributed: prose.title-typo . MEDIUM' "$TMP/gate.last" && grep -q '^new SHA: ' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_unattr; check "attribution end to end: a title finding the fix did not cause is listed at compare and gate, the loop finishes and the gate passes" $?
+t_intro_attr() { # a new MEDIUM on an unchanged main.tf beside the changed variables.tf is introduced and blocks the gate
+  fx_default; fnd structure.x MEDIUM main.tf | jq -s . > "$TMP/fi.json"
+  reviewed_run "$ROUND0" "$TMP/fi.json" || { cat "$TMP/compare.out"; return 1; }
+  grep -qx '  introduced: structure.x main.tf  MEDIUM' "$TMP/compare.out" && ! grep -q '^unattributed:' "$TMP/compare.out" || { cat "$TMP/compare.out"; return 1; }
+  GATE && return 1
+  grep -qx 'introduced: structure.x main.tf MEDIUM' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_intro_attr; check "attribution end to end: a new MEDIUM on an unchanged main.tf beside a changed variables.tf is introduced" $?
+t_rows_attr() { # the open set and the loop rows read attributable findings only
+  fx_default; jq -n --argjson f "$ROUND0B" --argjson x "$(fnd structure.x MEDIUM modules/zzz/main.tf)" '[$f[1], $x]' > "$TMP/fr.json"
+  reviewed_run "$ROUND0B" "$TMP/fr.json" || { cat "$TMP/compare.out"; return 1; }
+  grep -qx 'loop: the next round may start' "$TMP/compare.out" && grep -qx 'unattributed: structure.x modules/zzz/main.tf MEDIUM' "$TMP/compare.out" &&
+    grep -q '^round 1: verdict open, 1 open, 0 introduced$' "$TMP/compare.out" && [ "$(jq '.open | length' "$RUN/rounds/1/review.json")" = 1 ] ||
+    { cat "$TMP/compare.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+
 # --- 10. The content gate negatives --------------------------------------------------------------
 
 gate_neg() { # mutation (shell, run in the clone after a clean review), expected line
@@ -803,6 +869,7 @@ t_replies_merge() { # F-001: every round's reply drafts, the latest per item
   fr cleanup "$RUN" > /dev/null
 }
 t_replies_merge; check "gate: the reply drafts of every round, the latest per item" $?
+t_rows_attr; check "attribution end to end: an unattributed finding neither stops row 4 nor enters the open set rows 3 and 4 read" $?
 t_noident_restore() { # with no commit identity a refusal restores the last reviewed tree, not the pinned head
   fx_default; mv "$HOME/.gitconfig" "$HOME/.gitconfig.off"; new_run; mv "$HOME/.gitconfig.off" "$HOME/.gitconfig"
   round0 "$OUT" "$ROUND0B"; fr clone "$RUN" > /dev/null 2>&1 && fr items "$RUN" --review "$OUT/round-0" --handover "$OUT/handover-task.md" > /dev/null 2>&1 &&
@@ -1348,6 +1415,14 @@ mutate "the patch-only restore to the pinned head" 's/  if jq -e \x27\.commit_id
 mutate "a file not judged printed as a refusal" 's/\[ "\$r" = ok \] \|\| \[ "\$r" = need \] && continue/[ "\$r" = ok ] \&\& continue/' t_markers
 mutate "the extract checked out with links" 's/o=\(-c core\.symlinks=false\)/o=()/' t_extract_links
 mutate "the push without the http hardening" 's/ -c http\.proxy= -c http\.sslVerify=true -c http\.extraHeader= \\\n/ \\\n/' t_e2e
+mutate "attribution without A1 (a changed path)" 's/      or \(\$f \| IN\(\$ch\[\]\)\)\n/      or false\n/' t_attrib
+mutate "attribution without A2 (a changed .tf in its directory)" 's/or \(\$f != "" and \$f != "\." and \(\(/or (false and \$f != "" and \$f != "." and ((/' t_attrib
+mutate "attribution without A3 (a pinned tuple)" 's/      or \(\[\.rule_id, fp\(\$x\)\[1\], addr\] \| IN\(\$pk\[\]\)\)\n/      or false\n/' t_attrib
+mutate "attribution without A4 (HIGH or CRITICAL)" 's/or \(\.severity \| IN\("HIGH", "CRITICAL"\)\) \) as \$a/or false ) as \$a/' t_attrib
+mutate "attribution without A5 (a malformed path)" 's/\( \(\$f != "\." and \(\$f \| path_grammar \| not\)\)\n/( (false)\n/' t_attrib
+mutate "A3 at the same severity only" 's/\[\.pinned\[\] \| \[\.rule_id, \.file, addr\]\] as \$pk/[.pinned[] | [.rule_id, .file, addr, .severity]] as \$pk/; s/\[\.rule_id, fp\(\$x\)\[1\], addr\] \| IN\(\$pk\[\]\)/[.rule_id, fp(\$x)[1], addr, .severity] | IN(\$pk[])/' t_attrib
+mutate "the severity left out of the count" 's/def introduced\(\$pin; \$now\):\n  \(\$pin \| counts\) as \$a/def introduced(\$pin; \$now):\n  (\$pin | map(.[0:3] + ["MEDIUM"]) | counts) as \$a/' t_attrib
+mutate "the verdict from every finding" 's/\$at\[0\]\.attributable as \$now \| \(\$now \| verdict\) as \$v/\$all[0] as \$now | (\$now | verdict) as \$v/' t_unattr
 
 echo
 if [ "$fails" -eq 0 ]; then echo "pr-fix: all checks hold"; else echo "pr-fix: $fails failed"; exit 1; fi
