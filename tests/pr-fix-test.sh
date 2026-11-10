@@ -640,7 +640,7 @@ t_plan_pin() { # a plan of another head or another base ref is refused naming th
   grep -q 'base_ref' "$TMP/pi.out" && [ ! -e "$RUN/items.json" ] || { cat "$TMP/pi.out"; return 1; }
   fr cleanup "$RUN" > /dev/null
   plan_run '.pin.merge_base = "'"$H"'"' && return 1
-  grep -q 'merge_base' "$TMP/pi.out" || { cat "$TMP/pi.out"; return 1; }
+  grep -q 'merge_base' "$TMP/pi.out" && [ ! -e "$RUN/items.json" ] || { cat "$TMP/pi.out"; return 1; }
   fr cleanup "$RUN" > /dev/null
 }
 t_plan_pin; check "items --plan: a plan for another head_sha, base_ref or merge_base is refused naming the key" $?
@@ -676,6 +676,18 @@ t_plan_args() { # --plan excludes --review; an unknown field, kind or schema of 
 }
 t_plan_args; check "items --plan: excludes --review and --handover, rejects other kinds, schemas and fields, takes the profile from the plan, refuses another prefix or profile" $?
 
+t_plan_retry() { # items_of fails after a plan: run.json takes nothing, and a later --review run is no plan run
+  fx_default; stamp_all
+  new_run; round0 "$OUT"; mkplan "$TMP/plan-x"; fr clone "$RUN" > /dev/null 2>&1 || return 1
+  mkdir -p "$TMP/jqshim"; local rj; rj="$(command -v jq)"
+  printf '#!/bin/bash\ncase " $* " in *items_of*) exit 1 ;; esac\nexec "%s" "$@"\n' "$rj" > "$TMP/jqshim/jq"; chmod +x "$TMP/jqshim/jq"
+  PATH="$TMP/jqshim:$PATH" fr items "$RUN" --plan "$TMP/plan-x" > "$TMP/pi.out" 2>&1 && return 1
+  grep -q 'the item set could not be built' "$TMP/pi.out" && [ ! -e "$RUN/items.json" ] && ! jq -e 'has("plan_head_sha")' "$RUN/run.json" > /dev/null || { cat "$TMP/pi.out" "$RUN/run.json"; return 1; }
+  fr items "$RUN" --review "$OUT/round-0" --handover "$OUT/handover-task.md" > /dev/null 2>&1 && ! jq -e 'has("plan_head_sha")' "$RUN/run.json" > /dev/null || return 1
+  fr cleanup "$RUN" > /dev/null
+}
+t_plan_retry; check "items --plan: a failed item set leaves run.json without the plan's head, so a later --review run writes no applied.json" $?
+
 t_plan_applied() { # the gate of a plan run writes applied.json; a run without a plan writes none
   fx_default; stamp_all
   PLAN_RUN=1 reviewed_run && GATE || { cat "$TMP/gate.last"; return 1; }
@@ -684,7 +696,7 @@ t_plan_applied() { # the gate of a plan run writes applied.json; a run without a
     [ "$(jq -r '.pin.head_sha + " " + .plan_head_sha + " " + .round_verdict + " " + .pin.merge_base' "$OUT/applied.json")" = "$H $H clean $B" ] &&
     [ "$(jq -r .new_sha "$OUT/applied.json")" != "$H" ] || { cat "$OUT/applied.json" "$TMP/gate.last"; return 1; }
   fr cleanup "$RUN" > /dev/null
-  reviewed_run && GATE && [ ! -e "$OUT/applied.json" ] || return 1
+  reviewed_run && GATE && [ ! -e "$OUT/applied.json" ] && grep -q '^verdict: clean at round 1$' "$TMP/gate.last" || return 1
   fr cleanup "$RUN" > /dev/null
 }
 t_plan_applied; check "gate: a run that took a plan writes applied.json that passes stage_ok(applied); a run without a plan writes none" $?
@@ -1172,7 +1184,7 @@ t_trust_rounds; check "trust files: a compared round's dispositions join the rec
 t_replies_confirm() { # SN-003: replies post only the drafts the gate showed, and only to a fix that is live
   fx_default; reviewed_run || return 1
   printf '[{"item": "C-701", "body": "Not changed: the check is right."}]\n' > "$RUN/rounds/1/replies.json"
-  GATE && grep -qE '^replies sha256: [0-9a-f]{64}$' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  GATE && grep -qE '^replies sha256: [0-9a-f]{64}$' "$TMP/gate.last" && grep -q '^verdict: clean at round 1$' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
   local rd new; rd="$(sed -n 's/^replies sha256: //p' "$TMP/gate.last")"; new="$(sed -n 's/^new SHA: //p' "$TMP/gate.last")"
   [ "$rd" = "$(shasum -a 256 < "$OUT/replies.json" | cut -d' ' -f1)" ] || return 1
   cp "$OUT/replies.json" "$TMP/drafts.json"; : > "$FX/posted.log"

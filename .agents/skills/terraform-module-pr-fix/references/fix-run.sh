@@ -309,6 +309,7 @@ cmd_items() {
   done
   [ -z "$plan" ] || [ -z "$rev$hand" ] || die "--plan excludes --review and --handover"
   [ ! -e "$RUN/items.json" ] || fail "the item set is frozen already"
+  rm -f "$RUN/plan-meta.tmp"
   S="$RUN/state.json"
   if [ -n "$plan" ]; then
     items_from_plan "$plan"; F="$RUN/findings.tmp"; S="$RUN/state-plan.tmp"
@@ -320,11 +321,16 @@ cmd_items() {
     prose_of "$hand" > "$RUN/prose.tmp" || fail "the round-0 handover holds no untrusted block in pr-review's form"
     F="$rev/findings.json"
   fi
+  J -n --slurpfile s "$S" --slurpfile f "$F" 'include "fix-run";
+    {state: $s[0], findings: $f[0]} | items_of' > "$RUN/items.json" || { rm -f "$RUN/items.json" "$RUN/prose.tmp"; fail "the item set could not be built"; }
+  # The files later commands trust are written only now, after the item set exists.
   mv "$RUN/prose.tmp" "$RUN/prose.txt"
   cp -- "$F" "$RUN/round0-findings.json"
-  J -n --slurpfile s "$S" --slurpfile f "$F" 'include "fix-run";
-    {state: $s[0], findings: $f[0]} | items_of' > "$RUN/items.json" || fail "the item set could not be built"
-  rm -f "$RUN/findings.tmp" "$RUN/state-plan.tmp"
+  if [ -n "$plan" ]; then
+    jq -s '.[0] + .[1]' "$RUN/run.json" "$RUN/plan-meta.tmp" > "$RUN/run.tmp" && mv "$RUN/run.tmp" "$RUN/run.json" ||
+      { rm -f "$RUN/items.json"; fail "run.json could not take the plan's profile and head"; }
+  fi
+  rm -f "$RUN/findings.tmp" "$RUN/state-plan.tmp" "$RUN/plan-meta.tmp"
   chmod a-w "$RUN/items.json" "$RUN/round0-findings.json" "$RUN/prose.txt"
   : > "$RUN/apply.txt"
   trust_record
@@ -364,8 +370,8 @@ items_from_plan() {
   { jq -j '.handover_block' "$p"; echo; } > "$RUN/handover.tmp"
   prose_of "$RUN/handover.tmp" > "$RUN/prose.tmp" || fail "the plan's handover block is not an untrusted block in pr-review's form"
   rm -f "$RUN/handover.tmp"
-  jq --arg mp "${mp:-$rp}" --arg ph "$(jq -r '.pin.head_sha' "$p")" '. + {module_profile: $mp, plan_head_sha: $ph}' "$RUN/run.json" > "$RUN/run.tmp" &&
-    mv "$RUN/run.tmp" "$RUN/run.json"
+  # Held until items.json exists: run.json takes it only after the item set is frozen.
+  jq -n --arg mp "${mp:-$rp}" --arg ph "$(jq -r '.pin.head_sha' "$p")" '{module_profile: $mp, plan_head_sha: $ph}' > "$RUN/plan-meta.tmp"
 }
 
 # The prose items of a pr-review handover task: the lines of its untrusted block before the record.
@@ -1166,7 +1172,7 @@ cmd_gate() {
     echo "applied: $OUT/applied.json"
   fi
   G diff --cached --stat --no-ext-diff --no-textconv "$PINNED" | tail -n 8
-  jq -r '"verdict:\(.verdict) at round \(.round)"' "$RUN/rounds/$last/review.json"
+  jq -r '"verdict: \(.verdict) at round \(.round)"' "$RUN/rounds/$last/review.json"
   # Information only: the pairs that fail the convention test and the unattributed findings.
   local ni; ni="$(wc -l < "$RUN/gate/info.txt" | tr -d ' ')"
   if [ "$ni" -le 6 ]; then cat "$RUN/gate/info.txt"; else head -n 5 "$RUN/gate/info.txt"; echo "information: $((ni - 5)) more lines in $RUN/gate/info.txt"; fi
