@@ -7,7 +7,8 @@
 #       identity, the captured state (REST only) into <run>/state.json, the output directory
 #   fix-run.sh clone <run> [--prefix <p>]   the fix clone, the merge base check, the frozen prefix, the write path
 #   fix-run.sh path <run>                the write path, re-evaluated
-#   fix-run.sh items <run> --review <dir>   the frozen item set from the state and round 0
+#   fix-run.sh items <run> --review <dir> --handover <task.md>   the frozen item set from the state and round 0
+#   fix-run.sh items <run> --plan <dir>  the same from a pr-review plan.json, after its pin check
 #   fix-run.sh apply <run> --item <id>   the user named an item to apply
 #   fix-run.sh round <run>               starts the next round: its items, edit rule and task
 #   fix-run.sh wrappers <run> --round <n>   the staging check and the wrapper versions.tf files
@@ -37,7 +38,7 @@ LIMIT=3
 
 die() { echo "fix-run.sh: $1" >&2; exit 2; }
 fail() { echo "fix-run.sh: $1"; exit 1; }
-J() { jq -L "$HERE" "$@"; } # jq with fix-run.jq; every filter starts with include "fix-run";
+J() { jq -L "$HERE" -L "$PRR" "$@"; } # jq with fix-run.jq (and stage-contract.jq); every filter starts with include "fix-run";
 delete_run() { # the pattern-checked delete of github-io.md, Cleanup, for this skill's template
   case "${ROOT-}" in /?*) ;; *) return 1 ;; esac
   case "${RUN-}" in
@@ -297,30 +298,80 @@ cmd_path() {
 }
 
 cmd_items() {
-  local rev="" hand=""
+  local rev="" hand="" plan="" F S
   while [ $# -gt 0 ]; do
     case "$1" in
       --review) rev="${2-}"; shift 2 || die "--review needs a value" ;;
       --handover) hand="${2-}"; shift 2 || die "--handover needs a value" ;;
+      --plan) plan="${2-}"; shift 2 || die "--plan needs a value" ;;
       *) die "unexpected argument" ;;
     esac
   done
+  [ -z "$plan" ] || [ -z "$rev$hand" ] || die "--plan excludes --review and --handover"
   [ ! -e "$RUN/items.json" ] || fail "the item set is frozen already"
-  case "$rev" in /?*) ;; *) die "--review must be the absolute round-0 output directory" ;; esac
-  [ -f "$rev/result.json" ] && [ -f "$rev/findings.json" ] || fail "the round-0 review has no result.json and findings.json"
-  [ "$(jq -r '.head_sha' "$rev/result.json")" = "$PINNED" ] || fail "the round-0 review is of another head"
-  J -e 'include "fix-run"; findings_ok' "$rev/findings.json" > /dev/null || fail "the round-0 findings are not a findings list"
-  prose_of "$hand" > "$RUN/prose.tmp" || fail "the round-0 handover holds no untrusted block in pr-review's form"
+  rm -f "$RUN/plan-meta.tmp"
+  S="$RUN/state.json"
+  if [ -n "$plan" ]; then
+    items_from_plan "$plan"; F="$RUN/findings.tmp"; S="$RUN/state-plan.tmp"
+  else
+    case "$rev" in /?*) ;; *) die "--review must be the absolute round-0 output directory" ;; esac
+    [ -f "$rev/result.json" ] && [ -f "$rev/findings.json" ] || fail "the round-0 review has no result.json and findings.json"
+    [ "$(jq -r '.head_sha' "$rev/result.json")" = "$PINNED" ] || fail "the round-0 review is of another head"
+    J -e 'include "fix-run"; findings_ok' "$rev/findings.json" > /dev/null || fail "the round-0 findings are not a findings list"
+    prose_of "$hand" > "$RUN/prose.tmp" || fail "the round-0 handover holds no untrusted block in pr-review's form"
+    F="$rev/findings.json"
+  fi
+  J -n --slurpfile s "$S" --slurpfile f "$F" 'include "fix-run";
+    {state: $s[0], findings: $f[0]} | items_of' > "$RUN/items.json" || { rm -f "$RUN/items.json" "$RUN/prose.tmp"; fail "the item set could not be built"; }
+  # The files later commands trust are written only now, after the item set exists.
   mv "$RUN/prose.tmp" "$RUN/prose.txt"
-  cp -- "$rev/findings.json" "$RUN/round0-findings.json"
-  J -n --slurpfile s "$RUN/state.json" --slurpfile f "$rev/findings.json" 'include "fix-run";
-    {state: $s[0], findings: $f[0]} | items_of' > "$RUN/items.json" || fail "the item set could not be built"
+  cp -- "$F" "$RUN/round0-findings.json"
+  if [ -n "$plan" ]; then
+    jq -s '.[0] + .[1]' "$RUN/run.json" "$RUN/plan-meta.tmp" > "$RUN/run.tmp" && mv "$RUN/run.tmp" "$RUN/run.json" ||
+      { rm -f "$RUN/items.json"; fail "run.json could not take the plan's profile and head"; }
+  fi
+  rm -f "$RUN/findings.tmp" "$RUN/state-plan.tmp" "$RUN/plan-meta.tmp"
   chmod a-w "$RUN/items.json" "$RUN/round0-findings.json" "$RUN/prose.txt"
   : > "$RUN/apply.txt"
   trust_record
   jq -r '"items: \(length), eligible: \(map(select(.eligible)) | length)",
     (.[0:24][] | "  \(.id) \(.origin)" + (if .eligible then ", applied" else ", draft only" end))' "$RUN/items.json"
   echo "next: show the items, ask once which to apply, then: apply $RUN --item <id> per named item, or round $RUN"
+}
+
+# items --plan <dir>: plan.json of pr-review's render stands in for the round-0 review. It writes
+# findings.tmp, prose.tmp and state-plan.tmp (the state with only the comments the plan covers) and
+# records the plan's profile and head in run.json. Every refusal is a fail: nothing is frozen.
+items_from_plan() {
+  local d="$1" p mp rp x
+  case "$d" in /?*) ;; *) die "--plan must be the absolute directory of plan.json" ;; esac
+  p="$d/plan.json"
+  [ -f "$p" ] && [ ! -L "$p" ] && [ "$(wc -c < "$p")" -le 4194304 ] || fail "the plan is not a regular file of at most 4 MiB"
+  J -e 'include "stage-contract"; stage_ok("review-plan")' "$p" > /dev/null 2>&1 || fail "the plan is not a review-plan stage file of schema 1"
+  J -e 'include "fix-run"; (.findings | findings_ok) and (.module_prefix | prefix_ok) and (.handover_block | type == "string")
+    and (.read_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+    and (.module_profile == null or (.module_profile | type == "string" and test("^[a-z0-9-]{1,64}$")))' "$p" > /dev/null ||
+    fail "the plan holds a field outside its grammar"
+  jq -e '.frozen | type == "object"' "$RUN/state.json" > /dev/null || fail "run clone before items --plan: the pin check needs the merge base"
+  x="$(J -r --slurpfile s "$RUN/state.json" 'include "fix-run"; include "stage-contract"; ($s[0] | state_pin) as $l | .pin | pin_diff($l) // ""' "$p")" ||
+    fail "the plan's pin cannot be compared"
+  [ -z "$x" ] || fail "the plan is of another pull request state: $x differs"
+  [ "$(jq -r '.module_prefix' "$p")" = "$PREFIX" ] || fail "the plan's module_prefix differs from the one clone froze"
+  mp="$(jq -r '.module_profile // ""' "$p")"; rp="$(jq -r '.module_profile' "$RUN/run.json")"
+  [ -z "$mp" ] || [ -z "$rp" ] || [ "$mp" = "$rp" ] || fail "the plan's module_profile differs from --module-profile"
+  J -c -n --slurpfile s "$RUN/state.json" --arg r "$(jq -r '.read_at' "$p")" 'include "fix-run"; $s[0] | plan_comments($r)' > "$RUN/pc.tmp" ||
+    fail "the comments could not be sorted by the plan's read time"
+  x="$(jq -r '.edited | join(", ")' "$RUN/pc.tmp")"
+  [ -z "$x" ] || fail "a comment changed after the review: $x; review again"
+  echo "comments after the review, not items of this run: $(jq -r '.later' "$RUN/pc.tmp")"
+  jq -c --slurpfile c "$RUN/pc.tmp" '.comments = $c[0].keep' "$RUN/state.json" > "$RUN/state-plan.tmp" || fail "the plan's comments could not be applied"
+  rm -f "$RUN/pc.tmp"
+  jq '.findings' "$p" > "$RUN/findings.tmp"
+  { jq -j '.handover_block' "$p"; echo; } > "$RUN/handover.tmp"
+  prose_of "$RUN/handover.tmp" > "$RUN/prose.tmp" || fail "the plan's handover block is not an untrusted block in pr-review's form"
+  rm -f "$RUN/handover.tmp"
+  # Held until items.json exists: run.json takes it only after the item set is frozen.
+  jq -n --arg mp "${mp:-$rp}" --arg ph "$(jq -r '.pin.head_sha' "$p")" '{module_profile: $mp, plan_head_sha: $ph}' > "$RUN/plan-meta.tmp"
 }
 
 # The prose items of a pr-review handover task: the lines of its untrusted block before the record.
@@ -422,7 +473,7 @@ cmd_round() {
 
 frozen() { # the module root prefix and merge base clone froze in the state, into FPFX and FMB
   local x
-  x="$(J -r -e 'include "fix-run"; .frozen | select(type == "object" and (.prefix | prefix_ok) and (.merge_base | sha_ok))
+  x="$(J -r -e 'include "fix-run"; include "stage-contract"; .frozen | select(type == "object" and (.prefix | prefix_ok) and (.merge_base | sha_ok))
     | .merge_base + " " + .prefix' "$RUN/state.json" 2> /dev/null)" || return 1
   FMB="${x%% *}"; FPFX="${x#* }"
 }
@@ -1111,6 +1162,15 @@ cmd_gate() {
     printf '%s\n' "$why" | head -n 20
     fail "the gate refuses; the patch is $OUT/fix.patch"
   fi
+  # A run that took a plan leaves applied.json for the next stage: the pinned head's pin, since
+  # GitHub does not know the pushed head yet, and the commit this gate expects to push.
+  if jq -e '.plan_head_sha' "$RUN/run.json" > /dev/null 2>&1; then
+    J -n --slurpfile s "$RUN/state.json" --slurpfile r "$RUN/run.json" --slurpfile v "$RUN/rounds/$last/review.json" --arg h "$head" 'include "fix-run";
+      {kind: "applied", schema: 1, pin: ($s[0] | state_pin), new_sha: $h, plan_head_sha: $r[0].plan_head_sha, round_verdict: $v[0].verdict}' > "$OUT/applied.json.tmp" &&
+      J -e 'include "stage-contract"; stage_ok("applied") and (.new_sha | sha_ok) and (.plan_head_sha | sha_ok)' "$OUT/applied.json.tmp" > /dev/null &&
+      mv -- "$OUT/applied.json.tmp" "$OUT/applied.json" || fail "applied.json could not be written"
+    echo "applied: $OUT/applied.json"
+  fi
   G diff --cached --stat --no-ext-diff --no-textconv "$PINNED" | tail -n 8
   jq -r '"verdict: \(.verdict) at round \(.round)"' "$RUN/rounds/$last/review.json"
   # Information only: the pairs that fail the convention test and the unattributed findings.
@@ -1248,7 +1308,7 @@ cmd_checks() {
   get statuses "repos/$repo/commits/$sha/statuses?per_page=100" pages || ok=false
   local last; last="$(last_reviewed)"
   J -n -r --argjson ok "$ok" --slurpfile r "$RAW/runs.json" --slurpfile s "$RAW/statuses.json" --slurpfile st "$RUN/state.json" \
-    --slurpfile v "$RUN/rounds/$last/review.json" 'include "fix-run";
+    --slurpfile v "$RUN/rounds/$last/review.json" 'include "fix-run"; include "stage-contract";
     ({ok: $ok, runs: ($r[0] // []), statuses: ($s[0] // []), pinned_total: $st[0].checks_pinned.total} | checks_class) as $c |
     "checks: \($c.class), \($c.reason)",
     (if $c.class == "passing" and ($v[0].verdict | IN("clean", "nits")) then "finished: \($v[0].verdict), checks passing"

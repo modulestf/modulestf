@@ -16,7 +16,7 @@ All of these hold, or nothing is written:
 - The output directory is not the run directory or any path under it, which covers the clone and the base worktree. The check compares canonical paths: `OUT="$(cd -- "$OUT" && pwd -P)"`, with `RUN` canonicalized the same way, then refuse when `OUT` equals `"$RUN"` or starts with `"$RUN/"`. A `cd` that fails fails this condition.
 - The body passed the [leak scan](comment-format.md#leak-scan). A match blocks the body from being shown, so it blocks every file too.
 
-If the task names a directory and any other condition fails, the run writes nothing there, says which condition failed beside the body, and still ends complete. The skill never creates the directory, never deletes anything in it, and writes no file there other than the three below and the temporary `result.json.tmp` that becomes `result.json`.
+If the task names a directory and any other condition fails, the run writes nothing there, says which condition failed beside the body, and still ends complete. The skill never creates the directory, never deletes anything in it, and writes no file there other than the three below, [plan.json](#planjson) and the temporary `result.json.tmp` that becomes `result.json`.
 
 The files are written once, at the end of Step 11: after the body file is written and the body is shown, and before [Cleanup](github-io.md#cleanup). `comment.md` is written first, then `findings.json`. `result.json` appears last, by a rename of a checked temporary file, so a present `result.json` means every file is complete.
 
@@ -72,6 +72,26 @@ jq -n --arg target "<owner>/<repo>#<number>" --argjson number <number> \
 ```
 
 The temporary file sits in the output directory itself, so the `mv` is a rename on one file system and `result.json` never exists half written.
+
+## plan.json
+
+The first stage file of the [stage contract](stage-contract.md), kind `review-plan`: the review's result, bound to the pull request it read, for the stage that acts on it. It has its own condition, not the list above: it is written whenever the task names an output directory and the target is a pull request, interactive or render-only. A commit target and a repository target write none, because the pin has no value for them. [review-run.sh](review-run.sh) writes it at the end of `render`, after `result.json`, so a present `plan.json` also means the three files above are complete. The directory holds neither `plan.json` nor `plan.json.tmp`, and the run refuses before it renders when it does.
+
+Exactly these keys, and no others:
+
+| Key | Value |
+|-----|-------|
+| `kind`, `schema` | `"review-plan"` and `1` |
+| `pin` | The nine-field pin of [the stage contract](stage-contract.md#the-pin), saved by `prepare` from its read of the pull request and the merge base. It is never refreshed |
+| `verdict`, `proposed_event` | The two values of `result.json` |
+| `findings` | The array of `findings.json`, seven fields each |
+| `read_at` | ISO-8601 UTC time with `Z` at which `prepare` started the host reads, since host.json records none |
+| `handover_block` | The untrusted block of `handover/task.md`, from its `UNTRUSTED-<s> BEGIN` line through its `UNTRUSTED-<s> END` line, `RECORD-<s>` line included, byte for byte and with no final newline |
+| `module_prefix` | The module root prefix the run used, `""` for the repository root |
+| `module_profile` | The module profile id the user named for the run, or null when none |
+| `reviewer_id` | The numeric id of the token user from the run's identity read, or null when that read failed |
+
+Before it builds the file, `render` reads `repos/{owner}/{repo}/pulls/{number}` once more, builds the live pin with `live_pin` and compares it with the saved pin by `pin_diff`. A difference writes no plan: `render` prints `plan: not written, the pull request moved during the review: <field>` and exits 0; the body and `result.json` stay, and no `plan.json` or `plan.json.tmp` exists, so a plain review no stage reads stays green and a stage that needs the plan refuses on its own. The pin `prepare` records is the pull request read at the head and base SHAs the host read; a pull request whose pin `prepare` could not record, such as a head branch outside the pin grammar or a base that moved between those reads, also writes no plan, as does a failed second read or a failed build: `render` prints `plan: not written, <reason>` and still exits 0, since the body and the three files are complete. The file is built by `jq` from files, never by interpolation, written to `plan.json.tmp`, checked with `stage_ok("review-plan")` and renamed.
 
 ## Judgment Variant
 

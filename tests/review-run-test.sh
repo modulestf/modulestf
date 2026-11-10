@@ -118,7 +118,7 @@ case "$ep" in
   repos/*/issues/*) f="issue-${ep##*/}" ;;
   repos/*/commits/*/check-runs) f=runs ;;
   repos/*/commits/*/status) f=status ;;
-  repos/*/actions/runs) f=wfruns ;;
+  repos/*/actions/runs) f=wfruns; [ ! -f "$GHD/meta-next" ] || mv "$GHD/meta-next" "$GHD/meta" ;; # meta-next: the pulls read after the checks reads
   *) exit 1 ;;
 esac
 [ -f "$GHD/$f" ] || exit 1
@@ -187,18 +187,18 @@ mkrepo() { # name [, directory copied into the base] -> bare repo with base and 
 }
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.file://$TMP/remote/.insteadOf" GIT_CONFIG_VALUE_0="https://github.com/"
 ghfiles() { # state, merged, own review state
-  jq -n --arg h "$HEADC" --arg b "$BASEC" --arg st "$1" --argjson mg "$2" '{number: 7, title: "$(touch x) title `x`",
+  jq -n --arg h "$HEADC" --arg b "$BASEC" --arg st "$1" --argjson mg "$2" --arg hr "${HEADREF-$(printf 'feat\n$(touch b)')}" '{number: 7, title: "$(touch x) title `x`",
     body: "body $(touch y)", user: {login: "author1", id: 11, type: "User"}, state: $st, merged: $mg, draft: false,
     mergeable: (if $st == "open" then true else null end), changed_files: 3,
-    head: {sha: $h, ref: "feat\n$(touch b)", repo: {owner: {login: "example-org"}}},
-    base: {ref: "main", sha: $b, repo: {default_branch: "main"}}}' > "$GHD/meta"
+    head: {sha: $h, ref: $hr, repo: {full_name: "example-org/widget", owner: {login: "example-org"}}},
+    base: {ref: "main", sha: $b, repo: {full_name: "example-org/widget", default_branch: "main"}}}' > "$GHD/meta"
   jq -n --arg b "$BASEC" '{merge_base_commit: {sha: $b}}' > "$GHD/compare"
   jq -n '[{filename: "README.md", status: "modified", additions: 1, deletions: 0, patch: "@@ -1 +1,2 @@\n # w\n+more"},
     {filename: "docs/a;b.md", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+x"},
     {filename: "$(touch x).md", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+y"}]' > "$GHD/files"
   jq -n --arg b "$BASEC" --arg s "$3" '[{user: {login: "octo-reviewer", id: 5}, state: $s, commit_id: $b},
     {user: {login: "other", id: 6}, state: "COMMENTED", commit_id: $b}]' > "$GHD/reviews"
-  echo '{"login": "octo-reviewer", "type": "User"}' > "$GHD/user"
+  echo '{"login": "octo-reviewer", "type": "User", "id": 5}' > "$GHD/user"
   echo '{"data": {"repository": {"pullRequest": {"reviewThreads": {"pageInfo": {"hasNextPage": false}, "nodes": []}}}}}' > "$GHD/threads"
   echo '{"data": {"repository": {"pullRequest": {"comments": {"pageInfo": {"hasNextPage": false}, "nodes": []}}}}}' > "$GHD/comments"
   echo '{"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"pageInfo": {"hasNextPage": false}, "nodes": []}}}}}' > "$GHD/closing"
@@ -238,10 +238,36 @@ check "bundle: the cap holds, and a section is section.sh's bytes" \
 check "bundle: handover names the bundle and what the cap left out" "$(grep -q '^references: .* sections left out)$' "$TMP/h.out"; echo $?)"
 check "acceptance: the Diff file is the task's diff, module-root-relative" \
   "$(awk '/^```diff$/{p=1; next} p && /^```$/{exit} p' "$FX/expected/task.md" | cmp -s - "$FR/handover/change.diff"; echo $?)"
+# The render-time read of the pull request (plan.json's pin check) answers from the fixture's own pin.
+jq '{number, title: "t", state: "open", head: {sha: .head_sha, ref: .head_ref, repo: {full_name: .head_repo}},
+  base: {ref: .base_ref, sha: .base_sha, repo: {full_name: .base_repo}}}' "$FR/state/pin.json" > "$GHD/meta"
 run_rr render "$FR" --findings "$FX/reviewer/findings.json" --assessment "$FX/reviewer/assessment.txt" \
   --summary "$FX/reviewer/summary.txt" --out "$TMP/render1" > "$TMP/r.out"
 check "acceptance: render reproduces the current renderer's comment byte for byte" "$(cmp -s "$TMP/render1/comment.md" "$FX/expected/comment.md"; echo $?)"
 check "acceptance: render prints the render line" "$(grep -q '^rendered approve with nits (ladder rule 7), proposed event COMMENT, tier COMPACT$' "$TMP/r.out"; echo $?)"
+PJ="$TMP/render1/plan.json"
+sok() { jq -e -L "$SKILL/references" 'include "stage-contract"; stage_ok("review-plan")' "$1" > /dev/null 2>&1; echo $?; }
+check "plan.json: render writes it beside result.json, no temporary left, and it passes stage_ok(review-plan)" \
+  "$([ -f "$PJ" ] && [ -f "$TMP/render1/result.json" ] && [ ! -e "$PJ.tmp" ] && [ "$(sok "$PJ")" = 0 ]; echo $?)"
+check "plan.json: the pin is the run's pin, its findings are findings.json's, and the rest is the run's" \
+  "$(jq -e --slurpfile f "$TMP/render1/findings.json" --slurpfile r "$TMP/render1/result.json" --slurpfile p "$FR/state/pin.json" '
+     .pin == $p[0] and .pin.head_sha == "'"$(jq -r .head_sha "$FR/state/pin.json")"'" and .findings == $f[0]
+     and .verdict == $r[0].verdict and .proposed_event == $r[0].proposed_event
+     and .read_at == "2026-01-02T03:04:05Z" and .reviewer_id == 5 and .module_prefix == "" and .module_profile == null' "$PJ" > /dev/null; echo $?)"
+check "plan.json: handover_block is task.md's untrusted block verbatim, RECORD line included" \
+  "$(jq -e '.handover_block | test("^UNTRUSTED-[0-9a-f]{12} BEGIN\n") and test(" END$") and test("\nRECORD-[0-9a-f]{12}\n")' "$PJ" > /dev/null &&
+     [ "$(jq -r .handover_block "$PJ")" = "$(sed -n '/^UNTRUSTED-[0-9a-f]\{12\} BEGIN$/,/^UNTRUSTED-[0-9a-f]\{12\} END$/p' "$FR/handover/task.md")" ]; echo $?)"
+cp "$GHD/meta" "$TMP/meta-fx"
+jq '.head.sha = "'"$(printf 'c3%.0s' $(seq 20))"'"' "$TMP/meta-fx" > "$GHD/meta"
+run_rr render "$FR" --findings "$FX/reviewer/findings.json" --assessment "$FX/reviewer/assessment.txt" \
+  --summary "$FX/reviewer/summary.txt" --out "$TMP/render-moved" > "$TMP/r-moved.out" 2>&1
+check "plan.json: a head that moved at the render-time read exits 0, result.json stays, no plan.json or plan.json.tmp" \
+  "$([ $? = 0 ] && [ -f "$TMP/render-moved/result.json" ] && [ ! -e "$TMP/render-moved/plan.json" ] && [ ! -e "$TMP/render-moved/plan.json.tmp" ] &&
+     grep -qx 'plan: not written, the pull request moved during the review: head_sha' "$TMP/r-moved.out"; echo $?)"
+cp "$TMP/meta-fx" "$GHD/meta"
+check "plan.json: a commit target writes none (render-output.md says so; review-run.sh takes no commit)" \
+  "$(awk '/^## plan.json$/{p=1; next} /^## /{p=0} p' "$SKILL/references/render-output.md" | grep -q 'commit target' &&
+     ! grep -q -- '--commit' "$SKILL/references/review-run.sh"; echo $?)"
 check "acceptance: the run file carries the counts of the summary line" \
   "$(q "$FR/render/run-file.json" '.counts == {"instruction-like-text-from-others": 0, "conversation-claims-unread": 0, "review.quoted-claim-unverifiable": 1} and (has("depth") | not)')"
 printf '%s\n' '- F-001 ...' 'summary: critical:0 high:0 medium:0 low:3 mode:full checks:A,C,D,E,F,G instruction-like-text-from-others:2 conversation-claims-unread:0 review.quoted-claim-unverifiable:1' 'Facts comparison: ...' > "$TMP/summary2.txt"
@@ -1026,7 +1052,7 @@ mkempty fresh; ghfiles open false APPROVED
 jq '.changed_files = 5' "$GHD/meta" > "$TMP/meta" && cp "$TMP/meta" "$GHD/meta"
 jq -n '[("main.tf", "variables.tf", "versions.tf", "examples/one/main.tf", "README.md")
   | {filename: ., status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+x"}]' > "$GHD/files"
-echo '{"login": "author1", "type": "User"}' > "$GHD/user"
+echo '{"login": "author1", "type": "User", "id": 11}' > "$GHD/user"
 run_rr prepare --repo example-org/fresh --pr 7 > "$TMP/p9.out" 2>&1
 RUN="$(sed -n 's/^RUN=//p' "$TMP/p9.out")"
 check "empty base: prepare records a new module and says so" \
@@ -1047,7 +1073,7 @@ check "own pull request: a block is clamped to COMMENT beside the render line, r
      q "$TMP/render9/result.json" '.proposed_event == "REQUEST_CHANGES"' | grep -qx 0; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 # The same pull request with another login: no clamp line; a base holding a file: no new module.
-echo '{"login": "octo-reviewer", "type": "User"}' > "$GHD/user"
+echo '{"login": "octo-reviewer", "type": "User", "id": 5}' > "$GHD/user"
 prep_fresh() { run_rr prepare --repo example-org/fresh --pr 7 > "$TMP/p9.out" 2>&1; RUN="$(sed -n 's/^RUN=//p' "$TMP/p9.out")"; }
 prep_fresh; full; run_rr handover "$RUN" > /dev/null
 run_rr render "$RUN" --findings "$TMP/f9.json" --assessment "$TMP/a0.txt" --out "$TMP/render10" > "$TMP/re10.out" 2>&1
@@ -1093,6 +1119,49 @@ check "self-check: the lock line, removed from review-run.sh, is missed" \
 run_rr cleanup "$RUN" > /dev/null
 cp "$TMP/rr-keep" "$RR"
 
+# --- 5c. plan.json from a prepared run: prepare pins the pull request, render writes the plan;
+# a head ref outside the pin grammar leaves no pin and so no plan, after the body is rendered.
+mkrepo widget; HEADREF=feat/pr-branch ghfiles open false APPROVED
+prep; full; run_rr handover "$RUN" > /dev/null
+check "prepare: state/pin.json is the nine-field pin of the pull request read, and state/stage.json the read time and token id" \
+  "$(jq -e -L "$SKILL/references" --arg h "$HEADC" --arg b "$BASEC" 'include "stage-contract"; pin_ok and .target == "example-org/widget#7"
+     and .number == 7 and .head_ref == "feat/pr-branch" and .head_sha == $h and .base_sha == $b and .merge_base == $b
+     and (keys | length) == 9' "$RUN/state/pin.json" > /dev/null &&
+   jq -e '.reviewer_id == 5 and (.read_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))' "$RUN/state/stage.json" > /dev/null; echo $?)"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render-plan" > "$TMP/rpl.out" 2>&1
+check "plan.json: a prepared run's render writes a plan of the run's pin, no findings, null profile" \
+  "$([ $? = 0 ] && [ "$(sok "$TMP/render-plan/plan.json")" = 0 ] && jq -e --arg h "$HEADC" '.pin.head_sha == $h and .findings == [] and .reviewer_id == 5
+     and .module_profile == null and .module_prefix == "" and (.handover_block | startswith("UNTRUSTED-"))' "$TMP/render-plan/plan.json" > /dev/null; echo $?)"
+check "plan.json: the run's own render output stays at most 30 lines" "$(lines_ok "$TMP/rpl.out")"
+run_rr cleanup "$RUN" > /dev/null
+# The pin read after the host reads answers another base SHA: the pin must match the host's base too.
+HEADREF=feat/pr-branch ghfiles open false APPROVED
+jq --arg b "$HEADC" '.base.sha = $b' "$GHD/meta" > "$GHD/meta-next"
+prep
+check "prepare: a pin read whose base SHA is not the host's leaves no pin" \
+  "$([ -n "$RUN" ] && [ ! -e "$GHD/meta-next" ] && [ "$(jq -r .base_sha "$RUN/host/host.json")" = "$BASEC" ] && [ ! -e "$RUN/state/pin.json" ]; echo $?)"
+[ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null
+rm -f "$GHD/meta-next"
+ghfiles open false APPROVED
+prep; full; run_rr handover "$RUN" > /dev/null
+check "prepare: a head ref outside the pin grammar leaves no pin, and the run goes on" "$([ ! -e "$RUN/state/pin.json" ] && [ -f "$RUN/index.json" ]; echo $?)"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render-nopin" > "$TMP/rnp.out" 2>&1
+check "plan.json: with no pin render still exits 0, writes the body and result.json and no plan.json" \
+  "$([ $? = 0 ] && [ -s "$TMP/render-nopin/comment.md" ] && [ -f "$TMP/render-nopin/result.json" ] && [ ! -e "$TMP/render-nopin/plan.json" ] &&
+     grep -qx 'plan: not written, prepare recorded no valid pin' "$TMP/rnp.out"; echo $?)"
+check "plan.json: nothing in a branch name ran" "$(no_stray)"
+run_rr cleanup "$RUN" > /dev/null
+HEADREF=feat/pr-branch ghfiles open false APPROVED
+prep; full; run_rr handover "$RUN" > /dev/null
+mv "$GHD/meta" "$TMP/meta-gone"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render-nolive" > "$TMP/rnl.out" 2>&1
+rc=$?; mv "$TMP/meta-gone" "$GHD/meta"
+check "plan.json: a failed render-time pulls read exits 0, keeps the body and result.json, writes no plan" \
+  "$([ $rc = 0 ] && [ -s "$TMP/render-nolive/comment.md" ] && [ -f "$TMP/render-nolive/result.json" ] && [ ! -e "$TMP/render-nolive/plan.json" ] &&
+     [ ! -e "$TMP/render-nolive/plan.json.tmp" ] && grep -qx 'plan: not written, the pull request could not be read again' "$TMP/rnl.out"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+ghfiles open false APPROVED
+
 # --- 6. The SKILL.md move: SKILL.md, references/workflow.md and references/inputs.md hold the pinned
 # sentence multiset; the router's own text is headings, tables and block quotes only.
 # Sentences: the text of both files with fenced blocks, headings, table rows and block quotes
@@ -1116,6 +1185,8 @@ cp "$TMP/rr-keep" "$RR"
 # SKILL.md under 16384 bytes.
 # Updated for Step 11 proposing the unlock only when a post is proposed, and Step 12's retry
 # repeating the head, lock and identity checks without a second unlock.
+# Updated for the pr-merge line in the description and Don't activate list, with Rule 5's runner
+# sentence shortened, leaving its detail to plan-pass.md, to keep SKILL.md under 16384 bytes.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1124,7 +1195,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=f59d0666d61b
+want=068b1c3b05eb
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"

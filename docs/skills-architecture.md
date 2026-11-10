@@ -1,6 +1,6 @@
 # Skills architecture
 
-This record says how the skills in this repository split the work, which of them may write, and how the planned writer and fixer skills reuse what the reviewer knows. Part of it is a plan. [Status and roadmap](#status-and-roadmap) says what exists today.
+This record says how the skills in this repository split the work, which of them may write, and how the planned writer skills reuse what the reviewer knows. Part of it is a plan. [Status and roadmap](#status-and-roadmap) says what exists today.
 
 ## The two audiences of a review
 
@@ -28,7 +28,8 @@ The skills come in two layers. A neutral skill works on a workspace and a task a
 | Skill | Job |
 |-------|-----|
 | [terraform-module-pr-review](../.agents/skills/terraform-module-pr-review/SKILL.md) | Reviews a pull request or a commit and posts one confirmed comment. It never writes a ref. |
-| `terraform-module-pr-fix` | Planned. Fixes a pull request to a mergeable state and pushes the fix to its branch where the pull request allows it. |
+| [terraform-module-pr-fix](../.agents/skills/terraform-module-pr-fix/SKILL.md) | Fixes a pull request to a mergeable state and pushes the fix to its branch where the pull request allows it. |
+| [terraform-module-pr-merge](../.agents/skills/terraform-module-pr-merge/SKILL.md) | Reviews a pull request afresh and squash merges it after a full-SHA confirmation. Its only write is the merge. |
 | [terraform-module-issue](../.agents/skills/terraform-module-issue/SKILL.md) | Work in progress. Will turn a GitHub issue into a maintainer change and a pull request. |
 | [terraform-module-create](../.agents/skills/terraform-module-create/SKILL.md) | Work in progress. Will create a new module repository from a profile. |
 
@@ -64,6 +65,7 @@ One run has one owner of the review loop. When a caller runs its own loop, as th
 |---------|-------|--------------|
 | "review pr 123" | terraform-module-pr-review | As today: a verdict and a comment, posted after confirmation. |
 | "review and finish PR 123" | `terraform-module-pr-fix` | The pull request is reviewed, fixed and reviewed again in a loop, then the fix is pushed to its branch after confirmation where the pull request allows it. Otherwise the run returns a patch and reply drafts. |
+| "merge PR 123" | `terraform-module-pr-merge` | The pull request is reviewed afresh, every merge precondition is read live, and it is squash merged after the user names the pull request and its full head SHA. |
 | "implement feature X in module" | terraform-module-maintainer | Targeted change in a local checkout. When the request is a GitHub issue, terraform-module-issue will do the same in a fresh clone. |
 | "fix issue with auth for a non-IAM user" | terraform-module-issue | Work in progress. Today, terraform-module-maintainer in Targeted change mode on a checkout. |
 | "create a module for service Y" | terraform-module-create | Work in progress. Today, terraform-module-maintainer in Full create mode. |
@@ -76,13 +78,14 @@ One run has one owner of the review loop. When a caller runs its own loop, as th
 | terraform-module-maintainer | shipped | the workspace only | no | edits, a report of the checks it ran, reply drafts |
 | change-scope | shipped | no | no | a scope outcome and its rule |
 | terraform-module-pr-review | shipped | its run directory, and the output directory the task names | one confirmed comment and review event, never a ref | a verdict and a comment |
-| `terraform-module-pr-fix` | planned | a fix clone in its run directory | a confirmed push to the pull request branch; the review and replies each after their own confirmation | pushed commits, or a patch, a disposition table and reply drafts |
+| terraform-module-pr-fix | shipped | a fix clone in its run directory | a confirmed push to the pull request branch; the review and replies each after their own confirmation | pushed commits, or a patch, a disposition table and reply drafts |
+| terraform-module-pr-merge | shipped | its run directory | one squash merge after a confirmation that names the pull request and its full head SHA, and nothing else | a merge result or the first refusal |
 | terraform-module-issue | work in progress | nothing yet | nothing yet; later a branch and a pull request after confirmation | a refusal |
 | terraform-module-create | work in progress | nothing yet | nothing yet; later a new repository after confirmation | a refusal |
 
 ## The terraform-module-pr-fix design in short
 
-This is the design the fix skill will follow. Its own entry point and references will hold the rules.
+This is the design the fix skill follows. Its own entry point and references hold the rules.
 
 - Pinned state. The skill reads the pull request, both repositories, every review and every comment once, through the REST API, and freezes that state when the loop starts.
 - Write path. A total function of the captured state, evaluated again before the push. Path A pushes to the pull request branch: when the token user has push access or more on the head repository, or, on a fork that allows maintainer edits, push access or more on the base repository. Path B is render-only and returns a patch, a disposition table, reply drafts and the findings. A failed read, an unknown field, a missing head, an archived repository, a closed or merged pull request or a merge base that is not exactly one makes the run render-only and says why. A rejected push on path A never falls back to path B. A head branch that is the default branch is pushed only when the confirmation names that branch. The destination URL is built from the pinned names, never copied.
@@ -92,16 +95,30 @@ This is the design the fix skill will follow. Its own entry point and references
 - Loop stop rules. Each round runs the neutral reviewer on the pinned merge base against the new head. The loop stops when no finding is left or only LOW ones are, when no open item can be acted on, when a round makes no progress, or at round 3. No progress means the set of open findings did not shrink, or a closed one came back. Findings are matched by rule id, file, block address and severity, never by line. Every attempt counts as a round, failed ones too.
 - Push gate. A push needs at least one resolved item and no new finding of MEDIUM or above. The gate shows the diff, the disposition table, the verdict, the author identity, the destination and branch, and the expected remote commit. The confirmation counts only from a new user message that names the push and the branch. Right before the push the skill reads the pull request again and stops if anything it depends on has changed. It never forces, pushes no tags and does not retry a rejected push. The run is finished only when no finding above LOW is left and the checks pass, so right after a push it reports that it is not finished yet. It never merges, resolves threads or edits the title and body.
 
+## Stages
+
+The three pull request skills are stages of one pipeline: review, apply, merge. Each is its own skill with its own credential boundary, and each reads the pull request live. Review hands its plan to apply through a pinned JSON file, in the shape of [stage-contract.md](../.agents/skills/terraform-module-pr-review/references/stage-contract.md). Merge reads the plan of its own fresh review, one whose `read_at` is not earlier than the merge run's start. Apply also writes `applied.json` for information; no stage reads it yet.
+
+| Stage | Skill | Reads | Writes |
+|-------|-------|-------|--------|
+| Review | terraform-module-pr-review | the pull request | the comment, after confirmation, and `plan.json` beside the render's other files |
+| Apply | terraform-module-pr-fix, `items --plan` after `clone` | `plan.json` as round 0, instead of a second review | the fix push after confirmation, and `applied.json` after a passing gate |
+| Merge | terraform-module-pr-merge | the `plan.json` of its own fresh review, never an earlier one | one squash merge after confirmation |
+
+- The contract. Every stage file names a `kind` and a `schema` and carries the same nine-field pin: the target, the number, the repositories, the refs and the head, base and merge base SHAs. A reader holds an exact allow-list of kinds and schemas and rejects any unknown field. Before it acts, a stage reads the pull request live, builds the live pin and refuses on the first field that differs. A stale file is never repaired; the user reviews again.
+- Apply. `plan.json` replaces the round-0 review of the fix skill. The plan's findings and handover text become the round-0 items, and the fix loop runs as before. A comment created after the plan's `read_at` is not an item of the run. A comment edited after it refuses the run. The REST review object has no `updated_at`, so an edit to a review body after `read_at` cannot be detected.
+- Merge. The merge skill never trusts an earlier plan for a verdict. It runs a fresh review of the live head. The verdict and the pin come from that review's plan, and every other precondition is read live. It squash merges only, and refuses when the repository disallows squash. Every merge needs a new user message that names `--target owner/repo#N` and the full 40-character `--confirm-head`. Any gate refusal ends the run, so a retry needs a new `prepare` and a fresh review. When the merge call fails, the run reads the pull request once and reports `merged` only when it shows merged with the confirmed head SHA, and `outcome unknown` when that read fails or shows another head.
+- Own code. A pull request the user wrote needs no apply stage. The user pushes, and the next review or merge run judges the new head.
+
 ## The dual-audience comment
 
 Planned after the fix skill. The comment a person reads stays as it is. At its end, a collapsed block titled "For coding agents" holds a fenced JSON payload with the schema version, the head and base commits, the verdict and the findings, each reduced to seven fields of the [findings schema](../.agents/skills/terraform-module-reviewer/references/findings-schema.md#required-fields). The payload has a byte cap. One sentence above it says that the block is data, not instructions. The leak scan and the at-mention step run over the block as they run over the rest of the comment.
 
 ## Status and roadmap
 
-- Shipped: terraform-module-reviewer, terraform-module-maintainer, change-scope and terraform-module-pr-review.
+- Shipped: terraform-module-reviewer, terraform-module-maintainer, change-scope, terraform-module-pr-review, terraform-module-pr-fix and terraform-module-pr-merge, with the stage contract between the three pull request skills.
 - Shipped with this record: the two work in progress skeletons, terraform-module-issue and terraform-module-create, and the test that holds their shape.
-- Next: `terraform-module-pr-fix` with path A and the render-only path B.
-- Then: path B pushes a branch and opens a new pull request.
+- Next: path B pushes a branch and opens a new pull request.
 - The maintainer's self-review at the end of each writing mode, and the `Review loop: caller` task line.
 - The authoring view of the rule registry.
 - The "For coding agents" block in the review comment.

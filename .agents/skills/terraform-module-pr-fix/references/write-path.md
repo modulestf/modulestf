@@ -41,11 +41,11 @@ Read once by `prepare`, REST only, and frozen. Identity first, as pr-review's [I
 | `repos/<repo>/pulls/<n>` | `state`, `merged`, `draft`, `locked`, `active_lock_reason`, `maintainer_can_modify`, `user.id`, `user.login`, `user.type`, `head.sha`, `head.ref`, `head.repo.full_name` or null, `base.sha`, `base.ref`, `base.repo.full_name` |
 | `repos/<base>` and `repos/<head>` | `archived`, `private`, `default_branch`, `permissions` of the token user |
 | `pulls/<n>/files`, every page | `filename` and `previous_filename`: the change set |
-| `pulls/<n>/reviews`, `pulls/<n>/comments`, `issues/<n>/comments`, every page | `id`, `user.id`, `user.login`, `user.type`, `author_association`, `body`, and for a review comment `path`, `line` and `in_reply_to_id` |
+| `pulls/<n>/reviews`, `pulls/<n>/comments`, `issues/<n>/comments`, every page | `id`, `user.id`, `user.login`, `user.type`, `author_association`, `body`, `created_at`, `updated_at` (a review's `submitted_at` for both), and for a review comment `path`, `line` and `in_reply_to_id`. The two times let `items --plan` sort the comments against the plan's `read_at` |
 | `compare/<base.sha>...<head.sha>` | `merge_base_commit.sha` |
 | `commits/<head.sha>/check-runs` and `statuses`, every page | Their count, for the checks rule; a failed read leaves it unknown and is not a read failure |
 
-A read that fails is listed in `failed`. A field that is missing or of another type is unknown. The commit identity is read once here, before any clone exists, from the user's own git configuration: `git config --global user.name` and `user.email` from `/` with no inherited environment. Unset or malformed is none.
+A read that fails is listed in `failed`. A field that is missing or of another type is unknown. The commit identity is read once here, before any clone exists, from the user's own git configuration: `git config --global user.name` and `user.email` from `/` with no inherited environment. Unset or malformed is none. GitHub's REST review object has no `updated_at`, so an edit to a review body after the plan's `read_at` cannot be detected.
 
 ## Origins
 

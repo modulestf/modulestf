@@ -1,6 +1,10 @@
 # fix-run.jq: the decision functions of terraform-module-pr-fix, as write-path.md states them.
 # Each one is pure: it reads only the JSON it is given. fix-run.sh and tests/pr-fix-test.sh
-# include this file with `jq -L <dir> 'include "fix-run"; ...'`.
+# include this file with `jq -L <dir> -L <pr-review references> 'include "fix-run"; ...'`. The
+# pin grammar (sha_ok, repo_ok, ref_ok) and checks_class live in the pr-review skill's
+# stage-contract.jq, which this file includes.
+
+include "stage-contract";
 
 # --- Identity --------------------------------------------------------------------------------
 
@@ -26,10 +30,6 @@ def role($author):
 
 # --- Write path ------------------------------------------------------------------------------
 
-def sha_ok: type == "string" and test("^[0-9a-f]{40}$");
-def repo_ok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$");
-def ref_ok: type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$")
-  and (test("\\.\\.|//|/\\.|\\.lock$|/$|\\.$") | not);
 def bool_ok: type == "boolean";
 def push_perm: type == "object" and (.push == true or .maintain == true or .admin == true);
 
@@ -152,25 +152,6 @@ def loop_decision:
   elif .round >= .limit then {stop: true, finished_review: false, reason: "round \(.round) is the last"}
   else {stop: false, finished_review: false, reason: "the next round may start"} end;
 
-# --- Checks ----------------------------------------------------------------------------------
-
-# Input {ok, runs, statuses, pinned_total}: pinned_total is null when the pinned head's reads failed.
-def checks_class:
-  if .ok != true then {class: "not finished", reason: "a checks read failed"}
-  else
-    (.runs | group_by(.name) | map(max_by(.id))) as $r |
-    (.statuses | group_by(.context) | map(max_by(.id))) as $s |
-    if ($r | length) + ($s | length) == 0 then
-      if .pinned_total == 0 then {class: "passing", reason: "no checks, and the pinned head had none"}
-      else {class: "not finished", reason: "no checks yet, the pinned head had \(.pinned_total // "unknown")"} end
-    else
-      ([$r[] | select((.status == "completed" and (.conclusion | IN("success", "skipped"))) | not) | .name]
-       + [$s[] | select(.state != "success") | .context]) as $bad |
-      if ($bad | length) == 0 then {class: "passing", reason: "\($r | length) check runs and \($s | length) statuses passed"}
-      else {class: "not finished", reason: ("not passing: " + ($bad | sort | .[0:5] | join(", ")))} end
-    end
-  end;
-
 # --- Allowed paths ---------------------------------------------------------------------------
 
 def path_grammar: test("^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$") and length <= 255;
@@ -287,11 +268,11 @@ def state_of:
    change_set: ([.files[]? | .filename, (.previous_filename // empty)] | unique),
    comments: [
      (.reviews[]? | select((.body // "") != "") | {kind: "review", id, user: user_of, author_association, body,
-        path: null, line: null, reply_to: null}),
+        path: null, line: null, reply_to: null, created_at: .submitted_at, updated_at: .submitted_at}),
      (.rcomments[]? | {kind: "thread", id, user: user_of, author_association, body, path,
-        line: (.line // .original_line), reply_to: (.in_reply_to_id // .id)}),
+        line: (.line // .original_line), reply_to: (.in_reply_to_id // .id), created_at, updated_at}),
      (.icomments[]? | {kind: "conversation", id, user: user_of, author_association, body,
-        path: null, line: null, reply_to: null})],
+        path: null, line: null, reply_to: null, created_at, updated_at})],
    checks_pinned: (if .pinned_ok then {total: ((.runs | length) + (.statuses | length))} else {total: null} end)};
 
 # --- Feedback items --------------------------------------------------------------------------
@@ -311,6 +292,21 @@ def items_of:
        eligible: ($o == "self"), file: .path, line, text: (.body // ""), fingerprint: null,
        reply: (if .kind == "thread" then "repos/\($s.repo)/pulls/\($s.number)/comments/\(.reply_to)/replies"
                else "repos/\($s.repo)/issues/\($s.number)/comments" end)}) ];
+
+# Input: the state. The comments a review plan covers: those created at or before $read_at (ISO-8601
+# UTC with Z, so string order is time order). edited lists the ids of kept comments changed after
+# $read_at; later counts the comments created after it. A time that is not in that form never
+# proves a comment older: it counts as later, or as an edit of a kept comment.
+def plan_comments($read_at):
+  def ts: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$");
+  [.comments[] | select((.created_at | ts) and .created_at <= $read_at)] as $k
+  | {keep: $k,
+     edited: [$k[] | select(((.updated_at | ts) and .updated_at <= $read_at) | not) | .id],
+     later: ((.comments | length) - ($k | length))};
+
+# Input: the state. The pin of the pinned head, from the state's own pull request read and the
+# merge base clone froze (null before clone, which no plan's pin equals).
+def state_pin: {pr: (.pr + {number: .number}), merge_base: .frozen.merge_base} | live_pin;
 
 # The reply endpoint of a comment item, rebuilt from the pinned state and the item id alone.
 def reply_endpoint($id):
