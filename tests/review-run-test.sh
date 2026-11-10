@@ -187,7 +187,7 @@ mkrepo() { # name [, directory copied into the base] -> bare repo with base and 
 }
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.file://$TMP/remote/.insteadOf" GIT_CONFIG_VALUE_0="https://github.com/"
 ghfiles() { # state, merged, own review state
-  jq -n --arg h "$HEADC" --arg b "$BASEC" --arg st "$1" --argjson mg "$2" --arg hr "${HEADREF-feat/pr-branch}" '{number: 7, title: "$(touch x) title `x`",
+  jq -n --arg h "$HEADC" --arg b "$BASEC" --arg st "$1" --argjson mg "$2" --arg hr "${HEADREF-$(printf 'feat\n$(touch b)')}" '{number: 7, title: "$(touch x) title `x`",
     body: "body $(touch y)", user: {login: "author1", id: 11, type: "User"}, state: $st, merged: $mg, draft: false,
     mergeable: (if $st == "open" then true else null end), changed_files: 3,
     head: {sha: $h, ref: $hr, repo: {full_name: "example-org/widget", owner: {login: "example-org"}}},
@@ -1121,7 +1121,7 @@ cp "$TMP/rr-keep" "$RR"
 
 # --- 5c. plan.json from a prepared run: prepare pins the pull request, render writes the plan;
 # a head ref outside the pin grammar leaves no pin and so no plan, after the body is rendered.
-mkrepo widget; ghfiles open false APPROVED
+mkrepo widget; HEADREF=feat/pr-branch ghfiles open false APPROVED
 prep; full; run_rr handover "$RUN" > /dev/null
 check "prepare: state/pin.json is the nine-field pin of the pull request read, and state/stage.json the read time and token id" \
   "$(jq -e -L "$SKILL/references" --arg h "$HEADC" --arg b "$BASEC" 'include "stage-contract"; pin_ok and .target == "example-org/widget#7"
@@ -1134,14 +1134,23 @@ check "plan.json: a prepared run's render writes a plan of the run's pin, no fin
      and .module_profile == null and .module_prefix == "" and (.handover_block | startswith("UNTRUSTED-"))' "$TMP/render-plan/plan.json" > /dev/null; echo $?)"
 check "plan.json: the run's own render output stays at most 30 lines" "$(lines_ok "$TMP/rpl.out")"
 run_rr cleanup "$RUN" > /dev/null
-HEADREF="$(printf 'feat\n$(touch b)')" ghfiles open false APPROVED
+ghfiles open false APPROVED
 prep; full; run_rr handover "$RUN" > /dev/null
 check "prepare: a head ref outside the pin grammar leaves no pin, and the run goes on" "$([ ! -e "$RUN/state/pin.json" ] && [ -f "$RUN/index.json" ]; echo $?)"
 run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render-nopin" > "$TMP/rnp.out" 2>&1
-check "plan.json: with no pin render still writes the body and result.json, exits 1 and writes no plan.json" \
-  "$([ $? = 1 ] && [ -s "$TMP/render-nopin/comment.md" ] && [ -f "$TMP/render-nopin/result.json" ] && [ ! -e "$TMP/render-nopin/plan.json" ] &&
-     grep -qx 'review-run.sh: no plan.json: prepare recorded no valid pin' "$TMP/rnp.out"; echo $?)"
+check "plan.json: with no pin render still exits 0, writes the body and result.json and no plan.json" \
+  "$([ $? = 0 ] && [ -s "$TMP/render-nopin/comment.md" ] && [ -f "$TMP/render-nopin/result.json" ] && [ ! -e "$TMP/render-nopin/plan.json" ] &&
+     grep -qx 'plan: not written, prepare recorded no valid pin' "$TMP/rnp.out"; echo $?)"
 check "plan.json: nothing in a branch name ran" "$(no_stray)"
+run_rr cleanup "$RUN" > /dev/null
+HEADREF=feat/pr-branch ghfiles open false APPROVED
+prep; full; run_rr handover "$RUN" > /dev/null
+mv "$GHD/meta" "$TMP/meta-gone"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render-nolive" > "$TMP/rnl.out" 2>&1
+rc=$?; mv "$TMP/meta-gone" "$GHD/meta"
+check "plan.json: a failed render-time pulls read exits 0, keeps the body and result.json, writes no plan" \
+  "$([ $rc = 0 ] && [ -s "$TMP/render-nolive/comment.md" ] && [ -f "$TMP/render-nolive/result.json" ] && [ ! -e "$TMP/render-nolive/plan.json" ] &&
+     [ ! -e "$TMP/render-nolive/plan.json.tmp" ] && grep -qx 'plan: not written, the pull request could not be read again' "$TMP/rnl.out"; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 ghfiles open false APPROVED
 

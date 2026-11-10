@@ -91,7 +91,7 @@ Exactly these keys, and no others:
 | `module_profile` | The module profile id the user named for the run, or null when none |
 | `reviewer_id` | The numeric id of the token user from the run's identity read, or null when that read failed |
 
-Before it builds the file, `render` reads `repos/{owner}/{repo}/pulls/{number}` once more, builds the live pin with `live_pin` and compares it with the saved pin by `pin_diff`. A difference refuses with `the pull request moved during the review: <field>`, exit 1; the body and `result.json` stay, and no `plan.json` or `plan.json.tmp` exists. A pull request whose pin `prepare` could not record, such as a head branch outside the pin grammar, also writes no plan: `render` says so and exits 1 after the body is rendered. The file is built by `jq` from files, never by interpolation, written to `plan.json.tmp`, checked with `stage_ok("review-plan")` and renamed.
+Before it builds the file, `render` reads `repos/{owner}/{repo}/pulls/{number}` once more, builds the live pin with `live_pin` and compares it with the saved pin by `pin_diff`. A difference refuses with `the pull request moved during the review: <field>`, exit 1; the body and `result.json` stay, and no `plan.json` or `plan.json.tmp` exists. A pull request whose pin `prepare` could not record, such as a head branch outside the pin grammar, also writes no plan, as does a failed second read or a failed build: `render` prints `plan: not written, <reason>` and still exits 0, since the body and the three files are complete. Only a moved pin exits 1. The file is built by `jq` from files, never by interpolation, written to `plan.json.tmp`, checked with `stage_ok("review-plan")` and renamed.
 
 ## Judgment Variant
 

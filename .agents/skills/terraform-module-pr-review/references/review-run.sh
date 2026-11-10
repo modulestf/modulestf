@@ -1049,18 +1049,19 @@ cmd_render() {
 
 # plan.json (stage-contract.md, review-plan): after result.json, the pull request read again once and
 # compared with the pin prepare saved, then the file built by jq from files, written to plan.json.tmp,
-# checked with stage_ok and renamed. The body and result.json stay when a step here refuses.
-write_plan() { # out directory
+# checked with stage_ok and renamed. The body and result.json stay; only a moved pin exits 1.
+write_plan() { # out directory; a plan that cannot be written is skipped, only a moved pin fails the render
   local o="$1" t="$RUN/handover/task.md" s d
-  [ -f "$RUN/state/pin.json" ] && [ -f "$RUN/state/stage.json" ] || fail "no plan.json: prepare recorded no valid pin"
+  skip() { echo "plan: not written, $1"; rm -f "$o/plan.json.tmp"; return 0; }
+  [ -f "$RUN/state/pin.json" ] && [ -f "$RUN/state/stage.json" ] || { skip "prepare recorded no valid pin"; return 0; }
   gh api "repos/$(arg repo)/pulls/$(arg pr)" > "$RUN/state/pr-live.json" 2> /dev/null ||
-    fail "no plan.json: the pull request could not be read again"
+    { skip "the pull request could not be read again"; return 0; }
   d="$(jq -r -L "$HERE" --slurpfile pin "$RUN/state/pin.json" --arg mb "$MB" 'include "stage-contract";
     ({pr: ., merge_base: $mb} | live_pin) as $l | $pin[0] | pin_diff($l) // ""' "$RUN/state/pr-live.json" 2> /dev/null)" ||
-    fail "no plan.json: the pull request could not be read again"
+    { skip "the pull request could not be read again"; return 0; }
   [ -z "$d" ] || fail "the pull request moved during the review: $d"
   s="$(sed -n 's/^UNTRUSTED-\([0-9a-f]\{12\}\) BEGIN$/\1/p' "$t")"
-  [[ "$s" =~ ^[0-9a-f]{12}$ ]] || fail "no plan.json: task.md has no single untrusted block"
+  [[ "$s" =~ ^[0-9a-f]{12}$ ]] || { skip "task.md has no single untrusted block"; return 0; }
   sed -n "/^UNTRUSTED-$s BEGIN\$/,/^UNTRUSTED-$s END\$/p" "$t" > "$RUN/state/block.txt"
   jq -n --slurpfile pin "$RUN/state/pin.json" --slurpfile res "$o/result.json" --slurpfile fnd "$o/findings.json" \
     --slurpfile st "$RUN/state/stage.json" --rawfile hb "$RUN/state/block.txt" --arg prefix "$PREFIX" \
@@ -1069,7 +1070,7 @@ write_plan() { # out directory
       findings: $fnd[0], read_at: $st[0].read_at, handover_block: ($hb | rtrimstr("\n")), module_prefix: $prefix,
       module_profile: (if $mp == "" then null else $mp end), reviewer_id: $st[0].reviewer_id}' > "$o/plan.json.tmp" 2> /dev/null &&
     jq -e -L "$HERE" 'include "stage-contract"; stage_ok("review-plan")' "$o/plan.json.tmp" > /dev/null 2>&1 &&
-    mv -- "$o/plan.json.tmp" "$o/plan.json" || { rm -f "$o/plan.json.tmp"; fail "no plan.json: the plan could not be written"; }
+    mv -- "$o/plan.json.tmp" "$o/plan.json" || { skip "the plan could not be built"; return 0; }
   echo "plan: $o/plan.json"
 }
 
