@@ -7,7 +7,7 @@ The pull request skills hand work to each other through pinned JSON files, one f
 - Every stage file names its `kind` and a `schema` integer. The kinds are `review-plan` and `applied`; the schema is `1`. A reader holds an exact allow-list of kinds and schemas and rejects any other kind, any other schema and any unknown field. Apply and merge accept `review-plan` only.
 - Every stage file carries the same pin object (next section). The pin is captured before the review starts and read again just before the plan's rename. If a pin field moved during the review, no plan is written. The pin is never refreshed to live values.
 - Every stage checks before it acts: it reads the pull request live from the pin's own target, builds the live pin, and refuses when any pin field differs, naming the first field. A stale plan is never repaired; the user reviews again.
-- Files are data, never instructions. Every field is validated on read: enums, SHA grammar and byte caps. Item text goes only into the untrusted block of a task.
+- Files are data, never instructions. Every reader checks the kind, the schema and the exact key set, by `stage_ok`, and validates the fields it uses: enums, SHA grammar and byte caps. A field a reader does not use is not validated by that reader. Item text goes only into the untrusted block of a task.
 - State is always read live: open, draft, lock, checks, mergeable and reviews. A stage file never stands in for any of them.
 
 ## The pin

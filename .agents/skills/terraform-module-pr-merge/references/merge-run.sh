@@ -42,7 +42,7 @@ get() {
 
 # identity: a person's token, no CI, write access or more on the base repository.
 identity() {
-  [ -z "${CI+x}${GITHUB_ACTIONS+x}" ] || fail "identity refused: a CI variable is set"
+  [ -z "${CI+x}${GITHUB_ACTIONS+x}${GITHUB_RUN_ID+x}" ] || fail "identity refused: a CI variable is set"
   get user user || fail "identity refused: the token user cannot be read"
   jq -e '.type == "User" and (.login | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"))' "$RAW/user.json" > /dev/null ||
     fail "identity refused: the token user is not a person"
@@ -57,6 +57,7 @@ identity() {
 DECIDE='include "stage-contract";
 def clean: explode | map(if . < 32 or . == 127 then 32 else . end) | implode | .[0:300];
 def word: if type == "string" and test("^[a-z_ ]{1,40}$") then . else "unreadable" end;
+def iso_time: if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$") then (try fromdateiso8601 catch null) else null end;
 $pr[0] as $p | $plan[0] as $pl | $repo[0] as $r
 | ({pr: $p, merge_base: ($cmp[0].merge_base_commit.sha // null)} | live_pin) as $live
 | ({ok: $cok, runs: ($runs[0] // []), statuses: ($st[0] // []), pinned_total: null} | checks_class) as $c
@@ -67,6 +68,7 @@ $pr[0] as $p | $plan[0] as $pl | $repo[0] as $r
 | {refusal:
     (if $p == null then "a read failed: pr"
      elif ($pl | stage_ok("review-plan")) | not then "the plan is not a review-plan stage file of schema 1"
+     elif ($pl.read_at | iso_time) == null or ($pl.read_at | iso_time) < ($started | iso_time) then "the plan is not this run\u0027s review"
      elif $cmp[0] == null then "a read failed: compare"
      elif ($pl.pin | pin_diff($live)) != null then "the pull request moved since the review: \($pl.pin | pin_diff($live))"
      elif ($failed | length) > 0 then "a read failed: \($failed | join(", "))"
@@ -102,7 +104,7 @@ live() {
   else echo null > "$RAW/runs.json"; echo null > "$RAW/statuses.json"; fi
   get reviews "repos/$REPO/pulls/$NUM/reviews?per_page=100" pages
   get repo "repos/$REPO"
-  J -n --argjson cok "$cok" --slurpfile pr "$RAW/pr.json" --slurpfile plan "$RAW/plan.json" --slurpfile repo "$RAW/repo.json" \
+  J -n --argjson cok "$cok" --arg started "$STARTED" --slurpfile pr "$RAW/pr.json" --slurpfile plan "$RAW/plan.json" --slurpfile repo "$RAW/repo.json" \
     --slurpfile cmp "$RAW/compare.json" --slurpfile runs "$RAW/runs.json" --slurpfile st "$RAW/statuses.json" \
     --slurpfile rv "$RAW/reviews.json" "$DECIDE" > "$RAW/decision.json" || fail "the merge precondition could not be evaluated"
   local x; x="$(jq -r '.refusal // ""' "$RAW/decision.json")"
@@ -117,7 +119,9 @@ open_run() {
   [ "$RUN" = "$d" ] || die "the run directory must be given as its resolved path"
   [ -f "$RUN/run.json" ] || die "no prepared run in that directory"
   REPO="$(jq -r .repo "$RUN/run.json")"; NUM="$(jq -r .number "$RUN/run.json")"
-  [[ "$REPO" =~ $repo_re ]] && [[ "$NUM" =~ ^[1-9][0-9]{0,8}$ ]] || die "the run file is outside its grammar"
+  STARTED="$(jq -r .started_at "$RUN/run.json")"
+  [[ "$REPO" =~ $repo_re ]] && [[ "$NUM" =~ ^[1-9][0-9]{0,8}$ ]] &&
+    [[ "$STARTED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || die "the run file is outside its grammar"
 }
 
 cmd_prepare() {
@@ -140,7 +144,8 @@ cmd_prepare() {
   trap 'rm -rf -- "$RAW"' EXIT
   identity
   RUN="$(mktemp -d "${out%/}/pr-merge.XXXXXX")" && mkdir "$RUN/review" || fail "no run directory"
-  jq -n --arg r "$REPO" --argjson n "$NUM" '{repo: $r, number: $n}' > "$RUN/run.json" && chmod a-w "$RUN/run.json" ||
+  # started_at: the fresh review this run reads must have started its reads at or after this time.
+  jq -n --arg r "$REPO" --argjson n "$NUM" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{repo: $r, number: $n, started_at: $t}' > "$RUN/run.json" && chmod a-w "$RUN/run.json" ||
     fail "the run file cannot be written"
   echo "RUN=$RUN"
   echo "identity: $LOGIN (User), permission $PERM on $REPO"
@@ -184,14 +189,14 @@ cmd_merge() {
   resp="$(jq -n --slurpfile m "$RUN/merge.json" '$m[0] | {sha: .pin.head_sha, merge_method: .method, commit_title: .title, commit_message: ""}' |
     gh api -X PUT "repos/$REPO/pulls/$NUM/merge" --input - 2> "$RAW/put.err")" || {
     err="$(oneline < "$RAW/put.err")"
-    case "$err" in *"HTTP 405"*)
-      # A squash commit has one parent, the base: the merged pull request's own head is the binding.
-      if get after "repos/$REPO/pulls/$NUM" &&
-        jq -e --arg h "$head" '.merged == true and .head.sha == $h' "$RAW/after.json" > /dev/null; then
-        mc="$(jq -r '.merge_commit_sha // "unknown"' "$RAW/after.json" | oneline)"
-        echo "merged: $target, head $head, merge commit $mc (the merge had already landed)"; return 0
-      fi ;;
-    esac
+    # Any failure, a timeout that landed included, is read once: a read, never a second PUT. A squash
+    # commit has one parent, the base, so the merged pull request's own head is the binding.
+    get after "repos/$REPO/pulls/$NUM" || fail "outcome unknown, check the pull request: $err"
+    if jq -e --arg h "$head" '.merged == true and .head.sha == $h' "$RAW/after.json" > /dev/null; then
+      mc="$(jq -r '.merge_commit_sha // "unknown"' "$RAW/after.json" | oneline)"
+      echo "merged: $target, head $head, merge commit $mc (the merge had already landed)"; return 0
+    fi
+    jq -e '.merged == false' "$RAW/after.json" > /dev/null || fail "outcome unknown, check the pull request: $err"
     fail "the merge failed: $err; nothing retried"
   }
   printf '%s' "$resp" | jq -e '.merged == true' > /dev/null 2>&1 || fail "the merge answer is not merged: $(printf '%s' "$resp" | jq -r '.message // "unreadable"' 2> /dev/null | oneline); nothing retried"

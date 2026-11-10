@@ -244,8 +244,8 @@ cmd_prepare() {
     meta="$(jq -r '.head.sha + " " + (.changed_files | tostring)' "$RUN/state/pr.json" 2> /dev/null)" &&
     [ "${meta%% *}" = "$head" ] && [[ "${meta#* }" =~ ^[0-9]{1,6}$ ]] && changed="${meta#* }"
   # The pin of stage-contract.md from the same read, at the host's head: no valid pin, no plan.json later.
-  jq -e -L "$HERE" --arg head "$head" --arg mb "$mb" 'include "stage-contract";
-    {pr: ., merge_base: $mb} | live_pin | select(.head_sha == $head and pin_ok)' "$RUN/state/pr.json" \
+  jq -e -L "$HERE" --arg head "$head" --arg base "$base" --arg mb "$mb" 'include "stage-contract";
+    {pr: ., merge_base: $mb} | live_pin | select(.head_sha == $head and .base_sha == $base and pin_ok)' "$RUN/state/pr.json" \
     > "$RUN/state/pin.json" 2> /dev/null || rm -f "$RUN/state/pin.json"
 
   # Step 3, the clone, pinned to the head; then the merge base with enough history for depth.sh.
@@ -708,7 +708,7 @@ cmd_evidence() {
     done
   fi
   { for s in $EV_STEPS; do [ ! -f "$RUN/state/evidence-$s.out" ] || cat "$RUN/state/evidence-$s.out"; done; } | head -n 29
-  echo "evidence: depth $(depth), $( [ "$rc" = 0 ] && echo done || echo 'a step failed') ($((SECONDS - t0))s)"
+  echo "evidence: depth $(depth), $( [ "$rc" = 0 ] && echo 'done' || echo 'a step failed') ($((SECONDS - t0))s)"
   return "$rc"
 }
 
@@ -1049,8 +1049,9 @@ cmd_render() {
 
 # plan.json (stage-contract.md, review-plan): after result.json, the pull request read again once and
 # compared with the pin prepare saved, then the file built by jq from files, written to plan.json.tmp,
-# checked with stage_ok and renamed. The body and result.json stay; only a moved pin exits 1.
-write_plan() { # out directory; a plan that cannot be written is skipped, only a moved pin fails the render
+# checked with stage_ok and renamed. The body and result.json stay; a plan that cannot be written,
+# a moved pin included, is skipped and the render still exits 0.
+write_plan() { # out directory
   local o="$1" t="$RUN/handover/task.md" s d
   skip() { echo "plan: not written, $1"; rm -f "$o/plan.json.tmp"; return 0; }
   [ -f "$RUN/state/pin.json" ] && [ -f "$RUN/state/stage.json" ] || { skip "prepare recorded no valid pin"; return 0; }
@@ -1059,7 +1060,7 @@ write_plan() { # out directory; a plan that cannot be written is skipped, only a
   d="$(jq -r -L "$HERE" --slurpfile pin "$RUN/state/pin.json" --arg mb "$MB" 'include "stage-contract";
     ({pr: ., merge_base: $mb} | live_pin) as $l | $pin[0] | pin_diff($l) // ""' "$RUN/state/pr-live.json" 2> /dev/null)" ||
     { skip "the pull request could not be read again"; return 0; }
-  [ -z "$d" ] || fail "the pull request moved during the review: $d"
+  [ -z "$d" ] || { skip "the pull request moved during the review: $d"; return 0; }
   s="$(sed -n 's/^UNTRUSTED-\([0-9a-f]\{12\}\) BEGIN$/\1/p' "$t")"
   [[ "$s" =~ ^[0-9a-f]{12}$ ]] || { skip "task.md has no single untrusted block"; return 0; }
   sed -n "/^UNTRUSTED-$s BEGIN\$/,/^UNTRUSTED-$s END\$/p" "$t" > "$RUN/state/block.txt"

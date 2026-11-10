@@ -54,8 +54,12 @@ ep="${ep%%\?*}"
 if [ "$put" = true ]; then
   { printf '%s ' "$ep"; jq -c .; } >> "$FX/put.log"
   [ ! -f "$FX/put-405" ] || { echo '{"message": "Pull Request is not mergeable"}'; echo "gh: Pull Request is not mergeable (HTTP 405)" >&2; exit 1; }
+  # put-fail: a PUT that fails with the error line the file holds, such as a timeout
+  [ ! -f "$FX/put-fail" ] || { cat "$FX/put-fail" >&2; exit 1; }
   echo "{\"sha\": \"$(cat "$FX/merge-sha")\", \"merged\": true, \"message\": \"Pull Request successfully merged\"}"; exit 0
 fi
+# read-fail-after-put: every read after a PUT fails
+[ ! -f "$FX/read-fail-after-put" ] || [ ! -s "$FX/put.log" ] || exit 1
 f="$FX/api/$ep.json"; [ -f "$f" ] || exit 1
 # A fixture with a .second file answers its first read from the fixture and every later read from .second.
 if [ -f "$f.second" ]; then [ ! -f "$f.seen" ] || f="$f.second"; touch "$FX/api/$ep.json.seen"; fi
@@ -95,7 +99,7 @@ plan() { # writes the plan pr-review would leave in $RUN/review, edited by an op
   jq -n --arg h "$H" --arg b "$B" --arg m "$M" '{kind: "review-plan", schema: 1,
     pin: {target: "o/r#7", number: 7, base_repo: "o/r", head_repo: "f/r", base_ref: "main", head_ref: "fix/x",
           head_sha: $h, base_sha: $b, merge_base: $m},
-    verdict: "approve", proposed_event: "APPROVE", findings: [], read_at: "2026-11-10T00:00:00Z",
+    verdict: "approve", proposed_event: "APPROVE", findings: [], read_at: (now | floor | todateiso8601),
     handover_block: "x", module_prefix: "", module_profile: null, reviewer_id: 1} | '"${1:-.}" > "$RUN/review/plan.json"
 }
 prep() { RUN="$(mr prepare --repo o/r --pr 7 --out "$OUTD" | sed -n 's/^RUN=//p')"; [ -d "$RUN" ]; }
@@ -149,10 +153,14 @@ refuse_prepare "a bot user" "the token user is not a person" "fx user '.type = \
 refuse_prepare "CI=true" "a CI variable is set" "export CI=true"; unset CI
 refuse_prepare "CI set but empty" "a CI variable is set" "export CI="; unset CI
 refuse_prepare "GITHUB_ACTIONS set" "a CI variable is set" "export GITHUB_ACTIONS=true"; unset GITHUB_ACTIONS
+refuse_prepare "GITHUB_RUN_ID set but empty" "a CI variable is set" "export GITHUB_RUN_ID="; unset GITHUB_RUN_ID
 refuse_prepare "read permission" "has no write access" "fx repos/o/r/collaborators/alice/permission '.permission = \"read\"'"
 refuse_prepare "a relative --out" "--out" "OUTD_SAVE=\$OUTD; OUTD=out"; OUTD="$OUTD_SAVE"
 refuse_gate "plan kind applied" "the plan is not a review-plan stage file of schema 1" "plan '.kind = \"applied\"'"
 refuse_gate "no plan" "the plan is not a regular file" "rm \"\$RUN/review/plan.json\""
+refuse_gate "a plan read before this run started" "the plan is not this run's review" "plan '.read_at = \"2020-01-01T00:00:00Z\"'"
+refuse_gate "a malformed read_at" "the plan is not this run's review" "plan '.read_at = \"2026-11-10 00:00:00\"'"
+refuse_gate "a read_at that is not a time" "the plan is not this run's review" "plan '.read_at = \"2026-13-40T00:00:00Z\"'"
 refuse_gate "the pin moved" "the pull request moved since the review: head_sha" "fx repos/o/r/pulls/7 '.head.sha = \"$B\"'; cp \"\$FX/api/repos/o/r/compare/$B...$H.json\" \"\$FX/api/repos/o/r/compare/$B...$B.json\""
 refuse_gate "a retargeted base" "the pull request moved since the review: base_ref" "fx repos/o/r/pulls/7 '.base.ref = \"release\"'"
 refuse_gate "verdict changes suggested" "the verdict is changes suggested, not approve or approve with nits" "plan '.verdict = \"changes suggested\"'"
@@ -219,14 +227,34 @@ fresh; prep; plan; mr gate "$RUN" > /dev/null
 touch "$FX/put-405"
 fx2 repos/o/r/pulls/7 ".merged = true | .state = \"closed\" | .merge_commit_sha = \"$C\" | .head.sha = \"$M\""
 o="$(outof domerge)"
-! printf '%s\n' "$o" | grep -q '^merged' && printf '%s\n' "$o" | grep -qF 'Pull Request is not mergeable (HTTP 405)' && [ "$(puts)" = 1 ]
-check "a 405 with the pull request merged at another head reports the error as is, no second PUT" $?
+! printf '%s\n' "$o" | grep -q '^merged' && printf '%s\n' "$o" | grep -qxF 'merge-run.sh: outcome unknown, check the pull request: gh: Pull Request is not mergeable (HTTP 405)' && [ "$(puts)" = 1 ]
+check "a 405 with the pull request merged at another head reports the outcome unknown with the error, no second PUT" $?
 
 fresh; prep; plan; mr gate "$RUN" > /dev/null
 touch "$FX/put-405"
 o="$(outof domerge)"
-! printf '%s\n' "$o" | grep -q '^merged' && printf '%s\n' "$o" | grep -qF 'Pull Request is not mergeable (HTTP 405)' && [ "$(puts)" = 1 ]
+! printf '%s\n' "$o" | grep -q '^merged' && printf '%s\n' "$o" | grep -qxF 'merge-run.sh: the merge failed: gh: Pull Request is not mergeable (HTTP 405); nothing retried' && [ "$(puts)" = 1 ]
 check "a 405 with the pull request not merged reports the error as is, no second PUT" $?
+
+# --- any other PUT failure is read once too: a timeout that landed, one that did not, a failed read
+fresh; prep; plan; mr gate "$RUN" > /dev/null
+echo "Post https://api.github.com/repos/o/r/pulls/7/merge: net/http: request canceled (Client.Timeout exceeded)" > "$FX/put-fail"
+fx2 repos/o/r/pulls/7 ".merged = true | .state = \"closed\" | .merge_commit_sha = \"$C\""
+o="$(domerge)"; s=$?
+[ "$s" = 0 ] && printf '%s\n' "$o" | grep -qxF "merged: o/r#7, head $H, merge commit $C (the merge had already landed)" && [ "$(puts)" = 1 ]
+check "a PUT that timed out but landed at the confirmed head reports merged, no second PUT" $?
+
+fresh; prep; plan; mr gate "$RUN" > /dev/null
+echo "gh: Server Error (HTTP 502)" > "$FX/put-fail"
+o="$(outof domerge)"
+! printf '%s\n' "$o" | grep -q '^merged' && printf '%s\n' "$o" | grep -qxF 'merge-run.sh: the merge failed: gh: Server Error (HTTP 502); nothing retried' && [ "$(puts)" = 1 ]
+check "a PUT that failed and did not land reports the error as it came, nothing retried, no second PUT" $?
+
+fresh; prep; plan; mr gate "$RUN" > /dev/null
+echo "gh: Server Error (HTTP 502)" > "$FX/put-fail"; touch "$FX/read-fail-after-put"
+o="$(outof domerge)"
+! printf '%s\n' "$o" | grep -q '^merged' && printf '%s\n' "$o" | grep -qxF 'merge-run.sh: outcome unknown, check the pull request: gh: Server Error (HTTP 502)' && [ "$(puts)" = 1 ]
+check "a PUT that failed with a failed read after it reports the outcome unknown with the error, no second PUT" $?
 
 # --- Negative self-check ----------------------------------------------------------------------
 oc=0
@@ -246,5 +274,9 @@ mutate "the re-read before the merge skipped" 's/^  live raw-merge$/  RAW="\$RUN
   'fresh; prep; plan; mr gate "$RUN"; fx repos/o/r/commits/'"$H"'/check-runs ".[0].check_runs[0].conclusion = \"failure\""; mr merge "$RUN" --target o/r#7 --confirm-head '"$H"'; [ "$(puts)" = 0 ]'
 mutate "approve with nits swapped for changes suggested" 's/"approve with nits"/"changes suggested"/g' \
   'fresh; prep; plan ".verdict = \"changes suggested\""; ! mr gate "$RUN"'
+mutate "the fresh review check dropped" 's/^     elif \(\$pl\.read_at \| iso_time\)[^\n]*\n//m' \
+  'fresh; prep; plan ".read_at = \"2020-01-01T00:00:00Z\""; ! mr gate "$RUN"'
+mutate "the read after a failed PUT limited to a 405" 's/    get after "repos\/\$REPO\/pulls\/\$NUM" \|\| fail/    case "\$err" in *"HTTP 405"*) ;; *) fail "the merge failed: \$err; nothing retried" ;; esac\n    get after "repos\/\$REPO\/pulls\/\$NUM" || fail/' \
+  'fresh; prep; plan; mr gate "$RUN"; echo "timeout" > "$FX/put-fail"; fx2 repos/o/r/pulls/7 ".merged = true"; domerge'
 
 if [ "$fails" = 0 ]; then echo "all pr-merge checks passed"; else echo "$fails pr-merge check(s) FAILED"; exit 1; fi

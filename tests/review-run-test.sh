@@ -118,7 +118,7 @@ case "$ep" in
   repos/*/issues/*) f="issue-${ep##*/}" ;;
   repos/*/commits/*/check-runs) f=runs ;;
   repos/*/commits/*/status) f=status ;;
-  repos/*/actions/runs) f=wfruns ;;
+  repos/*/actions/runs) f=wfruns; [ ! -f "$GHD/meta-next" ] || mv "$GHD/meta-next" "$GHD/meta" ;; # meta-next: the pulls read after the checks reads
   *) exit 1 ;;
 esac
 [ -f "$GHD/$f" ] || exit 1
@@ -261,9 +261,9 @@ cp "$GHD/meta" "$TMP/meta-fx"
 jq '.head.sha = "'"$(printf 'c3%.0s' $(seq 20))"'"' "$TMP/meta-fx" > "$GHD/meta"
 run_rr render "$FR" --findings "$FX/reviewer/findings.json" --assessment "$FX/reviewer/assessment.txt" \
   --summary "$FX/reviewer/summary.txt" --out "$TMP/render-moved" > "$TMP/r-moved.out" 2>&1
-check "plan.json: a head that moved at the render-time read refuses, result.json stays, no plan.json or plan.json.tmp" \
-  "$([ $? = 1 ] && [ -f "$TMP/render-moved/result.json" ] && [ ! -e "$TMP/render-moved/plan.json" ] && [ ! -e "$TMP/render-moved/plan.json.tmp" ] &&
-     grep -qx 'review-run.sh: the pull request moved during the review: head_sha' "$TMP/r-moved.out"; echo $?)"
+check "plan.json: a head that moved at the render-time read exits 0, result.json stays, no plan.json or plan.json.tmp" \
+  "$([ $? = 0 ] && [ -f "$TMP/render-moved/result.json" ] && [ ! -e "$TMP/render-moved/plan.json" ] && [ ! -e "$TMP/render-moved/plan.json.tmp" ] &&
+     grep -qx 'plan: not written, the pull request moved during the review: head_sha' "$TMP/r-moved.out"; echo $?)"
 cp "$TMP/meta-fx" "$GHD/meta"
 check "plan.json: a commit target writes none (render-output.md says so; review-run.sh takes no commit)" \
   "$(awk '/^## plan.json$/{p=1; next} /^## /{p=0} p' "$SKILL/references/render-output.md" | grep -q 'commit target' &&
@@ -1134,6 +1134,14 @@ check "plan.json: a prepared run's render writes a plan of the run's pin, no fin
      and .module_profile == null and .module_prefix == "" and (.handover_block | startswith("UNTRUSTED-"))' "$TMP/render-plan/plan.json" > /dev/null; echo $?)"
 check "plan.json: the run's own render output stays at most 30 lines" "$(lines_ok "$TMP/rpl.out")"
 run_rr cleanup "$RUN" > /dev/null
+# The pin read after the host reads answers another base SHA: the pin must match the host's base too.
+HEADREF=feat/pr-branch ghfiles open false APPROVED
+jq --arg b "$HEADC" '.base.sha = $b' "$GHD/meta" > "$GHD/meta-next"
+prep
+check "prepare: a pin read whose base SHA is not the host's leaves no pin" \
+  "$([ -n "$RUN" ] && [ ! -e "$GHD/meta-next" ] && [ "$(jq -r .base_sha "$RUN/host/host.json")" = "$BASEC" ] && [ ! -e "$RUN/state/pin.json" ]; echo $?)"
+[ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null
+rm -f "$GHD/meta-next"
 ghfiles open false APPROVED
 prep; full; run_rr handover "$RUN" > /dev/null
 check "prepare: a head ref outside the pin grammar leaves no pin, and the run goes on" "$([ ! -e "$RUN/state/pin.json" ] && [ -f "$RUN/index.json" ]; echo $?)"
@@ -1177,6 +1185,8 @@ ghfiles open false APPROVED
 # SKILL.md under 16384 bytes.
 # Updated for Step 11 proposing the unlock only when a post is proposed, and Step 12's retry
 # repeating the head, lock and identity checks without a second unlock.
+# Updated for the pr-merge line in the description and Don't activate list, with Rule 5's runner
+# sentence shortened, leaving its detail to plan-pass.md, to keep SKILL.md under 16384 bytes.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1185,7 +1195,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=f59d0666d61b
+want=068b1c3b05eb
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"

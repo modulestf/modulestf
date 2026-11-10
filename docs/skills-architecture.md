@@ -97,7 +97,7 @@ This is the design the fix skill follows. Its own entry point and references hol
 
 ## Stages
 
-The three pull request skills are stages of one pipeline: review, apply, merge. Each is its own skill with its own credential boundary, and each reads the pull request live. Review hands its plan to apply through a pinned JSON file, in the shape of [stage-contract.md](../.agents/skills/terraform-module-pr-review/references/stage-contract.md). Merge reads the plan of its own fresh review. Apply also writes `applied.json` for information; no stage reads it yet.
+The three pull request skills are stages of one pipeline: review, apply, merge. Each is its own skill with its own credential boundary, and each reads the pull request live. Review hands its plan to apply through a pinned JSON file, in the shape of [stage-contract.md](../.agents/skills/terraform-module-pr-review/references/stage-contract.md). Merge reads the plan of its own fresh review, one whose `read_at` is not earlier than the merge run's start. Apply also writes `applied.json` for information; no stage reads it yet.
 
 | Stage | Skill | Reads | Writes |
 |-------|-------|-------|--------|
@@ -107,7 +107,7 @@ The three pull request skills are stages of one pipeline: review, apply, merge. 
 
 - The contract. Every stage file names a `kind` and a `schema` and carries the same nine-field pin: the target, the number, the repositories, the refs and the head, base and merge base SHAs. A reader holds an exact allow-list of kinds and schemas and rejects any unknown field. Before it acts, a stage reads the pull request live, builds the live pin and refuses on the first field that differs. A stale file is never repaired; the user reviews again.
 - Apply. `plan.json` replaces the round-0 review of the fix skill. The plan's findings and handover text become the round-0 items, and the fix loop runs as before. A comment created after the plan's `read_at` is not an item of the run. A comment edited after it refuses the run. The REST review object has no `updated_at`, so an edit to a review body after `read_at` cannot be detected.
-- Merge. The merge skill never trusts an earlier plan for a verdict. It runs a fresh review of the live head. The verdict and the pin come from that review's plan, and every other precondition is read live. It squash merges only, and refuses when the repository disallows squash. Every merge needs a new user message that names `--target owner/repo#N` and the full 40-character `--confirm-head`. Any gate refusal ends the run, so a retry needs a new `prepare` and a fresh review. When the merge call answers 405, the run reports `merged` only when the pull request shows merged with the confirmed head SHA.
+- Merge. The merge skill never trusts an earlier plan for a verdict. It runs a fresh review of the live head. The verdict and the pin come from that review's plan, and every other precondition is read live. It squash merges only, and refuses when the repository disallows squash. Every merge needs a new user message that names `--target owner/repo#N` and the full 40-character `--confirm-head`. Any gate refusal ends the run, so a retry needs a new `prepare` and a fresh review. When the merge call fails, the run reads the pull request once and reports `merged` only when it shows merged with the confirmed head SHA, and `outcome unknown` when that read fails or shows another head.
 - Own code. A pull request the user wrote needs no apply stage. The user pushes, and the next review or merge run judges the new head.
 
 ## The dual-audience comment
