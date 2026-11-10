@@ -13,7 +13,7 @@ Parse the pull request reference as pr-review's [inputs.md](../../terraform-modu
 merge-run.sh prepare --repo <owner>/<repo> --pr <number> --out <dir>
 ```
 
-`<dir>` is an existing absolute directory. `prepare` checks the identity before it makes anything: no `CI` or `GITHUB_ACTIONS` variable, `gh api user` of type `User`, and a permission of `write`, `maintain` or `admin` from `repos/{owner}/{repo}/collaborators/{login}/permission`. It makes `$RUN` under `<dir>` with an empty `$RUN/review`, and prints `RUN=` and the next step.
+`<dir>` is an existing absolute directory. `prepare` checks the identity before it makes anything: no `CI` or `GITHUB_ACTIONS` variable set, even to an empty value, `gh api user` of type `User`, and a permission of `write`, `maintain` or `admin` from `repos/{owner}/{repo}/collaborators/{login}/permission`. It makes `$RUN` under `<dir>` with an empty `$RUN/review`, and prints `RUN=` and the next step.
 
 ## Step 2
 
@@ -39,8 +39,9 @@ The verdict comes from the plan; everything else is read live: the pull request,
 | `$RUN/review/plan.json` is a regular file of at most 4 MiB | `the plan is not a regular file ...` |
 | The pull request read succeeds | `a read failed: pr` |
 | The plan passes `stage_ok("review-plan")` | `the plan is not a review-plan stage file of schema 1` |
+| The compare read succeeds, since the live pin needs its merge base | `a read failed: compare` |
 | The plan's pin equals the live pin, by `pin_diff` | `the pull request moved since the review: <field>` |
-| The other reads succeed | `a read failed: <names>` |
+| The reviews and repository reads succeed | `a read failed: <names>` |
 | The verdict is `approve` or `approve with nits` | `the verdict is <verdict>, not approve or approve with nits` |
 | `checks_class` with `pinned_total: null` is passing: pending, missing or failed refuses, and nothing waits | `the checks are not passing: <reason>` |
 | The pull request is open and not merged | `the pull request is not open` |
@@ -49,6 +50,8 @@ The verdict comes from the plan; everything else is read live: the pull request,
 | `mergeable_state` is exactly `clean` | `mergeable_state is <value>, not clean` |
 | No write-capable reviewer's latest review that is not a comment is `CHANGES_REQUESTED`; write-capable is `author_association` `OWNER`, `MEMBER` or `COLLABORATOR`, and a dismissed latest review does not block | `a write-capable reviewer requests changes: <logins>` |
 | The repository allows squash merges | `the repository does not allow squash merges` |
+| The pull request title is a string | `the title cannot be read` |
+| The decision itself evaluates | `the merge precondition could not be evaluated` |
 
 A head with no checks at all is not finished and refuses. `mergeable_state` is GitHub's view of protection, approvals and conflicts: an extra check, not a substitute for the others.
 
@@ -72,7 +75,7 @@ merge-run.sh merge "$RUN" --target <owner>/<repo>#<N> --confirm-head <40 hex>
 
 The target must equal the pin's and the head must equal the pin's `head_sha` in full, else it refuses. It then repeats every read and condition of Step 3, and refuses on any change from `merge.json`, the title included: `changed since the gate: <key>; nothing merged`. A merge runs once per run. Then one `PUT repos/{owner}/{repo}/pulls/{n}/merge` with `sha`, `merge_method`, `commit_title` and `commit_message: ""`. It prints `merged: ...` on success.
 
-A 405 answer is read once more: when `pulls/{n}` shows `merged` and its merge commit's parents include the confirmed head, it prints `merged: ...`. Any other error is printed as it came, with `nothing retried`. GitHub refuses a moved head, a draft and conflicts itself when `sha` is set; without branch protection the verdict, the checks and the confirmation are the only gates.
+A 405 answer is read once more: when `pulls/{n}` shows `merged == true` and its `head.sha` equals the confirmed head, it prints `merged: ...`. A squash merge commit has one parent, the base tip, so the head is checked on the pull request, not among the commit's parents. Any other error is printed as it came, with `nothing retried`. GitHub refuses a moved head, a draft and conflicts itself when `sha` is set; without branch protection the verdict, the checks and the confirmation are the only gates.
 
 Then delete the run directory:
 

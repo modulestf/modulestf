@@ -23,6 +23,8 @@ outof() { "$@" 2>&1; true; }
 FX="$TMP/fx"; BIN="$TMP/bin"; OUTD="$TMP/out"
 mkdir -p "$BIN" "$OUTD"
 export PATH="$BIN:$PATH"
+GITLOG="$TMP/git.log"; : > "$GITLOG"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 1\n' "$GITLOG" > "$BIN/git"; chmod +x "$BIN/git" # logs any git call
 unset CI GITHUB_ACTIONS GITHUB_RUN_ID
 
 H=0123456789abcdef0123456789abcdef01234567
@@ -125,7 +127,7 @@ check "the PUT carries exactly sha, merge_method, commit_title and an empty comm
 [ "$(cut -d' ' -f1 "$FX/put.log")" = repos/o/r/pulls/7/merge ]; check "the PUT goes to the pull request's merge endpoint" $?
 o="$(outof domerge)"
 [ "$(puts)" = 1 ] && printf '%s\n' "$o" | grep -q 'ran already'; check "a second merge in the same run sends no PUT" $?
-! grep -qE '(^| )git( |$)' "$FX/gh-argv.log"; check "no git call reaches gh" $?
+[ ! -s "$GITLOG" ]; check "the happy path makes no git call" $?
 mr cleanup "$RUN" > /dev/null && [ ! -e "$RUN" ]; check "cleanup deletes the run directory" $?
 
 # --- refusals: one precondition each, each with its reason and no PUT -----------------------
@@ -145,12 +147,13 @@ refuse_prepare() {
 }
 refuse_prepare "a bot user" "the token user is not a person" "fx user '.type = \"Bot\" | .login = \"ci[bot]\"'"
 refuse_prepare "CI=true" "a CI variable is set" "export CI=true"; unset CI
+refuse_prepare "CI set but empty" "a CI variable is set" "export CI="; unset CI
 refuse_prepare "GITHUB_ACTIONS set" "a CI variable is set" "export GITHUB_ACTIONS=true"; unset GITHUB_ACTIONS
 refuse_prepare "read permission" "has no write access" "fx repos/o/r/collaborators/alice/permission '.permission = \"read\"'"
 refuse_prepare "a relative --out" "--out" "OUTD_SAVE=\$OUTD; OUTD=out"; OUTD="$OUTD_SAVE"
 refuse_gate "plan kind applied" "the plan is not a review-plan stage file of schema 1" "plan '.kind = \"applied\"'"
 refuse_gate "no plan" "the plan is not a regular file" "rm \"\$RUN/review/plan.json\""
-refuse_gate "the pin moved" "the pull request moved since the review: head_sha" "fx repos/o/r/pulls/7 '.head.sha = \"$B\"'"
+refuse_gate "the pin moved" "the pull request moved since the review: head_sha" "fx repos/o/r/pulls/7 '.head.sha = \"$B\"'; cp \"\$FX/api/repos/o/r/compare/$B...$H.json\" \"\$FX/api/repos/o/r/compare/$B...$B.json\""
 refuse_gate "a retargeted base" "the pull request moved since the review: base_ref" "fx repos/o/r/pulls/7 '.base.ref = \"release\"'"
 refuse_gate "verdict changes suggested" "the verdict is changes suggested, not approve or approve with nits" "plan '.verdict = \"changes suggested\"'"
 refuse_gate "a pending check" "the checks are not passing: not passing: test" "fx repos/o/r/commits/$H/check-runs '.[0].check_runs[0].status = \"in_progress\" | .[0].check_runs[0].conclusion = null'"
@@ -165,6 +168,8 @@ refuse_gate "a maintainer's latest review CHANGES_REQUESTED" "a write-capable re
   "fx repos/o/r/pulls/7/reviews '.[0] += [{id: 4, user: {login: \"bob\", id: 2}, author_association: \"MEMBER\", state: \"CHANGES_REQUESTED\"}]'"
 refuse_gate "squash disallowed" "the repository does not allow squash merges" "fx repos/o/r '.allow_squash_merge = false'"
 refuse_gate "a failed pull request read" "a read failed: pr" "rm \"\$FX/api/repos/o/r/pulls/7.json\""
+refuse_gate "a failed compare read" "a read failed: compare" "rm \"\$FX/api/repos/o/r/compare/$B...$H.json\""
+[ ! -s "$GITLOG" ]; check "the refusals make no git call" $?
 
 # a dismissed latest review and a commenter's request do not block; approve with nits passes
 fresh; prep; plan '.verdict = "approve with nits"'
@@ -196,25 +201,32 @@ refuse_merge "a check failed after the gate" "the checks are not passing" "--tar
 refuse_merge "a title edited after the gate" "changed since the gate: title" "--target o/r#7 --confirm-head $H" \
   "fx repos/o/r/pulls/7 '.title = \"feat: Something else\"'"
 refuse_merge "a head pushed after the gate" "the pull request moved since the review: head_sha" "--target o/r#7 --confirm-head $H" \
-  "fx repos/o/r/pulls/7 '.head.sha = \"$B\"'"
+  "fx repos/o/r/pulls/7 '.head.sha = \"$B\"'; cp \"\$FX/api/repos/o/r/compare/$B...$H.json\" \"\$FX/api/repos/o/r/compare/$B...$B.json\""
 refuse_merge "a bot identity at merge" "the token user is not a person" "--target o/r#7 --confirm-head $H" "fx user '.type = \"Bot\"'"
 refuse_merge "CI set at merge" "a CI variable is set" "--target o/r#7 --confirm-head $H" "export CI=1"; unset CI
 refuse_merge "a merge before the gate" "run gate first" "--target o/r#7 --confirm-head $H" "chmod u+w \"\$RUN\"; chmod u+w \"\$RUN/merge.json\"; rm \"\$RUN/merge.json\""
 
 # --- Review Focus 5: the 405 answer ----------------------------------------------------------
+# The merge commit is a real squash: one parent, the base tip, never the head.
 fresh; prep; plan; mr gate "$RUN" > /dev/null
 touch "$FX/put-405"
 fx2 repos/o/r/pulls/7 ".merged = true | .state = \"closed\" | .merge_commit_sha = \"$C\""
-fx repos/o/r/commits/$C ".parents = [{sha: \"$B\"}, {sha: \"$H\"}]"
+fx repos/o/r/commits/$C ".parents = [{sha: \"$B\"}]"
 o="$(domerge)"; s=$?
-[ "$s" = 0 ] && printf '%s\n' "$o" | grep -q '^merged' && [ "$(puts)" = 1 ]; check "a 405 with the pull request merged and the head as a parent reports merged, no second PUT" $?
+[ "$s" = 0 ] && printf '%s\n' "$o" | grep -q '^merged' && [ "$(puts)" = 1 ]; check "a 405 with the pull request merged at the confirmed head reports merged, no second PUT" $?
 
 fresh; prep; plan; mr gate "$RUN" > /dev/null
 touch "$FX/put-405"
-fx2 repos/o/r/pulls/7 ".merged = true | .state = \"closed\" | .merge_commit_sha = \"$C\""
+fx2 repos/o/r/pulls/7 ".merged = true | .state = \"closed\" | .merge_commit_sha = \"$C\" | .head.sha = \"$M\""
 o="$(outof domerge)"
 ! printf '%s\n' "$o" | grep -q '^merged' && printf '%s\n' "$o" | grep -qF 'Pull Request is not mergeable (HTTP 405)' && [ "$(puts)" = 1 ]
-check "a 405 whose merge commit has another parent reports the error as is, no second PUT" $?
+check "a 405 with the pull request merged at another head reports the error as is, no second PUT" $?
+
+fresh; prep; plan; mr gate "$RUN" > /dev/null
+touch "$FX/put-405"
+o="$(outof domerge)"
+! printf '%s\n' "$o" | grep -q '^merged' && printf '%s\n' "$o" | grep -qF 'Pull Request is not mergeable (HTTP 405)' && [ "$(puts)" = 1 ]
+check "a 405 with the pull request not merged reports the error as is, no second PUT" $?
 
 # --- Negative self-check ----------------------------------------------------------------------
 oc=0

@@ -42,7 +42,7 @@ get() {
 
 # identity: a person's token, no CI, write access or more on the base repository.
 identity() {
-  [ -z "${CI-}${GITHUB_ACTIONS-}" ] || fail "identity refused: a CI variable is set"
+  [ -z "${CI+x}${GITHUB_ACTIONS+x}" ] || fail "identity refused: a CI variable is set"
   get user user || fail "identity refused: the token user cannot be read"
   jq -e '.type == "User" and (.login | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"))' "$RAW/user.json" > /dev/null ||
     fail "identity refused: the token user is not a person"
@@ -63,11 +63,11 @@ $pr[0] as $p | $plan[0] as $pl | $repo[0] as $r
 | ([($rv[0] // [])[] | select(.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))
     | select(.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED"))]
    | group_by(.user.id) | map(max_by(.id)) | map(select(.state == "CHANGES_REQUESTED") | .user.login | tostring | clean)) as $blocking
-| ([if $p == null then "pr" else empty end, if $cmp[0] == null then "compare" else empty end,
-    if $rv[0] == null then "reviews" else empty end, if $r == null then "repository" else empty end]) as $failed
+| ([if $rv[0] == null then "reviews" else empty end, if $r == null then "repository" else empty end]) as $failed
 | {refusal:
     (if $p == null then "a read failed: pr"
      elif ($pl | stage_ok("review-plan")) | not then "the plan is not a review-plan stage file of schema 1"
+     elif $cmp[0] == null then "a read failed: compare"
      elif ($pl.pin | pin_diff($live)) != null then "the pull request moved since the review: \($pl.pin | pin_diff($live))"
      elif ($failed | length) > 0 then "a read failed: \($failed | join(", "))"
      elif ($pl.verdict | IN("approve", "approve with nits")) | not then "the verdict is \($pl.verdict | word), not approve or approve with nits"
@@ -185,12 +185,11 @@ cmd_merge() {
     gh api -X PUT "repos/$REPO/pulls/$NUM/merge" --input - 2> "$RAW/put.err")" || {
     err="$(oneline < "$RAW/put.err")"
     case "$err" in *"HTTP 405"*)
-      if get after "repos/$REPO/pulls/$NUM" && jq -e '.merged == true' "$RAW/after.json" > /dev/null; then
-        mc="$(jq -r '.merge_commit_sha // ""' "$RAW/after.json")"
-        if [[ "$mc" =~ $sha_re ]] && get commit "repos/$REPO/commits/$mc" &&
-          jq -e --arg h "$head" 'any(.parents[]?; .sha == $h)' "$RAW/commit.json" > /dev/null; then
-          echo "merged: $target, head $head, merge commit $mc (the merge had already landed)"; return 0
-        fi
+      # A squash commit has one parent, the base: the merged pull request's own head is the binding.
+      if get after "repos/$REPO/pulls/$NUM" &&
+        jq -e --arg h "$head" '.merged == true and .head.sha == $h' "$RAW/after.json" > /dev/null; then
+        mc="$(jq -r '.merge_commit_sha // "unknown"' "$RAW/after.json" | oneline)"
+        echo "merged: $target, head $head, merge commit $mc (the merge had already landed)"; return 0
       fi ;;
     esac
     fail "the merge failed: $err; nothing retried"
