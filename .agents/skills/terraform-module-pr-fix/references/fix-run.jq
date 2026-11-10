@@ -268,11 +268,11 @@ def state_of:
    change_set: ([.files[]? | .filename, (.previous_filename // empty)] | unique),
    comments: [
      (.reviews[]? | select((.body // "") != "") | {kind: "review", id, user: user_of, author_association, body,
-        path: null, line: null, reply_to: null}),
+        path: null, line: null, reply_to: null, created_at: .submitted_at, updated_at: .submitted_at}),
      (.rcomments[]? | {kind: "thread", id, user: user_of, author_association, body, path,
-        line: (.line // .original_line), reply_to: (.in_reply_to_id // .id)}),
+        line: (.line // .original_line), reply_to: (.in_reply_to_id // .id), created_at, updated_at}),
      (.icomments[]? | {kind: "conversation", id, user: user_of, author_association, body,
-        path: null, line: null, reply_to: null})],
+        path: null, line: null, reply_to: null, created_at, updated_at})],
    checks_pinned: (if .pinned_ok then {total: ((.runs | length) + (.statuses | length))} else {total: null} end)};
 
 # --- Feedback items --------------------------------------------------------------------------
@@ -292,6 +292,21 @@ def items_of:
        eligible: ($o == "self"), file: .path, line, text: (.body // ""), fingerprint: null,
        reply: (if .kind == "thread" then "repos/\($s.repo)/pulls/\($s.number)/comments/\(.reply_to)/replies"
                else "repos/\($s.repo)/issues/\($s.number)/comments" end)}) ];
+
+# Input: the state. The comments a review plan covers: those created at or before $read_at (ISO-8601
+# UTC with Z, so string order is time order). edited lists the ids of kept comments changed after
+# $read_at; later counts the comments created after it. A time that is not in that form never
+# proves a comment older: it counts as later, or as an edit of a kept comment.
+def plan_comments($read_at):
+  def ts: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$");
+  [.comments[] | select((.created_at | ts) and .created_at <= $read_at)] as $k
+  | {keep: $k,
+     edited: [$k[] | select(((.updated_at | ts) and .updated_at <= $read_at) | not) | .id],
+     later: ((.comments | length) - ($k | length))};
+
+# Input: the state. The pin of the pinned head, from the state's own pull request read and the
+# merge base clone froze (null before clone, which no plan's pin equals).
+def state_pin: {pr: (.pr + {number: .number}), merge_base: .frozen.merge_base} | live_pin;
 
 # The reply endpoint of a comment item, rebuilt from the pinned state and the item id alone.
 def reply_endpoint($id):

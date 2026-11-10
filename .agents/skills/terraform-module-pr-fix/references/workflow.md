@@ -38,6 +38,14 @@ fix-run.sh clone "$RUN" --prefix <prefix>
 fix-run.sh items "$RUN" --review "$OUT/round-0" --handover <pr-review run>/handover/task.md
 ```
 
+With a plan, skip the round-0 review. When the user names a directory that holds the `plan.json` of an earlier pr-review render, read its `module_prefix` with `jq -r .module_prefix <dir>/plan.json`, run `clone` with that prefix, and then:
+
+```
+fix-run.sh items "$RUN" --plan <dir>
+```
+
+`--plan` excludes `--review` and `--handover`. `items` refuses a file that is not a `review-plan` stage file of schema 1 or has an unknown field, and compares the plan's pin with a pin built from the run's own frozen state: a difference refuses with `the plan is of another pull request state: <key> differs`, naming the first differing key, and the user reviews again. It also refuses a `module_prefix` other than the one `clone` froze and a `module_profile` other than the one `prepare` was given. The round-0 findings come from the plan's `findings`, the prose from its `handover_block`, and the profile from its `module_profile`. A comment created after the plan's `read_at` is no item of this run and is counted in the line `comments after the review, not items of this run: <n>`; a comment created before it and edited after it refuses with `a comment changed after the review: <id>; review again`. After a gate that passes, a run that took a plan leaves `$OUT/applied.json`, the `applied` stage file of [the stage contract](../../terraform-module-pr-review/references/stage-contract.md), with the pinned head's pin and the commit the gate expects to push.
+
 Then run pr-review's `cleanup`. `clone` prints the merge base and the write path. `items` refuses a round-0 review of another head and a handover with no untrusted block. On the render-only path the run ends here: show the round-0 body and the write path's reasons, then run Step 12's cleanup.
 
 Otherwise `items` prints each item id with its origin and whether it is applied or drafted only. Show the user each item that is drafted only, with its text from `$RUN/items.json` as quoted data, and ask once which of them to apply; "none" is an answer. Run `fix-run.sh apply "$RUN" --item <id>` for each id the user's answer names, then start round 1. The question is asked once, before round 1.
