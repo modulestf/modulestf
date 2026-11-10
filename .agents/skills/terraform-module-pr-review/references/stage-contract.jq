@@ -91,8 +91,13 @@ def checks_class:
 
 # --- Merge commit title ----------------------------------------------------------------------
 
-# Input: the pull request title. Control characters removed, whitespace runs collapsed to one
-# space, cut to 72 characters, then " (#N)" appended; cut is true when the cut removed text.
+# Input: the pull request title. Line breaks and tabs become spaces, control characters and the
+# bidi and format characters U+200B-U+200F, U+202A-U+202E and U+2066-U+2069 are removed, whitespace
+# runs collapse to one space, the text is cut to 72 characters with trailing spaces trimmed, then
+# " (#N)" is appended; cut is true when the cut removed text.
 def commit_title($n):
-  (explode | map(select(. > 31 and (. < 127 or . > 159))) | implode | gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "")) as $t
-  | {title: ($t[0:72] + " (#\($n))"), cut: (($t | length) > 72)};
+  (gsub("[\\t\\n\\r\\f\\v]"; " ")
+   | explode | map(select(. > 31 and (. < 127 or . > 159)
+       and ((. >= 8203 and . <= 8207) or (. >= 8234 and . <= 8238) or (. >= 8294 and . <= 8297) | not)))
+   | implode | gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "")) as $t
+  | {title: (($t[0:72] | sub(" +$"; "")) + " (#\($n))"), cut: (($t | length) > 72)};

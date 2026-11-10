@@ -85,6 +85,12 @@ ct() { JL -c -n --arg t "$1" "$INC \$t | commit_title(7)"; }
 LONG="$(printf 'a%.0s' $(seq 1 90))"
 [ "$(ct "$LONG")" = "{\"title\":\"$(printf 'a%.0s' $(seq 1 72)) (#7)\",\"cut\":true}" ]; check "commit_title cuts a 90-char title to 72 and flags it" $?
 [ "$(ct "$(printf 'a%.0s' $(seq 1 72))" | jq -r .cut)" = false ]; check "commit_title does not flag a 72-char title" $?
+[ "$(ct $'feat: x\ny')" = '{"title":"feat: x y (#7)","cut":false}' ]; check "commit_title turns a newline into a space" $?
+[ "$(ct "$(printf 'a%.0s' $(seq 1 71)) bcd")" = "{\"title\":\"$(printf 'a%.0s' $(seq 1 71)) (#7)\",\"cut\":true}" ]; check "commit_title trims a trailing space after the cut" $?
+for cp in 200B 200C 200D 200E 200F 202A 202B 202C 202D 202E 2066 2067 2068 2069; do
+  [ "$(JL -c -n --arg cp "$cp" "$INC \"a\" + ([\$cp | explode | map(if . < 65 then . - 48 else . - 55 end) | reduce .[] as \$d (0; . * 16 + \$d)] | implode) + \"b\" | commit_title(7)")" = '{"title":"ab (#7)","cut":false}' ]
+  check "commit_title strips U+$cp" $?
+done
 
 # --- Negative self-check: each mutation of a temp copy must make its named case fail. ----------
 oc=0
@@ -108,6 +114,10 @@ mutate "the schema check dropped" 's/  and \.schema == 1\n//' \
   '[ "$(sok "$PLAN" ".schema = 2" review-plan)" = false ]'
 mutate "the key-set check dropped" 's/  and \(\(keys \| sort\) == \(stage_keys\[\$kind\] \| sort\)\);/;/' \
   '[ "$(sok "$PLAN" ". + {x: 1}" review-plan)" = false ]'
+mutate "the bidi strip dropped" 's/ and \(\(\. >= 8203.*?\| not\)//' \
+  '[ "$(JL -c -n "$INC \"a\u202Eb\" | commit_title(7)")" = "{\"title\":\"ab (#7)\",\"cut\":false}" ]'
+mutate "the trailing-space trim dropped" 's/\(\$t\[0:72\] \| sub\(" \+\$"; ""\)\)/(\$t[0:72])/' \
+  '[ "$(ct "$(printf "a%.0s" $(seq 1 71)) bcd" | jq -r .title)" = "$(printf "a%.0s" $(seq 1 71)) (#7)" ]'
 mutate "the title cut dropped" 's/\$t\[0:72\]/\$t/' \
   '[ "$(ct "$LONG")" = "{\"title\":\"$(printf "a%.0s" $(seq 1 72)) (#7)\",\"cut\":true}" ]'
 

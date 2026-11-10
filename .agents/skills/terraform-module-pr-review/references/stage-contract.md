@@ -44,4 +44,4 @@ Nine fields are gated, in this order:
 ## Shared decisions
 
 - `checks_class` classifies a checks read as passing or not finished. The pull request fix and merge skills use it unchanged.
-- `commit_title($n)` takes the pull request title and returns `{title, cut}`: control characters removed, whitespace runs collapsed to one space, cut to 72 characters, then ` (#N)` appended. `cut` is true when the cut removed text, and the merge shows the title to the user in that case.
+- `commit_title($n)` takes the pull request title and returns `{title, cut}`: line breaks and tabs turned into spaces, control characters and the bidi and format characters U+200B to U+200F, U+202A to U+202E and U+2066 to U+2069 removed, whitespace runs collapsed to one space, cut to 72 characters with trailing spaces trimmed, then ` (#N)` appended. `cut` is true when the cut removed text, and the merge shows the title to the user in that case.
