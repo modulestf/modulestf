@@ -23,7 +23,7 @@ Agent skills that review reusable Terraform modules against a written profile of
 | [`terraform-module-maintainer`](.agents/skills/terraform-module-maintainer/SKILL.md) | A change to make, review feedback to work through, a module to create or a provider to upgrade | Edits in your checkout, a report of the checks it ran, and reply drafts |
 | [`change-scope`](.agents/skills/change-scope/SKILL.md) | A proposed addition, in any language or project | Whether it belongs in the thing being changed, and where it goes if not |
 
-The pull request review calls the reviewer, and both call `change-scope`. The pull request fix calls the pull request review, the maintainer and the reviewer. The rules of the module family live in a profile: [`terraform-aws-modules`](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md).
+The pull request review calls the reviewer, and both call `change-scope`. The pull request fix calls the pull request review, the maintainer and the reviewer. The pull request merge calls the pull request review. The rules of the module family live in a profile: [`terraform-aws-modules`](.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md).
 
 Two more skills are work in progress and not usable yet. Each refuses every request and points you to the maintainer:
 

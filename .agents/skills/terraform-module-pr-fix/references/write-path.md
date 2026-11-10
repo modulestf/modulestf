@@ -45,7 +45,7 @@ Read once by `prepare`, REST only, and frozen. Identity first, as pr-review's [I
 | `compare/<base.sha>...<head.sha>` | `merge_base_commit.sha` |
 | `commits/<head.sha>/check-runs` and `statuses`, every page | Their count, for the checks rule; a failed read leaves it unknown and is not a read failure |
 
-GitHub's REST review object has no `updated_at`, so an edit to a review body after the plan's `read_at` cannot be detected. A read that fails is listed in `failed`. A field that is missing or of another type is unknown. The commit identity is read once here, before any clone exists, from the user's own git configuration: `git config --global user.name` and `user.email` from `/` with no inherited environment. Unset or malformed is none.
+A read that fails is listed in `failed`. A field that is missing or of another type is unknown. The commit identity is read once here, before any clone exists, from the user's own git configuration: `git config --global user.name` and `user.email` from `/` with no inherited environment. Unset or malformed is none. GitHub's REST review object has no `updated_at`, so an edit to a review body after the plan's `read_at` cannot be detected.
 
 ## Origins
 

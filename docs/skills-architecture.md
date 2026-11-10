@@ -1,6 +1,6 @@
 # Skills architecture
 
-This record says how the skills in this repository split the work, which of them may write, and how the planned writer and fixer skills reuse what the reviewer knows. Part of it is a plan. [Status and roadmap](#status-and-roadmap) says what exists today.
+This record says how the skills in this repository split the work, which of them may write, and how the planned writer skills reuse what the reviewer knows. Part of it is a plan. [Status and roadmap](#status-and-roadmap) says what exists today.
 
 ## The two audiences of a review
 
@@ -85,7 +85,7 @@ One run has one owner of the review loop. When a caller runs its own loop, as th
 
 ## The terraform-module-pr-fix design in short
 
-This is the design the fix skill will follow. Its own entry point and references will hold the rules.
+This is the design the fix skill follows. Its own entry point and references hold the rules.
 
 - Pinned state. The skill reads the pull request, both repositories, every review and every comment once, through the REST API, and freezes that state when the loop starts.
 - Write path. A total function of the captured state, evaluated again before the push. Path A pushes to the pull request branch: when the token user has push access or more on the head repository, or, on a fork that allows maintainer edits, push access or more on the base repository. Path B is render-only and returns a patch, a disposition table, reply drafts and the findings. A failed read, an unknown field, a missing head, an archived repository, a closed or merged pull request or a merge base that is not exactly one makes the run render-only and says why. A rejected push on path A never falls back to path B. A head branch that is the default branch is pushed only when the confirmation names that branch. The destination URL is built from the pinned names, never copied.
@@ -97,15 +97,15 @@ This is the design the fix skill will follow. Its own entry point and references
 
 ## Stages
 
-The three pull request skills are stages of one pipeline: review, apply, merge. Each is its own skill with its own credential boundary, and each reads the pull request live. They hand work to each other through pinned JSON files, one per stage, in the shape of [stage-contract.md](../.agents/skills/terraform-module-pr-review/references/stage-contract.md).
+The three pull request skills are stages of one pipeline: review, apply, merge. Each is its own skill with its own credential boundary, and each reads the pull request live. Review hands its plan to apply through a pinned JSON file, in the shape of [stage-contract.md](../.agents/skills/terraform-module-pr-review/references/stage-contract.md). Merge reads the plan of its own fresh review. Apply also writes `applied.json` for information; no stage reads it yet.
 
 | Stage | Skill | Reads | Writes |
 |-------|-------|-------|--------|
 | Review | terraform-module-pr-review | the pull request | the comment, after confirmation, and `plan.json` beside the render's other files |
-| Apply | terraform-module-pr-fix, `prepare --plan` | `plan.json` as round 0, instead of a second review | the fix push after confirmation, and `applied.json` after a passing gate |
+| Apply | terraform-module-pr-fix, `items --plan` after `clone` | `plan.json` as round 0, instead of a second review | the fix push after confirmation, and `applied.json` after a passing gate |
 | Merge | terraform-module-pr-merge | the `plan.json` of its own fresh review, never an earlier one | one squash merge after confirmation |
 
-- The contract. Every stage file names a `kind` and a `schema` and carries the same nine-field pin: the target, the repositories, the refs and the head, base and merge base SHAs. A reader holds an exact allow-list of kinds and schemas and rejects any unknown field. Before it acts, a stage reads the pull request live, builds the live pin and refuses on the first field that differs. A stale file is never repaired; the user reviews again.
+- The contract. Every stage file names a `kind` and a `schema` and carries the same nine-field pin: the target, the number, the repositories, the refs and the head, base and merge base SHAs. A reader holds an exact allow-list of kinds and schemas and rejects any unknown field. Before it acts, a stage reads the pull request live, builds the live pin and refuses on the first field that differs. A stale file is never repaired; the user reviews again.
 - Apply. `plan.json` replaces the round-0 review of the fix skill. The plan's findings and handover text become the round-0 items, and the fix loop runs as before. A comment created after the plan's `read_at` is not an item of the run. A comment edited after it refuses the run. The REST review object has no `updated_at`, so an edit to a review body after `read_at` cannot be detected.
 - Merge. The merge skill never trusts an earlier plan for a verdict. It runs a fresh review of the live head. The verdict and the pin come from that review's plan, and every other precondition is read live. It squash merges only, and refuses when the repository disallows squash. Every merge needs a new user message that names `--target owner/repo#N` and the full 40-character `--confirm-head`. Any gate refusal ends the run, so a retry needs a new `prepare` and a fresh review. When the merge call answers 405, the run reports `merged` only when the pull request shows merged with the confirmed head SHA.
 - Own code. A pull request the user wrote needs no apply stage. The user pushes, and the next review or merge run judges the new head.
