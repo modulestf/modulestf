@@ -122,6 +122,7 @@ printf '%s\n' "$o" | grep -qxF "title: feat: Add the x input (#7)" && printf '%s
 [ "$(printf '%s\n' "$o" | wc -l)" -le 30 ]; check "gate prints at most 30 lines" $?
 [ -f "$RUN/merge.json" ] && [ ! -w "$RUN/merge.json" ] &&
   [ "$(jq -c 'keys' "$RUN/merge.json")" = '["checks","cut","method","pin","title","verdict"]' ]; check "gate writes merge.json read-only with its six keys" $?
+[ "$(jq -r .login "$RUN/run.json")" = alice ]; check "prepare records the token user's login in run.json" $?
 [ "$(puts)" = 0 ]; check "gate sends no PUT" $?
 o="$(domerge)"; s=$?
 [ "$s" = 0 ] && printf '%s\n' "$o" | grep -q '^merged'; check "merge prints merged" $?
@@ -134,6 +135,8 @@ o="$(outof domerge)"
 [ ! -s "$GITLOG" ]; check "the happy path makes no git call" $?
 mr cleanup "$RUN" > /dev/null && [ ! -e "$RUN" ]; check "cleanup deletes the run directory" $?
 
+# bind_other: the token now answers as another person with write access, so only the run binding refuses
+bind_other() { fx user '.login = "carol"'; mkdir -p "$FX/api/repos/o/r/collaborators/carol"; echo '{"permission": "admin"}' > "$FX/api/repos/o/r/collaborators/carol/permission.json"; }
 # --- refusals: one precondition each, each with its reason and no PUT -----------------------
 # refuse_gate <name> <reason substring> <setup command>: the setup runs after prepare and the plan
 refuse_gate() {
@@ -161,6 +164,8 @@ refuse_gate "no plan" "the plan is not a regular file" "rm \"\$RUN/review/plan.j
 refuse_gate "a plan read before this run started" "the plan is not this run's review" "plan '.read_at = \"2020-01-01T00:00:00Z\"'"
 refuse_gate "a malformed read_at" "the plan is not this run's review" "plan '.read_at = \"2026-11-10 00:00:00\"'"
 refuse_gate "a read_at that is not a time" "the plan is not this run's review" "plan '.read_at = \"2026-13-40T00:00:00Z\"'"
+refuse_gate "a run file whose started_at is not a time" "the plan is not this run's review" "chmod u+w \"\$RUN/run.json\"; jq '.started_at = \"2026-13-40T00:00:00Z\"' \"\$RUN/run.json\" > \"\$RUN/run.tmp\" && mv -f \"\$RUN/run.tmp\" \"\$RUN/run.json\""
+refuse_gate "another token user than the one that prepared the run" "the token user is not the one that prepared this run" "bind_other"
 refuse_gate "the pin moved" "the pull request moved since the review: head_sha" "fx repos/o/r/pulls/7 '.head.sha = \"$B\"'; cp \"\$FX/api/repos/o/r/compare/$B...$H.json\" \"\$FX/api/repos/o/r/compare/$B...$B.json\""
 refuse_gate "a retargeted base" "the pull request moved since the review: base_ref" "fx repos/o/r/pulls/7 '.base.ref = \"release\"'"
 refuse_gate "verdict changes suggested" "the verdict is changes suggested, not approve or approve with nits" "plan '.verdict = \"changes suggested\"'"
@@ -210,6 +215,8 @@ refuse_merge "a title edited after the gate" "changed since the gate: title" "--
   "fx repos/o/r/pulls/7 '.title = \"feat: Something else\"'"
 refuse_merge "a head pushed after the gate" "the pull request moved since the review: head_sha" "--target o/r#7 --confirm-head $H" \
   "fx repos/o/r/pulls/7 '.head.sha = \"$B\"'; cp \"\$FX/api/repos/o/r/compare/$B...$H.json\" \"\$FX/api/repos/o/r/compare/$B...$B.json\""
+refuse_merge "another token user at merge" "the token user is not the one that prepared this run" "--target o/r#7 --confirm-head $H" "bind_other"
+refuse_merge "a decision key only the fresh side has" "changed since the gate: cut" "--target o/r#7 --confirm-head $H" "jq 'del(.cut)' \"\$RUN/merge.json\" > \"\$RUN/m.tmp\" && mv -f \"\$RUN/m.tmp\" \"\$RUN/merge.json\""
 refuse_merge "a bot identity at merge" "the token user is not a person" "--target o/r#7 --confirm-head $H" "fx user '.type = \"Bot\"'"
 refuse_merge "CI set at merge" "a CI variable is set" "--target o/r#7 --confirm-head $H" "export CI=1"; unset CI
 refuse_merge "a merge before the gate" "run gate first" "--target o/r#7 --confirm-head $H" "chmod u+w \"\$RUN\"; chmod u+w \"\$RUN/merge.json\"; rm \"\$RUN/merge.json\""

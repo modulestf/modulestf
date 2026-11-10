@@ -13,7 +13,7 @@ Parse the pull request reference as pr-review's [inputs.md](../../terraform-modu
 merge-run.sh prepare --repo <owner>/<repo> --pr <number> --out <dir>
 ```
 
-`<dir>` is an existing absolute directory. `prepare` checks the identity before it makes anything: no `CI`, `GITHUB_ACTIONS` or `GITHUB_RUN_ID` variable set, even to an empty value, `gh api user` of type `User`, and a permission of `write`, `maintain` or `admin` from `repos/{owner}/{repo}/collaborators/{login}/permission`. It makes `$RUN` under `<dir>` with an empty `$RUN/review` and a read-only `run.json` that records the repository, the number and `started_at`, the UTC time of `prepare` in ISO 8601 with `Z`. It prints `RUN=` and the next step.
+`<dir>` is an existing absolute directory. `prepare` checks the identity before it makes anything: no `CI`, `GITHUB_ACTIONS` or `GITHUB_RUN_ID` variable set, even to an empty value, `gh api user` of type `User`, and a permission of `write`, `maintain` or `admin` from `repos/{owner}/{repo}/collaborators/{login}/permission`. It makes `$RUN` under `<dir>` with an empty `$RUN/review` and a read-only `run.json` that records the repository, the number, the token user's `login` and `started_at`, the UTC time of `prepare` in ISO 8601 with `Z`. `gate` and `merge` read the identity again and refuse when the live login is not the recorded one. It prints `RUN=` and the next step.
 
 ## Step 2
 
@@ -35,11 +35,11 @@ The verdict comes from the plan; everything else is read live: the pull request,
 
 | Condition | Refusal |
 |---|---|
-| The identity of Step 1 | `identity refused: ...` |
+| The identity of Step 1, and the token user is the one that ran `prepare` | `identity refused: ...`, for the second `identity refused: the token user is not the one that prepared this run` |
 | `$RUN/review/plan.json` is a regular file of at most 4 MiB | `the plan is not a regular file ...` |
 | The pull request read succeeds | `a read failed: pr` |
 | The plan passes `stage_ok("review-plan")` | `the plan is not a review-plan stage file of schema 1` |
-| The plan's `read_at` is an ISO 8601 UTC time with `Z` and not earlier than `started_at`, so the plan is this run's own review and not one copied from an earlier review at the same pin | `the plan is not this run's review` |
+| The plan's `read_at` and the run's `started_at` are ISO 8601 UTC times with `Z` that parse, and `read_at` is not earlier than `started_at`, so the plan is this run's own review and not one copied from an earlier review at the same pin | `the plan is not this run's review` |
 | The compare read succeeds, since the live pin needs its merge base | `a read failed: compare` |
 | The plan's pin equals the live pin, by `pin_diff` | `the pull request moved since the review: <field>` |
 | The reviews and repository reads succeed | `a read failed: <names>` |
@@ -74,7 +74,7 @@ Wait for a new user message that names the pull request and the full 40-characte
 merge-run.sh merge "$RUN" --target <owner>/<repo>#<N> --confirm-head <40 hex>
 ```
 
-The target must equal the pin's and the head must equal the pin's `head_sha` in full, else it refuses. It then repeats every read and condition of Step 3, and refuses on any change from `merge.json`, the title included: `changed since the gate: <key>; nothing merged`. A merge runs once per run. Then one `PUT repos/{owner}/{repo}/pulls/{n}/merge` with `sha`, `merge_method`, `commit_title` and `commit_message: ""`. It prints `merged: ...` on success.
+The target must equal the pin's and the head must equal the pin's `head_sha` in full, else it refuses. It then repeats every read and condition of Step 3, and refuses on any change from `merge.json`, a key on either side included, the title among them: `changed since the gate: <key>; nothing merged`. A merge runs once per run. Then one `PUT repos/{owner}/{repo}/pulls/{n}/merge` with `sha`, `merge_method`, `commit_title` and `commit_message: ""`. It prints `merged: ...` on success.
 
 Any failed `PUT`, a 405 or a time-out that may have landed, is followed by one read of `pulls/{n}`: a read, never a second `PUT`. When it shows `merged == true` and its `head.sha` equals the confirmed head, it prints `merged: ...`. A squash merge commit has one parent, the base tip, so the head is checked on the pull request, not among the commit's parents. When it shows the pull request not merged, the error is printed as it came, with `nothing retried`. When the read fails, or shows it merged at another head, it prints `outcome unknown, check the pull request: <error>`, the `PUT` error included. A new run cannot recover this case: its gate refuses a pull request that is not open. GitHub refuses a moved head, a draft and conflicts itself when `sha` is set; without branch protection the verdict, the checks and the confirmation are the only gates.
 

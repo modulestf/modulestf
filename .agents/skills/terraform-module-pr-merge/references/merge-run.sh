@@ -47,6 +47,7 @@ identity() {
   jq -e '.type == "User" and (.login | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"))' "$RAW/user.json" > /dev/null ||
     fail "identity refused: the token user is not a person"
   LOGIN="$(jq -r .login "$RAW/user.json")"
+  [ -z "${BOUND-}" ] || [ "$LOGIN" = "$BOUND" ] || fail "identity refused: the token user is not the one that prepared this run"
   get perm "repos/$REPO/collaborators/$LOGIN/permission" || fail "identity refused: the permission of $LOGIN cannot be read"
   PERM="$(jq -r '.permission // ""' "$RAW/perm.json")"
   case "$PERM" in write | maintain | admin) ;; *) fail "identity refused: $LOGIN has no write access to $REPO" ;; esac
@@ -68,7 +69,7 @@ $pr[0] as $p | $plan[0] as $pl | $repo[0] as $r
 | {refusal:
     (if $p == null then "a read failed: pr"
      elif ($pl | stage_ok("review-plan")) | not then "the plan is not a review-plan stage file of schema 1"
-     elif ($pl.read_at | iso_time) == null or ($pl.read_at | iso_time) < ($started | iso_time) then "the plan is not this run\u0027s review"
+     elif ($pl.read_at | iso_time) == null or ($started | iso_time) == null or ($pl.read_at | iso_time) < ($started | iso_time) then "the plan is not this run\u0027s review"
      elif $cmp[0] == null then "a read failed: compare"
      elif ($pl.pin | pin_diff($live)) != null then "the pull request moved since the review: \($pl.pin | pin_diff($live))"
      elif ($failed | length) > 0 then "a read failed: \($failed | join(", "))"
@@ -120,8 +121,10 @@ open_run() {
   [ -f "$RUN/run.json" ] || die "no prepared run in that directory"
   REPO="$(jq -r .repo "$RUN/run.json")"; NUM="$(jq -r .number "$RUN/run.json")"
   STARTED="$(jq -r .started_at "$RUN/run.json")"
+  BOUND="$(jq -r .login "$RUN/run.json")"
   [[ "$REPO" =~ $repo_re ]] && [[ "$NUM" =~ ^[1-9][0-9]{0,8}$ ]] &&
-    [[ "$STARTED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || die "the run file is outside its grammar"
+    [[ "$STARTED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] &&
+    [[ "$BOUND" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]] || die "the run file is outside its grammar"
 }
 
 cmd_prepare() {
@@ -145,7 +148,7 @@ cmd_prepare() {
   identity
   RUN="$(mktemp -d "${out%/}/pr-merge.XXXXXX")" && mkdir "$RUN/review" || fail "no run directory"
   # started_at: the fresh review this run reads must have started its reads at or after this time.
-  jq -n --arg r "$REPO" --argjson n "$NUM" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{repo: $r, number: $n, started_at: $t}' > "$RUN/run.json" && chmod a-w "$RUN/run.json" ||
+  jq -n --arg r "$REPO" --argjson n "$NUM" --arg l "$LOGIN" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{repo: $r, number: $n, login: $l, started_at: $t}' > "$RUN/run.json" && chmod a-w "$RUN/run.json" ||
     fail "the run file cannot be written"
   echo "RUN=$RUN"
   echo "identity: $LOGIN (User), permission $PERM on $REPO"
@@ -184,7 +187,7 @@ cmd_merge() {
   [ "$target" = "$(jq -r .pin.target "$RUN/merge.json")" ] || fail "the target is not the pull request the gate showed"
   [ "$head" = "$(jq -r .pin.head_sha "$RUN/merge.json")" ] || fail "the head is not the one the gate showed"
   live raw-merge
-  x="$(jq -r --slurpfile g "$RUN/merge.json" '.merge as $m | first(($g[0] | keys_unsorted[]) as $k | select($g[0][$k] != $m[$k]) | $k) // ""' "$RAW/decision.json")"
+  x="$(jq -r --slurpfile g "$RUN/merge.json" '.merge as $m | first((($g[0] + $m) | keys_unsorted[]) as $k | select(($g[0] | has($k)) != ($m | has($k)) or $g[0][$k] != $m[$k]) | $k) // ""' "$RAW/decision.json")"
   [ -z "$x" ] || fail "changed since the gate: $x; nothing merged"
   resp="$(jq -n --slurpfile m "$RUN/merge.json" '$m[0] | {sha: .pin.head_sha, merge_method: .method, commit_title: .title, commit_message: ""}' |
     gh api -X PUT "repos/$REPO/pulls/$NUM/merge" --input - 2> "$RAW/put.err")" || {
