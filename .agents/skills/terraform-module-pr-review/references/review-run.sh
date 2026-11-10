@@ -26,7 +26,7 @@
 #                                        the module profile snapshot (state/profile.json)
 #   review-run.sh render <run> --findings <file> --assessment <file> --out <dir>
 #       [--summary <file>] [--standard]
-#                                        the run file, depth.sh verify, render-comment.sh
+#                                        the run file, depth.sh verify, render-comment.sh, plan.json
 #   review-run.sh cleanup <run>         deletes the run directory
 #
 # Every subcommand prints at most 30 lines. Host strings never reach a command line or an
@@ -194,9 +194,10 @@ cmd_prepare() {
   case "$cache" in /?*) ;; *) die "--provider-cache must be an absolute path" ;; esac
 
   # Step 1, identity, before anything else (github-io.md, Identity).
-  local id login="" type="" posting=enabled
-  id="$(gh api user --jq '.login + " " + .type' 2> /dev/null)" || id=""
-  login="${id% *}"; type="${id##* }"
+  local id login="" type="" uid="" posting=enabled
+  id="$(gh api user --jq '.login + " " + .type + " " + (.id // "" | tostring)' 2> /dev/null)" || id=""
+  read -r login type uid <<< "$id"
+  [[ "$uid" =~ ^[1-9][0-9]{0,12}$ ]] || uid=""
   [[ "$login" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]] && [ "$type" = User ] || posting=disabled
   [ -z "${CI-}${GITHUB_ACTIONS-}${GITHUB_RUN_ID-}" ] || posting=disabled
   [[ "$login" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$ ]] || login=""
@@ -217,6 +218,9 @@ cmd_prepare() {
   local hp=(bash "$HERE/host-pass.sh") ro=() tr=() err
   [ "$render_only" = false ] || ro=(--render-only)
   [ "$triage" = false ] || tr=(--triage)
+  # The time the host reads start, for plan.json's read_at (host.json records none); the token user's id beside it.
+  jq -n --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg u "$uid" \
+    '{read_at: $t, reviewer_id: ($u | tonumber? // null)}' > "$RUN/state/stage.json" || refuse index-failed "stage.json could not be written"
   if ! "${hp[@]}" run --repo "$repo" --pr "$pr" --login "$login" --out "$RUN/host" ${ro[@]+"${ro[@]}"} \
       ${tr[@]+"${tr[@]}"} > /dev/null 2> "$RUN/state/host-pass.err"; then
     err="$(sed -n 's/^::error::host-pass.sh: //p' "$RUN/state/host-pass.err" | head -n 1)"
@@ -235,9 +239,14 @@ cmd_prepare() {
   local checks_file=rejected
   [ "$("${hp[@]}" check "$RUN/checks" --head "$head" 2> /dev/null)" = "checks accepted" ] && checks_file=accepted
   # The count skip-coverage.md holds the files list to, from a metadata read at the same head.
-  local changed=null meta
-  meta="$(gh api "repos/$repo/pulls/$pr" --jq '.head.sha + " " + (.changed_files | tostring)' 2> /dev/null)" &&
+  local changed=null meta=""
+  gh api "repos/$repo/pulls/$pr" > "$RUN/state/pr.json" 2> /dev/null &&
+    meta="$(jq -r '.head.sha + " " + (.changed_files | tostring)' "$RUN/state/pr.json" 2> /dev/null)" &&
     [ "${meta%% *}" = "$head" ] && [[ "${meta#* }" =~ ^[0-9]{1,6}$ ]] && changed="${meta#* }"
+  # The pin of stage-contract.md from the same read, at the host's head: no valid pin, no plan.json later.
+  jq -e -L "$HERE" --arg head "$head" --arg mb "$mb" 'include "stage-contract";
+    {pr: ., merge_base: $mb} | live_pin | select(.head_sha == $head and pin_ok)' "$RUN/state/pr.json" \
+    > "$RUN/state/pin.json" 2> /dev/null || rm -f "$RUN/state/pin.json"
 
   # Step 3, the clone, pinned to the head; then the merge base with enough history for depth.sh.
   git init -q --template= "$RUN/clone" && git -C "$RUN/clone" remote add origin "https://github.com/$repo.git" ||
@@ -985,6 +994,7 @@ cmd_render() {
     stop "depth.json changed after the handover"
   case "$out" in /?*) ;; *) die "--out must be an absolute path" ;; esac
   [ -d "$out" ] || mkdir -p -- "$out" || die "--out cannot be made"
+  [ ! -e "$out/plan.json" ] && [ ! -e "$out/plan.json.tmp" ] || fail "the output directory already holds plan.json"
   if [ -f "$RUN/depth.json" ]; then
     bash "$HERE/depth.sh" verify "$RUN/depth.json" --clone "$RUN/clone" > /dev/null 2>&1 ||
       fail "depth.sh verify: the depth binding does not match the clone; nothing is rendered"
@@ -1034,6 +1044,33 @@ cmd_render() {
     | "clamp: own pull request, propose COMMENT in place of \(.proposed_event)"' "$out/result.json"
   echo "body: $out/comment.md"
   jq -r '"identity: \(.login | if . == "" then "none" else . end), posting \(.posting)" + (if .render_only then ", render-only" else "" end)' "$RUN/state/args.json"
+  write_plan "$out"
+}
+
+# plan.json (stage-contract.md, review-plan): after result.json, the pull request read again once and
+# compared with the pin prepare saved, then the file built by jq from files, written to plan.json.tmp,
+# checked with stage_ok and renamed. The body and result.json stay when a step here refuses.
+write_plan() { # out directory
+  local o="$1" t="$RUN/handover/task.md" s d
+  [ -f "$RUN/state/pin.json" ] && [ -f "$RUN/state/stage.json" ] || fail "no plan.json: prepare recorded no valid pin"
+  gh api "repos/$(arg repo)/pulls/$(arg pr)" > "$RUN/state/pr-live.json" 2> /dev/null ||
+    fail "no plan.json: the pull request could not be read again"
+  d="$(jq -r -L "$HERE" --slurpfile pin "$RUN/state/pin.json" --arg mb "$MB" 'include "stage-contract";
+    ({pr: ., merge_base: $mb} | live_pin) as $l | $pin[0] | pin_diff($l) // ""' "$RUN/state/pr-live.json" 2> /dev/null)" ||
+    fail "no plan.json: the pull request could not be read again"
+  [ -z "$d" ] || fail "the pull request moved during the review: $d"
+  s="$(sed -n 's/^UNTRUSTED-\([0-9a-f]\{12\}\) BEGIN$/\1/p' "$t")"
+  [[ "$s" =~ ^[0-9a-f]{12}$ ]] || fail "no plan.json: task.md has no single untrusted block"
+  sed -n "/^UNTRUSTED-$s BEGIN\$/,/^UNTRUSTED-$s END\$/p" "$t" > "$RUN/state/block.txt"
+  jq -n --slurpfile pin "$RUN/state/pin.json" --slurpfile res "$o/result.json" --slurpfile fnd "$o/findings.json" \
+    --slurpfile st "$RUN/state/stage.json" --rawfile hb "$RUN/state/block.txt" --arg prefix "$PREFIX" \
+    --arg mp "$(jq -r '.id // ""' "$RUN/state/profile.json" 2> /dev/null)" \
+    '{kind: "review-plan", schema: 1, pin: $pin[0], verdict: $res[0].verdict, proposed_event: $res[0].proposed_event,
+      findings: $fnd[0], read_at: $st[0].read_at, handover_block: ($hb | rtrimstr("\n")), module_prefix: $prefix,
+      module_profile: (if $mp == "" then null else $mp end), reviewer_id: $st[0].reviewer_id}' > "$o/plan.json.tmp" 2> /dev/null &&
+    jq -e -L "$HERE" 'include "stage-contract"; stage_ok("review-plan")' "$o/plan.json.tmp" > /dev/null 2>&1 &&
+    mv -- "$o/plan.json.tmp" "$o/plan.json" || { rm -f "$o/plan.json.tmp"; fail "no plan.json: the plan could not be written"; }
+  echo "plan: $o/plan.json"
 }
 
 build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout

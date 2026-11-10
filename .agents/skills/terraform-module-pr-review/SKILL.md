@@ -120,7 +120,7 @@ A check that cannot run never stops the run. If terraform is not installed, the 
 | [inputs.md](references/inputs.md) | Step 0: parsing the reference |
 | [verdict.md](references/verdict.md), [comment-format.md](references/comment-format.md) | The verdict and clamps; the comment's sections, tiers and leak scan |
 | [github-io.md](references/github-io.md) | Interactive reads, a commit target, triage, the Step 12 write, cleanup |
-| [host-pass.md](references/host-pass.md), [facts-variant.md](references/facts-variant.md), [render-output.md](references/render-output.md) | A hosted run: `Host records:`, `Facts variant: judgment`, an output directory |
+| [host-pass.md](references/host-pass.md), [facts-variant.md](references/facts-variant.md), [render-output.md](references/render-output.md) | A hosted run: `Host records:`, `Facts variant: judgment`, an output directory, `plan.json` |
 | [review-run-details.md](references/review-run-details.md) | A run script edge case: refusals, depth pin, record, shell safety |
 | [depth.md](references/depth.md), [verify-pass.md](references/verify-pass.md), [plan-pass.md](references/plan-pass.md), [test-pass.md](references/test-pass.md), [skip-coverage.md](references/skip-coverage.md), [behaviour-pass.md](references/behaviour-pass.md), [ladder-pass.md](references/ladder-pass.md), [schema-pass.md](references/schema-pass.md) | A pass's edge case its command names |
 | [terraform-module-reviewer](../terraform-module-reviewer/SKILL.md), [change-scope](../change-scope/SKILL.md), [profile](../terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md) | The reviewer that produces every finding; scope; the conventions |

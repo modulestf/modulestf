@@ -1,0 +1,11 @@
+{
+  "target": "example-org/terraform-aws-widget#12",
+  "number": 12,
+  "base_repo": "example-org/terraform-aws-widget",
+  "head_repo": "example-org/terraform-aws-widget",
+  "base_ref": "main",
+  "head_ref": "feat/widget",
+  "head_sha": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "base_sha": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "merge_base": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+}
