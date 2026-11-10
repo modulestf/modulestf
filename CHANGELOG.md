@@ -1,3 +1,12 @@
+# [0.9.0](https://github.com/modulestf/modulestf/compare/v0.8.0...v0.9.0) (2026-11-10)
+
+
+### Features
+
+* Review, apply and merge stages for pull requests ([#136](https://github.com/modulestf/modulestf/issues/136)) ([2d62d69](https://github.com/modulestf/modulestf/commit/2d62d69c33b37e1570443a78c5a201ba5e9b21f9))
+
+
+
 # [0.8.0](https://github.com/modulestf/modulestf/compare/v0.7.0...v0.8.0) (2026-11-09)
 
 
