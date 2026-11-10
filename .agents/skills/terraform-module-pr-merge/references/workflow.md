@@ -53,7 +53,7 @@ The verdict comes from the plan; everything else is read live: the pull request,
 | The pull request title is a string | `the title cannot be read` |
 | The decision itself evaluates | `the merge precondition could not be evaluated` |
 
-A head with no checks at all is not finished and refuses. `mergeable_state` is GitHub's view of protection, approvals and conflicts: an extra check, not a substitute for the others.
+A gate refusal ends the run, so a retry costs a new `prepare` and a full review. A head with no checks at all is not finished and refuses. `mergeable_state` is GitHub's view of protection, approvals and conflicts: an extra check, not a substitute for the others.
 
 ## Step 4
 

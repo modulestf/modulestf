@@ -18,6 +18,7 @@ Agent skills that review reusable Terraform modules against a written profile of
 |-------|-------------|--------------|
 | [`terraform-module-pr-review`](.agents/skills/terraform-module-pr-review/SKILL.md) | A pull request or commit URL, or `owner/repo#123` | A verdict and a comment to post, after you confirm |
 | [`terraform-module-pr-fix`](.agents/skills/terraform-module-pr-fix/SKILL.md) | A pull request URL or `owner/repo#123` to finish | A reviewed fix pushed to the pull request's branch, after you confirm, or a patch |
+| [`terraform-module-pr-merge`](.agents/skills/terraform-module-pr-merge/SKILL.md) | A pull request URL or `owner/repo#123` to merge | A fresh review, then a squash merge after you confirm the pull request and its full head SHA |
 | [`terraform-module-reviewer`](.agents/skills/terraform-module-reviewer/SKILL.md) | A module checkout and a diff, a base ref or a list of changed files | A list of findings. Read-only, no verdict |
 | [`terraform-module-maintainer`](.agents/skills/terraform-module-maintainer/SKILL.md) | A change to make, review feedback to work through, a module to create or a provider to upgrade | Edits in your checkout, a report of the checks it ran, and reply drafts |
 | [`change-scope`](.agents/skills/change-scope/SKILL.md) | A proposed addition, in any language or project | Whether it belongs in the thing being changed, and where it goes if not |

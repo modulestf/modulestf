@@ -1,6 +1,6 @@
 ---
 name: terraform-module-pr-fix
-description: Reviews a GitHub pull request against a Terraform module repository, fixes it to a mergeable state and pushes the fix to the pull request's own branch where the pull request allows it, after the user confirms. Use when the request carries a pull request URL or owner/repo#123 and asks to "review and finish PR 123", "fix this pull request", "make owner/repo#123 mergeable" or "apply the review to PR N and push". Not for a review only (use terraform-module-pr-review). Not for a change in a local checkout with no pull request (use terraform-module-maintainer).
+description: Reviews a GitHub pull request against a Terraform module repository, fixes it to a mergeable state and pushes the fix to the pull request's own branch where the pull request allows it, after the user confirms. Use when the request carries a pull request URL or owner/repo#123 and asks to "review and finish PR 123", "fix this pull request", "make owner/repo#123 mergeable" or "apply the review to PR N and push". Not for a review only (use terraform-module-pr-review). Not for a change in a local checkout with no pull request (use terraform-module-maintainer). Not for merging (use terraform-module-pr-merge).
 ---
 
 # Terraform Module Pull Request Fix
@@ -15,6 +15,7 @@ Turn one GitHub pull request into a fix clone, a set of feedback items and a rev
 **Don't activate for:**
 - A review, a verdict or a comment only (use `terraform-module-pr-review`, which never writes a ref)
 - A change in a local checkout with no pull request (use `terraform-module-maintainer`)
+- Merging a pull request (use `terraform-module-pr-merge`)
 - General Terraform questions (use the `antonbabenko/terraform-skill` plugin)
 
 ## Inputs

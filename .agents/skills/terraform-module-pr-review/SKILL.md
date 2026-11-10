@@ -1,6 +1,6 @@
 ---
 name: terraform-module-pr-review
-description: Reviews a GitHub pull request, or a single commit, against a Terraform module repository. Use when the request carries a pull request URL like github.com/owner/repo/pull/123, a short reference like owner/repo#123, or a commit URL like github.com/owner/repo/commit/<sha>, and asks for a review, a verdict, a comment to post, "what should I reply on this pull request", or "is this ready to merge". Not for a local diff or a set of changed files with no pull request (use terraform-module-reviewer), not for making the change (use terraform-module-maintainer), and not for fixing and pushing a pull request (use terraform-module-pr-fix).
+description: Reviews a GitHub pull request, or a single commit, against a Terraform module repository. Use when the request carries a pull request URL like github.com/owner/repo/pull/123, a short reference like owner/repo#123, or a commit URL like github.com/owner/repo/commit/<sha>, and asks for a review, a verdict, a comment to post, "what should I reply on this pull request", or "is this ready to merge". Not for a local diff or a set of changed files with no pull request (use terraform-module-reviewer), not for making the change (use terraform-module-maintainer), not for fixing and pushing a pull request (use terraform-module-pr-fix), and not for merging (use terraform-module-pr-merge).
 ---
 
 # Terraform Module Pull Request Review
@@ -17,6 +17,7 @@ Turn one GitHub pull request into a workspace and a task, get findings from `ter
 - A local diff, a base reference, or a list of changed files with no pull request (use `terraform-module-reviewer`)
 - Making, fixing, or upgrading the change (use `terraform-module-maintainer`)
 - Fixing a pull request and pushing the fix (use `terraform-module-pr-fix`)
+- Merging a pull request (use `terraform-module-pr-merge`)
 - General Terraform questions (use the `antonbabenko/terraform-skill` plugin)
 
 ## Inputs
