@@ -28,7 +28,7 @@ FR="$SKILLS/terraform-module-pr-fix/references/fix-run.sh" # the script under te
 check() { if [ "$2" = 0 ]; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
 SH="${PR_FIX_TEST_SHELL:-bash}" # bash, or /bin/bash for the 3.2 that macOS ships
 fr() { "$SH" "$FR" "$@"; }
-JL() { jq -L "$(dirname "$FR")" "$@"; } # the decision functions of the script under test
+JL() { jq -L "$(dirname "$FR")" -L "$SKILLS/terraform-module-pr-review/references" "$@"; } # the decision functions of the script under test
 outof() { "$@" 2>&1; true; } # the output of a command expected to refuse, under pipefail
 
 REALGIT="$(command -v git)"
@@ -413,7 +413,7 @@ t_loop; check "loop: no progress, a reappearing fingerprint, round 3, nits and n
 
 # --- 6. Checks ---------------------------------------------------------------------------------
 
-ck() { JL -r -n --argjson x "$1" 'include "fix-run"; $x | checks_class | .class'; }
+ck() { JL -r -n --argjson x "$1" 'include "fix-run"; include "stage-contract"; $x | checks_class | .class'; }
 t_checks() {
   local ok='{"id": 1, "name": "ci", "status": "completed", "conclusion": "success"}'
   [ "$(ck "{\"ok\": true, \"runs\": [$ok], \"statuses\": [], \"pinned_total\": 1}")" = passing ] &&

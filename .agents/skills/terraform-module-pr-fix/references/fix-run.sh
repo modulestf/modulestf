@@ -37,7 +37,7 @@ LIMIT=3
 
 die() { echo "fix-run.sh: $1" >&2; exit 2; }
 fail() { echo "fix-run.sh: $1"; exit 1; }
-J() { jq -L "$HERE" "$@"; } # jq with fix-run.jq; every filter starts with include "fix-run";
+J() { jq -L "$HERE" -L "$PRR" "$@"; } # jq with fix-run.jq (and stage-contract.jq); every filter starts with include "fix-run";
 delete_run() { # the pattern-checked delete of github-io.md, Cleanup, for this skill's template
   case "${ROOT-}" in /?*) ;; *) return 1 ;; esac
   case "${RUN-}" in
@@ -422,7 +422,7 @@ cmd_round() {
 
 frozen() { # the module root prefix and merge base clone froze in the state, into FPFX and FMB
   local x
-  x="$(J -r -e 'include "fix-run"; .frozen | select(type == "object" and (.prefix | prefix_ok) and (.merge_base | sha_ok))
+  x="$(J -r -e 'include "fix-run"; include "stage-contract"; .frozen | select(type == "object" and (.prefix | prefix_ok) and (.merge_base | sha_ok))
     | .merge_base + " " + .prefix' "$RUN/state.json" 2> /dev/null)" || return 1
   FMB="${x%% *}"; FPFX="${x#* }"
 }
@@ -1248,7 +1248,7 @@ cmd_checks() {
   get statuses "repos/$repo/commits/$sha/statuses?per_page=100" pages || ok=false
   local last; last="$(last_reviewed)"
   J -n -r --argjson ok "$ok" --slurpfile r "$RAW/runs.json" --slurpfile s "$RAW/statuses.json" --slurpfile st "$RUN/state.json" \
-    --slurpfile v "$RUN/rounds/$last/review.json" 'include "fix-run";
+    --slurpfile v "$RUN/rounds/$last/review.json" 'include "fix-run"; include "stage-contract";
     ({ok: $ok, runs: ($r[0] // []), statuses: ($s[0] // []), pinned_total: $st[0].checks_pinned.total} | checks_class) as $c |
     "checks: \($c.class), \($c.reason)",
     (if $c.class == "passing" and ($v[0].verdict | IN("clean", "nits")) then "finished: \($v[0].verdict), checks passing"

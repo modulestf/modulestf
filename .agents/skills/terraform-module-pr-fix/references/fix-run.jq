@@ -1,6 +1,10 @@
 # fix-run.jq: the decision functions of terraform-module-pr-fix, as write-path.md states them.
 # Each one is pure: it reads only the JSON it is given. fix-run.sh and tests/pr-fix-test.sh
-# include this file with `jq -L <dir> 'include "fix-run"; ...'`.
+# include this file with `jq -L <dir> -L <pr-review references> 'include "fix-run"; ...'`. The
+# pin grammar (sha_ok, repo_ok, ref_ok) and checks_class live in the pr-review skill's
+# stage-contract.jq, which this file includes.
+
+include "stage-contract";
 
 # --- Identity --------------------------------------------------------------------------------
 
@@ -26,10 +30,6 @@ def role($author):
 
 # --- Write path ------------------------------------------------------------------------------
 
-def sha_ok: type == "string" and test("^[0-9a-f]{40}$");
-def repo_ok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$");
-def ref_ok: type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$")
-  and (test("\\.\\.|//|/\\.|\\.lock$|/$|\\.$") | not);
 def bool_ok: type == "boolean";
 def push_perm: type == "object" and (.push == true or .maintain == true or .admin == true);
 
@@ -151,25 +151,6 @@ def loop_decision:
   then {stop: true, finished_review: false, reason: "no progress: the open set did not shrink"}
   elif .round >= .limit then {stop: true, finished_review: false, reason: "round \(.round) is the last"}
   else {stop: false, finished_review: false, reason: "the next round may start"} end;
-
-# --- Checks ----------------------------------------------------------------------------------
-
-# Input {ok, runs, statuses, pinned_total}: pinned_total is null when the pinned head's reads failed.
-def checks_class:
-  if .ok != true then {class: "not finished", reason: "a checks read failed"}
-  else
-    (.runs | group_by(.name) | map(max_by(.id))) as $r |
-    (.statuses | group_by(.context) | map(max_by(.id))) as $s |
-    if ($r | length) + ($s | length) == 0 then
-      if .pinned_total == 0 then {class: "passing", reason: "no checks, and the pinned head had none"}
-      else {class: "not finished", reason: "no checks yet, the pinned head had \(.pinned_total // "unknown")"} end
-    else
-      ([$r[] | select((.status == "completed" and (.conclusion | IN("success", "skipped"))) | not) | .name]
-       + [$s[] | select(.state != "success") | .context]) as $bad |
-      if ($bad | length) == 0 then {class: "passing", reason: "\($r | length) check runs and \($s | length) statuses passed"}
-      else {class: "not finished", reason: ("not passing: " + ($bad | sort | .[0:5] | join(", ")))} end
-    end
-  end;
 
 # --- Allowed paths ---------------------------------------------------------------------------
 
