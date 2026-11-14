@@ -17,6 +17,7 @@ A profile is one self-contained directory. It links to no other profile and hold
 | `review-guide.md` | no | The profile restated for another code reviewer |
 | `pr-description.md` | no | What a pull request body holds |
 | `plan-providers.txt` | no | Providers the review's plan pass admits in runner mode. The plan pass reads only the default profile's file today, whatever profile is selected |
+| `generated-artifacts.txt` | no | The generators the generated-only mode of `terraform-module-pr-fix` may run, in the grammar of [Generated artifacts](#generated-artifacts). Absent means none |
 
 A file the profile omits means only the generic rules of the skills apply where a rule links to it. The reviewer's checks link to the files of the default profile, [terraform-aws-modules](../profiles/terraform-aws-modules/PROFILE.md); under another profile each link means the selected profile's file of the same name, and the same section in it.
 
@@ -63,6 +64,18 @@ What each value means:
 - `partitions: portable`: the modules run in every AWS partition. `fixed`: they run in one partition only.
 - `examples: required`: each module ships examples under `examples/`. `none`: the callers in the repository are the examples.
 - `release: registry`: releases are cut from commit titles and published. `none`: the repository has no release process of the family's kind.
+
+## Generated artifacts
+
+`generated-artifacts.txt` declares what the generated-only mode of `terraform-module-pr-fix` may regenerate ([Generated-Only](../../terraform-module-pr-fix/references/write-path.md#generated-only)). `fix-run.sh` reads it from the profile directory of the skill checkout for the run's profile id, never from the workspace. No `mtf-facts` command reads it. A profile without the file declares no generator, and the mode refuses.
+
+The file is at most 4096 bytes. Each line is blank, a comment that starts with `#`, or one of:
+
+- `generator wrapper-versions`: each wrapper `versions.tf` from its module's `versions.tf`.
+- `generator terraform-docs`: the `BEGIN_TF_DOCS` regions of `README.md`.
+- `terraform-docs-pin <path> <VARIABLE>`: where the family's CI pins terraform-docs, as a repository-relative file path and a variable name of capitals, digits and underscores.
+
+`generator terraform-docs` needs exactly one `terraform-docs-pin` line, and a pin line needs `generator terraform-docs`. Any other line, a generator named twice, a link or a file over the cap refuses the run with `the profile's generated-artifacts.txt is malformed`.
 
 ## Gate table
 

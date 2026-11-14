@@ -1791,6 +1791,154 @@ t_wrap_b_seq_() { # path B: two rounds that raise the same module, then a full r
 t_wrap_b_seq() { pilot t_wrap_b_seq_; }
 t_wrap_b_seq; check "wrappers: on path B two rounds raise the same module and a third reverts it; each writes derive of its round's module, and the gate passes" $?
 
+# --- 17. Generated-only: generate, the version guard, the gate and the push --------------------
+
+# The generated module: a wrapper derived from its module, a root README whose region is current at
+# the base, and the pre-commit workflow that pins terraform-docs. The head raises the provider floor
+# and adds a variable, leaving the wrapper and the region stale. Variants change the pin.
+GMD="$WORK/generated"
+RG init -q "$GMD"
+mkdir -p "$GMD/wrappers" "$GMD/.github/workflows"
+cp "$WFX/terraform-aws-cloudfront/versions.tf" "$GMD/versions.tf"; cp "$WFX/terraform-aws-cloudfront/wrappers/versions.tf" "$GMD/wrappers/versions.tf"
+printf 'resource "null_resource" "this" {}\n' > "$GMD/main.tf"
+printf 'variable "name" {\n  type = string\n}\n' > "$GMD/variables.tf"
+printf 'module "wrapper" {\n  source = "../"\n}\n' > "$GMD/wrappers/main.tf"
+printf '# module\n\nIntro.\n\n%s\ngenerated: name \n%s\n' "$B1" "$E1" > "$GMD/README.md"
+gpin() { printf 'name: Pre-Commit\n\nenv:\n  TERRAFORM_DOCS_VERSION: %s\n  TFLINT_VERSION: v0.64.0\n' "$1" > "$GMD/.github/workflows/pre-commit.yml"; }
+gpin v0.24.0
+RG -C "$GMD" add -A; RG -C "$GMD" commit -qm base; GB="$(RG -C "$GMD" rev-parse HEAD)"
+ghead() { # branch, base, [setup]: the author's change on the base, then the setup, committed
+  RG -C "$GMD" checkout -q -b "$1" "$2"
+  perl -pi -e 's/>= 6.46"/>= 6.50"/' "$GMD/versions.tf"
+  printf 'variable "name" {\n  type = string\n}\n\nvariable "size" {\n  type = number\n}\n' > "$GMD/variables.tf"
+  [ -z "${3-}" ] || eval "$3"
+  RG -C "$GMD" add -A; RG -C "$GMD" commit -qm "$1"; RG -C "$GMD" rev-parse HEAD
+}
+GH="$(ghead feat "$GB")"
+GHD="$(ghead pin-head "$GB" 'gpin v0.25.0')"
+GHQ="$(ghead pin-quoted "$GB" 'gpin "\"v0.24.0\""')"
+GHO="$(ghead pin-big "$GB" 'perl -e "print qq(# pad\n) x 12000" >> "$GMD/.github/workflows/pre-commit.yml"')"
+GHN="$(ghead pin-gone "$GB" 'rm "$GMD/.github/workflows/pre-commit.yml"')"
+RG -C "$GMD" checkout -q -b base-old "$GB"; gpin v0.23.0; RG -C "$GMD" commit -qam old; GBD="$(RG -C "$GMD" rev-parse HEAD)"
+GHBD="$(ghead pin-base "$GBD" 'gpin v0.24.0')"
+# A head whose generated files are current already: only main.tf changes.
+RG -C "$GMD" checkout -q -b current "$GB"; printf '# x\n' >> "$GMD/main.tf"; RG -C "$GMD" commit -qam current; GHC="$(RG -C "$GMD" rev-parse HEAD)"
+RG -C "$GMD" checkout -q feat
+
+gen_run() { # base, head [prepare args...]: prepare and clone the generated module, then generate into $TMP/g.out
+  use "$GMD" "$1" "$2"; shift 2; fx_default; new_run "$@"
+  fr clone "$RUN" > /dev/null 2>&1 || return 1
+  fr generate "$RUN" > "$TMP/g.out" 2>&1
+}
+t_gen_pilot_() { # both generators, a commit of the two generated files only, the gate and the push
+  gen_run "$GB" "$GH" || { cat "$TMP/g.out"; return 1; }
+  grep -qx 'wrappers: updated wrappers/versions.tf' "$TMP/g.out" && grep -qx 'terraform-docs: regenerated .' "$TMP/g.out" &&
+    grep -qx 'terraform-docs pin: merge base v0.24.0, head v0.24.0, profile v0.24.0' "$TMP/g.out" || { cat "$TMP/g.out"; return 1; }
+  [ "$(CG diff-tree -r --name-only --no-commit-id "$H" HEAD | tr '\n' ' ')" = "README.md wrappers/versions.tf " ] &&
+    [ "$(interior "$RUN/clone/README.md")" = "generated: name size " ] && want terraform-aws-cloudfront 6.46 6.50 | cmpw wrappers/versions.tf &&
+    [ "$(CG log -1 --format='%an %s' HEAD)" = "Pat Owner chore: Regenerate generated files" ] || return 1
+  outof fr round "$RUN" | grep -q 'this run is generated-only: no round runs' || return 1
+  GATE && grep -qx 'verdict: none, a generated-only commit with no review round' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  PUSH > "$TMP/p.out" 2>&1 && grep -q '^next: a terraform-module-pr-review run at ' "$TMP/p.out" || { cat "$TMP/p.out"; return 1; }
+  [ "$(RG --git-dir="$REM/o/r.git" rev-parse refs/heads/feat)" = "$(CG rev-parse HEAD)" ] && fr cleanup "$RUN" > /dev/null
+}
+t_gen_pilot() { pilot t_gen_pilot_; }
+t_gen_pilot; check "generated-only: generate updates the wrapper and the README region in one commit, round refuses, the gate passes with no review round and the push lands" $?
+
+t_gen_pin_() { # each failure of the version guard: every README unknown with its reason, the wrapper still updated
+  local c base head why seen
+  for c in "$GHD|$GB|pin differs|head v0.25.0" "$GHBD|$GBD|pin differs|merge base v0.23.0, head v0.24.0" \
+    "$GHQ|$GB|pin unreadable|head pin unreadable" "$GHO|$GB|pin unreadable|head pin unreadable" "$GHN|$GB|pin missing|head pin missing"; do
+    IFS='|' read -r head base why seen <<< "$c"
+    gen_run "$base" "$head" || { echo "$c"; cat "$TMP/g.out"; return 1; }
+    grep -qx "terraform-docs: unknown . $why" "$TMP/g.out" && grep -qx 'wrappers: updated wrappers/versions.tf' "$TMP/g.out" &&
+      grep -q "^terraform-docs pin: .*$seen" "$TMP/g.out" && ! grep -q 'regenerated' "$TMP/g.out" &&
+      [ "$(CG diff-tree -r --name-only --no-commit-id "$H" HEAD | tr '\n' ' ')" = "wrappers/versions.tf " ] || { echo "$c"; cat "$TMP/g.out"; return 1; }
+    if [ "$head" = "$GHD" ]; then GATE && grep -qx 'terraform-docs: unknown . pin differs' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }; fi
+    fr cleanup "$RUN" > /dev/null
+  done
+}
+t_gen_pin() { pilot t_gen_pin_; }
+t_gen_pin; check "generated-only: the pin differs at the base, at the head, at both, is quoted, oversize or missing: every README unknown with its reason, listed at the gate, and the wrapper still updated" $?
+
+t_gen_empty_() { # nothing to regenerate: a fixed line, no commit, no push
+  gen_run "$GB" "$GHC" && return 1
+  grep -qx 'fix-run.sh: generated-only: nothing regenerated; no commit, no push' "$TMP/g.out" && [ "$(CG rev-parse HEAD)" = "$H" ] || { cat "$TMP/g.out"; return 1; }
+  GATE && return 1
+  [ "$(RG --git-dir="$REM/o/r.git" rev-parse refs/heads/current)" = "$H" ] && fr cleanup "$RUN" > /dev/null
+}
+t_gen_empty() { pilot t_gen_empty_; }
+t_gen_empty; check "generated-only: a head with nothing to regenerate is refused with the fixed line, no commit and no passing gate" $?
+
+t_gen_none_() { # a profile that declares no generated artifacts
+  gen_run "$GB" "$GH" --module-profile in-repo-modules && return 1
+  grep -qx 'fix-run.sh: the profile declares no generated artifacts: the generated-only mode refuses' "$TMP/g.out" && [ "$(CG rev-parse HEAD)" = "$H" ] ||
+    { cat "$TMP/g.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_gen_none() { pilot t_gen_none_; }
+t_gen_none; check "generated-only: a profile that declares no generated artifacts refuses before any change" $?
+
+gen_skills() { # content (printf %b) or "link": a skills tree with the script in $GSRC and that generated-artifacts.txt in the default profile
+  local d="$TMP/gen-skills" g; chmod -R u+w "$d" 2> /dev/null; rm -rf "$d"
+  mkdir -p "$d/terraform-module-pr-fix/references" "$d/terraform-module-maintainer/profiles/terraform-aws-modules"
+  cp "$GSRC/fix-run.sh" "$GSRC/fix-run.jq" "$d/terraform-module-pr-fix/references/"
+  ln -s "$SKILLS/terraform-module-pr-review" "$d/terraform-module-pr-review"
+  ln -s "$SKILLS/terraform-module-maintainer/references" "$d/terraform-module-maintainer/references"
+  cp "$SKILLS/terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md" "$d/terraform-module-maintainer/profiles/terraform-aws-modules/"
+  g="$d/terraform-module-maintainer/profiles/terraform-aws-modules/generated-artifacts.txt"
+  if [ "$1" = link ]; then printf 'generator wrapper-versions\n' > "$TMP/ga-target.txt"; ln -s "$TMP/ga-target.txt" "$g"; else printf '%b' "$1" > "$g"; fi
+}
+t_gen_file_() { # the file's grammar: comments, blank lines and one generator pass; every other shape refuses before any change
+  local keep="$FR" c P='terraform-docs-pin .github/workflows/pre-commit.yml TERRAFORM_DOCS_VERSION' rc=0
+  GSRC="$(dirname "$FR")"
+  gen_skills '# only the wrappers\n\ngenerator wrapper-versions\n'; FR="$TMP/gen-skills/terraform-module-pr-fix/references/fix-run.sh"
+  if gen_run "$GB" "$GH" && grep -qx 'wrappers: updated wrappers/versions.tf' "$TMP/g.out" && ! grep -q '^terraform-docs' "$TMP/g.out" &&
+    [ "$(CG diff-tree -r --name-only --no-commit-id "$H" HEAD | tr '\n' ' ')" = "wrappers/versions.tf " ]; then fr cleanup "$RUN" > /dev/null
+  else cat "$TMP/g.out"; rc=1; fi
+  for c in 'generator wrapper-versions\ngenerator terraform-fmt\n' 'generator terraform-docs\n' "generator wrapper-versions\n$P\n" \
+    "generator terraform-docs\n$P\n$P\n" 'generator wrapper-versions\ngenerator wrapper-versions\n' \
+    'generator terraform-docs\nterraform-docs-pin ../x.yml VERSION\n' ' generator wrapper-versions\n' \
+    "$(perl -e 'print "# pad\\n" x 1000')generator wrapper-versions\n" link; do
+    [ "$rc" = 0 ] || break
+    gen_skills "$c"
+    if gen_run "$GB" "$GH"; then echo "accepted: $c"; rc=1
+    elif ! grep -qx "fix-run.sh: the profile's generated-artifacts.txt is malformed" "$TMP/g.out" || [ "$(CG rev-parse HEAD)" != "$H" ]; then
+      echo "$c"; cat "$TMP/g.out"; rc=1
+    else fr cleanup "$RUN" > /dev/null; fi
+  done
+  FR="$keep"; return "$rc"
+}
+t_gen_file() { pilot t_gen_file_; }
+t_gen_file; check "generated-only: generated-artifacts.txt with comments and one generator runs it alone; an unknown line, terraform-docs without a pin or with two, a pin without terraform-docs, a generator twice, a climbing pin path, a leading space, an oversize file and a link each refuse before any change" $?
+
+t_gen_refuse_() { # README prose beside the region, or another path: refused at gate and push
+  gen_run "$GB" "$GH" || { cat "$TMP/g.out"; return 1; }
+  GATE || { cat "$TMP/gate.last"; return 1; }
+  local g c k
+  g="$(CG rev-parse HEAD)"
+  for k in prose region other; do
+    case "$k" in
+      # One commit on the pinned head: the generated files and prose beside the region.
+      prose) c="$(craft "$H" "add 100644 wrappers/versions.tf $(CG show "$g:wrappers/versions.tf" | sed 's/$/\\n/' | tr -d '\n')" \
+          "add 100644 README.md # module\n\nIntro, edited.\n\n$B1\ngenerated: name size \n$E1\n")" ;;
+      region) c="$(craft "$g" "add 100644 README.md # module\n\nIntro.\n\n$B1\ngenerated: name size \n$E1\nMore prose.\n")" ;;
+      other) c="$(craft "$g" "add 100644 variables.tf variable \"name\" {}\n")" ;;
+    esac
+    [ -n "$c" ] && CG update-ref --no-deref HEAD "$c" || return 1
+    GATE && { echo "gate passed: $k"; return 1; }
+    case "$k" in other) p=variables.tf ;; *) p=README.md ;; esac
+    grep -qx "not generated-only: $c $p" "$TMP/gate.last" || { echo "$k"; cat "$TMP/gate.last"; return 1; }
+    fr push "$RUN" --target o/r#7 --confirm-branch feat --expect-sha "$H" --confirm-head "$c" \
+      --confirm-patch "$(CG diff --binary --no-ext-diff --no-textconv "$H" "$c" | shasum -a 256 | cut -d' ' -f1)" > "$TMP/p.out" 2>&1 && return 1
+    grep -qx "not generated-only: $c $p" "$TMP/p.out" && [ "$(RG --git-dir="$REM/o/r.git" rev-parse refs/heads/feat)" = "$H" ] || { echo "$k"; cat "$TMP/p.out"; return 1; }
+    CG update-ref --no-deref HEAD "$g" || return 1
+  done
+  fr cleanup "$RUN" > /dev/null
+}
+t_gen_refuse() { pilot t_gen_refuse_; }
+t_gen_refuse; check "generated-only: a commit that edits README prose beside the region, prose added after it, or another path is refused at gate and push, with nothing pushed" $?
+
 # --- Negative self-check: each mutation of a temp copy must make its named case fail. ------------
 
 oc=0
@@ -1849,7 +1997,7 @@ mutate "the <sha> placeholder kept" 's/gsub\("<sha>"; \$sha\)/./' t_e2e
 mutate "the reply leak scan dropped" 's/\[ -z "\$leak" \] \|\| fail/true || fail/' t_e2e
 mutate "the prose block omitted" 's/    prose_block "\$n"\n//' t_e2e
 mutate "apply after a stop" 's/then fail "the loop stopped; no round reopens"; fi/then :; fi/' t_loop_e2e
-mutate "the push not bound to the confirmed head" 's/  \[\[ "\$ch" =~ \$sha_re \]\] && \[ "\$\(G rev-parse HEAD\)" = "\$ch" \] \|\| fail "HEAD is not the head the confirmation names"\n  \[ "\$\(G rev-parse "\$ch\^\{tree\}"\)" = [^\n]*\n//; s/local sha="\$ch" err/local sha err/; s/  # The push runs from a new bare repository/  sha="\$(G rev-parse HEAD)"\n  # The push runs from a new bare repository/; s/fix_patch "\$ch" \| shasum/fix_patch HEAD | shasum/' t_confirm_head
+mutate "the push not bound to the confirmed head" 's/  \[\[ "\$ch" =~ \$sha_re \]\] && \[ "\$\(G rev-parse HEAD\)" = "\$ch" \] \|\| fail "HEAD is not the head the confirmation names"\n  # A generated-only run has no reviewed tree[^\n]*\n[^\n]*\n    \[ "\$\(G rev-parse "\$ch\^\{tree\}"\)" = [^\n]*\n//; s/local sha="\$ch" err/local sha err/; s/  # The push runs from a new bare repository/  sha="\$(G rev-parse HEAD)"\n  # The push runs from a new bare repository/; s/fix_patch "\$ch" \| shasum/fix_patch HEAD | shasum/' t_confirm_head
 mutate "the patch digest not checked" 's/\[\[ "\$cp" =~ \^\[0-9a-f\]\{64\}\$ \]\] && \[ "\$\(fix_patch "\$ch" \| shasum -a 256 \| cut -d. . -f1\)" = "\$cp" \] \|\|/true ||/' t_confirm_patch
 mutate "replies not bound to the target" 's/\[ "\$\(lower "\$TREPO"\)" = "\$\(lower "\$\(jq -r .\.repo. "\$RUN\/state\.json"\)"\)" \] && \[ "\$TNUM" = "\$\(jq -r .\.number. "\$RUN\/state\.json"\)" \] \|\|/true ||/; s/\[ "\$\(lower "\$\{BASH_REMATCH\[1\]\}"\)" = "\$\(lower "\$TREPO"\)" \] && \[ "\$\{BASH_REMATCH\[3\]\}\$\{BASH_REMATCH\[4\]\}" = "\$TNUM" \] \|\|/true ||/' t_target_replies
 mutate "the push not bound to the target" 's/\[ "\$\(lower "\$TREPO"\)" = "\$\(lower "\$\(jq -r .\.repo. "\$RUN\/state\.json"\)"\)" \] && \[ "\$TNUM" = "\$\(jq -r .\.number. "\$RUN\/state\.json"\)" \] \|\|/true ||/; s/read_host "\$TREPO" "\$TNUM" false/read_host "\$(jq -r .repo "\$RUN\/state.json")" "\$TNUM" false/' t_target_push
@@ -1895,6 +2043,22 @@ mutate "the wrapper equality test dropped" 's/blob_at "\$1" "\$2" "\$d\/tw" && c
 mutate "the convention test dropped" 's/  blob_at "\$FMB" "\$m" "\$d\/mbm" && derive_to "\$d\/mbm" "\$d\/mbm\.d" && blob_at "\$FMB" "\$w" "\$d\/mbw" && cmp -s "\$d\/mbm\.d" "\$d\/mbw" && CONV=yes/  CONV=yes/' t_wrap_notconv
 mutate "the author-edit guard dropped" 's/; \}; \} && GUARD=yes/; }; }; GUARD=yes/' t_wrap_author
 mutate "the out-of-date check dropped" 's/then printf .wrapper out of date: %s\\n. "\$p"; fi/then :; fi/' t_wrap_b_outdated
+mutate "the wrapper scope of generate read from the pinned head" 's/wrappers_body "\$r\/wrappers\.txt" "\$FMB"/wrappers_body "\$r\/wrappers.txt"/' t_gen_pilot
+mutate "the pin read at the head only" 's/b="\$\(docs_pin "\$FMB"\)"/b="\$(docs_pin "\$PINNED")"/' t_gen_pin
+mutate "the pin not compared with the profile" 's/\[ "\$b" = "\$v" \] && \[ "\$h" = "\$v" \] \|\| echo "pin differs"/true || echo "pin differs"/' t_gen_pin
+mutate "the pin size cap dropped" 's/\[ "\$n" -le 65536 \] &&/true \&\&/' t_gen_pin
+mutate "the pin line read in any form" 's/grep -E "\^ \*\$var: v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$"/grep -E "^ *\$var: "/' t_gen_pin
+mutate "an empty regeneration committed" 's/if \[ "\$t" = "\$\(G rev-parse "\$par\^\{tree\}"\)" \]; then fail "generated-only/if false; then fail "generated-only/' t_gen_empty
+mutate "a profile that declares none accepted" 's/\[ "\$GENS" != none \] \|\| fail/true || fail/' t_gen_none
+mutate "README bytes outside the region not compared" 's/exit\(\$s\[0\] eq \$s\[1\] \? 0 : 1\)/exit(0)/' t_gen_refuse
+mutate "the generated-only test not run at the gate" 's/\[ -z "\$gen" \] \|\| \[ -z "\$p1" \] \|\| gen_only "\$p1" "\$c" < \/dev\/null/true/' t_gen_refuse
+mutate "any path taken as generated" 's/    bad=1; echo "not generated-only: \$2 /    continue; echo "not generated-only: \$2 /' t_gen_refuse
+mutate "an absent generated-artifacts.txt read as both generators" 's/\{ GENS=none; return 0; \}/{ GENS="wrapper-versions terraform-docs"; PIN=".github\/workflows\/pre-commit.yml TERRAFORM_DOCS_VERSION"; return 0; }/' t_gen_none
+mutate "an unknown line of generated-artifacts.txt skipped" 's/      \*\) return 1 ;;\n    esac\n  done < "\$f"/      *) ;;\n    esac\n  done < "\$f"/' t_gen_file
+mutate "terraform-docs accepted without exactly one pin" 's/ && \[ "\$np" = "\$t" \] \|\| return 1/ || return 1/' t_gen_file
+mutate "the size cap of generated-artifacts.txt dropped" 's/ && \[ "\$\(wc -c < "\$f"\)" -le 4096 \]//' t_gen_file
+mutate "a linked generated-artifacts.txt read" 's/\[ -f "\$f" \] && \[ ! -L "\$f" \] && \[ "\$\(wc -c < "\$f"\)" -le 4096 \]/[ -f "\$f" ] \&\& [ "\$(wc -c < "\$f")" -le 4096 ]/' t_gen_file
+mutate "the climbing pin path accepted" 's/ && \[\[ "\/\$\{PIN% \*\}\/" != \*\/\.\.\/\* \]\]//' t_gen_file
 
 echo
 if [ "$fails" -eq 0 ]; then echo "pr-fix: all checks hold"; else echo "pr-fix: $fails failed"; exit 1; fi

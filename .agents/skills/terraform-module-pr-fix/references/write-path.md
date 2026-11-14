@@ -205,6 +205,28 @@ The editor's task carries `Edit rule: <file>`, the path of this file, instead of
 
 The gate prints, as information only, `outside findings: <path>` for each path the pr-fix commits change that is neither in the pull request's change set at the pinned head nor the file of an applied item; at most five, then the count of the rest.
 
+## Generated-Only
+
+The generated-only mode regenerates the generated files of the pull request with this skill's own pinned tools, before any review, so that the review then runs on a head whose generated files are current. It runs no code from the head: no hook, no `pre-commit`, no script. It covers wrapper `versions.tf` files and the `BEGIN_TF_DOCS` regions of `README.md` only; `terraform fmt`, whitespace fixers and wrapper `main.tf`, `variables.tf` and `outputs.tf` are not covered.
+
+The run's module profile declares the mode in its optional `generated-artifacts.txt` ([Generated artifacts](../../terraform-module-maintainer/references/profile-format.md#generated-artifacts)), read from the profile directory of this skill's checkout for the run's profile id, never from the clone. `generate` refuses with `the profile declares no generated artifacts: the generated-only mode refuses` when the file is absent or names no generator, and with `the profile's generated-artifacts.txt is malformed` for a line outside its grammar, `generator terraform-docs` without exactly one pin line, a pin line without it, a generator named twice, a link or a file over 4096 bytes. It also refuses a render-only write path, a run with no commit identity, and a run that already started a round or generated; `round` refuses a run that generated.
+
+`generate` runs after `clone`, with the work tree at the pinned head, and takes the scope of the existing rules from the frozen merge base against the pinned head, with no repository-wide sweep:
+
+- `wrapper-versions`: the [Wrapper Versions](#wrapper-versions) step, with "in scope" read against the frozen merge base in place of the pinned head. The baseline is the pinned head, so the author-edit guard and every safety check hold as they do in a round.
+- `terraform-docs`: the [docs step](#staging-and-the-docs-step) on the READMEs the selection rule names, only when the version guard passes.
+
+Version guard. The profile's `terraform-docs-pin` line names a file and a variable. At the frozen merge base and at the pinned head the file is read as data: its blob, never a checkout, at most 64 KiB, with no parser. Of its lines, those that are spaces then `<variable>:` must be exactly one, and it must be spaces, `<variable>: ` and `v<major>.<minor>.<patch>`, nothing else. No file, or no such line, is `pin missing`; a file that is not a 100644 blob, over 64 KiB, or with two such lines or a line of another form, is `pin unreadable`. Both values must equal the terraform-docs version of the profile, else `pin differs`. When the guard fails, at either side, every selected README is reported `unknown <dir> <reason>`, unreadable before missing before differs, and no README is written; the wrappers still run. The `terraform-docs pin:` line of the report gives both values and the profile's.
+
+Then `generate` makes one commit with the commit identity and the message `chore: Regenerate generated files`, judged before the ref moves by the [Allowed Paths](#allowed-paths) rule, the out-of-date check and the generated-only test below; a refusal restores the work tree. When nothing was regenerated it prints `generated-only: nothing regenerated; no commit, no push` and refuses.
+
+A commit is generated-only when each path it changes against its parent is either:
+
+- a mapped wrapper `versions.tf` that clause 3's exception admits, modified; or
+- a modified `README.md` whose bytes outside its `BEGIN_TF_DOCS` interiors equal the parent's byte for byte; clause 6 holds each changed interior to the docs pass output.
+
+Anything else prints `not generated-only: <commit> <path>`. With no reviewed round, `gate` and `push` accept a run only when it generated, and then judge every commit from the pinned head to the commit to push by the generated-only test as well as every other rule of the [Content Gate](#content-gate); the reviewed-tree rule and the [Push Precondition](#push-precondition) do not apply, since no round reviewed it. The gate's information lines are every `unknown`, `stale`, `not-convention` and `skipped` line of the report, with the `terraform-docs pin:` line. The push takes the same confirmed values as every push ([Push](#push)). After it, the next step is a `terraform-module-pr-review` run at the new head.
+
 ## Content Gate
 
 `gate` and `push` refuse unless every rule holds. Edit permission is the path shape of [Allowed Paths](#allowed-paths), which takes nothing from findings.
@@ -217,7 +239,7 @@ The gate prints, as information only, `outside findings: <path>` for each path t
 | No component of a changed path is a symbolic link on disk, or a link or gitlink in the index | `a symbolic link in a changed path`, `under a symbolic link or gitlink` |
 | The commits since the pinned head descend from it, with no merge | `do not descend from the pinned head`, `is a merge` |
 | Every commit's author and committer is the commit identity | `not by the gate identity` |
-| The index tree is the last reviewed tree, and no change is outside a commit | `not the last reviewed tree`, `changes no commit holds` |
+| The index tree is the last reviewed tree, or with no reviewed round every commit is [generated-only](#generated-only), and no change is outside a commit | `not the last reviewed tree`, `not generated-only`, `changes no commit holds` |
 | The local configuration is the one recorded after the checkout | `the clone's local config changed` |
 
 The rule judges every commit since the pinned head, so a file added in one commit and removed in the next is still refused. With no commit identity, the commit rules become one: no commit since the pinned head.
@@ -306,7 +328,7 @@ Comments are not read again, so new comment traffic never aborts. Then `gh auth 
 |---|---|---|
 | `--target <owner>/<repo>#<n>` | The user's original request | The pinned pull request (repository compared without case) |
 | `--confirm-branch` | The user's confirmation | The destination ref |
-| `--confirm-head` | The user's confirmation; a short SHA there is expanded only when it is a prefix of the gate's `new SHA:` line, else the confirmation does not count | The clone's head, whose tree must be the last reviewed tree |
+| `--confirm-head` | The user's confirmation; a short SHA there is expanded only when it is a prefix of the gate's `new SHA:` line, else the confirmation does not count | The clone's head, whose tree must be the last reviewed tree, or of a [generated-only](#generated-only) run |
 | `--expect-sha` | The gate's `expected remote SHA:` line shown to the user | The pinned head, the remote ref's expected value |
 | `--confirm-patch` | The gate's `patch sha256:` line shown to the user | The SHA-256 of the diff from the pinned head to `--confirm-head`, recomputed |
 
