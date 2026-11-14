@@ -119,7 +119,8 @@ check "worked example 1: block at rule 6, proposes REQUEST_CHANGES" "$([ "$(verd
 H2="$(host threads '.signals.threads = "unknown" | .could_not_run = [{kind: "thread-resolution-unknown"}]')"
 render "$WF" "$H2" "" "" "$TMP/assess-worked.txt"
 check "worked example 2: the body byte for byte" "$(cmp -s "$O/comment.md" <(fence 7); echo $?)"
-check "worked example 2: inconclusive at rule 4, proposes COMMENT" "$([ "$(verdict)" = "inconclusive COMMENT" ] && [ "$(rule)" = 4 ]; echo $?)"
+# The known MEDIUM outranks the unknown thread resolution, which section 5 still lists.
+check "worked example 2: block at rule 6 over the unknown, proposes REQUEST_CHANGES" "$([ "$(verdict)" = "block REQUEST_CHANGES" ] && [ "$(rule)" = 6 ]; echo $?)"
 
 fence 8 | sed -n 1,2p > "$TMP/assess-worked3.txt"
 render "$(printf '%s\n' "$WL" | list worked3)" "" "" "" "$TMP/assess-worked3.txt"
@@ -194,7 +195,8 @@ todo() {
 invariant() {
   case "$(rule)" in
     1|2|3|5|6) todo | grep -q '^- \[ \] ' ;;
-    7) jq -e 'all(.[]; .severity == "LOW")' "$O/findings.json" > /dev/null && ! todo | grep -q '^- \[ \] ' ;;
+    # Rule 7 boxes only the maintainer's item for a workflow that never started a job.
+    7) jq -e 'all(.[]; .severity == "LOW")' "$O/findings.json" > /dev/null && ! todo | grep '^- \[ \] ' | grep -qv '^- \[ \] Maintainer: approve or re-run ' ;;
     8) jq -e 'all(.[]; .rule_id == "review.tool-disputed")' "$O/findings.json" > /dev/null && [ -z "$(todo)" ] ;;
     0) todo | grep -q '^- `[^`]*`.* one way to restore compatibility; see Findings\.$' ;;
     # Rule 4 renders What to do only with an item other than Optional and the gaps line; a list
@@ -289,7 +291,7 @@ grep -qxF "Checks: the host's check runs file was rejected." "$O/comment.md"; ch
 # --- Collapsing: the check-not-run rule, and the disputed note outside the count.
 
 n=0
-{ f structure.grouping MEDIUM a.tf 1 "M." "F."
+{ f review.verification-incomplete MEDIUM a.tf 1 "M." "F."
   f review.check-not-run LOW . null "Check B did not run." "no code change: none."
   for i in 1 2 3 4 5 6 7 8 9; do f structure.argument-order LOW "f$i.tf" 1 "L$i." "F."; done
 } | list fold4 > /dev/null
@@ -1143,24 +1145,62 @@ t_tests_ci; check "tests: beside a check run, the untested trigger is left to th
 refused "a tests result outside the grammar" "$NONE" "" "" "$(trun bad '{dir: "functions", result: "passed: all"}')"
 refused "a tests key with another field" "$NONE" "" "" "$(trun badk '{dir: "functions", result: "passed 1", log: "x"}')"
 refused "a tests directory that is not a plain path" "$NONE" "" "" "$(trun badd '{dir: "a b\nc", result: "passed 1"}')"
-# Job-less workflow runs: CI that never ran, so Checks unknown at rule 4, one line each, named by
-# file or unnamed, and a maintainer item in place of the author's "Fix the failing checks."
+# Job-less workflow runs: CI that never ran. Ended action_required or failure with every read
+# complete and nothing else open, the signal is jobless: approve with nits at best, one line each,
+# named by file or unnamed, and a maintainer item in place of the author's "Fix the failing checks."
 JL='.jobless = [{workflow: "unit-test.yml", conclusion: "failure"}, {workflow: null, conclusion: "action_required"}]'
 t_jobless() {
   render "$NONE" "" "$(checks jl unknown "$JL"' | .check_runs = []')"
-  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] \
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && printf '%s' "$MSG" | grep -q ', tier STANDARD$' \
+    && grep -qxF "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-7-jobless"]')" "$O/comment.md" \
+    && grep -qxF "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["todo-lead-7-jobless"]')" "$O/comment.md" \
+    && grep -qxF 'Checks: not run, as a workflow ended without starting a job. Mergeable. No review yet. Threads resolved.' "$O/comment.md" \
     && grep -qxF 'Checks: workflow `unit-test.yml` ended `failure` without starting a job, so its tests never ran and say nothing about this change.' "$O/comment.md" \
     && grep -qxF 'Checks: workflow (unnamed) ended `action_required` without starting a job, so its tests never ran and say nothing about this change.' "$O/comment.md" \
     && grep -qxF -- '- [ ] Maintainer: approve or re-run the workflows that never started a job: `unit-test.yml`, (unnamed).' "$O/comment.md" \
-    && grep -qxF "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-checks-jobless"]')" "$O/comment.md" \
     && ! grep -qF 'Fix the failing checks.' "$O/comment.md" && ! grep -qF 'Check results could not be read' "$O/comment.md"
 }
-t_jobless; check "checks: job-less runs are unknown at rule 4 with a maintainer item" $?
+t_jobless; check "checks: job-less runs alone are approve with nits at best, with a maintainer item" $?
 t_jobless_one() {
   render "$NONE" "" "$(checks jl1 unknown '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = []')"
-  [ "$(rule)" = 4 ] && grep -qxF -- '- [ ] Maintainer: approve or re-run the workflow that never started a job: `pre-commit.yml`.' "$O/comment.md"
+  [ "$(rule)" = 7 ] && grep -qxF -- '- [ ] Maintainer: approve or re-run the workflow that never started a job: `pre-commit.yml`.' "$O/comment.md"
 }
 t_jobless_one; check "checks: one job-less run names one workflow" $?
+JL1='.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = []'
+t_jobless_low() {
+  render "$LOWF" "" "$(checks jllow unknown "$JL1")"
+  [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && printf '%s' "$MSG" | grep -q ', tier STANDARD$' \
+    && grep -qxF "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-7"]')" "$O/comment.md" \
+    && grep -qxF "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["todo-lead-7-jobless"]')" "$O/comment.md" \
+    && grep -qxF -- '- [ ] Maintainer: approve or re-run the workflow that never started a job: `pre-commit.yml`.' "$O/comment.md"
+}
+t_jobless_low; check "checks: job-less with a LOW finding stays approve with nits, the maintainer item kept" $?
+t_jobless_medium() {
+  render "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "" "$(checks jlmed unknown "$JL1")"
+  [ "$(rule)" = 6 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ]
+}
+t_jobless_medium; check "checks: job-less with a MEDIUM finding blocks at rule 6" $?
+# Ambiguous reads stay unknown: another conclusion, a queued check, a pending status, a failed read.
+t_jobless_amb() { # name, checks update -> rule 4 with the job-less rationale
+  render "$NONE" "" "$(checks "jla-$1" unknown "$2")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "inconclusive COMMENT" ] \
+    && grep -qxF "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-checks-jobless"]')" "$O/comment.md" \
+    && grep -qF 'Checks: unknown, as a workflow ended without starting a job.' "$O/comment.md" \
+    && grep -qF -- '- [ ] Maintainer: approve or re-run the workflow' "$O/comment.md"
+}
+t_jobless_amb cancelled '.jobless = [{workflow: "pre-commit.yml", conclusion: "cancelled"}] | .check_runs = []'; check "checks: a job-less run that ended cancelled stays unknown at rule 4" $?
+t_jobless_amb queued '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}]'; check "checks: a job-less run beside a queued check stays unknown at rule 4" $?
+t_jobless_amb pending '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = [] | .statuses = {state: "pending", total_count: 1}'; check "checks: a job-less run beside a pending status stays unknown at rule 4" $?
+t_jobless_amb reads '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = [] | .reads = "failed"'; check "checks: a job-less run with a failed read stays unknown at rule 4" $?
+t_jobless_amb ownjobs '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = [] | .own_jobs_unreadable = true'; check "checks: a job-less run with unreadable own jobs stays unknown at rule 4" $?
+# The missing jobs are no test evidence: a non-hcl-dependency trigger stays a gap beside a job-less run.
+t_jobless_ci() {
+  render "$NONE" "" "$(checks jlci unknown "$JL1"' | .check_runs = [{app_slug: "ci", check_suite_id: 2, conclusion: "success", id: 1, status: "completed"}]')" \
+    "$(runf jlci '.behaviour.triggers = [{id: "T-001", file: "functions/app.py", line: null, category: "non-hcl-dependency", state: "unverifiable"}]')"
+  [ "$(rule)" = 4 ] && ! grep -qF "left to the repository's own tests" "$O/comment.md" \
+    && grep -qF -- '- Behaviour change at `functions/app.py` (non-hcl-dependency): not verified.' "$O/comment.md"
+}
+t_jobless_ci; check "checks: a job-less run is no test evidence for a change outside Terraform" $?
 t_jobless_fail() {
   render "$NONE" "" "$(checks jlf fail "$JL")"
   [ "$(rule)" = 3 ] && grep -qxF -- '- [ ] Fix the failing checks.' "$O/comment.md" \
@@ -1185,7 +1225,7 @@ t_bev_none() { render "$LOWF" "" "" "$BOK"; [ "$ST" = 0 ] && ! grep -q '^Behavio
 t_bstate() { render "$G" "" "" "$TMP/run-b-bs.json"; [ "$ST" = 2 ]; }
 mutate "behaviour gaps not counted" 's/ \+ \(\$b \| behaviour_gaps\)\),\n     unplanned:/),\n     unplanned:/' t_bgaps
 mutate "unverified triggers not counted" 's/select\(\.state == "unverifiable"\)\] \| length\)/select(false)] | length)/' t_bgaps
-mutate "review.verification-incomplete not an unknown" 's/, "review\.verification-incomplete"\)\)/))/' t_bvi
+mutate "review.verification-incomplete not an unknown" 's/, "review\.verification-incomplete"\];/];/' t_bvi
 mutate "the evidence line dropped" 's/\+ evidence_lines\(\$b\)//' t_bev
 mutate "the evidence line kept when every trigger and claim passed" 's/or \(\$b\.capped == 0 and all/or (false and all/' t_bev_none
 mutate "any trigger state accepted" 's/\(\.state \| IN\("inert", "verified", "covered", "refuted", "unverifiable"\)\)/true/' t_bstate
@@ -1431,7 +1471,7 @@ refused "a host.json item on another kind" "$(F556)" "$(host omk '.could_not_run
 # Every condition of the selector, one case each; the 556 fixture with one thing changed.
 std() { check "tiers: $1 forces STANDARD" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && grep -qF '### ' "$O/comment.md"; echo $?)"; }
 rc "$(F556 '{severity: "MEDIUM"}')" "$(R556 med)"; std "a MEDIUM finding with rule 4 outstanding"
-check "tiers: the MEDIUM case stays at rule 4" "$([ "$(rule)" = 4 ]; echo $?)"
+check "tiers: the MEDIUM case blocks at rule 6 over its unknowns" "$([ "$(rule)" = 6 ]; echo $?)"
 rc "$(F556)" "$(R556 uv '.behaviour.triggers += [{id: "T-002", file: "main.tf", line: 9, category: "default-change", state: "unverifiable"}]')"; std "an unverifiable trigger"
 rc "$(F556)" "$(R556 nocls '.behaviour = {status: "not-run", reason: "mtf-facts failed", triggers: [], claims: [], capped: 0}')"; std "a classifier that did not run"
 rc "$(F556)" "$(R556 floorcat '.behaviour.triggers += [{id: "T-002", file: "versions.tf", line: 5, category: "provider-version-floor-change", state: "verified"}]')"; std "a provider version floor change"
@@ -1898,15 +1938,15 @@ t_cov_one; check "covered: one skip takes the one form in both tiers, with the s
 
 # Negative self-check for covered skips.
 mutate "covered skips still counted at rule 4" 's/ or \.unplanned_open > 0/ or .unplanned > 0/' t_cov_gold
-mutate "rule 8 reachable with covered skips" 's/elif has_sev\("LOW"\) or \.covered > 0 then/elif has_sev("LOW") then/' t_cov_rule8
+mutate "rule 8 reachable with covered skips" 's/elif has_sev\("LOW"\) or \.covered > 0 or/elif has_sev("LOW") or/' t_cov_rule8
 mutate "all or nothing dropped" 's/and all\(\$u\[\]; \. as \$x \| any\(\$cs\[\];/and all(\$u[]; true or any(\$cs[];/' t_cov_partial
 mutate "a covered entry that is no skip accepted" 's/and all\(\$cs\[\]; \. as \$x \| any\(\$u\[\];/and all(\$cs[]; true or any(\$u[];/' t_cov_extra
-mutate "the plan mode not checked" 's/and \$run\.plan_mode == "laptop" and/and/' t_cov_runner
+mutate "the plan mode not checked" 's/and all\(\$cs\[\]; \.gate \| skip_mode == \$run\.plan_mode\)//' t_cov_runner
 mutate "the head not checked" 's/\$cs != \[\] and \$cv\.skip_head_sha == \$in\.host\.head_sha/\$cs != []/' t_cov_head
 mutate "inert not checked" 's/and \(\$cv\.inert \| not\)//' t_cov_inert
 mutate "duplicate skips accepted" 's/and \(\$u \| map\(\.dir\) \| length == \(unique \| length\)\)//' t_cov_dup
 mutate "a skipped example accepted as a witness" 's/and all\(\$cs\[\]\.witnesses\[\]; \.example as \$e \| all\(\$u\[\]; \.dir != \$e\)\)//' t_cov_witself
-mutate "trigger states not checked" 's/\n\s+and all\(\$b\.triggers\[\]; \.state \| IN\("verified", "covered", "inert", "reported"\)\)\n/\n/' t_cov_reftrig
+mutate "trigger states not checked" 's/\n\s+and all\(\$b\.triggers\[\]; \(\.state \| IN\("verified", "covered", "inert", "reported"\)\) or floor_ok\)\n/\n/' t_cov_reftrig
 mutate "claim states not checked" 's/\n\s+and all\(\$b\.claims\[\]; \.state == "verified"\)\n/\n/' t_cov_refuted
 mutate "no trigger and no claim accepted" 's/ and \(\$b\.triggers \+ \$b\.claims\) != \[\]//' t_cov_zero
 mutate "validated below count accepted" 's/and \$run\.examples\.validated == \$run\.examples\.count//' t_cov_validated
@@ -1920,17 +1960,17 @@ mutate "covered names not allowlisted" 's/dir: \(\$c\.dir \| nm\(allowed\)\)/dir
 mutate "the witness lines left out of section 5" 's/if \$cov != \[\] then covered_lines\("unplanned-covered"; \$cov; \$run\) else/if false then [] else/' t_cov_std
 mutate "the COMPACT sentence dropped" 's/\+ \(if \$cov != \[\] then " " \+ covered_sentence\("compact-covered"; \$run; \$cov\)/+ (if false then " " + covered_sentence("compact-covered"; \$run; \$cov)/' t_cov_gold
 mutate "What to do with no item rendered" 's/ or \(\$cov != \[\] and \$items == \[\]\)//' t_cov_rule8_std
-mutate "the rule 7 rationale for covered skips alone dropped" 's/elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) then tx\("rationale-7-covered"\)\n//' t_cov_rule8_std
+mutate "the rule 7 rationale for covered skips alone dropped" 's/elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.covered > 0 then tx\("rationale-7-covered"\)\n//' t_cov_rule8_std
 mutate "the base not checked" 's/ and \$cv\.skip_base_sha == \$in\.host\.merge_base//' t_cov_base
-mutate "a plan pass that did not run accepted" 's/and \$run\.plan_ran and \$run\.plan_mode/and \$run.plan_mode/' t_cov_noplan
+mutate "a plan pass that did not run accepted" 's/and \$run\.plan_ran and \(\$cv\.inert/and (\$cv.inert/' t_cov_noplan
 mutate "every example skipped accepted" 's/ and \(\$u \| length\) < \(\$run\.examples\.count \/\/ 0\)//' t_cov_allskip
 mutate "the witness cap dropped" 's/and \(witnesses\(\$cs\) \| length\) <= 100/and true/' t_cov_w101
 mutate "non-canonical paths accepted" 's/def canon_path: plain_path and [^\n]*/def canon_path: plain_path;/' t_cov_canon
 mutate "a dir listed twice accepted" 's/type == "array" and \(map\(\.dir\?\) \| length == \(unique \| length\)\)/type == "array"/' t_cov_dupdir
-mutate "the one form of the covered sentence dropped" 's/tx\(\$k \+ \(if \$n == 1 then "-one" else "-many" end\); \{count: \$n, total/tx(\$k + "-many"; {count: \$n, total/' t_cov_one
+mutate "the one form of the covered sentence dropped" 's/\+ \(if \$n == 1 then "-one" else "-many" end\); \{count: \$n, total/+ "-many"; {count: \$n, total/' t_cov_one
 mutate "STANDARD section 5 keeps its gap heading" 's/section\(if \$cov != \[\] then "Examples not planned" else/section(if false then "Examples not planned" else/' t_cov_one
 mutate "witnesses not deduplicated" 's/if any\(\.\[\]; \. == \$w\) then \. else \. \+ \[\$w\] end/. + [\$w]/' t_cov_gold
-mutate "the downloaded flag ignored" 's/\(if \$c\.downloaded then "-downloaded" else "" end\)/""/' t_cov_dl
+mutate "the downloaded flag ignored" 's/\(if \$c\.downloaded then "-downloaded" elif/(if false then "-downloaded" elif/' t_cov_dl
 mutate "the one witness example not allowlisted" 's/ and \(\$e\[0\] \| allowed\)//' t_cov_names
 mutate "one example named for several witness examples" 's/if \(\$e \| length\) == 1 and/if true and/' t_cov_two
 
@@ -2060,7 +2100,8 @@ if git -C "$SRC" cat-file -e b3f74cf^{commit} 2> /dev/null; then
     RCU="$keep"; render "$@"; [ "$s1" = 0 ] && [ "$ST" = 0 ] && cmp -s "$a" "$O/comment.md"
   }
   t_same "$NONE"; check "depth absent: nothing open renders as before, byte for byte" $?
-  t_same "$WF" "$H2" "" "" "$TMP/assess-worked.txt"; check "depth absent: worked example 2 renders as before, byte for byte" $?
+  # Worked example 2 now blocks at rule 6 (a known MEDIUM outranks unknowns); its LOW alone is unchanged.
+  t_same "$(printf '%s\n' "$WL" | list worked2low)" "$H2" "" "" "$TMP/assess-worked.txt"; check "depth absent: worked example 2 with its LOW alone renders as before, byte for byte" $?
   # A fix per finding: grouping rule 8, later than b3f74cf, prints a fix that every entry shares once.
   jq 'map(.suggested_fix = "Fix \(.id).")' "$TMP/pr410.json" > "$TMP/pr410-fixes.json"
   t_same "$TMP/pr410-fixes.json" "$H410" "" "" "$TMP/assess-410.txt"; check "depth absent: pull request 410 with a fix per finding renders as before, byte for byte" $?
@@ -2139,7 +2180,7 @@ mutate "not-applicable trusted on an open pull request" 's/if \.mergeability == 
 mutate "the no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\)\n//' t_merged
 mutate "the COMPACT no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\) \+ reopen_line/+ reopen_line/' t_nacompact
 mutate "the plan pass in scope at light" 's/\| if \.depth\.depth == "light" then \.coverage\.unplanned = \[\] else \. end//' t_dlight_noplan
-mutate "triage approves at a depth" 's/elif \.triage or any/elif any/' t_dtriage
+mutate "triage approves at a depth" 's/\(\.triage or any/(any/' t_dtriage
 
 # --- A profile was named and the plan pass gave no record: its own reason, never "no AWS profile
 # named", an unknown at rule 4 in STANDARD with no advice to name a profile.
@@ -2199,7 +2240,7 @@ t_closed_lead() {
       '- [ ] Maintainer: approve or re-run the workflow that never started a job: `pre-commit.yml`.' \
       '- [ ] `structure.docs-contradict-code`: apply the Fix at `a.tf:1`.') &&
     ! grep -qF "$LEAD_BLOCK" "$O/comment.md" && grep -qxF "$REOPEN" "$O/comment.md" &&
-    grep -qxF 'Checks: unknown, as a workflow ended without starting a job. Mergeability: not applicable. No review yet. Threads resolved.' "$O/comment.md" &&
+    grep -qxF 'Checks: not run, as a workflow ended without starting a job. Mergeability: not applicable. No review yet. Threads resolved.' "$O/comment.md" &&
     grep -qxF 'Checks: workflow `pre-commit.yml` ended `failure` without starting a job, so its tests never ran and say nothing about this change.' "$O/comment.md"
 }
 t_closed_lead; check "closed: the block lead names the reopen, and the Checks phrase names the job-less run" $?
@@ -2207,6 +2248,8 @@ t_merged_lead() { na "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F."
 t_merged_lead; check "merged: the block lead is unchanged" $?
 t_open_jobless_line() {
   render "$NONE" "" "$(checks jl-open unknown "$JL1")"
+  grep -qxF 'Checks: not run, as a workflow ended without starting a job. Mergeable. No review yet. Threads resolved.' "$O/comment.md" || return 1
+  render "$NONE" "" "$(checks jl-open-q unknown '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}]')"
   grep -qxF 'Checks: unknown, as a workflow ended without starting a job. Mergeable. No review yet. Threads resolved.' "$O/comment.md"
 }
 t_open_jobless_line; check "checks: a job-less run gives the Checks phrase its reason" $?
@@ -2305,6 +2348,168 @@ mutate "a fix shared by entries that differ" 's/\| unique \| length\) == 1;/| un
 mutate "the validate clause dropped" 's/\(if \$invalid then "-invalid" else "" end\)/""/' t_binvalid
 mutate "the validate clause over head-side gaps" 's/\n      and all\(\$run\.verify_gaps\[\]; \.reason \| startswith\("merge base "\)\)//' t_binv_absent
 mutate "the validate clause with no example counted" 's/\.count > 0 and \.validated == 0/.validated == 0/' t_binv_zero
+
+# --- A known MEDIUM blocker outranks unknowns (verdict.md, The Ladder, rule 6): block at rule 6,
+# REQUEST_CHANGES, with section 5 listing every unknown; a MEDIUM that is a verification gap stays
+# an unknown at rule 4.
+KM="$(f structure.grouping MEDIUM a.tf 1 "S." "F." | list km)"
+RKM="$(runf km '.coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}
+  | .verify_gaps = [{dir: "examples/b", reason: "not run: environment"}]
+  | .behaviour.triggers = [{id: "T-001", file: "main.tf", line: 3, category: "default-change", state: "unverifiable"}]
+  | .behaviour.claims = [{claim_id: "C-1", state: "unverifiable"}]')"
+HKM="$(host km '.signals.threads = "unknown" | .could_not_run = [{kind: "thread-resolution-unknown"}, {kind: "patch-unavailable", path: "b.tf"}]')"
+cat > "$TMP/want-km5.md" <<'WANT'
+### Checks that could not run
+
+- Review thread resolution: the thread query was unavailable, so review comments were grouped by reply instead. Whether the open threads are resolved is unknown.
+- The patch of `b.tf` was unavailable, so its changes could not be read.
+- Verification of `examples/b`: not run: environment.
+- 1 example was not planned: no AWS profile named.
+  - `examples/a`
+- Behaviour change at `main.tf:3` (default-change): not verified.
+- Claim C-1 from the description: not verified.
+WANT
+t_km() {
+  render "$KM" "$HKM" "$(checks km unknown)" "$RKM"
+  [ "$ST" = 0 ] && [ "$(rule)" = 6 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ] \
+    && grep -qxF 'A MEDIUM finding is open. Any MEDIUM finding blocks merge (ladder rule 6).' "$O/comment.md" \
+    && awk '/^### Checks that could not run$/ { on = 1 } on && /^### Pull request state$/ { exit } on' "$O/comment.md" | sed '$d' | cmp -s - "$TMP/want-km5.md" \
+    && grep -qxF 'Checks: unknown. Mergeable. No review yet. Thread resolution: unknown.' "$O/comment.md" \
+    && todo | cmp -s - <(printf '%s\n' '### What to do' '' "$(jq -nr -L "$REF" 'include "render-comment"; texts["todo-lead-block"]')" '' \
+         '- [ ] `structure.grouping`: apply the Fix at `a.tf:1`.')
+}
+t_km; check "known MEDIUM: blocks at rule 6 over every unknown, section 5 byte for byte" $?
+t_km_threads() { render "$KM" "$(host kmt '.unresolved_threads = [{path: "a.tf", line: 1}]')"; [ "$(rule)" = 6 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ]; }
+t_km_threads; check "known MEDIUM: blocks at rule 6 over unresolved threads" $?
+t_km_triage() { render "$KM" "" "" "$(runf kmtr '.triage = true | del(.behaviour)')"; [ "$(rule)" = 6 ] && grep -qxF 'Triage only: the full review of this change has not run yet.' "$O/comment.md"; }
+t_km_triage; check "known MEDIUM: a triage run blocks at rule 6, still never approves" $?
+t_km_gap() { render "$(one review.check-not-run MEDIUM . null "Check B did not run." "no code change: none." '{"source": "host", "subject": "coverage.argument-unexposed@."}')"; [ "$(rule)" = 4 ] && [ "$(verdict)" = "inconclusive COMMENT" ]; }
+t_km_gap; check "known MEDIUM: a MEDIUM review.check-not-run stays an unknown at rule 4" $?
+t_bvi; check "known MEDIUM: a MEDIUM review.verification-incomplete stays an unknown at rule 4" $?
+t_km_gap_and() { render "$(pair review.verification-incomplete MEDIUM structure.grouping MEDIUM)" "$HKM"; [ "$(rule)" = 6 ]; }
+t_km_gap_and; check "known MEDIUM: a gap MEDIUM beside a known one blocks at rule 6" $?
+mutate "rule 4 above the known MEDIUM" 's/elif \(\$m \| not\) and \(\.triage/elif (.triage/' t_km
+mutate "rule 5 above the known MEDIUM" 's/elif \(\$m \| not\) and \.unresolved > 0/elif .unresolved > 0/' t_km_threads
+mutate "a gap MEDIUM counted as a known blocker" 's/ and \(\.rule_id \| IN\(gap_rules\[\]\) \| not\)\)/)/' t_km_gap
+
+# Job-less: the COMPACT tier is not taken, so the maintainer item stays; the mutations.
+t_jobless_compact() {
+  rc "$(F556C)" "$(R556K jlc)" "$H556N"; [ "$(tier)" = COMPACT ] || return 1
+  render "$(F556C)" "$H556N" "$(checks jlc unknown "$JL1")" "$(R556K jlc2)" "$TMP/assess-556.txt"
+  [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && [ "$(rule)" = 7 ] \
+    && grep -qxF -- '- [ ] Maintainer: approve or re-run the workflow that never started a job: `pre-commit.yml`.' "$O/comment.md"
+}
+t_jobless_compact; check "checks: a job-less run forces STANDARD, covered skips beside it" $?
+t_jobless_cancelled() { t_jobless_amb mc '.jobless = [{workflow: "pre-commit.yml", conclusion: "cancelled"}] | .check_runs = []'; }
+t_jobless_queued() { t_jobless_amb mq '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}]'; }
+t_jobless_pending() { t_jobless_amb mp '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = [] | .statuses = {state: "pending", total_count: 1}'; }
+t_jobless_reads() { t_jobless_amb mr '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = [] | .reads = "failed"'; }
+mutate "jobless never computed" 's/jobless_only: \(\.jobless != \[\]/jobless_only: (false/' t_jobless
+mutate "jobless reaches rule 8" 's/ or \$g\.checks == "jobless" then/ then/' t_jobless
+mutate "jobless for any conclusion" 's/\n      and all\(\.jobless\[\]; \.conclusion \| IN\("action_required", "failure"\)\)//' t_jobless_cancelled
+mutate "jobless beside an open check run" 's/\n      and all\(\.check_runs\[\]; \.status == "completed" and \(\.conclusion \| IN\("success", "neutral", "skipped"\)\)\)//' t_jobless_queued
+mutate "jobless with a pending status" 's/\n      and \(\.statuses == null or \.statuses\.total_count == 0 or \.statuses\.state == "success"\)\)/)/' t_jobless_pending
+mutate "jobless with a failed read" 's/\.jobless != \[\] and \.reads == "ok" and/.jobless != [] and/' t_jobless_reads
+mutate "jobless in COMPACT" 's/\(\$v\.rule \| IN\(4, 7, 8\)\) and \$l\.signals\.checks != "jobless"/($v.rule | IN(4, 7, 8))/' t_jobless_compact
+mutate "missing jobs taken as test evidence" 's/ or \(\(\$checks\.jobless \/\/ \[\]\) != \[\]\) then \./ then ./' t_jobless_ci
+mutate "the jobless rule 7 rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) then tx\("rationale-7-jobless"\)//' t_jobless
+mutate "the jobless lead dropped" 's/elif \$rule == 7 and any\(\$items\[\]; \.jobless\) then "todo-lead-7-jobless" //' t_jobless
+
+# --- Provider floor changes (verdict.md, Provider floor changes): a provider-version-floor-change
+# trigger leaves rule 4 when a compat.provider-floor-raised finding names its file, or when Check A
+# ran and the run file's floors, bound to the head and the merge base, read both floors in its
+# directory; otherwise it stays an unknown.
+FT='{id: "T-001", file: "versions.tf", line: 7, category: "provider-version-floor-change", state: "unverifiable"}'
+RFL() { runf "fl-$1" '.behaviour.triggers = ['"$FT"'] | '"${2:-.}"; }
+FLR='{head_sha: "'"$HEAD"'", base_sha: "'"$BASE"'", dirs: [{dir: ".", provider: "hashicorp/aws", old_floor: "6.42.0", floor: "6.44.0", read: true}]}'
+FLF="$(f compat.provider-floor-raised LOW versions.tf 7 "The AWS provider floor moves from 6.42 to 6.44." "no code change: state the new floor in the description." | list flf)"
+FLX="$(f compat.provider-floor-raised LOW modules/a/versions.tf 7 "The AWS provider floor moves from 6.42 to 6.44." "no code change: state the new floor in the description." | list flx)"
+JUDGED='Provider floor changes judged by Check A, which no behaviour level verifies: 1.'
+t_fl_finding() {
+  render "$FLF" "" "" "$(RFL f)"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$JUDGED" "$O/comment.md" \
+    && grep -qxF 'Behaviour evidence: 1 change classified: 0 verified, 0 covered by a plan, 0 inert, 0 refuted, 1 not verified; 0 claims: 0 verified, 0 refuted, 0 not verified.' "$O/comment.md" \
+    && ! grep -qF '### Checks that could not run' "$O/comment.md"
+}
+t_fl_finding; check "floor: a compat.provider-floor-raised finding naming the file clears the trigger, approve with nits" $?
+t_fl_other() { render "$FLX" "" "" "$(RFL o)"; [ "$(rule)" = 4 ] && grep -qxF -- '- Behaviour change at `versions.tf:7` (provider-version-floor-change): not verified.' "$O/comment.md" && ! grep -qF "$JUDGED" "$O/comment.md"; }
+t_fl_other; check "floor: a finding at another file leaves the trigger an unknown at rule 4" $?
+t_fl_read() { render "$NONE" "" "" "$(RFL r ".floors = $FLR")"; [ "$ST" = 0 ] && [ "$(rule)" = 8 ] && [ "$(verdict)" = "approve APPROVE" ] && grep -qxF "$JUDGED" "$O/comment.md"; }
+t_fl_read; check "floor: Check A ran and both floors read clears the trigger" $?
+t_fl_unread() { render "$NONE" "" "" "$(RFL "u$oc" "$1")"; [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && ! grep -qF "$JUDGED" "$O/comment.md"; }
+t_fl_unread_one() { t_fl_unread ".floors = $FLR | .floors.dirs[0].read = false"; }
+t_fl_head() { t_fl_unread ".floors = $FLR | .floors.head_sha = \"$BASE\""; }
+t_fl_also() { t_fl_unread ".floors = $FLR | .behaviour.triggers[0].also_categories = [\"default-change\"]"; }
+t_fl_unread_one; check "floor: a floor not read leaves the trigger an unknown" $?
+t_fl_unread ".floors = $FLR | .floors.dirs += [{dir: \".\", provider: \"hashicorp/random\", old_floor: \"3.1.0\", floor: \"3.6.0\", read: false}]"; check "floor: one provider of the directory not read leaves the trigger an unknown" $?
+t_fl_unread ".floors = $FLR | .floors.dirs[0].dir = \"modules/a\""; check "floor: floors of another directory leave the trigger an unknown" $?
+t_fl_head; check "floor: floors of another head leave the trigger an unknown" $?
+t_fl_unread ".floors = $FLR | .floors.base_sha = \"$HEAD\""; check "floor: floors of another merge base leave the trigger an unknown" $?
+t_fl_also; check "floor: a trigger with another category stays an unknown" $?
+t_fl_unread "."; check "floor: no floors and no finding leave the trigger an unknown" $?
+t_fl_cnr() { render "$(one review.check-not-run LOW . null "Check A did not run." "no code change: none." '{"source": "host", "subject": "compat.provider-floor-raised@."}')" "" "" "$(RFL c ".floors = $FLR")"
+  [ "$(rule)" = 4 ] && grep -qxF -- '- Behaviour change at `versions.tf:7` (provider-version-floor-change): not verified.' "$O/comment.md"; }
+t_fl_cnr; check "floor: Check A not run keeps the floors from clearing the trigger" $?
+t_fl_prefix() { render "$NONE" "$(host flp '.prefix = "modules/x"')" "" "$(RFL p ".floors = $FLR | .floors.dirs[0].dir = \"modules/x\"")"; [ "$(rule)" = 8 ]; }
+t_fl_prefix; check "floor: the trigger's directory is read under the module root prefix" $?
+t_fl_ca() { jq -n -L "$REF" --argjson d '{"depth": "light", "checks_out_of_scope": ["A", "B"]}' 'include "render-comment";
+  check_a_ran([]; {triage: false}) and (check_a_ran([]; {triage: true}) | not) and (check_a_ran([]; {triage: false, depth: $d}) | not)' | grep -qx true; }
+t_fl_ca; check "floor: Check A out of scope or a triage run is Check A not run" $?
+refused "a floors key with another field" "$NONE" "" "" "$(RFL b1 ".floors = $FLR | .floors.extra = 1")"
+refused "a floors SHA that is not 40 hex" "$NONE" "" "" "$(RFL b2 ".floors = $FLR | .floors.head_sha = \"abc\"")"
+refused "a floors provider outside its grammar" "$NONE" "" "" "$(RFL b3 ".floors = $FLR | .floors.dirs[0].provider = \"aws\"")"
+refused "a floors version outside its grammar" "$NONE" "" "" "$(RFL b4 ".floors = $FLR | .floors.dirs[0].floor = \"6.44\"")"
+refused "a floors directory that climbs" "$NONE" "" "" "$(RFL b5 ".floors = $FLR | .floors.dirs[0].dir = \"../x\"")"
+refused "a floors read that is not a boolean" "$NONE" "" "" "$(RFL b6 ".floors = $FLR | .floors.dirs[0].read = \"yes\"")"
+refused "a floors directory and provider listed twice" "$NONE" "" "" "$(RFL b7 ".floors = $FLR | .floors.dirs += .floors.dirs")"
+mutate "the finding that names the file ignored" 's/any\(\$findings\[\]; \.rule_id == "compat\.provider-floor-raised" and \.file == \$t\.file\)/false/' t_fl_finding
+mutate "the floors read ignored" 's/\$e != \[\] and all\(\$e\[\]; \.read\)/false/' t_fl_read
+mutate "an unread floor accepted" 's/\$e != \[\] and all\(\$e\[\]; \.read\)/\$e != []/' t_fl_unread_one
+mutate "floors of another head accepted" 's/\$fl\.head_sha == \$h\.head_sha\n       and/true and/' t_fl_head
+mutate "another category cleared" 's/\n             and \(\(\(\.also_categories \/\/ \[\]\) - \["provider-version-floor-change"\]\) == \[\]\)//' t_fl_also
+mutate "Check A not run ignored" 's/check_a_ran\(\$findings; \$run\) and \$fl != null/\$fl != null/' t_fl_cnr
+mutate "judged triggers counted as gaps" 's/select\(\(ci_gated or floor_ok\) \| not\)\), \.claims/select(ci_gated | not)), .claims/' t_fl_read
+
+# --- Recorded exceptions join the covered skips (verdict.md, Covered safety-gate skips): a
+# runner-mode run whose every unplanned example is a recorded exception witnessed by a planned
+# example lands at rule 7 at best, all or nothing.
+COVX='[{dir: "examples/outpost", gate: "role", path: "main.tf", witnesses: ['"$W1"']}]'
+R556X() { R556 "$1" '.plan_mode = "runner" | .coverage.unplanned = [{dir: "examples/outpost", reason: "exception: example assumes a role in another account"}]
+  | .coverage += {covered_skips: '"$COVX"', skip_head_sha: "'"$HEAD"'", skip_base_sha: "'"$BASE"'"} | '"${2:-.}"; }
+cat > "$TMP/want-556x.txt" <<'WANT'
+**Good to merge, with nits.** `validate` passed in all 9 examples; 8 were planned. 1 of 9 examples was not planned because of a recorded exception of the plan pass; the changed code was planned in `examples/autoscaling` (see notes).
+- Not planned: `examples/outpost` (recorded exception, it needs a role in another account, in `main.tf`, same at base 89abcde).
+- Covered by: `vpc_security_group_ids` planned in `examples/autoscaling` as `module.aurora.aws_rds_cluster.this` at 0123456.
+WANT
+t_cov_exc() {
+  rc "$(F556C)" "$(R556X xgold)" "$H556N"
+  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] \
+    && grep -E '^\*\*Good|^- (Not planned|Covered by): ' "$O/comment.md" | cmp -s - "$TMP/want-556x.txt" || return 1
+  rc "$(F556C)" "$(R556X xstd)" "$H556N" --standard
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qxF -- '- Not planned: `examples/outpost` (recorded exception, it needs a role in another account, in `main.tf`, same at base 89abcde).' "$O/comment.md" \
+    && grep -qF '1 of 9 examples was not planned because of a recorded exception of the plan pass; the changed code was planned in `examples/autoscaling`, as listed below.' "$O/comment.md" \
+    && grep -qxF '### Examples not planned' "$O/comment.md"
+}
+t_cov_exc; check "covered: a recorded exception with a witness is approve with nits at rule 7, byte for byte" $?
+t_cov_exc_docker() { rc "$(F556C)" "$(R556X xd '.coverage.unplanned[0].reason = "exception: needs a Docker daemon" | .coverage.covered_skips[0].gate = "docker"')" "$H556N"
+  [ "$(rule)" = 7 ] && grep -qF '(recorded exception, it needs a Docker daemon, in `main.tf`' "$O/comment.md"; }
+t_cov_exc_docker; check "covered: a Docker daemon exception with a witness is approve with nits" $?
+t_cov_exc_laptop() { unch x "$(F556C)" "$(R556X xl '.plan_mode = "laptop"')"; }
+t_cov_exc_laptop; check "covered: an exception entry after a laptop pass is ignored" $?
+t_cov_exc_mixed() { unch x "$(F556C)" "$(R556X xm '.coverage.unplanned += [{dir: "examples/mysql", reason: "plan gate G3"}] | .coverage.covered_skips += [{dir: "examples/mysql", gate: "G3", path: "main.tf", witnesses: ['"$W1"']}]')"; }
+t_cov_exc_mixed; check "covered: exceptions and gate skips in one run are ignored" $?
+t_cov_exc_reason() { unch x "$(F556C)" "$(R556X xr '.coverage.covered_skips[0].gate = "docker"')"; }
+t_cov_exc_reason; check "covered: an exception entry under another exception is ignored" $?
+t_cov_exc_part() { unch x "$(F556C)" "$(R556X xp '.coverage.unplanned += [{dir: "examples/b", reason: "exception: example assumes a role in another account"}]')"; }
+t_cov_exc_part; check "covered: one exception not covered leaves every exception an unknown" $?
+t_cov_exc_floor() { rc "$(F556C)" "$(R556X xf '.behaviour.triggers += [{id: "T-002", file: "versions.tf", line: 7, category: "provider-version-floor-change", state: "unverifiable"}] | .floors = '"$FLR")" "$H556N"; [ "$(rule)" = 7 ] && grep -qF 'recorded exception' "$O/comment.md"; }
+t_cov_exc_floor; check "covered: a floor trigger judged by Check A does not stop the covered skip" $?
+refused "a covered gate outside the list" "$(F556C)" "$H556N" "" "$(R556X xbad '.coverage.covered_skips[0].gate = "G4"')" "$TMP/assess-556.txt"
+mutate "exceptions never covered" 's/"role": "exception: example assumes a role in another account", //' t_cov_exc
+mutate "the exception mode not checked" 's/if IN\("role", "docker"\) then "runner" else "laptop" end/"laptop"/' t_cov_exc
+mutate "the exception lines dropped" 's/ elif \(\$c\.gate \| skip_mode\) == "runner" then "-exception"//' t_cov_exc
+mutate "the exception sentence dropped" 's/\(if \(\$cov\[0\]\.gate \| skip_mode\) == "runner" then "-exception" else "" end\)/""/' t_cov_exc
+mutate "a laptop run takes exception entries" 's/and all\(\$cs\[\]; \.gate \| skip_mode == \$run\.plan_mode\)//' t_cov_exc_laptop
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

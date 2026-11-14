@@ -55,6 +55,13 @@ case "${SCHEMA_STUB:-overflow}" in
   deeppartial) mkdir -p "$1"; echo '{"format": 1, "reasons": ["page"], "missing": []}' > "$1/missing.json"; echo "$src"
     echo "schema pass: deep partial page, 1 sheets, 10 bytes, 1 types without a sheet"; exit 0 ;;
   badsource) mkdir -p "$1"; echo "$src"; echo "schema pass: source modulestf/m x \$(touch x)"; echo "schema pass: focused"; exit 0 ;;
+  floors) mkdir -p "$1/hashicorp/aws/6.42.0" "$1/hashicorp/aws/6.44.0" "$1/hashicorp/random/3.6.0" "$1/hashicorp/null/3.1.0" "$1/hashicorp/null/3.2.0"
+    for v in aws/6.42.0 aws/6.44.0 random/3.6.0 null/3.1.0 null/3.2.0; do echo '{}' > "$1/hashicorp/$v/index.json"; done
+    echo '{"format": 1, "directories": {".": {"hashicorp/aws": {"latest": "6.70.0", "minimum": "6.44.0", "old_floor": "6.42.0"},
+      "hashicorp/random": {"latest": "3.7.0", "minimum": "3.6.0", "old_floor": "3.1.0"}, "hashicorp/time": {"latest": "0.13.0", "minimum": "0.9.0"},
+      "!aws": {"unresolved": "registry_host"}}, "modules/x": {"hashicorp/null": {"latest": "3.2.4", "minimum": "3.2.0", "old_floor": "3.1.0"}}}}' > "$1/versions.json"
+    echo '{"format": 1, "reasons": ["page"], "missing": [{"provider": "hashicorp/null", "type": "resource:null_resource", "versions": ["3.1.0"]}]}' > "$1/missing.json"
+    echo "$src"; echo "schema pass: deep partial page, 4 sheets, 10 bytes, 1 types without a sheet"; exit 0 ;;
 esac
 [ -z "${3-}" ] || { mkdir -p "$3"; echo '{}' | gzip -n > "$3/schema-handoff.json.gz"; }
 echo "schema pass: escalate overflow"; exit 3
@@ -553,6 +560,24 @@ DEPTH_STUB=focused prep
 SCHEMA_STUB=badsource with_tf run_rr schema "$RUN" > "$TMP/s.out"
 check "schema: a source line outside its grammar escalates and nothing of it is recorded" \
   "$(grep -q '^depth: escalated to deep (deep-schema-source-line)$' "$TMP/s.out" && [ ! -e "$RUN/state/schema-sources.txt" ] && [ ! -e "$RUN/facts" ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+# The provider floors of the run file (verdict.md, Provider floor changes): each directory and
+# provider whose floor moved, read when both versions were published and none is missing, bound
+# to the head and the merge base the depth was bound to.
+DEPTH_STUB=deep prep
+SCHEMA_STUB=floors with_tf run_rr schema "$RUN" > /dev/null
+full; run_rr handover "$RUN" > /dev/null; render_to "$TMP/render-fl"
+check "render: the run file's floors from versions.json and missing.json" "$(jq -e --arg h "$(git -C "$RUN/clone" rev-parse HEAD)" --arg b "$(jq -r .binding.merge_base "$RUN/depth.json")" '
+  .floors == {head_sha: $h, base_sha: $b, dirs: [
+    {dir: ".", provider: "hashicorp/aws", old_floor: "6.42.0", floor: "6.44.0", read: true},
+    {dir: ".", provider: "hashicorp/random", old_floor: "3.1.0", floor: "3.6.0", read: false},
+    {dir: "modules/x", provider: "hashicorp/null", old_floor: "3.1.0", floor: "3.2.0", read: false}]}' "$RUN/render/run-file.json" > /dev/null; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+DEPTH_STUB=deep prep
+SCHEMA_STUB=deeppartial with_tf run_rr schema "$RUN" > /dev/null
+full; run_rr handover "$RUN" > /dev/null; render_to "$TMP/render-nofl"
+check "render: no versions.json gives the run file no floors" "$(q "$RUN/render/run-file.json" 'has("floors") | not')"
 run_rr cleanup "$RUN" > /dev/null
 
 # A module root below the repository root: schema passes it as SCHEMA_ROOT and the inputs

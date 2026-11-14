@@ -6,7 +6,7 @@
 # never from the head or the workspace:
 #
 #   <bash|zsh> /abs/path/skip-coverage.sh gates <run-dir> --tree <dir> --base <sha> \
-#       --coverage <coverage.json> --out <file>
+#       --coverage <coverage.json> --out <file> [--mode laptop|runner]
 #       The base gate record: for every unplanned example directory in <coverage.json>, the
 #       clone scope plan-pass.sh gives in <dir>, a worktree at <sha>, and the per-file gates
 #       plan-pass.sh runs over it. Writes <file> complete or not at all. Exit 3 when the
@@ -14,8 +14,11 @@
 #   <bash|zsh> /abs/path/skip-coverage.sh check <run-dir> --files <files.json> \
 #       --coverage <coverage.json> --plan <record> --head <sha> --base <sha|unresolved> \
 #       --changed-files <n> [--addresses <dir>] [--base-gates <file>] [--prefix <module-root>]
+#       [--mode laptop|runner]
 #       Prints one JSON object: the covered and the uncovered unplanned directories
 #       (skip-coverage.md, Output). Never runs terraform and never reads the network.
+#   --mode runner covers the recorded exceptions of a runner-mode pass instead of the laptop gate
+#   skips (skip-coverage.md, Recorded exceptions); laptop is the default.
 #
 # <run-dir> is the absolute run directory Workspace printed, "<root>/pr-review.XXXXXX", holding
 # the clone at head at <run-dir>/clone. Exit 2 is a usage error or a refused input.
@@ -33,7 +36,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 PP="$HERE/plan-pass.sh"
 [ -f "$PP" ] || die "no plan-pass.sh beside this script"
 
-FILES=; COV=; PLANREC=; ADDRS=; BGATES=; HEADSHA=; BASESHA=; PREFIX=; TREE=; OUT=; NCHANGED=
+FILES=; COV=; PLANREC=; ADDRS=; BGATES=; HEADSHA=; BASESHA=; PREFIX=; TREE=; OUT=; NCHANGED=; MODE=laptop
 while [ $# -gt 0 ]; do
   case "$1" in
     --files) FILES=${2:-} ;;
@@ -47,11 +50,14 @@ while [ $# -gt 0 ]; do
     --prefix) PREFIX=${2:-} ;;
     --tree) TREE=${2:-} ;;
     --out) OUT=${2:-} ;;
+    --mode) MODE=${2:-} ;;
     *) die "unknown argument: $1" ;;
   esac
   [ $# -ge 2 ] || die "$1 needs a value"
   shift 2
 done
+
+case "$MODE" in laptop|runner) ;; *) die "--mode must be laptop or runner" ;; esac
 
 sha_ok() { # a full lowercase commit SHA, one line, nothing else
   [ "${#1}" -eq 40 ] || return 1
@@ -77,11 +83,13 @@ jq -r 'if type == "object" and (.unplanned | type == "array") then
 # from plan-pass.sh, the same two functions the plan pass ran, paths relative to the tree and
 # hits without their line, which a change elsewhere in a shared file moves. plan-pass.sh is
 # pointed at the tree through a run directory of its own whose clone is a link to the tree.
+# In runner mode the gates are the runner's, and its exception hits, Xrole and Xdocker, are kept
+# beside the gate hits; the header names the mode, so a record of one mode never stands for the other.
 record_gates() { # tree, sha: the record on standard output; non-zero when a step failed
   f="$(mktemp -d "$W/pr-review.XXXXXX")" || return 1
   ln -s "$1" "$f/clone" || return 1
   t="$(cd "$1" && pwd -P)" || return 1
-  echo "skip-gates 1 $2"
+  if [ "$MODE" = runner ]; then echo "skip-gates 1 $2 runner"; else echo "skip-gates 1 $2"; fi
   while IFS= read -r d; do
     echo "dir $d"
     if [ -d "$t/$d" ]; then
@@ -89,9 +97,10 @@ record_gates() { # tree, sha: the record on standard output; non-zero when a ste
       case "$r" in "$t") echo "real ." ;; "$t"/*) echo "real ${r#"$t"/}" ;; *) echo "real $r" ;; esac
       s="$(bash "$PP" scope "$f" "$t/$d")" || return 1
       printf '%s\n' "$s" | awk -v r="$t/" 'NF { if (index($0, r) == 1) print "file " substr($0, length(r) + 1); else print "file " $0 }'
-      printf '%s\n' "$s" | bash "$PP" gates "$f" laptop clone "$t/$d" | awk -v r="$t/" '/^G[0-3] / {
-          p = substr($0, 4); sub(/:[^:]*$/, "", p); if (index(p, r) == 1) p = substr(p, length(r) + 1)
-          print "hit " substr($0, 1, 2) " " p }' | sort
+      printf '%s\n' "$s" | bash "$PP" gates "$f" "$MODE" clone "$t/$d" | awk -v r="$t/" -v m="$MODE" '
+        $1 ~ /^G[0-3]$/ || (m == "runner" && $1 ~ /^X(role|docker)$/) {
+          g = $1; p = substr($0, length(g) + 2); sub(/:[^:]*$/, "", p); if (index(p, r) == 1) p = substr(p, length(r) + 1)
+          print "hit " g " " p }' | sort
     else
       echo "file MISSING"
     fi
@@ -385,10 +394,11 @@ if [ -n "$BGATES" ] && [ -f "$BGATES" ] && [ ! -L "$BGATES" ] && [ "$(wc -c < "$
 fi
 
 jq -n -L "$HERE" --slurpfile cov "$COV" --slurpfile cls "$W/classes.jsonl" --slurpfile a "$W/addr.jsonl" \
-  --rawfile rec "$PLANREC" --arg hg "$HEADGATES" --arg bg "$BASEGATES" \
+  --rawfile rec "$PLANREC" --arg hg "$HEADGATES" --arg bg "$BASEGATES" --arg mode "$MODE" \
   --arg head "$HEADSHA" --arg base "$BASESHA" --argjson headok "$HEADOK" --argjson nchanged "$NCHANGED" \
   --slurpfile files "$FILES" '
   include "skip-coverage";
-  skip_coverage($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged)
+  if $mode == "runner" then skip_coverage_runner($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged)
+  else skip_coverage($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged) end
 ' || die "cannot evaluate"
 exit 0
