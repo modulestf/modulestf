@@ -34,7 +34,7 @@ A refused run renders nothing. The reply says the review is inconclusive and why
 
 `depth.json` is written only by `depth.sh compute` in `prepare` and by `depth.sh escalate`. After each, the run pins its SHA-256 in `state/depth.sha256`, and every later command refuses a `depth.json` that differs from the pin, a depth lowered by hand included. `handover` copies the pin to `state/handover.sha256`, and `render` refuses when the two differ, so the depth rendered is the depth the reviewer was handed.
 
-An escalation is refused once `handover` has run. A refusal of that kind, a `depth.json` that differs from its pin and a failed `depth.sh escalate` each write `state/stop` and exit 1; every later command but `cleanup` then refuses, so a run never renders at a depth it could not raise. `render` refuses findings that are not a JSON list, and passes every refusal of render-comment.sh through unchanged, the COMPACT cap advice included.
+An escalation is refused once `handover` has run. A refusal of that kind, a `depth.json` that differs from its pin and a failed `depth.sh escalate` each write `state/stop` and exit 1; every later command but `cleanup` then refuses, so a run never renders at a depth it could not raise. `render` refuses findings that are not a JSON list, and passes every refusal of render-comment.sh through unchanged, the STANDARD cap message included.
 
 ## Handover
 

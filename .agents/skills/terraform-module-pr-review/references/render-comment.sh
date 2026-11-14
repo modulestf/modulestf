@@ -72,11 +72,14 @@
 #   whose outstanding differences findings explain is reported (verdict.md, Behaviour evidence).
 #   The caps are per tier: STANDARD 700, 500 and 600 characters for the assessment, a summary and
 #   a fix, COMPACT 350 in one paragraph, 200 and 250, or 600 for a fix that starts with
-#   "needs decision:". Over a cap the input is refused, never cut; one message names every
-#   offender with its length and its limit.
+#   "needs decision:". Text over a COMPACT cap renders STANDARD in place of COMPACT, and one line
+#   before the last, "rendered STANDARD, over the COMPACT limits: ...", names every offender with
+#   its length and its limit. Over a STANDARD cap the input is refused, never cut; the message names
+#   each finding, field, length and limit over it.
 #
 # Writes comment.md, findings.json and result.json, in that order, result.json last by a rename,
-# and prints "rendered <verdict> (ladder rule <n>), proposed event <EVENT>, tier <TIER>". Exit 2 is a usage
+# and prints "rendered <verdict> (ladder rule <n>), proposed event <EVENT>, tier <TIER>", after the
+# COMPACT fallback line when there is one. Exit 2 is a usage
 # error or a refused input, and nothing is written. Exit 1 is a leak scan match or a bare
 # at-mention left after the wrap, and nothing is written, or a failed write, which leaves what
 # was written and no result.json.
@@ -136,6 +139,8 @@ RJ() { jq -L "$HERE" "$@"; }
 one() { RJ -e --slurp --arg head "$head" "include \"$2\"; length == 1 and (.[0] | $3)" "$1" > /dev/null 2>&1; }
 RJ -e --slurp 'include "render-comment"; length == 1 and (.[0] | below_floor)' "$findings" > /dev/null 2>&1 \
   && die "a finding that explains differences is rated below LOW, the floor; send it back to the reviewer"
+over="$(RJ -r 'include "render-comment"; standard_over | join("; ")' "$findings" 2> /dev/null)"
+[ -z "$over" ] || die "over the STANDARD limits: $over; send the finding back to the reviewer"
 one "$findings" render-comment valid_findings || die "the findings do not fit the merged findings schema (a summary is at most 500 characters and a suggested_fix at most 600, the STANDARD limits)"
 RJ -e --slurp --arg head "$head" 'include "host-records"; length == 1 and (.[0] | valid_host($head))' \
   "$host" > /dev/null 2>&1 || die "host.json is not valid for this head"
@@ -192,8 +197,6 @@ RJ -n --slurpfile f "$findings" --slurpfile h "$host" --slurpfile r "$run" --raw
   | .mention_left = (.body | bare_mention)
   | del(.parts)' > "$TMP/render.json" || die "the render failed"
 
-refuse="$(jq -r '.refuse // ""' "$TMP/render.json")"
-[ -z "$refuse" ] || die "$refuse; send it back to the reviewer once; if it keeps the finding because it is within the schema targets, render with --standard"
 leak="$(jq -r 'if .leak then "\(.leak.pattern) in \(.leak.src)" else "" end' "$TMP/render.json")"
 [ -z "$leak" ] || stop "leak scan: $leak; nothing written"
 [ "$(jq -r '.mention_left' "$TMP/render.json")" = false ] || stop "an at-mention is left outside a code span; nothing written"
@@ -210,4 +213,5 @@ jq --slurpfile h "$host" '{target: "\($h[0].repo)#\($h[0].number)", number: $h[0
     "$OUT/result.json.tmp" > /dev/null \
   && mv -- "$OUT/result.json.tmp" "$OUT/result.json" || stop "writing result.json failed"
 
+jq -r '.fallback // empty | "rendered STANDARD, \(.)"' "$TMP/render.json"
 jq -r '"rendered \(.verdict) (ladder rule \(.rule)), proposed event \(.event), tier \(.tier)"' "$TMP/render.json"
