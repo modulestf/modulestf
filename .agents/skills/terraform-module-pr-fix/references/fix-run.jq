@@ -294,14 +294,14 @@ def items_of:
                else "repos/\($s.repo)/issues/\($s.number)/comments" end)}) ];
 
 # Input: the state. The comments a review plan covers: those created at or before $read_at (ISO-8601
-# UTC with Z, so string order is time order). edited lists the ids of kept comments changed after
+# UTC with Z, so string order is time order). edited lists the item ids (T-, V- or C- and the id) of kept comments changed after
 # $read_at; later counts the comments created after it. A time that is not in that form never
 # proves a comment older: it counts as later, or as an edit of a kept comment.
 def plan_comments($read_at):
   def ts: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$");
   [.comments[] | select((.created_at | ts) and .created_at <= $read_at)] as $k
   | {keep: $k,
-     edited: [$k[] | select(((.updated_at | ts) and .updated_at <= $read_at) | not) | .id],
+     edited: [$k[] | select(((.updated_at | ts) and .updated_at <= $read_at) | not) | "\(if .kind == "thread" then "T" elif .kind == "review" then "V" else "C" end)-\(.id)"],
      later: ((.comments | length) - ($k | length))};
 
 # Input: the state. The pin of the pinned head, from the state's own pull request read and the

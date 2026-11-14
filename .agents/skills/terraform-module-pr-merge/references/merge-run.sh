@@ -121,6 +121,7 @@ open_run() {
   [ -f "$RUN/run.json" ] || die "no prepared run in that directory"
   REPO="$(jq -r .repo "$RUN/run.json")"; NUM="$(jq -r .number "$RUN/run.json")"
   STARTED="$(jq -r .started_at "$RUN/run.json")"
+  jq -e 'has("login")' "$RUN/run.json" > /dev/null || die "the run file has no login (written before the login binding); prepare the run again"
   BOUND="$(jq -r .login "$RUN/run.json")"
   [[ "$REPO" =~ $repo_re ]] && [[ "$NUM" =~ ^[1-9][0-9]{0,8}$ ]] &&
     [[ "$STARTED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] &&
