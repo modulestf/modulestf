@@ -100,7 +100,7 @@ Start one subagent with the `terraform-module-reviewer` skill, read-only. Its wo
 fix-run.sh compare "$RUN" --round <n> --findings "$RUN/rounds/<n>/findings.json"
 ```
 
-It prints the local verdict, the open count, every introduced tuple, each `unattributed:` finding, each `surfaced late:` finding, which the pull request already held and the fix did not touch, and the loop decision of [Loop](write-path.md#loop). The verdict, the open set and the loop read only the findings the fix could have caused, as [Fingerprints and the Local Verdict](write-path.md#fingerprints-and-the-local-verdict) says. When it says the next round may start, go back to Step 7. When it says stop, go to Step 10.
+It prints the local verdict, the open count, every introduced tuple, each `unattributed:` finding, each `surfaced late:` finding, which the pull request already held, on a rule and a span the fix left byte-identical, and the loop decision of [Loop](write-path.md#loop). The verdict, the open set and the loop read only the findings the fix could have caused, as [Fingerprints and the Local Verdict](write-path.md#fingerprints-and-the-local-verdict) says. When it says the next round may start, go back to Step 7. When it says stop, go to Step 10.
 
 ## Step 10
 
@@ -108,7 +108,7 @@ It prints the local verdict, the open count, every introduced tuple, each `unatt
 fix-run.sh gate "$RUN"
 ```
 
-It runs the content gate and the [Push Precondition](write-path.md#push-precondition), writes `$OUT/fix.patch`, the disposition tables, `$OUT/replies.json` with the reply drafts of every round, the latest per item, and the last findings, and prints the diff stat, the verdict, the author, the write path, the destination URL and branch, the expected remote SHA, the draft and default-branch flags, an `outside findings: <path>` flag for each changed path that is neither in the change set nor the file of an applied item, a `not-convention: <path>` line for each wrapper pair that fails the convention test, an `unattributed:` line for each finding of the last round the fix did not cause, a `surfaced late:` line for each finding of the last round on a line the fix did not touch, and, for a locked pull request with reply drafts, the `locked:` line with the unlock command. On a refusal it prints every reason. On path B the run ends here with the patch.
+It runs the content gate and the [Push Precondition](write-path.md#push-precondition), writes `$OUT/fix.patch`, the disposition tables, `$OUT/replies.json` with the reply drafts of every round, the latest per item, and the last findings, and prints the diff stat, the verdict, the author, the write path, the destination URL and branch, the expected remote SHA, the draft and default-branch flags, an `outside findings: <path>` flag for each changed path that is neither in the change set nor the file of an applied item, a `not-convention: <path>` line for each wrapper pair that fails the convention test, an `unattributed:` line for each finding of the last round the fix did not cause, a `surfaced late:` line for each finding of the last round that surfaced late, all of them past the cap on information lines, and, for a locked pull request with reply drafts, the `locked:` line with the unlock command. On a refusal it prints every reason. On path B the run ends here with the patch.
 
 ## Step 11
 

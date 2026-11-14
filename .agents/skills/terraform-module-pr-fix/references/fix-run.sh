@@ -1020,10 +1020,72 @@ open_set() { # round [findings file]: its open set (write-path.md, Loop), from i
   rm -f "$RUN/f.tmp" "$RUN/e.tmp"
 }
 
-late_before() { # round: the fingerprints of the findings that surfaced late in the reviewed rounds before it, as JSON
+late_before() { # round: the fingerprints that surfaced late in the reviewed rounds before it, each at its largest count, as JSON
   local k fs=()
   for k in 1 2 3; do [ "$k" -lt "$1" ] && [ -f "$RUN/rounds/$k/review.json" ] && fs+=("$RUN/rounds/$k/review.json"); done
-  if [ "${#fs[@]}" = 0 ]; then echo '[]'; else J -c -s 'include "fix-run"; [.[].late[]? | fp("")]' "${fs[@]}"; fi
+  if [ "${#fs[@]}" = 0 ]; then echo '[]'; else J -c -s 'include "fix-run"; [.[] | [.late[]? | fp("")]] | mmax' "${fs[@]}"; fi
+}
+
+# The evidence span check (write-path.md, Surfaced Late): kind (item or file), the judged blob, the
+# pinned blob and the line. Prints "same" when the span holding the line, as raw bytes with CR kept,
+# occurs at the pinned head at least as often as in the judged tree; anything it cannot read differs.
+span_same() {
+  perl -e '
+    use strict; use warnings;
+    my ($kind, $jf, $pf, $l) = @ARGV;
+    sub lines { open(my $h, "<:raw", $_[0]) or exit 2; local $/; my $c = <$h>; $c = "" unless defined $c; return split /(?<=\n)/, $c }
+    my @j = lines($jf); my @p = lines($pf);
+    exit 3 unless $l =~ /^[1-9][0-9]*$/ && $l <= @j;
+    # Depth at the start and the end of each line: braces outside strings, comments and heredocs.
+    sub depths {
+      my ($a) = @_; my ($d, $bc, $hd) = (0, 0, undef); my (@d0, @d1);
+      for my $t (@$a) {
+        push @d0, $d;
+        if (defined $hd) { undef $hd if $t =~ /^\s*\Q$hd\E\s*$/; push @d1, $d; next }
+        my ($k, $in, $n) = (0, 0, length $t);
+        while ($k < $n) {
+          my $c = substr($t, $k, 1); my $c2 = substr($t, $k, 2);
+          if ($bc) { if ($c2 eq "*/") { $bc = 0; $k += 2 } else { $k++ } next }
+          if ($in) { if ($c eq "\\") { $k += 2; next } $in = 0 if $c eq "\""; $k++; next }
+          if ($c eq "\"") { $in = 1; $k++; next }
+          last if $c eq "#" || $c2 eq "//";
+          if ($c2 eq "/*") { $bc = 1; $k += 2; next }
+          if (substr($t, $k) =~ /^<<-?([A-Za-z_][A-Za-z0-9_]*)\s*$/) { $hd = $1; last }
+          $d++ if $c eq "{";
+          if ($c eq "}") { $d--; return () if $d < 0 }
+          $k++;
+        }
+        return () if $in;
+        push @d1, $d;
+      }
+      return () if $d != 0 || $bc || defined $hd;
+      return (\@d0, \@d1);
+    }
+    # The top-level item that holds line $i: its block with the comment lines right above it, or a
+    # comment run at depth 0 with the block right after it. The whole file when the depths fail.
+    sub item {
+      my ($a, $i) = @_; my ($d0, $d1) = depths($a);
+      return (0, $#$a) unless $d0;
+      my $com = sub { $a->[$_[0]] =~ m{^\s*(#|//)} }; my $blank = sub { $a->[$_[0]] =~ /^\s*$/ };
+      return (0, $#$a) if $blank->($i) && $d0->[$i] == 0;
+      my $b = $i;
+      if ($d0->[$i] == 0 && $com->($i)) {
+        $b++ while $b < $#$a && $d0->[$b + 1] == 0 && $com->($b + 1);
+        return run($a, $d0, $com, $b, $b) if $b == $#$a || $blank->($b + 1);
+        $b++;
+      }
+      $b-- while $d0->[$b] > 0;
+      my $f = $b; $f++ while $d1->[$f] > 0;
+      return run($a, $d0, $com, $b, $f);
+    }
+    sub run { my ($a, $d0, $com, $s, $e) = @_; $s-- while $s > 0 && $d0->[$s - 1] == 0 && $com->($s - 1); return ($s, $e) }
+    my ($s, $e) = (0, $#j);
+    ($s, $e) = item(\@j, $l - 1) if $kind eq "item";
+    my $span = join "", @j[$s .. $e]; my $w = $e - $s + 1;
+    sub count { my ($a) = @_; my $c = 0; for my $x (0 .. @$a - $w) { $c++ if join("", @$a[$x .. $x + $w - 1]) eq $span } return $c }
+    my $cp = count(\@p);
+    print(($cp > 0 && $cp >= count(\@j)) ? "same\n" : "differs\n");
+  ' "$@"
 }
 
 cmd_compare() {
@@ -1041,23 +1103,17 @@ cmd_compare() {
   G add -A > /dev/null 2>&1; tree="$(G write-tree)"; head="$(G rev-parse HEAD)"
   # Attribution: the round's changed paths are those between the pinned head and the judged tree.
   G diff-tree -r -z --name-only --no-renames "$PINNED" "$tree" > "$RD/changed" 2> /dev/null || fail "the round's changed paths cannot be read"
-  # The fix's lines: the new side of each hunk; a hunk body is skipped by its counts, so no content line reads as a header.
-  G diff -U0 --no-ext-diff --no-textconv --no-renames "$PINNED" "$tree" 2> /dev/null | perl -ne '
-    if (/^\\ /) { next } if ($n > 0) { $n--; next }
-    if (/^diff --git /) { undef $f; next } if (/^\+\+\+ b\/(.*)$/) { $f = $1; next }
-    if (defined $f && /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/) {
-      my ($b, $c, $d) = (defined $1 ? $1 : 1, $2, defined $3 ? $3 : 1); $n = $b + $d; print "$f\t$c\t", ($d ? $c + $d - 1 : $c), "\n" }' \
-    > "$RD/hunks.tsv" || fail "the round's changed lines cannot be read"
-  # The judged tree's text of each file a finding names with a line, for the block rule.
-  local tx='{}' p
-  while IFS= read -r p; do
-    G cat-file blob "$tree:${PREFIX:+$PREFIX/}$p" > "$RD/text.tmp" 2> /dev/null &&
-      tx="$(jq -c -n --argjson t "$tx" --arg p "$p" --rawfile c "$RD/text.tmp" '$t + {($p): $c}')"
-  done < <(J -r 'include "fix-run"; [.[] | select((.line | type) == "number" and .file != "." and (.file | path_grammar)) | .file] | unique[]' "$f")
-  rm -f "$RD/text.tmp"; printf '%s\n' "$tx" > "$RD/texts.json"
-  J -n --slurpfile f "$f" --slurpfile pin "$RUN/round0-findings.json" --rawfile c "$RD/changed" --arg p "$PREFIX" \
-    --rawfile h "$RD/hunks.tsv" --slurpfile t "$RD/texts.json" 'include "fix-run";
-    {findings: $f[0], pinned: $pin[0], changed: ($c | module_paths($p)), prefix: $p, hunks: ($h | fix_hunks($p)), texts: $t[0]} | attribution' > "$RD/attribution.json" ||
+  # The evidence spans: raw blobs from git cat-file, so no attribute, filter or diff driver applies.
+  local same='[]' i fl ln kind
+  while IFS=$'\t' read -r i fl ln kind; do
+    G cat-file blob "$tree:${PREFIX:+$PREFIX/}$fl" > "$RD/span-j" 2> /dev/null &&
+      G cat-file blob "$PINNED:${PREFIX:+$PREFIX/}$fl" > "$RD/span-p" 2> /dev/null &&
+      [ "$(span_same "$kind" "$RD/span-j" "$RD/span-p" "$ln")" = same ] && same="$(jq -c --argjson i "$i" '. + [$i]' <<< "$same")"
+  done < <(J -r 'include "fix-run"; to_entries[] | .key as $i | .value | select((.line | type) == "number" and .file != "." and (.file | path_grammar))
+    | [$i, .file, .line, span_kind] | @tsv' "$f")
+  rm -f "$RD/span-j" "$RD/span-p"
+  J -n --slurpfile f "$f" --slurpfile pin "$RUN/round0-findings.json" --rawfile c "$RD/changed" --arg p "$PREFIX" --argjson same "$same" 'include "fix-run";
+    {findings: $f[0], pinned: $pin[0], changed: ($c | module_paths($p)), prefix: $p, same: $same} | attribution' > "$RD/attribution.json" ||
     fail "the attribution could not be built"
   jq '.attributable' "$RD/attribution.json" > "$RD/attributable.json"
   for k in 0 1 2 3; do
@@ -1079,7 +1135,7 @@ cmd_compare() {
     {round: $round, head: $head, tree: $tree, verdict: $v,
      fingerprints: [$all[0][] | fp("")], open: $h[-1],
      attributable: $now, unattributed: $at[0].unattributed, late: $at[0].late,
-     introduced: introduced([$pin[0][] | fp("")] + $lb; msub([$now[] | fp("")]; [$at[0].late[] | fp("")])),
+     introduced: introduced_late([$pin[0][] | fp("")]; $lb; [$now[] | fp("")]; [$at[0].late[] | fp("")]),
      decision: ({history: $h, round: $round, limit: $limit, verdict: $v, nonactionable: $na,
        unattributed: ($at[0].unattributed | length)} | loop_decision)}' > "$RD/review.json" ||
     fail "the comparison could not be built"
@@ -1153,8 +1209,8 @@ gate_check() {
   : > "$r/info.txt"
   if [ -n "$name" ]; then c="$(G rev-parse -q --verify 'HEAD^{tree}' 2> /dev/null)"; else c="$(G write-tree 2> /dev/null)"; fi
   if [[ "$c" =~ $sha_re ]]; then wrap_check "$c" "$r/info.txt"; else echo "path rule refused: the tree to push cannot be read"; fi
-  jq -r '(.unattributed[] | "unattributed: \(.rule_id) \(.file) \(.severity)"),
-    (.late[]? | "surfaced late: \(.rule_id) \(.file):\(.line) \(.severity)")' "$RUN/rounds/$last/review.json" >> "$r/info.txt"
+  jq -r '.unattributed[] | "unattributed: \(.rule_id) \(.file) \(.severity)"' "$RUN/rounds/$last/review.json" >> "$r/info.txt"
+  jq -r '.late[]? | "surfaced late: \(.rule_id) \(.file):\(.line) \(.severity)"' "$RUN/rounds/$last/review.json" > "$r/late.txt"
   # The push precondition: at least one item resolved, no MEDIUM or higher introduced.
   local disp='[]' k
   for k in 1 2 3; do [ ! -f "$RUN/rounds/$k/dispositions.json" ] || disp="$(jq -c --argjson d "$disp" '$d + .' "$RUN/rounds/$k/dispositions.json")"; done
@@ -1163,7 +1219,7 @@ gate_check() {
     $v[0].attributable as $now | [$pin[0][] | fp("") | tojson] as $a | [$now[] | fp("") | tojson] as $b |
     (if (msub($a; $b) | length) == 0 and ([$d[] | select(.decision == "apply" and (.item | test("^[TCV]-")))] | length) == 0
      then "no item is resolved" else empty end),
-    (introduced($a | map(fromjson) + $lb; msub($b | map(fromjson); [$v[0].late[]? | fp("")]))[] | "introduced: \(.[0]) \(.[1]) \(.[3])")'
+    (introduced_late($a | map(fromjson); $lb; $b | map(fromjson); [$v[0].late[]? | fp("")])[] | "introduced: \(.[0]) \(.[1]) \(.[3])")'
 }
 
 cmd_gate() {
@@ -1201,6 +1257,8 @@ cmd_gate() {
   # Information only: the pairs that fail the convention test and the unattributed findings.
   local ni; ni="$(wc -l < "$RUN/gate/info.txt" | tr -d ' ')"
   if [ "$ni" -le 6 ]; then cat "$RUN/gate/info.txt"; else head -n 5 "$RUN/gate/info.txt"; echo "information: $((ni - 5)) more lines in $RUN/gate/info.txt"; fi
+  # Every finding that surfaced late, uncapped: the user decides the push with all of them in view.
+  cat "$RUN/gate/late.txt"
   jq -r '"author: " + (if .commit_identity then "\(.commit_identity.name) <\(.commit_identity.email)>" else "none, patch only" end)' "$RUN/state.json"
   jq -r --arg h "$head" '"write path: \(.path)", (select(.path == "A") |
     "push: \(.dest.url) \($h):refs/heads/\(.dest.ref)", "expected remote SHA: \(.dest.expected_sha)"),

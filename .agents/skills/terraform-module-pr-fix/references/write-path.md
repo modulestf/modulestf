@@ -244,16 +244,29 @@ A finding of a round counts against the fix only when the fix could have caused 
 
 Otherwise it is unattributed.
 
-An attributable finding surfaced late when the pull request already held what it reports and the round-0 review did not raise it: the fix did not touch its line. It surfaced late when all of these hold:
+An attributable finding may have surfaced late, as [Surfaced Late](#surfaced-late) says.
 
-- L1. Its `(rule_id, file, block address)` does not occur among the pinned head's findings, so a severity raise never surfaces late.
-- L2. Its file is not `.`, passes the path grammar, and is a file of the judged tree; its `line` is an integer from 1 to the file's line count.
-- L3. Its line is more than 3 lines away from every line the fix changed. The fix's lines are the new side of each hunk of `git diff -U0` between the pinned head and the judged tree; a hunk that only deletes marks the line before the deletion.
-- L4. Its line does not open a top-level block that holds a line the fix changed. A line opens one when it is a block header at column 0 that ends with `{`; the block runs to the next line that is `}` at column 0. A finding on a block as a whole takes the block's first line, so a change inside the block makes it the fix's.
+A tuple `(rule_id, file, block address, severity)` with severity MEDIUM or higher is introduced when its count among the round's attributable findings that did not surface late is above its count among all of the pinned head's findings and the tuples that surfaced late in the earlier reviewed rounds and not again in this round, each at its largest count over those rounds. Counting is by multiset, so a second finding with the same tuple and no address is introduced, and so is a LOW finding raised to MEDIUM. The local verdict, the open set and every [Loop](#loop) row read attributable findings only, the ones that surfaced late among them: such a finding is the pull request's, so the loop may fix it, and it is not introduced. Comment items are frozen at `prepare` and unchanged. Each unattributed finding is recorded as `unattributed: <rule_id> <file> <severity>`, the file repository-relative, in the round's `review.json` and in the gate's information file `$RUN/gate/info.txt`. Each finding that surfaced late is recorded as `surfaced late: <rule_id> <file>:<line> <severity>` in the same two places. `compare` prints the first ten of each kind, then the count of the rest and the path of `review.json`; the gate prints its information lines at Step 11, all of them when there are at most six, else the first five and the path of the information file. pr-review's final review still reports every finding.
 
-A finding with a null line, at the module level, with a malformed file, or on a file the judged tree does not hold never surfaces late. A finding on a file the fix did not change surfaces late when L1 and L2 hold.
+## Surfaced Late
 
-A tuple `(rule_id, file, block address, severity)` with severity MEDIUM or higher is introduced when its count among the round's attributable findings that did not surface late is above its count among all of the pinned head's findings and the findings that surfaced late in the earlier reviewed rounds of the run. Counting is by multiset, so a second finding with the same tuple and no address is introduced, and so is a LOW finding raised to MEDIUM. The local verdict, the open set and every [Loop](#loop) row read attributable findings only, the ones that surfaced late among them: such a finding is the pull request's, so the loop may fix it, and it is not introduced. Comment items are frozen at `prepare` and unchanged. Each unattributed finding is recorded as `unattributed: <rule_id> <file> <severity>`, the file repository-relative, in the round's `review.json` and in the gate's information file `$RUN/gate/info.txt`. Each finding that surfaced late is recorded as `surfaced late: <rule_id> <file>:<line> <severity>` in the same two places. `compare` prints the first ten of each kind, then the count of the rest and the path of `review.json`; the gate prints its information lines at Step 11, all of them when there are at most six, else the first five and the path of the information file. pr-review's final review still reports every finding.
+A finding surfaced late when the pull request already held what it reports and the round-0 review did not raise it. Line distance cannot tell that apart from a defect the fix caused somewhere else, so only a rule whose verdict depends on the text it cites alone qualifies, and only when that text is unchanged. An attributable finding surfaced late when all of these hold:
+
+- S1. Its rule is on the list below.
+- S2. Its evidence span is byte-identical at the pinned head: the span's bytes, as whole lines, occur in the pinned head's file at least once and at least as often as in the judged tree's file, so a copy the fix adds never counts.
+- S3. Its `(rule_id, file, block address)` does not occur among the pinned head's findings, so a severity raise is never late.
+
+| Rule | Span | Why its verdict reads the span alone |
+|---|---|---|
+| `structure.comment-redundant` | item | It compares a comment with the code beside it, and the item holds both |
+| `structure.comment-unsourced` | item | It reads the comment's own claim and whether a source or a date is next to it |
+| `structure.suppression-unexplained` | item | It reads a suppression comment and the comment lines next to it |
+| `structure.argument-order` | item | It reads the order of the arguments inside one block |
+| `structure.grouping` | file | It reads where a block sits among the other blocks of its file |
+
+Every other rule, a rule about values, types, references, scope or behaviour among them, can be caused by a change elsewhere, so a new finding of it is introduced as before, file-level ones included.
+
+The span is read from the raw blobs, `git cat-file blob` at the pinned head and in the judged tree: no attribute, filter, text conversion or diff driver applies, and a CR is a byte like any other. A `file` span is the whole file. An `item` span is the top-level item that holds the finding's line: the top-level block that holds it, from its opening line to the line that brings the brace depth back to 0, with the comment lines right above it; a comment line at depth 0 takes its run of comment lines and the block right after it, unless a blank line follows the run. Braces count outside strings, comments and heredocs. A blank line at depth 0, a depth below 0, an unclosed string, comment or heredoc, or a depth that does not end at 0 makes the span the whole file. A finding with a null or out-of-range line, at the module level, on a malformed file, or on a file one of the two trees does not hold never surfaces late.
 
 ## Loop
 
