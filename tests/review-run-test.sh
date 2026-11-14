@@ -61,9 +61,11 @@ echo "schema pass: escalate overflow"; exit 3
 EOF
 cat > "$SK/plan-pass.sh" <<'EOF'
 #!/bin/bash
-# stub: g0 passes; plan leaves no record and exits PLAN_STUB_RC
+# stub: g0 passes; plan prints the file PLAN_STUB_REC as its record when set, and otherwise
+# leaves no record and exits PLAN_STUB_RC
 echo "plan-pass $*" >> "${STUB_LOG:?}"
 [ "$1" = g0 ] && exit 0
+[ -z "${PLAN_STUB_REC:-}" ] || { cat "$PLAN_STUB_REC"; exit 0; }
 exit "${PLAN_STUB_RC:-1}"
 EOF
 cat > "$SK/ladder-pass.sh" <<'EOF'
@@ -658,6 +660,18 @@ for rc in 2 1; do
   want="plan pass did not run: $([ "$rc" = 2 ] && echo refused || echo failed)"
   check "plan: a plan pass that exits $rc with no record gives '$want'" \
     "$([ "$(jq -r '[.unplanned[].reason] | unique | join(",")' "$RUN/coverage.json")" = "$want" ] && grep -qE "^plan: $want \([0-9]+s\)\$" "$TMP/pl.out"; echo $?)"
+  run_rr cleanup "$RUN" > /dev/null
+done
+
+# The environment class reaches the coverage with its fixed reason token; a bare or free-text
+# environment class is no class and reads as output unrecognised.
+for c in 'environment (access-denied)|environment (access-denied)' 'environment|output unrecognised' \
+  'environment (AccessDenied on arn:aws:ssm:us-east-1:000000000000:parameter/x)|output unrecognised'; do
+  printf '%s\n' 'plan pass mode: laptop' 'example: examples/one' "plan: ${c%%|*}" 'plan summary: 1 examples, 0 planned, 0 exceptions, 1 other' > "$TMP/plan-rec.txt"
+  DEPTH_STUB=deep prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review
+  run_rr verify "$RUN" > /dev/null; PLAN_STUB_REC="$TMP/plan-rec.txt" run_rr plan "$RUN" > "$TMP/pl.out"
+  check "plan: the record's class '${c%%|*}' reaches the coverage as '${c#*|}'" \
+    "$(jq -e --arg r "${c#*|}" '[.unplanned[] | select(.dir == "examples/one") | .reason] == [$r]' "$RUN/coverage.json" > /dev/null; echo $?)"
   run_rr cleanup "$RUN" > /dev/null
 done
 

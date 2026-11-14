@@ -74,12 +74,16 @@ def gap_reasons: ["terraform was not installed", "init failed", "not run: enviro
   "merge base not available", "merge base not run: environment", "not run: command limit", "not run: budget",
   "merge base not run: command limit", "merge base not run: budget"];
 
+# plan-pass.sh ENV_REASONS, each as its class
+def env_classes: ["credentials", "access-denied", "throttling", "registry", "plugin", "sandbox", "network",
+  "timeout", "output-cap"] | map("environment (\(.))");
+
 # The fixed reasons verify-pass.sh coverage gives an example that was not planned.
 # "plan pass did not run: refused" and "...: failed" are the host's, for a profile named and a plan
 # pass that gave no record (it refused its input, or failed); "no AWS profile named" means none was.
 def unplanned_reasons: ["no example directory", "no AWS profile named", "plan pass did not run: refused",
   "plan pass did not run: failed", "plan pass skipped at light depth", "not reached by the plan pass",
-  "code-error, merge base not planned", "environment", "needs input", "output unrecognised", "budget",
+  "code-error, merge base not planned"] + env_classes + ["needs input", "output unrecognised", "budget",
   "plan pass ended: credentials", "plan gate G0", "plan gate G1", "plan gate G2", "plan gate G3",
   "exception: example assumes a role in another account", "exception: needs a Docker daemon"];
 
