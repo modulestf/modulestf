@@ -181,10 +181,10 @@ for p in ${paths[@]+"${paths[@]}"}; do
       regenerated*)
         if cmp -s "$WS/$p" "$RR/orig-$i"; then r=generated
         else
-          # The pinned version wrote other bytes. When the head's workflow pins another version,
-          # the difference may be that version's output, which the host cannot run.
+          # The pinned version wrote other bytes. Only a head workflow that pins that same version
+          # makes it a difference; another version, no pin or a pin it cannot read is unknown.
           [ -n "$wf" ] || wf="$(wf_state)"
-          case "$wf" in mismatch) r="unknown version mismatch" ;; unreadable) r="unknown version unreadable" ;; *) r=differs ;; esac
+          case "$wf" in same) r=differs ;; mismatch) r="unknown version mismatch" ;; none) r="unknown no version pin" ;; *) r="unknown version unreadable" ;; esac
         fi ;;
       stale*)
         r="$(printf '%s' "${line#stale "$d" }" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9 .-' | cut -c1-60)"

@@ -20,8 +20,9 @@ A pull request that regenerates a README table, often after a terraform-docs ver
 | Result | When |
 |--------|------|
 | `generated` | The pass regenerated the directory and the new `README.md` equals the head's byte for byte. |
-| `differs` | The pass regenerated the directory, the bytes differ, and the head's `.github/workflows/pre-commit.yml` pins the profile's terraform-docs version or no version. |
+| `differs` | The pass regenerated the directory, the bytes differ, and the head's `.github/workflows/pre-commit.yml` pins the profile's terraform-docs version. |
 | `unknown version mismatch` | As `differs`, but that workflow pins another version: the difference may be that version's output, which the host does not run. |
+| `unknown no version pin` | As `differs`, but the head has no such workflow or it pins no version: the host cannot tell which version wrote the region. |
 | `unknown version unreadable` | As `differs`, but the workflow's pin is not a plain version. |
 | `unknown <reason>` | Any other refusal: the pass's own stale reason in lower case, or the host's (`link`, `not a regular file`, `file over 1 mib`, `not a documentation region`, `partial clone`, `read failed`, `pass failed`). |
 

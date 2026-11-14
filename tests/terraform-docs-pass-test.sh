@@ -328,7 +328,7 @@ rdir() { # rdir DIR REGION: a directory with main.tf and a README.md whose regio
   printf 'Intro\n\n%s\n%s\n%s\n\nOutro\n' "$B" "$2" "$E" >"$RC/$1/README.md"
 }
 rdir . generated                                  # generated
-rdir modules/a old                                # differs
+rdir modules/a old                                # differs, unknown with no pin
 mkdir -p "$RC/modules/b"; printf 'No markers.\n' >"$RC/modules/b/README.md"
 mkdir -p "$RC/modules/c"; ln -s ../a/README.md "$RC/modules/c/README.md"
 rdir modules/d generated; awk 'BEGIN {for (i = 0; i < 25000; i++) print "padding line of the oversized readme, sixty-odd bytes"}' >>"$RC/modules/d/README.md"
@@ -351,7 +351,7 @@ rr_run() { # rr_run [script] -> $TMP/rr-out-N/regions.txt as $RO
   bash "${1:-$RRS}" --clone "$RC" --head "$HC" --diff "$TMP/rr-files.json" --out "$RO" --profile "$TMP/PROFILE.md" >/dev/null 2>"$RO.err"
 }
 rr_want() { # the expected lines of the first run
-  printf '%s\n' "README.md generated" "docs/README.md unknown not a documentation region" "modules/a/README.md differs" \
+  printf '%s\n' "README.md generated" "docs/README.md unknown not a documentation region" "modules/a/README.md unknown no version pin" \
     "modules/c/README.md unknown link" "modules/d/README.md unknown file over 1 mib" "modules/e/README.md unknown marker test" \
     "modules/f/README.md unknown terraform-docs configuration present"
 }
@@ -359,6 +359,7 @@ rr_case() { # name, expected lines on stdin: the last run's regions.txt
   check "readme regions: $1" "$(rr_want | cmp -s - "$RO/regions.txt"; echo $?)"
 }
 rr_run; rr_case "each case's line, and no line for no markers or a deleted file"
+check "readme regions: no workflow pin, a region that differs is unknown" "$(grep -qx 'modules/a/README.md unknown no version pin' "$RO/regions.txt"; echo $?)"
 check "readme regions: the clone is unchanged" "$(rsnap | cmp -s - "$TMP/rr-snap"; echo $?)"
 check "readme regions: nothing the clone names ran" "$([ ! -e "$TMP/rr-ran" ]; echo $?)"
 check "readme regions: no work directory left" "$([ ! -e "$RO/rr" ]; echo $?)"
@@ -388,7 +389,7 @@ git clone -q "$RC" "$PRC" && mkdir -p "$PRC/mods" && git -C "$PRC" mv modules mo
 jq -n '[{filename: "mods/modules/a/README.md"}, {filename: "modules/b/README.md"}, {filename: "README.md"}]' >"$TMP/rr-pfiles.json"
 rr=$((rr + 1)); RO=$TMP/rr-out-$rr; mkdir "$RO"
 bash "$RRS" --clone "$PRC" --head "$(git -C "$PRC" rev-parse HEAD)" --diff "$TMP/rr-pfiles.json" --prefix mods --out "$RO" --profile "$TMP/PROFILE.md" >/dev/null 2>&1
-check "readme regions: a prefix is stripped and a file outside it ignored" "$([ "$(cat "$RO/regions.txt")" = "modules/a/README.md differs" ]; echo $?)"
+check "readme regions: a prefix is stripped and a file outside it ignored" "$([ "$(cat "$RO/regions.txt")" = "modules/a/README.md unknown no version pin" ]; echo $?)"
 git -C "$PRC" config remote.origin.promisor true
 rr=$((rr + 1)); RO=$TMP/rr-out-$rr; mkdir "$RO"
 bash "$RRS" --clone "$PRC" --head "$(git -C "$PRC" rev-parse HEAD)" --diff "$TMP/rr-files.json" --out "$RO" --profile "$TMP/PROFILE.md" >/dev/null 2>&1
@@ -405,6 +406,7 @@ rr_mut() { # name, perl substitution
   rr_run "$m"
   check "readme regions self-check: $1 is caught" "$( { ! rr_want | cmp -s - "$RO/regions.txt"; } || ! rsnap | cmp -s - "$TMP/rr-snap"; echo $?)"
 }
+rr_mut "no pin read as differs" 's/none\) r="unknown no version pin"/none) r=differs/'
 rr_mut "the comparison dropped" 's/if cmp -s "\$WS\/\$p" "\$RR\/orig-\$i"; then/if true; then/'
 rr_mut "the link test dropped" 's/\[ "\$mode" != 120000 \] \|\| \{ echo link; return 1; \}\n//'
 rr_mut "the marker filter dropped" 's/grep -qF "\$\{mk\[\@\]\}" "\$RR\/orig-\$i" \|\| \{ res\[i\]=skip; continue; \}//'
