@@ -18,8 +18,15 @@ def pos(f): [to_entries[] | select(.value | f) | .key][0];
 # review.tool-disputed note at LOW, as the spec gives it.
 
 # The rule registry (verdict.md): the rule_id of each row of the reviewer's rule-facts.md, read
-# from its raw text. A finding whose rule is no row is kept and listed, and is an unknown at rule 4.
-def registry_ids: [splits("\n") | capture("^\\| `(?<id>" + rule_pat + ")` \\|") | .id] | unique;
+# from its raw text. Only the table under the header `| \`rule_id\` | Provider facts` counts, up to
+# its first line that is not a table row; no header, no rule. A finding whose rule is no row is
+# kept and listed, and is an unknown at rule 4.
+def registry_ids:
+  [splits("\n")] as $l
+  | (first(range($l | length) | select($l[.] | startswith("| `rule_id` | Provider facts |"))) // null) as $h
+  | if $h == null then [] else
+      [ $l[$h + 2:] | label $out | .[] | if startswith("|") then . else break $out end
+        | capture("^\\| `(?<id>" + rule_pat + ")` \\|") | .id ] | unique end;
 def registered($reg): .rule_id | IN($reg[]);
 
 def plain_subject: type == "string" and length > 0 and (test("^" + rule_pat + "@") | not);
@@ -1064,7 +1071,8 @@ def covered_of($in; $l; $b):
 def render($in):
   ($in | .run |= scoped_run) as $in
   | $in.host as $h | $in.host.prefix as $p
-  # Only a registry rule is read by the ladder; the rest are unknowns (verdict.md).
+  # Only a registry rule is read by the ladder; the rest are unknowns (verdict.md). Every rung reads
+  # $known, never $in.findings, so an unregistered MEDIUM is never a MEDIUM that blocks.
   | ($in.findings | map(select(registered($in.registry)))) as $known
   | ($in.findings | map(select(registered($in.registry) | not))) as $unreg
   | (behaviour_of($in.run) | with_reported($known) | mark_tests($in.run.tests) | mark_ci($in.checks)) as $b

@@ -257,6 +257,60 @@ t_no_registry() {
   [ "$ST" = 2 ] && empty_out && printf '%s' "$MSG" | grep -qF "the rule registry, the reviewer's rule-facts.md"
 }
 t_no_registry; check "unregistered rule: a render with no rule registry beside it is refused" $?
+ladder "an unregistered rule at LOW" "inconclusive COMMENT" 4 "$(one structure.third-party-promotion LOW a.tf 3 "S." "F.")"
+# A registry MEDIUM beside an unregistered one: the ladder reads only the registry finding. Here
+# rule 4 stands above rule 6; the unregistered rule is never a blocking item of What to do.
+ladder "a registry MEDIUM beside an unregistered MEDIUM" "inconclusive COMMENT" 4 "$(pair structure.grouping MEDIUM structure.third-party-promotion MEDIUM)"
+UNREG_B='- `structure.third-party-promotion` at `b.tf:2`: rule not in the registry, so this MEDIUM finding does not decide the verdict.'
+t_unreg_todo() { ! grep -qF -- '- [ ] `structure.third-party-promotion`' "$O/comment.md" && grep -qxF -- "$UNREG_B" "$O/comment.md"; }
+t_unreg_todo; check "unregistered rule: beside a registry MEDIUM it is no blocking item, and section 5 names it" $?
+t_bad_registry() { # how: link | empty | fenced
+  local m="$TMP/badreg-$1-$oc" keep="$RCU"; local d="$m/terraform-module-pr-review/references" rr="$m/terraform-module-reviewer/references"
+  mkdir -p "$d" "$rr"; cp "$RCU" "$(dirname "$RCU")/render-comment.jq" "$REF/host-records.jq" "$REF/host-pass.sh" "$d/"
+  case "$1" in
+    link) cp "$RF" "$m/rf.md"; ln -s "$m/rf.md" "$rr/rule-facts.md" ;;
+    empty) : > "$rr/rule-facts.md" ;;
+    # rule rows outside the registry table: in a fence and in another table, no registry header
+    fenced) printf '%s\n' '```' '| `structure.grouping` | none |' '```' '' '| Pair | Kept |' '| `structure.grouping` | x |' > "$rr/rule-facts.md" ;;
+  esac
+  RCU="$d/render-comment.sh"; render "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")"; RCU="$keep"
+  [ "$ST" = 2 ] && empty_out && printf '%s' "$MSG" | grep -qF "the rule registry, the reviewer's rule-facts.md"
+}
+t_bad_link() { t_bad_registry link; }
+t_bad_empty() { t_bad_registry empty; }
+t_bad_fenced() { t_bad_registry fenced; }
+t_bad_link; check "unregistered rule: a registry that is a symbolic link is refused" $?
+t_bad_empty; check "unregistered rule: an empty registry is refused" $?
+t_bad_fenced; check "unregistered rule: rows outside the registry table register nothing, so the render is refused" $?
+# host-pass.sh accept checks the rendered verdict with host_verdict after any prior: the same
+# registry rule, read from the same rule-facts.md, so an unregistered HIGH or CRITICAL passes.
+PRIOR="$TMP/prior-full"; mkdir -p "$PRIOR"
+jq -n --arg h "$HEAD" '{format: 1, mode: "full", reason: "no-record", head: $h, previous_head: null,
+  previous_merge_base: null, depth: 0, last_full: "2026-11-14T00:00:00Z", scope: [],
+  metrics: {changed_since: 0, changed_total: 0, commits: 0, pages: 0}}' > "$PRIOR/meta.json"
+for x in carried carried-task scope-task; do echo '[]' > "$PRIOR/$x.json"; done
+HPA="$REF/host-pass.sh"
+accept() { bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$1" --rules "${2:-$RF}"; }
+t_accept() { # severity [rule] -> the render accepted by host-pass.sh accept
+  render "$(one "${2:-structure.third-party-promotion}" "$1" a.tf 3 "S." "F.")"
+  [ "$ST" = 0 ] && [ "$(accept "$O/result.json")" = "findings accepted: full" ]
+}
+t_accept_high() { t_accept HIGH; }
+t_accept_crit() { t_accept CRITICAL compat.made-up-break; }
+t_accept_high; check "accept: a render with an unregistered HIGH is accepted after a prior" $?
+t_accept_crit; check "accept: a render with an unregistered compat CRITICAL is accepted after a prior" $?
+t_accept MEDIUM structure.grouping; check "accept: a render with a registry MEDIUM is still accepted" $?
+t_accept_forged() { # an approval beside an unregistered HIGH does not follow from the findings
+  render "$(one structure.third-party-promotion HIGH a.tf 3 "S." "F.")"
+  jq '.verdict = "approve"' "$O/result.json" > "$TMP/forged.json" &&
+    [ "$(accept "$TMP/forged.json")" = "findings rejected: the verdict does not follow from the findings" ]
+}
+t_accept_forged; check "accept: approve beside an unregistered HIGH is rejected" $?
+t_accept_norules() {
+  render "$NONE"; printf 'no table\n' > "$TMP/norules.md"
+  [ "$(accept "$O/result.json" "$TMP/norules.md")" = "findings rejected: the rule facts file holds no rule" ]
+}
+t_accept_norules; check "accept: a rules file with no registry row is rejected" $?
 ladder "a patch unavailable" "inconclusive COMMENT" 4 "$NONE" "$(host pu '.could_not_run = [{kind: "patch-unavailable", path: "main.tf"}]')"
 ladder "an example not verified" "inconclusive COMMENT" 4 "$NONE" "" "" "$(runf gap '.verify_gaps = [{dir: "examples/complete", reason: "not run: environment"}]')"
 grep -qxF -- '- Verification of `examples/complete`: not run: environment.' "$O/comment.md"; check "ladder: the unverified example is listed in section 5" $?
@@ -982,6 +1036,20 @@ t_unreg() { render "$(one structure.third-party-promotion HIGH a.tf 3 "S." "F.")
 mutate "unregistered rules read by the ladder" 's/\(\$in\.findings \| map\(select\(registered\(\$in\.registry\)\)\)\) as \$known/\$in.findings as \$known/' t_unreg
 mutate "the unregistered line dropped from section 5" 's/\+ \[\$unreg\[\] \| tx\("rule-unregistered"[^\n]*\]/+ []/' t_unreg
 mutate "unregistered rules not counted as gaps" 's/ \+ \(\$unreg \| length\) \+ \(\$in\.run/ + (\$in.run/' t_unreg
+mutate "the registry read from every table row" 's/\| if \$h == null then \[\] else/| if true then [\$l[] | capture("^\\\\| `(?<id>" + rule_pat + ")` \\\\|") | .id] else/' t_bad_fenced
+mutate_hp() { # name, perl substitution on host-pass.sh and incremental.jq, case function
+  local d="$TMP/muthp-$oc/terraform-module-pr-review/references" keep="$HPA" before="$fails"; mkdir -p "$d"
+  cp "$REF/host-pass.sh" "$REF/incremental.jq" "$REF/render-comment.jq" "$REF/host-records.jq" "$d/"
+  perl -0pi -e "$2" "$d/host-pass.sh" "$d/incremental.jq"
+  if cmp -s "$d/host-pass.sh" "$REF/host-pass.sh" && cmp -s "$d/incremental.jq" "$REF/incremental.jq"; then
+    check "self-check: $1 (the mutation changed nothing)" 1; return
+  fi
+  HPA="$d/host-pass.sh"; "$3" > /dev/null 2>&1; local s=$?; HPA="$keep"; fails="$before"
+  check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
+}
+mutate_hp "accept without the registry" 's/host_verdict\(\$v; \$reg\)/host_verdict(\$v)/' t_accept_high
+mutate_hp "host_verdict reading unregistered rules" 's/map\(select\(\.rule_id \| IN\(\$reg\[\]\)\)\) as \$k/. as \$k/' t_accept_crit
+mutate_hp "the prior check run in the same shell" 's/\( check_prior "\$prior" "\$head" \)/check_prior "\$prior" "\$head"/' t_accept_forged
 mutate "unplanned examples left out of the ladder" 's/ or \.unplanned_open > 0//' t_cov_rule
 mutate "unplanned example names left out of section 5" 's/\| tx\("unplanned-name"; \{dir\}\)\]/| empty]/' t_cov_rule
 t_rule0() { render "$(pair compat.type-narrowed CRITICAL structure.docs-contradict-code HIGH)"; [ "$(rule)" = 1 ]; }

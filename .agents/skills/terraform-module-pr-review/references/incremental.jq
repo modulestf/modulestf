@@ -69,6 +69,13 @@ def host_verdict($model):
     elif any($f[]; .severity == "LOW") then "approve with nits"
     else "approve" end;
 
+# The same with the rule registry, $reg, the rule ids of the reviewer's rule-facts.md: a finding
+# whose rule is not in it is an unknown at rule 4 (verdict.md), so only rules 0 to 3 can stand above it.
+def host_verdict($model; $reg):
+  map(select(.rule_id | IN($reg[]))) as $k
+  | if length == ($k | length) then host_verdict($model)
+    else $k | host_verdict(if $model == "block" then "block" else "inconclusive" end) end;
+
 # Paths relative to the module root, for the reviewer; null for a path outside it.
 def rel($prefix):
   if $prefix == "" then . elif . == $prefix then "." elif startswith($prefix + "/") then .[($prefix | length) + 1:] else null end;
