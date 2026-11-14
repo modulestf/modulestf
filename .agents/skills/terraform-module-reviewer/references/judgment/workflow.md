@@ -92,7 +92,7 @@ Not in this prefix; read each when its case arises and apply it as the full vari
 
 - Before reporting `review.tool-disputed`: [Optional Fields](../findings-schema.md#optional-fields), whose last paragraph gives its fields.
 - Before a `suggested_fix`: the Suggested Fixes table of its check ([A](../check-a-compatibility.md#suggested-fixes), [B](../check-b-coverage.md#suggested-fixes), [C](../check-c-structure.md#suggested-fixes), [D](../check-d-examples.md#suggested-fixes), [E](../check-e-profile.md#suggested-fixes), [F](../check-f-scope.md#suggested-fixes)) and the [Suggested Fix Contract](../findings-schema.md#suggested-fix-contract).
-- Before a `compat.*` finding: Check A's **Reverts:** paragraph and the text after it, in [Reads, Fails When and Severity](../check-a-compatibility.md#reads-fails-when-and-severity).
+- Before reporting or dropping a `compat.*` finding, and whenever a commit in the change reverts another: Check A's **Reverts:** paragraph and the text after it, in [Reads, Fails When and Severity](../check-a-compatibility.md#reads-fails-when-and-severity).
 - A new module: [Check A No base](../check-a-compatibility.md#no-base) and [Check F A new module](../check-f-scope.md#a-new-module).
 - Check B, before judging a block: [Which blocks](../check-b-coverage.md#which-blocks) and [Documented omissions](../check-b-coverage.md#documented-omissions).
 - Check D, when the task carries a plan record: [Plan evidence](../check-d-examples.md#plan-evidence).

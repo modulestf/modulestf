@@ -73,7 +73,7 @@ Three rows change `scope` after the facts engine review found them:
 
 These rules left a value open. Each value in the table is the reading above; a reviewer of the audit may decide otherwise.
 
-- `structure.sibling-block-asymmetry`: Check C's **Severity** block gives HIGH for a field the change promises and MEDIUM for a field only a sibling block sets.
+- `structure.sibling-block-asymmetry`: Check C's **Severity** block gives HIGH for a field a variable description, README or example of the change documents and MEDIUM for a field only a sibling block sets.
 - Check C's MEDIUM for "missing tag propagation" and its **Fails when** bullet on tags have no `rule_id` in the registry. No row takes them; a finding of that kind is minted under [findings-schema.md](findings-schema.md).
 - Check D's bullet on invented input names has no `rule_id` of its own. It is left with the per-example rules, without a row change.
 - Check C does not say whether its rules run in example areas. `area_kinds` adds `example` only where a rule names examples: `structure.docs-contradict-code` ("an example comment") and `structure.version-floor-understated` ("an example against the module it calls"). `structure.multi-provider` excludes examples in its own text.

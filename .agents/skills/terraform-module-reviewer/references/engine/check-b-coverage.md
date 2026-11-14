@@ -92,7 +92,7 @@ Engine: `candidate`
 
 ### Confirm when: `coverage.optional-argument-unexposed`
 
-- The `resource` block is new in the change, the argument is Optional in the schema, nothing sets it from an input, no documented omission covers it, and no existing block of the type in the module omits it too.
+- The `resource` block is new in the change, the argument is Optional in the schema, nothing sets it from an input, no documented omission covers it, and no block of the type that exists at the base in the module omits it too.
 - Severity: always MEDIUM.
 
 ### Host templates: `coverage.optional-argument-unexposed`
