@@ -2539,5 +2539,64 @@ t_pm_alone() { render "$PM"; [ "$(rule)" = 6 ] && [ "$(verdict)" = "block REQUES
 t_pm_alone; check "known MEDIUM: review.path-missing alone still blocks at rule 6" $?
 mutate "a review.* MEDIUM counted as a known blocker" 's/and \(\.rule_id \| startswith\("review\."\) \| not\)\);/);/' t_pm_unknown
 
+# --- host-pass.sh accept after a prior review: its host_verdict (incremental.jq) must agree with
+# the render's ladder on every new rung, or the rendered review is rejected and never posted.
+# The prior is a full one, so accept reaches the verdict check and stops there.
+ACCP="$TMP/prior-full"; mkdir -p "$ACCP"
+for x in carried carried-task scope-task; do echo '[]' > "$ACCP/$x.json"; done
+jq -n --arg h "$HEAD" '{format: 1, mode: "full", reason: "first-review", head: $h, previous_head: null,
+  previous_merge_base: null, depth: 0, last_full: "2026-01-01T00:00:00Z", scope: [],
+  metrics: {changed_since: 0, changed_total: 0, commits: 0, pages: 0}}' > "$ACCP/meta.json"
+RULESF="$SRC/.agents/skills/terraform-module-reviewer/references/rule-facts.md"
+HPA="$REF/host-pass.sh" # swapped for a mutated copy by acc_mutate
+acc() { # the last render's findings and verdict -> accept's status
+  bash "$HPA" accept --prior "$ACCP" --findings "$O/findings.json" --result "$O/result.json" --rules "$RULESF" 2>&1 | grep -qx 'findings accepted: full'
+}
+acc_case() { # name, case function: the case renders, then accept takes its verdict
+  "$2" > /dev/null 2>&1; local s=$?
+  check "accept: $1" "$([ "$s" = 0 ] && acc; echo $?)"
+}
+acc_case "a known MEDIUM over unknowns, block at rule 6" t_km
+acc_case "a known MEDIUM over unresolved threads, block at rule 6" t_km_threads
+acc_case "a jobless Checks signal alone, approve with nits" t_jobless
+acc_case "a jobless Checks signal with a LOW, approve with nits" t_jobless_low
+acc_case "a floor trigger cleared by its finding, approve with nits" t_fl_finding
+acc_case "a floor trigger cleared by the floors read, approve" t_fl_read
+acc_case "covered gate skips with no finding, approve with nits" t_cov_rule8
+acc_case "a covered recorded exception, approve with nits" t_cov_exc
+acc_case "a MEDIUM review.path-missing beside an unknown, inconclusive" t_pm_unknown
+acc_case "a MEDIUM review.verification-incomplete, inconclusive" t_bvi
+# Toward stricter only: a forged lenient verdict over a known MEDIUM is refused.
+t_acc_forged() { t_km > /dev/null 2>&1 || return 1; jq '.verdict = "inconclusive"' "$O/result.json" > "$O/r2.json" && mv "$O/r2.json" "$O/result.json"; ! acc; }
+t_acc_forged; check "accept: an inconclusive verdict over a known MEDIUM is refused" $?
+t_acc_approve() { t_jobless > /dev/null 2>&1 || return 1; jq '.verdict = "approve"' "$O/result.json" > "$O/r2.json" && mv "$O/r2.json" "$O/result.json"; acc; }
+t_acc_approve; check "accept: approve with no finding still follows from the findings" $?
+# A prior that fails its check, and a verdict that does not follow, end accept with status 1.
+t_acc_badprior() {
+  local p="$TMP/prior-bad"; rm -rf "$p"; cp -R "$ACCP" "$p"; echo x > "$p/extra"
+  t_km > /dev/null 2>&1 || return 1
+  local out; out="$(bash "$HPA" accept --prior "$p" --findings "$O/findings.json" --result "$O/result.json" --rules "$RULESF" 2>&1)"
+  [ $? = 1 ] && [ "$out" = "findings rejected: the prior directory did not pass its check" ]
+}
+t_acc_badprior; check "accept: a prior that fails its check ends accept with status 1" $?
+t_acc_exit() {
+  t_km > /dev/null 2>&1 || return 1; jq '.verdict = "approve"' "$O/result.json" > "$O/r2.json" && mv "$O/r2.json" "$O/result.json"
+  local out; out="$(bash "$HPA" accept --prior "$ACCP" --findings "$O/findings.json" --result "$O/result.json" --rules "$RULESF" 2>&1)"
+  [ $? = 1 ] && [ "$out" = "findings rejected: the verdict does not follow from the findings" ]
+}
+t_acc_exit; check "accept: a verdict that does not follow ends accept with status 1" $?
+t_acc_pm() { t_pm_unknown > /dev/null 2>&1 && acc; }
+t_acc_jl() { t_jobless > /dev/null 2>&1 && acc; }
+acc_mutate() { # name, perl substitution on incremental.jq, case function that holds -> caught when it fails
+  local d="$TMP/hp-mut-$oc"; mkdir -p "$d"; cp "$REF/host-pass.sh" "$REF/incremental.jq" "$d/"
+  perl -0pi -e "$2" "$d/incremental.jq"
+  if cmp -s "$d/incremental.jq" "$REF/incremental.jq"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
+  HPA="$d/host-pass.sh"; "$3" > /dev/null 2>&1; local s=$?; HPA="$REF/host-pass.sh"
+  check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
+}
+acc_mutate "accept without the known MEDIUM rung" 's/\n    elif \$m then "block"//' t_acc_forged
+acc_mutate "accept counting a review.* MEDIUM as a known blocker" 's/ and \(\.rule_id \| startswith\("review\."\) \| not\)\) as \$m/) as \$m/' t_acc_pm
+acc_mutate "accept refusing approve with nits with no LOW" 's/ or \$model == "approve with nits" then/ then/' t_acc_jl
+
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi
