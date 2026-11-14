@@ -103,12 +103,14 @@ copy() {
 # Each check keeps its Reads, Fails when and Severity text. Its other sections are the
 # on-demand reads workflow.md names; Check B's Fails when sits in its Rules section. The
 # heading that opens that text is an anchor for the run summaries, so it is unwrapped.
+# Check E's Host Wrapper Evidence and its pointer are left out: the prefix is at its size cap, so
+# a judgment run keeps the generated content rules alone for a wrapper versions.tf.
 drops_of() {
   case "$1" in
     a-compatibility) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:No base" ;;
     b-coverage) echo "u:Reads|h:Which blocks|h:Documented omissions|h:Suggested Fixes" ;;
     c-structure) echo "u:Reads, Fails When and Severity|h:Embedded Code|h:Suggested Fixes" ;;
-    e-profile) echo "u:Reads, Fails When and Severity|h:Suggested Fixes" ;;
+    e-profile) echo "u:Reads, Fails When and Severity|h:Host Wrapper Evidence|h:Suggested Fixes|l:^- A wrapper .versions\.tf. that a .Wrapper versions:. line" ;;
     d-examples) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:Plan evidence" ;;
     f-scope) echo "u:Reads, Fails When and Severity|h:The suggested fix|h:Suggested Fixes|h:The base revision|h:A new module|h:Renamed files|h:Not evaluated|h:Where Check F yields|h:Decisions|h:Worked Cases" ;;
   esac

@@ -1529,7 +1529,8 @@ t_restore_fail; check "allowed paths: a restoration that fails aborts the run" $
 # --- 16. Wrapper versions.tf: derive, the wrappers step, the clause 3 exception -------------------
 
 WFX="$SRC/tests/pr-fix-fixture" # recorded upstream: each module's versions.tf and its wrappers/versions.tf
-WPL() { sed -n "/^WRAP_PL='\$/,/^out(\"updated\");'\$/p" "$FR" | sed "1s/^WRAP_PL='//;\$s/'\$//"; } # the script's perl
+# derive, from the one copy pr-review holds, then the script's perl, as fix-run.sh runs them
+WPL() { cat "$(dirname "$FR")/../../terraform-module-pr-review/references/wrapper-derive.pl"; sed -n "/^WRAP_PL='\$/,/^out(\"updated\");'\$/p" "$FR" | sed "1s/^WRAP_PL='//;\$s/'\$//"; }
 dv() { perl -e "$(WPL)" derive "$1"; } # file: derive on stdout; exit 3 when undefined
 t_derive() {
   local r d="$TMP/dv" c n=0 PM_='terraform {\n  provider_meta "aws" {\n' END_='  }\n}\n'

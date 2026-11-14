@@ -677,46 +677,18 @@ restore() {
 
 # --- Wrapper versions.tf (write-path.md, Wrapper Versions) ------------------------------------
 
-# derive and the wrappers step's work on one pair. "derive <file>" prints derive(file) and exits 0,
-# or exits 3 when derive is undefined. "step <wrapper> <module> <baseline file> <conv> <guard>", run
-# in the clone, prints the step's one result for the pair: the safety checks, then the convention
-# test and the author-edit guard as the caller decided them from git, then derive and the write.
+# derive is pr-review's wrapper-derive.pl, the one copy both skills run: "perl WRAP_LIB derive
+# <file>" prints derive(file) and exits 0, or exits 3 when derive is undefined. The step's perl
+# below runs with that file prepended. "step <wrapper> <module> <baseline file> <conv> <guard>",
+# run in the clone, prints the step's one result for the pair: the safety checks, then the
+# convention test and the author-edit guard as the caller decided them from git, then derive and
+# the write.
+WRAP_LIB="$PRR/wrapper-derive.pl"
 WRAP_PL='
 use strict; use warnings; use Fcntl qw(O_RDONLY O_RDWR O_NOFOLLOW O_NONBLOCK);
-sub closes { my $d = 0; for my $c (split //, shift) { $d++ if $c eq "["; return 0 if $c eq "]" && --$d < 0 } return $d == 0 }
-sub derive {
-  my $s = shift;
-  return undef if length($s) > 65536 || $s !~ /\n\z/ || $s =~ /[^\x20-\x7e\t\n]/ || index($s, "<<") >= 0;
-  my @l = split /\n/, $s, -1; pop @l;
-  my ($o, $i) = ("", 0);
-  while ($i < @l) {
-    my $x = $l[$i++]; $o .= "$x\n";
-    next unless $x =~ /^([ \t]*)provider_meta "[^"]*" \{$/;
-    my ($ind, $closed) = ($1, 0);
-    while ($i < @l) {
-      my $y = $l[$i++];
-      if ($y eq "$ind}") { $o .= "$y\n"; $closed = 1; last }
-      return undef if $y =~ /[{}]/;
-      if ($y =~ m{^[ \t]*(#|//|$)}) { $o .= "$y\n"; next }
-      my ($t) = $y =~ /^[ \t]*([A-Za-z0-9_-]+)/;
-      my $ua = defined $t && ($t eq "user_agent" || $t eq "module_name");
-      if ($ua && $y =~ /^[ \t]*(user_agent|module_name) *= *\[[ \t]*$/) {
-        while (1) { return undef if $i >= @l; my $z = $l[$i++]; return undef if $z =~ /[{}]/; last if $z =~ /^[ \t]*\]/ }
-        next;
-      }
-      return undef unless $y =~ /^[ \t]*[A-Za-z_][A-Za-z0-9_-]* *= *(\S.*)$/;
-      my $v = $1;
-      return undef if index($v, "[") >= 0 && !($ua && closes($v));
-      $o .= "$y\n" unless $ua;
-    }
-    return undef unless $closed;
-  }
-  return $o;
-}
 sub slurp { open(my $h, "<:raw", shift) or return undef; local $/; my $s = <$h>; return defined $s ? $s : "" }
 sub rd { my $h = shift; sysseek($h, 0, 0) or return undef; my ($s, $b) = (""); while (1) { my $n = sysread($h, $b, 65536); return undef unless defined $n; last unless $n; $s .= $b } return $s }
 sub real_dirs { my @c = split m{/}, shift; pop @c; my $a = ""; for (@c) { $a = $a eq "" ? $_ : "$a/$_"; return 0 if -l $a || !-d _ } return 1 }
-if ($ARGV[0] eq "derive") { my $s = slurp($ARGV[1]); my $d = defined $s ? derive($s) : undef; exit 3 unless defined $d; print $d; exit 0 }
 my (undef, $w, $m, $bf, $conv, $guard) = @ARGV;
 sub out { print "$_[0] $w", (defined $_[1] ? " $_[1]" : ""), "\n"; exit 0 }
 out("stale", "link on its path") unless real_dirs($w) && real_dirs($m);
@@ -750,7 +722,7 @@ blob_at() { # tree, path, file: the blob of a 100644 entry into the file; 1 when
   e="$(entry_at "$1" "$2")"
   [[ "$e" =~ $re ]] && [ "${BASH_REMATCH[2]}" = "$2" ] && G cat-file blob "${BASH_REMATCH[1]}" > "$3" 2> /dev/null
 }
-derive_to() { perl -e "$WRAP_PL" derive "$1" > "$2"; } # file, out: 0 when derive is defined
+derive_to() { perl "$WRAP_LIB" derive "$1" > "$2"; } # file, out: 0 when derive is defined
 wrap_derived() { # tree, wrapper, module: the wrapper's blob there equals derive of the module's blob there
   local d="$RUN/wrap"
   blob_at "$1" "$3" "$d/tm" && derive_to "$d/tm" "$d/tm.d" && blob_at "$1" "$2" "$d/tw" && cmp -s "$d/tm.d" "$d/tw"
@@ -842,7 +814,7 @@ cmd_wrappers() {
     elif ! blob_at "$base" "$p" "$d/bw" || ! blob_at "$base" "$m" "$d/bm"; then r="stale $p not a blob at the baseline"
     else
       pair_conv_guard "$p" "$m"
-      r="$(cd "$RUN/clone" && perl -e "$WRAP_PL" step "$p" "$m" "$d/bw" "$CONV" "$GUARD")" || r="stale $p the step failed"
+      r="$(cd "$RUN/clone" && perl -e "$(cat "$WRAP_LIB")$WRAP_PL" step "$p" "$m" "$d/bw" "$CONV" "$GUARD")" || r="stale $p the step failed"
     fi
     printf '%s\n' "$r" >> "$RD/wrappers.txt"
   done < <(wrap_pairs "$base")

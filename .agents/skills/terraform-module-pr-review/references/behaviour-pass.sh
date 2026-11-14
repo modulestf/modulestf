@@ -6,7 +6,14 @@
 #   behaviour-pass.sh classify --facts <mtf-facts> --dir <module root>
 #       (--diff <files.json> [--prefix <module root prefix>] | --base <dir>) [--schema <schema.json>] --out <dir>
 #   behaviour-pass.sh eval --facts <mtf-facts> --out <dir> --head <sha> --base-sha <sha>
-#       [--claims <claims.json>] [--ladder <ladder.json>]
+#       [--claims <claims.json>] [--ladder <ladder.json>] [--wrappers <wrappers.txt>]
+#   behaviour-pass.sh wrappers --clone <dir> --head <sha> --diff <files.json> [--prefix <p>] --out <dir>
+#
+# wrappers writes <out>/wrappers.txt, one line per wrapper versions.tf the change touches: its
+# module-relative path and derived, copied, differs or "unknown <reason>" (behaviour-pass.md,
+# Wrapper Versions). It reads the head tree with the git form of the reviewer's git-safety.md and
+# runs nothing from the clone. eval with --wrappers makes an unverifiable trigger at a derived or
+# copied wrapper inert.
 #
 # classify writes <out>/behaviour.json, the checked classifier output, or <out>/status, the reason
 # nothing was classified, and prints one line. eval writes <out>/run-behaviour.json, the run file's
@@ -26,19 +33,19 @@ deadline="${BEHAVIOUR_PASS_TIMEOUT:-120}"
 die() { echo "behaviour-pass.sh: $1" >&2; exit 2; }
 
 cmd="${1-}"; shift 2> /dev/null
-facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder=""
+facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder="" wrappers="" clone=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --facts) facts="${2-}" ;; --dir) dir="${2-}" ;; --diff) diff="${2-}" ;; --prefix) prefix="${2-}" ;; --base) base="${2-}" ;; --schema) schema="${2-}" ;;
     --out) out="${2-}" ;; --head) head="${2-}" ;; --base-sha) bsha="${2-}" ;;
-    --claims) claims="${2-}" ;; --ladder) ladder="${2-}" ;;
+    --claims) claims="${2-}" ;; --ladder) ladder="${2-}" ;; --wrappers) wrappers="${2-}" ;; --clone) clone="${2-}" ;;
     *) die "unexpected argument" ;;
   esac
   [ $# -ge 2 ] || die "$1 needs a value"; shift 2
 done
 abs() { case "$1" in /?*) ;; *) die "$2 must be an absolute path" ;; esac; }
 abs "$out" --out; [ -d "$out" ] && [ ! -L "$out" ] || die "--out is not a directory"
-abs "$facts" --facts
+[ "$cmd" = wrappers ] || abs "$facts" --facts
 
 # Shared checks, in jq: a clean module-relative path, and the classifier output of contract 2.
 JQ_DEFS='
@@ -187,6 +194,15 @@ evaluate() {
     jq -n --arg h "$head" --arg b "$bsha" '{schema_version: 1, head_sha: $h, base_sha: $b, terraform_version: null,
       pins: [], runs: [], coverage: {class: "none", examples: []}}' > "$ladder"
   fi
+  # The wrapper evidence of the wrappers command: only a file whose every line is in its grammar
+  # counts; any other is no evidence, as with no file.
+  local wj='{}'
+  if [ -n "$wrappers" ]; then
+    abs "$wrappers" --wrappers; [ -f "$wrappers" ] && [ ! -L "$wrappers" ] || die "--wrappers is not a regular file"
+    wj="$(jq -R -s -c --arg re "$WRAP_LINE_RE" 'split("\n") | map(select(. != ""))
+      | if length <= 256 and all(.[]; test($re)) then map(capture("^(?<p>[^ ]+) (?<r>.+)$") | {(.p): .r}) | add // {} else {} end' \
+      "$wrappers" 2> /dev/null)" || wj='{}'
+  fi
   set -- claims-eval --behaviour "$out/behaviour.json" --ladder "$ladder" --head-sha "$head" --base-sha "$bsha"
   [ -n "$claims" ] && set -- "$@" --claims "$claims"
   case "$(run_facts "$out/eval.raw" "$@" --json)" in
@@ -198,8 +214,13 @@ evaluate() {
   # kept or discarded, and nothing else.
   jq -e --slurpfile b "$out/behaviour.json" --argjson c "$cf" "$JQ_DEFS"' valid_eval($b[0]; $c)' \
     "$out/eval.raw" > /dev/null 2>&1 || not_run "output refused"
-  jq -n --slurpfile b "$out/behaviour.json" --slurpfile e "$out/eval.raw" --argjson c "$cf" "$JQ_DEFS"'
-    $b[0] as $b | $e[0] as $e
+  jq -n --slurpfile b "$out/behaviour.json" --slurpfile e "$out/eval.raw" --argjson c "$cf" --argjson w "$wj" "$JQ_DEFS"'
+    $b[0] as $b
+    # An unverifiable trigger at a wrapper versions.tf the host found equal to its generator output
+    # is inert, with no outstanding difference: the wrapper is the module file, as the hook writes it.
+    | ($e[0] | .triggers |= map(.id as $id | (first($b.triggers[] | select(.id == $id)) | .file) as $f
+        | if .state == "unverifiable" and ($w[$f] // "" | IN("derived", "copied"))
+          then {id, state: "inert", wrapper: $w[$f]} else . end)) as $e
     | def kstate($id): first($e.claims[] | select(.claim_id == $id) | .state) // "discarded";
     {run: {status: "ran", reason: null,
        triggers: [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
@@ -211,6 +232,7 @@ evaluate() {
      record: (["behaviour: ran, \($b.triggers | length) triggers, \($b.capped) over the cap\(if $b.inert then ", inert" else "" end)"]
        + [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
           | "trigger \($t.id) `\($t.file)`\(if $t.line == null then "" else " line \($t.line)" end) \($t.category): \($et.state)"
+            + (if $et.wrapper != null then ", wrapper \($et.wrapper)" else "" end)
             + (if $et.complete == true then ", complete" else "" end)
             + (if ($et.outstanding // []) != [] and $et.evidence_digest != null
                then ", outstanding \($et.outstanding | length), digest \($et.evidence_digest)" else "" end)]
@@ -227,8 +249,124 @@ evaluate() {
   rm -f -- "$out/eval.json"
 }
 
+# --- Wrapper versions (behaviour-pass.md, Wrapper Versions) ---------------------------------------
+
+WRAP_RE='^wrappers/([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/)?versions\.tf$'
+WRAP_LINE_RE='^wrappers/([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/)?versions\.tf (derived|copied|differs|unknown [a-z0-9 .-]{1,60})$'
+WRAP_CAP=65536
+DERIVE="$(cd "$(dirname "$0")" && pwd -P)/wrapper-derive.pl"
+# The form of the reviewer's git-safety.md, The form, in the clone. Only ls-tree and cat-file of
+# the head run in it: they read objects, apply no driver or filter, and need no history, so the
+# depth-1 clone serves, as it does for the head revision query.
+safe_git() {
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_LAZY_FETCH=1 \
+  GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null \
+  GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat \
+  git -C "$clone" --no-pager -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+    -c protocol.allow=never -c diff.external= -c log.showSignature=false \
+    -c advice.graftFileDeprecated=false "$@"
+}
+safe_git_partial() {
+  [ -n "$(safe_git config --get extensions.partialClone)" ] ||
+    [ -n "$(safe_git config --get-regexp '^remote\..*\.promisor$')" ]
+}
+# head_blob <repository path> <file>: the blob at the head into the file, or prints why not: link
+# (the path or an ancestor), not a regular file, absent, over size, read failed.
+head_blob() {
+  local p="$1" a="" c e re=$'^([0-7]{6}) [a-z]+ [0-9a-f]{40,64} +([0-9-]+)\t(.*)$'
+  local IFS=/; set -f
+  for c in ${p%/*}; do
+    [ "$p" != "${p%/*}" ] || break
+    a="${a:+$a/}$c"
+    e="$(safe_git ls-tree -l -z "$head" -- "$a" 2> /dev/null | tr '\0' '\n')" || { echo "read failed"; return 1; }
+    [[ "$e" =~ $re ]] && [ "${BASH_REMATCH[3]}" = "$a" ] || { echo absent; return 1; }
+    [ "${BASH_REMATCH[1]}" != 120000 ] || { echo link; return 1; }
+    [ "${BASH_REMATCH[1]}" = 040000 ] || { echo "not a regular file"; return 1; }
+  done
+  unset IFS
+  e="$(safe_git ls-tree -l -z "$head" -- "$p" 2> /dev/null | tr '\0' '\n')" || { echo "read failed"; return 1; }
+  [[ "$e" =~ $re ]] && [ "${BASH_REMATCH[3]}" = "$p" ] || { echo absent; return 1; }
+  [ "${BASH_REMATCH[1]}" != 120000 ] || { echo link; return 1; }
+  [ "${BASH_REMATCH[1]}" = 100644 ] || { echo "not a regular file"; return 1; }
+  [ "${BASH_REMATCH[2]}" -le "$WRAP_CAP" ] || { echo "over size"; return 1; }
+  safe_git cat-file blob "$head:$p" > "$2" 2> /dev/null && [ "$(wc -c < "$2")" -le "$WRAP_CAP" ] || { echo "read failed"; return 1; }
+}
+# The pre-commit-terraform pin of the head .pre-commit-config.yaml, read as data: prints derive (a
+# release tag at v1.106.0 or later), copy (an earlier tag) or "unknown <reason>".
+pin_mode() {
+  local why
+  why="$(head_blob .pre-commit-config.yaml "$out/wrap/pin")" || { [ "$why" = absent ] && echo "unknown no pin" || echo "unknown pin unreadable"; return; }
+  perl -e '
+    open(my $h, "<:raw", $ARGV[0]) or exit print "unknown pin unreadable\n";
+    local $/; my $s = <$h>; $s = "" unless defined $s;
+    exit print "unknown pin unreadable\n" if $s =~ /[^\x20-\x7e\t\n]/;
+    # YAML this line reader does not follow, so pre-commit could read another pin: an anchor, an
+    # alias, a tag, a merge key or a complex key.
+    exit print "unknown pin unreadable\n" if $s =~ /(^|[\s\[{,])[&*!]\S/m || $s =~ /^[ \t]*(-[ \t]+)?(\?|<<)/m;
+    my $url = qr{https://github\.com/antonbabenko/pre-commit-terraform(?:\.git)?};
+    my ($in, @e) = (0);
+    for (split /\n/, $s) {
+      my ($repo, $rev);
+      $repo = $2 if /^[ \t]*-[ \t]+repo:[ \t]*(["\x27]?)(\S+?)\1[ \t]*(#.*)?$/;
+      $rev = $2 if /^[ \t]+rev:[ \t]*(["\x27]?)([^"\x27\s#]+)\1[ \t]*(#.*)?$/;
+      # A repo or rev key in any other spelling, a duplicate a YAML loader would keep last included.
+      exit print "unknown pin unreadable\n" if /^[ \t]*(-[ \t]+)?["\x27]?(repo|rev)["\x27]?[ \t]*:/i && !defined $repo && !defined $rev;
+      if (defined $repo) { $in = $repo =~ /^$url$/; push @e, {rev => [], hook => 0} if $in; next }
+      if (/^\S/) { $in = 0; next }
+      next unless $in;
+      push @{$e[-1]{rev}}, $rev if defined $rev;
+      $e[-1]{hook} = 1 if /^[ \t]*-[ \t]+id:[ \t]*(["\x27]?)terraform_wrapper_module_for_each\1[ \t]*(#.*)?$/;
+    }
+    # Every mention of the repository, in any letter case, is the one entry read, so no other
+    # form hides a second pin.
+    my $m = () = $s =~ m{antonbabenko/pre-commit-terraform}gi;
+    exit print "unknown no pin\n" if $m == 0;
+    exit print "unknown pin unreadable\n" unless @e == 1 && $m == 1 && @{$e[0]{rev}} == 1;
+    exit print "unknown hook not listed\n" unless $e[0]{hook};
+    my ($maj, $min, $pat) = $e[0]{rev}[0] =~ /^v?([0-9]{1,5})\.([0-9]{1,5})\.([0-9]{1,5})$/
+      or exit print "unknown pin not a release tag\n";
+    print +($maj <=> 1 || $min <=> 106 || $pat <=> 0) >= 0 ? "derive\n" : "copy\n";' "$out/wrap/pin"
+}
+wrapper_pairs() {
+  [ -n "$clone" ] && [ -n "$diff" ] || die "wrappers needs --clone, --head, --diff and --out"
+  abs "$clone" --clone; abs "$diff" --diff; [ -d "$clone" ] || die "--clone is not a directory"
+  [[ "$head" =~ $sha_re ]] || die "--head must be a 40 character SHA"
+  [ ! -e "$out/wrappers.txt" ] && [ ! -e "$out/wrap" ] || die "--out already holds the wrapper evidence"
+  jq -e 'type == "array" and all(.[]; type == "object" and (.filename | type == "string"))' "$diff" > /dev/null 2>&1 ||
+    die "--diff is not a GitHub files list"
+  mkdir "$out/wrap"
+  local p r m mode why w=() all=""
+  # The wrappers the change touches, module-relative, in path order.
+  while IFS= read -r p; do [[ "$p" =~ $WRAP_RE ]] && w+=("$p"); done < <(jq -r --arg p "${prefix:+$prefix/}" \
+    '.[] | .filename | select($p == "" or startswith($p)) | .[($p | length):]' "$diff" | LC_ALL=C sort -u)
+  if [ ${#w[@]} -gt 0 ]; then
+    if ! safe_git cat-file -e "$head^{tree}" 2> /dev/null; then all="unknown read failed"
+    elif safe_git_partial; then all="unknown partial clone"
+    else mode="$(pin_mode)"; fi
+  fi
+  for p in ${w[@]+"${w[@]}"}; do
+    if [ "$p" = wrappers/versions.tf ]; then m=versions.tf; else m="modules/${p#wrappers/}"; fi
+    if [ -n "$all" ]; then r="$all"
+    elif ! why="$(head_blob "${prefix:+$prefix/}$p" "$out/wrap/w")"; then r="unknown wrapper $why"
+    elif ! why="$(head_blob "${prefix:+$prefix/}$m" "$out/wrap/m")"; then r="unknown module $why"
+    else
+      case "$mode" in
+        derive) if perl "$DERIVE" derive "$out/wrap/m" > "$out/wrap/e"; then
+                  cmp -s "$out/wrap/e" "$out/wrap/w" && r=derived || r=differs
+                else r="unknown derive undefined"; fi ;;
+        copy) cmp -s "$out/wrap/m" "$out/wrap/w" && r=copied || r=differs ;;
+        *) r="$mode" ;;
+      esac
+    fi
+    printf '%s %s\n' "$p" "$r"
+  done > "$out/wrappers.txt"
+  rm -rf -- "$out/wrap"
+  cat "$out/wrappers.txt"
+}
+
 case "$cmd" in
   classify) classify ;;
   eval) evaluate ;;
-  *) die "the first argument is classify or eval" ;;
+  wrappers) wrapper_pairs ;;
+  *) die "the first argument is classify, eval or wrappers" ;;
 esac

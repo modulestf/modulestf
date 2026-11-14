@@ -17,6 +17,8 @@
 #   - the closing issues' text: kind=issue items by origin, the 4000 byte cut and its entry, one issue
 #     named twice read once, and a cross-repository reference, a third issue or a failed read adding nothing;
 #   - a failed validate at light escalates, a schema escalation at focused escalates;
+#   - the wrapper evidence: ladder runs behaviour-pass.sh wrappers before eval and passes its file,
+#     and handover states its grammar lines before the block, with a negative self-check;
 #   - a locked pull request: prepare's lock line, the lock in host.json and index.json, and a body
 #     byte for byte the unlocked one, with a negative self-check on the lock line;
 #   - the pr-review SKILL.md workflow move: the sentence multiset of SKILL.md and
@@ -76,7 +78,10 @@ EOF
 cat > "$SK/behaviour-pass.sh" <<'EOF'
 #!/bin/bash
 echo "behaviour $*" >> "${STUB_LOG:?}"
+sub="$1"
 while [ $# -gt 0 ]; do [ "$1" = --out ] && out="$2"; shift; done
+# wrappers: the lines a case names, when it names any.
+if [ "$sub" = wrappers ]; then [ -z "${WRAP_STUB:-}" ] || printf '%s\n' "$WRAP_STUB" > "$out/wrappers.txt"; exit 0; fi
 if [ -f "$out/behaviour.json" ] || [ -n "${EVAL:-}" ]; then
   echo '{"status": "ran", "reason": null, "triggers": [], "claims": [], "capped": 0}' > "$out/run-behaviour.json"
   echo 'behaviour: ran, 0 triggers, 0 over the cap' > "$out/record.txt"
@@ -454,6 +459,41 @@ check "a stopped run stays stopped, even with depth.json put back" "$(run_rr han
 check "after every subcommand nothing in a host string ran" "$(no_stray)"
 run_rr cleanup "$RUN" > /dev/null
 check "cleanup: the run directory is gone, a stopped run included" "$([ ! -e "$RUN" ]; echo $?)"
+
+# The wrapper evidence: ladder runs behaviour-pass.sh wrappers on the clone at the head before
+# eval and hands eval its file; the handover states each line in the grammar as a host fact line
+# before the untrusted block; a file with a line outside the grammar crosses no line, as eval
+# reads it as no evidence.
+t_wrap_rr() {
+  prep
+  WRAP_STUB="$(printf 'wrappers/versions.tf derived\nwrappers/x/versions.tf maybe $(touch x)')" full
+  run_rr handover "$RUN" > /dev/null 2>&1 || return 1
+  ! grep -q '^Wrapper versions: \|maybe' "$RUN/handover/task.md" || { echo "a file outside the grammar crossed"; return 1; }
+  run_rr cleanup "$RUN" > /dev/null
+  prep; : > "$STUB_LOG"
+  WRAP_STUB="$(printf 'wrappers/sub/versions.tf unknown no pin\nwrappers/versions.tf derived')" full
+  run_rr handover "$RUN" > /dev/null 2>&1 || return 1
+  local T="$RUN/handover/task.md" w e
+  w="$(grep -n -m1 -xF "behaviour wrappers --clone $RUN/clone --head $HEADC --diff $RUN/host/files.json --prefix  --out $RUN/behaviour" "$STUB_LOG" | cut -d: -f1)"
+  e="$(grep -n -m1 -F "behaviour eval " "$STUB_LOG" | cut -d: -f1)"
+  [ -n "$w" ] && [ -n "$e" ] && [ "$w" -lt "$e" ] || { echo "the wrappers step before eval"; return 1; }
+  sed -n "${e}p" "$STUB_LOG" | grep -qF -- "--wrappers $RUN/behaviour/wrappers.txt" || { echo "eval without --wrappers"; return 1; }
+  [ "$(grep '^Wrapper versions: ' "$T")" = "$(printf 'Wrapper versions: wrappers/sub/versions.tf unknown no pin\nWrapper versions: wrappers/versions.tf derived')" ] &&
+    awk '/^Wrapper versions: /{w=NR} /^UNTRUSTED-[0-9a-f]{12} BEGIN$/{b=NR} END{exit !(w && w < b)}' "$T" || { echo "task lines"; return 1; }
+  run_rr cleanup "$RUN" > /dev/null
+}
+t_wrap_rr; check "wrappers: ladder runs the wrappers step before eval and passes its file; handover states its grammar lines before the block" $?
+check "wrappers: nothing in the stub's lines ran" "$(no_stray)"
+wrap_mut() { # name, perl substitution: a weakened copy of review-run.sh must fail t_wrap_rr
+  local keep="$RR" s; perl -0pe "$2" "$RR" > "$SK/review-run-wmut.sh"
+  if cmp -s "$RR" "$SK/review-run-wmut.sh"; then check "self-check: wrappers mutation $1 changes the script" 1; return; fi
+  RR="$SK/review-run-wmut.sh"; t_wrap_rr > /dev/null 2>&1; s=$?; RR="$keep"
+  [ -z "${RUN:-}" ] || [ ! -d "$RUN" ] || run_rr cleanup "$RUN" > /dev/null 2>&1
+  check "self-check: wrappers mutation $1 is caught" "$([ "$s" != 0 ]; echo $?)"
+}
+wrap_mut "the grammar check dropped" 's/ &&\n        ! grep -qvE "\$WRAP_LINE_RE" "\$RUN\/behaviour\/wrappers\.txt"; then/; then/'
+wrap_mut "the file not passed to eval" 's/\$\{wr\[\@\]\+"\$\{wr\[\@\]\}"\} > \/dev\/null 2> "\$RUN\/state\/eval\.err"/> \/dev\/null 2> "\$RUN\/state\/eval.err"/'
+wrap_mut "the wrappers step not run" 's/  bash "\$HERE\/behaviour-pass\.sh" wrappers [^\n]*\n[^\n]*\n/  :\n/'
 
 # Lowering the depth: a deep run whose depth.json is edited to light is refused.
 DEPTH_STUB=deep prep
