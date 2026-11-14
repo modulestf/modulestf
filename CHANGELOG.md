@@ -1,3 +1,12 @@
+## [0.9.5](https://github.com/modulestf/modulestf/compare/v0.9.4...v0.9.5) (2026-11-14)
+
+
+### Bug Fixes
+
+* **pr-review:** Check generated README regions on the host with the pinned terraform-docs ([#157](https://github.com/modulestf/modulestf/issues/157)) ([db8403d](https://github.com/modulestf/modulestf/commit/db8403d02661a6d55b87030711a1c88c408ec0db))
+
+
+
 ## [0.9.4](https://github.com/modulestf/modulestf/compare/v0.9.3...v0.9.4) (2026-11-14)
 
 
