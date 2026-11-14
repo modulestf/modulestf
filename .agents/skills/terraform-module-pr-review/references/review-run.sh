@@ -569,20 +569,26 @@ plan_mode() { # laptop or runner from the record's own line, as SKILL.md Step 10
 cmd_skip_coverage() {
   need_full skip-coverage
   [ -f "$RUN/coverage.json" ] || fail "skip-coverage needs plan first"
-  [ "$(plan_mode)" = laptop ] && jq -e 'any(.unplanned[]; .reason | IN("plan gate G1", "plan gate G2", "plan gate G3"))' \
-    "$RUN/coverage.json" > /dev/null || { echo "skip-coverage: nothing to check"; return 0; }
+  # Laptop gate skips, or a runner-mode pass's recorded exceptions (skip-coverage.md)
+  local mode; mode="$(plan_mode)"
+  case "$mode" in
+    laptop) jq -e 'any(.unplanned[]; .reason | IN("plan gate G1", "plan gate G2", "plan gate G3"))' "$RUN/coverage.json" > /dev/null ;;
+    runner) jq -e 'any(.unplanned[]; .reason | startswith("exception: "))' "$RUN/coverage.json" > /dev/null ;;
+    *) false ;;
+  esac || { echo "skip-coverage: nothing to check"; return 0; }
   local changed; changed="$(jq -r '.counts.changed_files // ""' "$RUN/index.json")"
   [ -n "$changed" ] && [ -n "$MB" ] && [ -d "$RUN/base" ] ||
     { echo "skip-coverage: not run (no merge base or no changed files count); the skips stay unknowns"; return 0; }
   local sc=(bash "$HERE/skip-coverage.sh")
   rm -f "$RUN/base-gates.txt" "$RUN/skip-check.json"
   "${sc[@]}" gates "$RUN" --tree "$RUN/base" --base "$MB" --coverage "$RUN/coverage.json" --out "$RUN/base-gates.txt" \
-    > /dev/null 2> "$RUN/state/skip-gates.err" || rm -f "$RUN/base-gates.txt"
+    --mode "$mode" > /dev/null 2> "$RUN/state/skip-gates.err" || rm -f "$RUN/base-gates.txt"
   local bg=(); [ ! -f "$RUN/base-gates.txt" ] || bg=(--base-gates "$RUN/base-gates.txt")
-  local ad=(); [ ! -d "$RUN/plan-addresses" ] || ad=(--addresses "$RUN/plan-addresses")
+  local ad=() adir="$RUN/plan-addresses"; [ "$mode" = laptop ] || adir="$RUN/plan-record"
+  [ ! -d "$adir" ] || ad=(--addresses "$adir")
   if "${sc[@]}" check "$RUN" --files "$RUN/host/files.json" --coverage "$RUN/coverage.json" --plan "$(plan_record)" \
       --head "$HEAD_SHA" --base "$MB" --changed-files "$changed" ${ad[@]+"${ad[@]}"} ${bg[@]+"${bg[@]}"} \
-      --prefix "$PREFIX" > "$RUN/skip-check.json" 2> "$RUN/state/skip-check.err" &&
+      --prefix "$PREFIX" --mode "$mode" > "$RUN/skip-check.json" 2> "$RUN/state/skip-check.err" &&
       jq -e '(.covered | type == "array")' "$RUN/skip-check.json" > /dev/null 2>&1; then
     jq -r '"skip-coverage: \(.covered | length) covered, \(.uncovered | length? // 0) not covered"' "$RUN/skip-check.json"
   else rm -f "$RUN/skip-check.json"; echo "skip-coverage: failed; the skips stay unknowns"; fi
@@ -1075,6 +1081,44 @@ write_plan() { # out directory
   echo "plan: $o/plan.json"
 }
 
+# The provider floors the schema pass read (verdict.md, Provider floor changes): one entry per
+# directory and provider of versions.json with both a minimum and an old floor, read when both
+# versions were published, each with its index.json, and missing.json lists no type of that
+# provider at either. Bound to the head and the merge base the depth was bound to. Prints
+# nothing and fails when the pass left no versions.json or no binding.
+floors_of() {
+  local mbs v="$RUN/facts/versions.json" miss='{"missing": []}'
+  [ -f "$v" ] && [ ! -L "$v" ] || return 1
+  mbs="$(jq -r '.binding.merge_base // ""' "$RUN/depth.json" 2> /dev/null)"
+  [[ "$mbs" =~ $sha_re ]] || return 1
+  [ ! -f "$RUN/facts/missing.json" ] || miss="$(cat "$RUN/facts/missing.json")"
+  # A provider whose floor the pass could not resolve, an old floor unresolved, the pair
+  # unresolved or a source outside the grammar, gives an entry with no versions that is never read.
+  local list; list="$(jq -c '[.directories | to_entries[] | .key as $d | .value | to_entries[]
+      | (.key | test("^[a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63}$")) as $ok
+      | if $ok and .value.minimum? and .value.old_floor? then
+          {dir: $d, provider: .key, old_floor: .value.old_floor, floor: .value.minimum}
+        elif ($ok | not) or .value.unresolved? or .value.old_floor_unresolved? or .value.old_floor? then
+          {dir: $d, provider: (if $ok then .key else null end), old_floor: null, floor: null, unresolved: true}
+        else empty end] | unique_by([.dir, .provider])' "$v")" || return 1
+  # Over the render's 256 entries no list is written, never a cut one: a cut list could leave a
+  # directory with only its read entries, and without floors no trigger is cleared by them.
+  [ "$(jq length <<< "$list")" -le 256 ] || return 1
+  local out='[]' e dir prov of fv read
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    prov="$(jq -r .provider <<< "$e")"; of="$(jq -r .old_floor <<< "$e")"; fv="$(jq -r .floor <<< "$e")"
+    read=false
+    if [ "$(jq -r '.unresolved // false' <<< "$e")" = false ] && [ -f "$RUN/facts/$prov/$of/index.json" ] && [ -f "$RUN/facts/$prov/$fv/index.json" ] &&
+      jq -e --arg p "$prov" --arg a "$of" --arg b "$fv" \
+        'all(.missing[]?; .provider != $p or (any(.versions[]?; . == $a or . == $b) | not))' <<< "$miss" > /dev/null 2>&1; then
+      read=true
+    fi
+    out="$(jq -c --argjson e "$e" --argjson r "$read" '. + [$e + {read: $r} | del(.unresolved)]' <<< "$out")" || return 1
+  done < <(jq -c '.[]' <<< "$list")
+  jq -c -n --arg h "$HEAD_SHA" --arg b "$mbs" --argjson d "$out" '{head_sha: $h, base_sha: $b, dirs: $d}'
+}
+
 build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   local triage beh='null' ver='null' cov='null' skip='null' dj='null' tj='null' mode
   triage="$TRIAGE"
@@ -1084,11 +1128,13 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   [ ! -f "$RUN/skip-check.json" ] || skip="$(cat "$RUN/skip-check.json")"
   [ ! -f "$RUN/depth.json" ] || dj="$(cat "$RUN/depth.json")"
   [ "$TRIAGE" = true ] || [ ! -f "$RUN/tests.json" ] || tj="$(cat "$RUN/tests.json")"
-  local prof=null
+  local prof=null fl=null
   [ ! -f "$RUN/state/profile.json" ] || prof="$(cat "$RUN/state/profile.json")"
+  [ "$TRIAGE" = true ] || fl="$(floors_of)" || fl=null
   mode="$(plan_mode)"
   jq -n --argjson triage "$triage" --argjson counts "$1" --argjson beh "$beh" --argjson ver "$ver" \
     --argjson cov "$cov" --argjson skip "$skip" --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
+    --argjson floors "$fl" \
     --argjson planned "$( [ -f "$RUN/state/plan" ] && echo true || echo false)" \
     --slurpfile sel "$RUN/selection.json" "
     {format: 1, triage: \$triage, plan_ran: \$planned,
@@ -1107,6 +1153,7 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
     + (if \$mode != \"\" then {plan_mode: \$mode} else {} end)
     + (if \$depth != null then {depth: \$depth} else {} end)
     + (if \$tests != null then {tests: \$tests} else {} end)
+    + (if \$floors != null then {floors: \$floors} else {} end)
     + (if \$prof != null and (\$prof.label != \"shipped:terraform-aws-modules\" or \$prof.tree != \"none\")
        then {profile: {label: \$prof.label, tree: \$prof.tree}} else {} end)"
 }

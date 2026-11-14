@@ -1017,7 +1017,11 @@ cmd_accept() {
   IJ -e 'include "incremental"; findings_list(true)' "$findings" > /dev/null 2>&1 || reject "the findings do not match the contract"
   local head
   head="$(jq -r '.head_sha' "$result" 2> /dev/null)"
-  check_prior "$prior" "$head" > /dev/null || reject "the prior directory did not pass its check"
+  local prior_ok=0
+  check_prior "$prior" "$head" > /dev/null || prior_ok=1
+  # check_prior defines its own reject, which returns; this one must exit again.
+  reject() { echo "findings rejected: $1"; exit 1; }
+  [ "$prior_ok" = 0 ] || reject "the prior directory did not pass its check"
   local verdict
   verdict="$(jq -r '.verdict' "$result")"
   IJ -e --arg v "$verdict" 'include "incremental"; host_verdict($v) == $v' "$findings" > /dev/null 2>&1 ||

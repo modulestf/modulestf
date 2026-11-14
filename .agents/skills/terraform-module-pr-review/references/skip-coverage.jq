@@ -30,9 +30,9 @@ def record_blocks:
 
 # --- A gate record of skip-coverage.sh gates: {dir: {lines, done}} for the SHA it names, or
 # null when it names another SHA or has no end line. A directory without its done line is partial.
-def gate_record($sha):
+def gate_record_h($header):
   split("\n") | map(select(length > 0))
-  | if length >= 2 and .[0] == "skip-gates 1 " + $sha and .[-1] == "end" then
+  | if length >= 2 and .[0] == $header and .[-1] == "end" then
       reduce .[1:-1][] as $x ({d: {}, cur: null};
         if ($x | startswith("dir ")) then .cur = $x[4:] | .d[.cur] = {lines: [], done: false}
         elif .cur == null then .
@@ -40,6 +40,9 @@ def gate_record($sha):
         else .d[.cur].lines += [$x] end)
       | .d
     else null end;
+def gate_record($sha): gate_record_h("skip-gates 1 " + $sha);
+# A runner-mode record names its mode, so a laptop record never stands for it, nor it for one.
+def gate_record_runner($sha): gate_record_h("skip-gates 1 " + $sha + " runner");
 
 # A local module source resolved against the example directory, repository-relative, or null
 # when it climbs out of the repository: the same resolution as verify-pass.sh coverage.
@@ -74,15 +77,26 @@ def downloaded_ok: .gate != null and .gate != "G0" and (.path | safe_path and st
 # --- The decision. $cls: per changed file {file, dir, ok, attrs}; $addr: addresses-<n>.json by
 # n; $rec: the plan record text; $hg, $bg: the head and base gate records; $headok: the clone is
 # at $head; $nchanged: the pull request's changed file count.
-def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $headok; $nchanged):
-  ($rec | record_blocks) as $blocks
-  | (($cls | length) > 0 and all($cls[]; .ok) and any($cls[]; .attrs | length > 0)) as $allowed
+# The part both modes share: whether the change is allowed, and the witnesses of its attributes,
+# {allowed, nowit, wits}; nowit is null when every changed attribute has a witness.
+def witness_part($cls; $blocks; $addr; $head):
+  (($cls | length) > 0 and all($cls[]; .ok) and any($cls[]; .attrs | length > 0)) as $allowed
   | ([$cls[] | .dir as $d | .attrs[] | . + {dir: $d}] | unique) as $changed
   | (if $blocks == null then [] else [$changed[] | . as $c | {c: ., w: candidates($c; $blocks; $addr; $head)}] end) as $cand
-  | (if all($cand[]; any(.w[]; .ok)) and all($changed[]; .attribute | attr_name) and ($cand | length) > 0 then null
-     elif all($cand[]; any(.w[]; .ok) or (.w | length) > 0) and ($cand | length) > 0 then "witness-sensitive"
-     else "no-witness" end) as $nowit
-  | [$cand[] | .c.attribute as $at | first(.w[] | select(.ok)) | {attribute: $at, example, address}] as $wits
+  | {allowed: $allowed,
+     nowit: (if all($cand[]; any(.w[]; .ok)) and all($changed[]; .attribute | attr_name) and ($cand | length) > 0 then null
+       elif all($cand[]; any(.w[]; .ok) or (.w | length) > 0) and ($cand | length) > 0 then "witness-sensitive"
+       else "no-witness" end),
+     wits: [$cand[] | .c.attribute as $at | first(.w[] | select(.ok)) | {attribute: $at, example, address}]};
+
+# Condition 5: a changed file, by its name or previous name, under the directory or its real one.
+def dir_changed($paths; $d; $h; $b):
+  any($paths[]; . as $p | any(([$d] + [($h.lines?, $b.lines?) | .[]? | select(startswith("real ")) | .[5:]])[]; . as $r | $p | startswith($r + "/")));
+
+def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $headok; $nchanged):
+  ($rec | record_blocks) as $blocks
+  | witness_part($cls; $blocks; $addr; $head) as $wp
+  | $wp.allowed as $allowed | $wp.nowit as $nowit | $wp.wits as $wits
   | ($hg | gate_record($head)) as $H
   | (if $base | sha then $bg | gate_record($base) else null end) as $B
   | [$files[] | .filename, (.previous_filename // empty)] as $paths
@@ -102,8 +116,7 @@ def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $head
          elif $blk == null or $blk.hit == null or $blk.hit.gate != $g.g or ($d | safe_path | not)
            then "plan-record-unusable"
          elif ($allowed | not) then "change-not-allowed"
-         elif any($paths[]; . as $p | any(([$d] + [($h.lines?, $b.lines?) | .[]? | select(startswith("real ")) | .[5:]])[]; . as $r | $p | startswith($r + "/")))
-           then "dir-changed"
+         elif dir_changed($paths; $d; $h; $b) then "dir-changed"
          elif ($base | sha | not) then "merge-base-unresolved"
          elif $b == null or $b.done != true then "base-record-missing"
          elif $h == null or $h.done != true or ($h.lines | sort) != ($b.lines | sort) then "hit-set-differs"
@@ -116,6 +129,61 @@ def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $head
          elif $nowit != null then $nowit
          else null end) as $why
       | if $why == null then {covered: ({dir: $d, gate: $g.g, path: $blk.hit.path} + (if $dl then {downloaded: true} else {} end) + {witnesses: $wits})}
+        else {uncovered: {dir: $d, why: $why}} end)
+  | {format: 1, head_sha: $head, base_sha: (if $base | sha then $base else null end),
+     covered: [.[] | .covered // empty], uncovered: [.[] | .uncovered // empty]};
+
+# --- Recorded exceptions (skip-coverage.md, Recorded exceptions): a runner-mode pass records an
+# exception, not a gate hit, for an example that assumes a role in another account or needs a
+# Docker daemon. The runner record carries only the class, under the host's own "host example
+# <n>:" line; the hits come from the gate records, the head's computed here in runner mode.
+def exception_kind: {"exception: example assumes a role in another account": "role",
+  "exception: needs a Docker daemon": "docker"}[.] // null;
+def runner_blocks:
+  split("\n") as $l
+  | if any($l[]; . == "plan pass mode: runner") and any($l[]; startswith("host example ")) then
+      reduce $l[] as $x ({b: []};
+        if ($x | startswith("host example ")) then
+          (($x | capture("^host example (?<n>[1-9][0-9]{0,5}): (?<p>.*)$")) // null) as $h
+          | if $h == null then . else .b += [{n: ($h.n | tonumber), dir: $h.p, plan: null}] end
+        elif (.b | length) == 0 then .
+        elif ($x | startswith("plan: ")) and .b[-1].plan == null then .b[-1].plan = ($x[6:] | split(" | ")[0])
+        else . end)
+      | .b
+    else null end;
+
+def skip_coverage_runner($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $headok; $nchanged):
+  ($rec | runner_blocks) as $blocks
+  | witness_part($cls; $blocks; $addr; $head) as $wp
+  | ($hg | gate_record_runner($head)) as $H
+  | (if $base | sha then $bg | gate_record_runner($base) else null end) as $B
+  | [$files[] | .filename, (.previous_filename // empty)] as $paths
+  | reduce ($cov.unplanned[] | .dir) as $d ([]; if index($d) == null then . + [$d] else . end)
+  | map(. as $d
+      | [$cov.unplanned[] | select(.dir == $d) | .reason] as $rs
+      | ($rs[0] | if type == "string" then exception_kind else null end) as $k
+      | (if $blocks == null then null else first($blocks[] | select(.dir == $d)) // null end) as $blk
+      | ($H[$d]? // null) as $h
+      | ($B[$d]? // null) as $b
+      | [($h.lines? // [])[] | select(startswith("hit X"))] as $xh
+      | ($xh | sort | .[0] // "" | sub("^hit X[a-z]+ "; "")) as $path
+      | (if ($rs | length) > 1 then "not-sole-reason"
+         elif $k == null then "wrong-gate-class"
+         elif ($headok | not) then "head-mismatch"
+         elif ($files | length) != $nchanged or ($cls | length) != ($files | length) then "files-incomplete"
+         elif $blk == null or $blk.plan != $rs[0] or ($d | safe_path | not) then "plan-record-unusable"
+         elif ($wp.allowed | not) then "change-not-allowed"
+         elif dir_changed($paths; $d; $h; $b) then "dir-changed"
+         elif ($base | sha | not) then "merge-base-unresolved"
+         elif $b == null or $b.done != true then "base-record-missing"
+         elif $h == null or $h.done != true or ($h.lines | sort) != ($b.lines | sort) then "hit-set-differs"
+         # any gate hit at head would have made the example a gate skip, never an exception
+         elif any($h.lines[]; startswith("hit G")) then "wrong-gate-class"
+         # every exception hit in the clone scope, of the recorded kind; none is a lock file or downloaded
+         elif $xh == [] or any($xh[]; startswith("hit X" + $k + " ") | not) or ($path | safe_path | not) then "hit-set-differs"
+         elif $wp.nowit != null then $wp.nowit
+         else null end) as $why
+      | if $why == null then {covered: {dir: $d, gate: $k, path: $path, witnesses: $wp.wits}}
         else {uncovered: {dir: $d, why: $why}} end)
   | {format: 1, head_sha: $head, base_sha: (if $base | sha then $base else null end),
      covered: [.[] | .covered // empty], uncovered: [.[] | .uncovered // empty]};

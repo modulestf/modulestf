@@ -136,6 +136,13 @@ for e in s1 s2 s3; do
   printf '# Example\n' > "$C/examples/$e/README.md"
 done
 printf 'module "other" {\n  source = "../../modules/other"\n}\n' >> "$C/examples/s2/main.tf"
+# examples/r1 assumes a fixed role in another account, a recorded exception in runner mode and a
+# G3 hit in laptop mode; examples/r2 has a G1 hit beside it, so the runner gates class it a gate.
+mkdir -p "$C/examples/r1" "$C/examples/r2"
+printf 'provider "aws" {\n  assume_role {\n    role_arn = "arn:aws:iam::123456789012:role/outpost"\n  }\n}\n\nmodule "lb" {\n  source = "../../"\n}\n' > "$C/examples/r1/main.tf"
+printf '# Example\n' > "$C/examples/r1/README.md"
+printf 'terraform {\n  required_providers {\n    evil = {\n      source = "evil/evil"\n    }\n  }\n}\n\n' > "$C/examples/r2/main.tf"
+cat "$C/examples/r1/main.tf" >> "$C/examples/r2/main.tf"
 G init -q && G add -A && G commit -qm base
 BASE="$(G rev-parse HEAD)"
 G worktree add -q --detach "$RUN/base" "$BASE"
@@ -620,12 +627,12 @@ mutate "merge allowed" 's/qw\(concat /qw(merge concat /' t_merge
 mutate "count. references allowed" 's/each\|count\|self\|//' t_count_ref
 mutate "the structure and name checks dropped" 's/\$hs eq \$bs && \@\$ha == \@\$ba/1/; s/ && \$h->\{name\} eq \$b->\{name\}//' t_added_attr
 mutate "the hit sets not compared" 's/ or \(\$h\.lines \| sort\) != \(\$b\.lines \| sort\)//' t_relabel
-mutate "changes under the directory ignored" 's/\n           then "dir-changed"/\n           then null/' t_dir_md
+mutate "changes under the directory ignored" 's/elif dir_changed\(\$paths; \$d; \$h; \$b\) then "dir-changed"/elif false then "dir-changed"/' t_dir_md
 mutate "the sensitive bit ignored" 's/and \(index\(\$c\.attribute\) == null\)//' t_sens
 mutate "the witness head SHA ignored" 's/ and \.head_sha == \$head//' t_otherhead
 mutate "the module call directory ignored" 's/\n            and \(\.value \| resolve\(\$b\.dir\)\) == \$c\.dir//' t_otherdir
 mutate "an added file allowed" 's/if \.s != "modified" or \.prev != null then "other" else \.kind end/.kind/' t_md_added
-mutate "a stale base record accepted" 's/\.\[0\] == "skip-gates 1 " \+ \$sha and //' t_base_stale
+mutate "a stale base record accepted" 's/\.\[0\] == \$header and //' t_base_stale
 mutate "the merge base not required" 's/elif \(\$base \| sha \| not\) then "merge-base-unresolved"\n//' t_unresolved
 mutate "a document a .tf file names allowed" 's/\[ \$\? = 1 \] && out=ok/out=ok/' t_md_read
 mutate "the base expression not checked" 's/ && plain\(\$b->\{toks\}\)//' t_base_plain
@@ -641,6 +648,79 @@ mutate "a base commit missing from the clone not caught by check" 's/ \|\| BASES
 mutate "a downloaded hit with no line accepted" 's/\(\.line \/\/ ""\) \| test\("\^:\[0-9\]\+\$"\)/true/' t_dl_noline
 mutate "a downloaded hit taken while the clone scope has hits" 's/ and \(any\(\$h\.lines\[\]; startswith\("hit "\)\) \| not\)//' t_downloaded_hit
 mutate "downloaded hits never covered" 's/elif \$dl and \(all/elif \$dl or (all/' t_dl
+
+# --- Recorded exceptions (skip-coverage.md, Recorded exceptions): a runner-mode record, its
+# blocks under the host's own lines, examples/r1 an exception for a role in another account, the
+# gate records in runner mode, and the same witnesses.
+RX=examples/r1 # the excepted example of the runner cases
+records_runner() { # the class of the excepted example's plan line
+  rm -rf "$TMP/addr"; mkdir -p "$TMP/addr"
+  { echo "plan pass mode: runner"; echo "plan pass budget: 120 minutes"; i=0
+    for e in examples/e1 examples/e2 examples/e3 examples/e4 examples/e5 examples/e6 "$RX"; do
+      i=$((i + 1)); echo "host example $i: $e"; echo "example: $e"
+      case "$e" in
+        "$RX") echo "plan: $1" ;;
+        *) echo "plan: planned | Plan: 3 to add, 0 to change, 0 to destroy."
+           jq -n --arg h "$HEAD" --arg e "$e" '
+             {addresses: ["module.lb.aws_lb.this"], attributes: {"module.lb.aws_lb.this": ["name", "security_groups", "subnets", "tags"]},
+              module_calls: {lb: "../../"}, sensitive: {"module.lb.aws_lb.this": []}, head_sha: $h, example: $e}' > "$TMP/addr/addresses-$i.json" ;;
+      esac
+    done
+    echo "plan summary: 7 examples, 6 planned, 1 exceptions, 0 other"; } > "$TMP/record.txt"
+}
+ROLE='exception: example assumes a role in another account'
+run_runner() { # class of the plan line [, reason in the coverage] [, gates mode] [, check mode]
+  commit; filesjson; records_runner "$1"
+  jq -n --arg r "${2:-$1}" --arg d "$RX" '{schema_version: 1, class: "partial", inert: false, unplanned: [{dir: $d, reason: $r}]}' > "$TMP/coverage.json"
+  rm -f "$TMP/base-gates.txt"
+  "$SH" "$SC" gates "$RUN" --tree "$RUN/base" --base "$BASE" --coverage "$TMP/coverage.json" --out "$TMP/base-gates.txt" --mode "${3:-runner}"
+  [ -n "${BGEDIT:-}" ] && perl -0pi -e "$BGEDIT" "$TMP/base-gates.txt"
+  "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
+    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" \
+    --changed-files "$(jq length "$TMP/files.json")" --mode "${4:-runner}" > "$TMP/out.json"
+}
+t_runner_covered() {
+  fresh; reset_knobs; plain_change; run_runner "$ROLE" || return 1
+  [ "$(why examples/r1)" = covered ] && grep -qx "skip-gates 1 $BASE runner" "$TMP/base-gates.txt" \
+    && grep -qx 'hit Xrole examples/r1/main.tf' "$TMP/base-gates.txt" \
+    && jq -e '.covered == [{dir: "examples/r1", gate: "role", path: "examples/r1/main.tf",
+      witnesses: [{attribute: "security_groups", example: "examples/e1", address: "module.lb.aws_lb.this"}]}]' "$TMP/out.json" > /dev/null
+}
+for sh in bash zsh; do
+  SH=$sh
+  t_runner_covered; check "$sh: runner mode, an exception for a role in another account with a witness: covered" $?
+done
+SH=bash
+t_runner_laptop_rec() { fresh; reset_knobs; plain_change; run_runner "$ROLE" && records && recheck --mode runner && [ "$(why examples/r1)" = plan-record-unusable ]; }
+t_runner_laptop_rec; check "runner mode: a laptop record covers no exception" $?
+t_runner_class() { fresh; reset_knobs; plain_change; run_runner "plan gate G3" "$ROLE" && [ "$(why examples/r1)" = plan-record-unusable ]; }
+t_runner_class; check "runner mode: a plan line of another class: plan-record-unusable" $?
+t_runner_gate() { fresh; reset_knobs; plain_change; run_runner "plan gate G3" && [ "$(why examples/r1)" = wrong-gate-class ]; }
+t_runner_gate; check "runner mode: a gate skip is never covered in runner mode" $?
+t_runner_base_mode() { fresh; reset_knobs; plain_change; run_runner "$ROLE" "$ROLE" laptop && [ "$(why examples/r1)" = base-record-missing ]; }
+t_runner_base_mode; check "runner mode: a base record of laptop mode: base-record-missing" $?
+t_runner_check_mode() { fresh; reset_knobs; plain_change; run_runner "$ROLE" "$ROLE" runner laptop && [ "$(why examples/r1)" = wrong-gate-class ]; }
+t_runner_check_mode; check "runner mode: an exception checked in laptop mode: wrong-gate-class" $?
+t_runner_kind() { fresh; reset_knobs; plain_change; run_runner 'exception: needs a Docker daemon' && [ "$(why examples/r1)" = hit-set-differs ]; }
+t_runner_kind; check "runner mode: an exception of another kind than its hits: hit-set-differs" $?
+t_runner_base_hit() { fresh; reset_knobs; plain_change; BGEDIT='s/hit Xrole examples\/r1\/main\.tf\n//'; run_runner "$ROLE" && [ "$(why examples/r1)" = hit-set-differs ]; }
+t_runner_base_hit; check "runner mode: an exception hit missing at the base: hit-set-differs" $?
+t_runner_dir() { fresh; reset_knobs; plain_change; printf '# Note\n' >> "$C/examples/r1/README.md"; run_runner "$ROLE" && [ "$(why examples/r1)" = dir-changed ]; }
+t_runner_dir; check "runner mode: a change under the excepted example: dir-changed" $?
+t_runner_witness() { fresh; reset_knobs; ed modules/sub/main.tf 's/port     = var\.port/port     = var.listener_port/'; run_runner "$ROLE" && [ "$(why examples/r1)" = no-witness ]; }
+t_runner_witness; check "runner mode: no planned example witnesses the change: no-witness" $?
+t_runner_bad_mode() { "$SH" "$SC" check "$RUN" --mode cloud > /dev/null 2>&1; [ $? = 2 ]; }
+t_runner_bad_mode; check "runner mode: a mode outside laptop and runner is a usage error" $?
+mutate "runner gates read in laptop mode" 's/gates "\$f" "\$MODE" clone/gates "\$f" laptop clone/' t_runner_covered
+mutate "the runner header not checked" 's/gate_record_h\("skip-gates 1 " \+ \$sha \+ " runner"\)/gate_record_h("skip-gates 1 " + $sha)/' t_runner_base_mode
+mutate "the exception kind not checked" 's/ or any\(\$xh\[\]; startswith\("hit X" \+ \$k \+ " "\) \| not\)//' t_runner_kind
+mutate "the runner plan line not checked" 's/ or \$blk\.plan != \$rs\[0\]//' t_runner_class
+t_runner_gate_hit() { # a gate hit beside the exception at head and base: the record's class is forged
+  fresh; reset_knobs; plain_change; RX=examples/r2; run_runner "$ROLE"; local s=$?; RX=examples/r1
+  [ "$s" = 0 ] && [ "$(why examples/r2)" = wrong-gate-class ]
+}
+t_runner_gate_hit; check "runner mode: a gate hit beside the exception: wrong-gate-class" $?
+mutate "a head gate hit beside an exception ignored" 's/         elif any\(\$h\.lines\[\]; startswith\("hit G"\)\) then "wrong-gate-class"\n//' t_runner_gate_hit
 
 echo
 if [ "$fails" -eq 0 ]; then echo "skip coverage: all checks hold"; else echo "skip coverage: $fails failed"; exit 1; fi

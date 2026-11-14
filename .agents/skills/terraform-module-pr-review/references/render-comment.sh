@@ -51,19 +51,30 @@
 #                 repository host.json names (comment-format.md, Location links); without it the
 #                 location is a plain code span
 #
+#   One optional key more, "floors": {"head_sha", "base_sha", "dirs": [{"dir", "provider",
+#   "old_floor", "floor", "read"}]}, the provider floors the schema pass read, written by
+#   review-run.sh; with Check A run and its SHAs equal to --head and host.json's merge_base, a
+#   provider-version-floor-change trigger whose directory's floors were all read is no gap, nor is
+#   one a compat.provider-floor-raised finding names by its file (verdict.md, Provider floor
+#   changes). Any other shape is refused.
+#   The Checks signal reads as jobless when the accepted checks file's only unknown is workflows
+#   that ended action_required or failure without starting a job: approve with nits at best
+#   (verdict.md, Host Signals).
 #   The run file may carry two keys more: "examples": {"count": n, "validated": n}, the selected
 #   examples verified and how many passed `validate`, which COMPACT needs, and "plan_mode",
 #   "laptop" or "runner", the plan pass mode of the plan record; a gate hit is a cause COMPACT
 #   admits only after a laptop-mode pass. coverage may carry three keys more, all or none:
-#   "covered_skips", the "covered" list skip-coverage.sh prints, [{"dir", "gate": "G1|G2|G3",
+#   "covered_skips", the "covered" list skip-coverage.sh prints, [{"dir", "gate": "G1|G2|G3|role|docker",
 #   "path", "witnesses": [{"attribute", "example", "address"}]}] with an optional "downloaded":
-#   true when the covering hit is in a downloaded module (skip-coverage.md), and "skip_head_sha" and
+#   true when the covering hit is in a downloaded module (skip-coverage.md), role and docker the
+#   recorded exceptions of a runner-mode pass, and "skip_head_sha" and
 #   "skip_base_sha", its head_sha and base_sha, 40 lowercase hex. dir, path and example are
 #   relative paths in one spelling (no leading or trailing slash, no empty, "." or ".."
 #   segment), no dir twice, attribute matches ^[a-z0-9_]{1,128}$, and address is 1 to 300
 #   characters with no control character or backtick; any other shape is refused. The list takes
 #   the skipped examples off ladder rule 4 only when every condition of verdict.md, Covered
-#   safety-gate skips, holds for every one of them, skip_head_sha equal to --head, skip_base_sha
+#   safety-gate skips, holds for every one of them, gates G1 to G3 only after a laptop pass and
+#   role and docker only after a runner pass, skip_head_sha equal to --head, skip_base_sha
 #   to host.json's merge_base and at most 100 distinct witnesses among them; else it is ignored. A
 #   host.json prose-truncated entry
 #   may carry "item" (body, title, thread or issue) and "omitted" (bytes); only a cut of the body, the
@@ -150,8 +161,16 @@ RJ -e -R --slurp 'include "render-comment"; valid_assessment' "$assessment" > /d
   || die "the assessment is not printable ASCII text of at most two paragraphs and 700 characters, the STANDARD limit"
 
 # The Checks signal: the checks file when host-pass.sh accepts it, else unknown (host-pass.md).
+# jobless_only: every read complete, the job-less list under host-pass.sh's cap of 10 (a list at
+# the cap may have lost an entry), every check run and commit status passed, and the only
+# unknown is workflows that ended action_required or failure without starting a job
+# (verdict.md, Host Signals); the ladder then reads the signal as jobless, not unknown.
 if [ "$(bash "$HERE/host-pass.sh" check "$checks" --head "$head" 2> /dev/null)" = "checks accepted" ]; then
   cj="$(jq -c '{accepted: true, signal, own_check, own_check_dropped, own_jobs_dropped, own_jobs_unreadable, jobless,
+    jobless_only: (.jobless != [] and (.jobless | length) < 10 and .reads == "ok" and (.own_jobs_unreadable | not)
+      and all(.jobless[]; .conclusion | IN("action_required", "failure"))
+      and all(.check_runs[]; .status == "completed" and (.conclusion | IN("success", "neutral", "skipped")))
+      and (.statuses == null or .statuses.total_count == 0 or .statuses.state == "success")),
     runs: ((.check_runs | length) + (.statuses.total_count // 0))}' \
     "$checks/checks.json")" || die "the checks file cannot be read"
 else

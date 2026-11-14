@@ -131,10 +131,13 @@ def behaviour_of($run):
 # the repository's own tests are its evidence, read through the Checks signal, so it is no gap.
 # Only when the head has a check run or a commit status: no checks at all is no evidence.
 def ci_gated: .ci == true;
-def mark_ci($checks): if . == null or .status != "ran" or (($checks.runs // 0) == 0) then .
+# A provider floor trigger Check A judged (mark_floors): no gap, as a ci_gated trigger.
+def floor_ok: .floor == true;
+# A workflow that never started a job ran no test, so with one the trigger stays a gap.
+def mark_ci($checks): if . == null or .status != "ran" or (($checks.runs // 0) == 0) or (($checks.jobless // []) != []) then .
   else .triggers |= map(if .category == "non-hcl-dependency" and .state == "unverifiable" then . + {ci: true} else . end) end;
 def behaviour_gaps: if . == null then 0 elif .status == "not-run" then 1
-  else ([(.triggers[] | select(ci_gated | not)), .claims[] | select(.state == "unverifiable")] | length) + .capped end;
+  else ([(.triggers[] | select((ci_gated or floor_ok) | not)), .claims[] | select(.state == "unverifiable")] | length) + .capped end;
 def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select(.state == "refuted")] | length end;
 
 # A claim.* finding words a refuted state; one with no refuted state in the behaviour object is
@@ -157,6 +160,25 @@ def mark_tests($t):
   else ($t.result | startswith("passed ")) as $ok
     | .triggers |= map(if tested_by($t) then .state = (if $ok then "tested" else "refuted" end) else . end) end;
 
+# --- Provider floor changes (verdict.md, Behaviour evidence). No level verifies a
+# provider-version-floor-change trigger; Check A judges it. The trigger leaves the gaps when a
+# compat.provider-floor-raised finding names its file, at any severity, or when Check A ran and
+# the run file's floors, bound to the head and host.json's merge base, say the schema pass read
+# both floors of every provider whose floor moved in the trigger's directory. A trigger that also
+# carries another category stays a gap.
+def floor_ver: type == "string" and test("^[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}$");
+def valid_floors: type == "object" and keys == ["base_sha", "dirs", "head_sha"]
+  and (.head_sha | type == "string" and test("^[0-9a-f]{40}$")) and (.base_sha | type == "string" and test("^[0-9a-f]{40}$"))
+  and (.dirs | type == "array" and length <= 256 and all(.[]; type == "object"
+        and keys == ["dir", "floor", "old_floor", "provider", "read"]
+        and (.dir == "." or (.dir | type == "string" and length <= 1024 and test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
+             and all(split("/")[]; . != "." and . != "..")))
+        and (.provider == null or (.provider | type == "string" and test("^[a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63}$")))
+        and (.floor == null or (.floor | floor_ver)) and (.old_floor == null or (.old_floor | floor_ver))
+        and (.read | type == "boolean")
+        # a provider or a floor not resolved is never read
+        and ((.read | not) or (.provider != null and .floor != null and .old_floor != null)))
+        and (map([.dir, .provider]) | length == (unique | length)));
 # compat.claim-contradicts-analysis sits one band below the highest compat.* code finding that
 # refutes its claim, compat.break-unexplained aside, and never fires without one (quoted-claims.md).
 def sev_rank: {"CRITICAL": 3, "HIGH": 2, "MEDIUM": 1, "LOW": 0}[.];
@@ -193,11 +215,17 @@ def sha40: type == "string" and test("^[0-9a-f]{40}$");
 # One spelling per path, so a witness cannot pass for another directory: no leading or trailing
 # slash, no empty or "." segment.
 def canon_path: plain_path and (test("^/|/$|//") | not) and all(split("/")[]; . != ".");
+# The skip a covered entry stands for: a laptop gate G1 to G3, or a runner-mode recorded
+# exception, role or docker (skip-coverage.md, Recorded exceptions), each with its unplanned reason.
+def skip_reason: {"G1": "plan gate G1", "G2": "plan gate G2", "G3": "plan gate G3",
+  "role": "exception: example assumes a role in another account", "docker": "exception: needs a Docker daemon"}[.];
+def skip_gates: ["G1", "G2", "G3", "role", "docker"];
+def skip_mode: if IN("role", "docker") then "runner" else "laptop" end;
 def valid_covered:
   type == "array" and (map(.dir?) | length == (unique | length))
   and all(.[]; type == "object" and (keys - ["downloaded"]) == ["dir", "gate", "path", "witnesses"]
     and ((has("downloaded") | not) or .downloaded == true)
-    and (.dir | canon_path) and (.path | canon_path) and (.gate | IN("G1", "G2", "G3"))
+    and (.dir | canon_path) and (.path | canon_path) and (.gate | IN(skip_gates[]))
     and (.witnesses | type == "array" and length > 0 and all(.[]; type == "object"
           and keys == ["address", "attribute", "example"]
           and (.attribute | type == "string" and test("^[a-z0-9_]{1,128}$")) and (.example | canon_path)
@@ -279,13 +307,14 @@ def depth_bound($h): .binding.head_sha == $h.head_sha and $h.merge_base != null 
 
 def valid_run:
   type == "object"
-  and ((keys - ["behaviour", "depth", "examples", "plan_mode", "profile", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((keys - ["behaviour", "depth", "examples", "floors", "plan_mode", "profile", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
   # The reviewer's profile line, as the run checked it against its handover.
   and ((has("profile") | not) or (.profile | type == "object" and keys == ["label", "tree"]
         and (.label | type == "string" and test("^(shipped:[a-z0-9-]{1,64}|custom)$"))
         and (.tree | type == "string" and test("^([0-9a-f]{64}|none)$"))))
   and ((has("tests") | not) or (.tests | valid_tests))
   and ((has("behaviour") | not) or (.behaviour | valid_behaviour))
+  and ((has("floors") | not) or (.floors | valid_floors))
   and ((has("depth") | not) or (.depth | valid_depth))
   # The host writes "plan pass skipped at light depth" at light only, where the plan pass is out of scope.
   and ((any(.coverage.unplanned[]?; .reason == "plan pass skipped at light depth") | not) or .depth.depth? == "light")
@@ -328,6 +357,25 @@ def valid_assessment: type == "string" and length <= 4096
 # A name the pull request controls renders in a code span only when every character is in this set.
 def allowed: test("^[A-Za-z0-9._/-]+$");
 def repo_path($p): if $p == "" then . elif . == "." then $p else $p + "/" + . end;
+
+# Provider floor changes, continued: Check A ran, and the marking (behaviour evidence above).
+def check_a_ran($findings; $run): ($run.triage | not)
+  and (any(($run.depth.checks_out_of_scope // [])[]; . == "A") | not)
+  and (any($findings[]; .rule_id == "review.check-not-run" and ((.subject // "") | startswith("compat."))) | not);
+def file_dir: split("/") | .[:-1] | join("/") | if . == "" then "." else . end;
+def mark_floors($findings; $run; $h):
+  if . == null or .status != "ran" then . else
+    ($run.floors // null) as $fl | $h.prefix as $p
+    | (check_a_ran($findings; $run) and $fl != null and $fl.head_sha == $h.head_sha
+       and $h.merge_base != null and $fl.base_sha == $h.merge_base) as $bound
+    | .triggers |= map(. as $t
+        | if .state == "unverifiable" and .category == "provider-version-floor-change"
+             and (((.also_categories // []) - ["provider-version-floor-change"]) == [])
+             and (any($findings[]; .rule_id == "compat.provider-floor-raised" and .file == $t.file)
+                  or ($bound and ([$fl.dirs[] | select(.dir == ($t.file | file_dir | repo_path($p)))] as $e
+                      | $e != [] and all($e[]; .read))))
+          then . + {floor: true} else . end)
+  end;
 # A location is a code span; under --links (link_base set) a link to the file at the head when
 # the path is in the allowed set, and is not the module root `.`, so the URL holds no character the pull request could choose.
 def link_base: $ARGS.named.link_base // "";
@@ -342,25 +390,33 @@ def trigger_at($p): {category, location: loc_at(.file | repo_path($p))};
 # --- The ladder (verdict.md). Input: {findings, signals: {checks, threads, review_decision,
 # mergeability}, unresolved, triage, gaps, refuted, unplanned, covered}. The disputed note is the
 # one finding it does not read. covered counts the skipped examples whose skip is covered
-# (verdict.md, Covered safety-gate skips): they leave rule 4, and keep the verdict off rule 8.
+# (verdict.md, Covered safety-gate skips): they leave rule 4, and keep the verdict off rule 8, as
+# a Checks signal of jobless does (verdict.md, Host Signals).
+
+# The findings that are themselves verification gaps: rule 4 reads them as unknowns.
+def gap_rules: ["review.check-not-run", "review.no-change-identified", "review.verification-incomplete"];
+# A known MEDIUM blocker: a MEDIUM finding outside review.*, which says how far the review reached
+# and is no defect of the change. It outranks every unknown, so rules 4 and 5 apply only without
+# one and rule 6 blocks on it (verdict.md, The Ladder).
+def known_medium: any(.[]; .severity == "MEDIUM" and (.rule_id | startswith("review.") | not));
 
 def ladder:
   (.findings | map(select(.rule_id != "review.tool-disputed"))) as $f
   | .signals as $g
   | def has_sev($s): any($f[]; .severity == $s);
-  if has_sev("CRITICAL") and .refuted == 0
+  ($f | known_medium) as $m
+  | if has_sev("CRITICAL") and .refuted == 0
      and all($f[] | select(.severity == "CRITICAL" or .severity == "HIGH"); .rule_id | startswith("compat."))
     then {rule: 0, verdict: "hold for the next major"}
   elif has_sev("CRITICAL") then {rule: 1, verdict: "block"}
   elif has_sev("HIGH") or .refuted > 0 then {rule: 2, verdict: "block"}
   elif any($g.checks, $g.review_decision, $g.mergeability; . == "fail") then {rule: 3, verdict: "block"}
-  elif .triage or any($g[]; . == "unknown")
-       or any($f[]; .rule_id | IN("review.check-not-run", "review.no-change-identified", "review.verification-incomplete"))
-       or .gaps > 0 or .unplanned_open > 0
+  elif ($m | not) and (.triage or any($g[]; . == "unknown")
+       or any($f[]; .rule_id | IN(gap_rules[])) or .gaps > 0 or .unplanned_open > 0)
     then {rule: 4, verdict: "inconclusive"}
-  elif .unresolved > 0 then {rule: 5, verdict: "changes suggested"}
+  elif ($m | not) and .unresolved > 0 then {rule: 5, verdict: "changes suggested"}
   elif has_sev("MEDIUM") then {rule: 6, verdict: "block"}
-  elif has_sev("LOW") or .covered > 0 then {rule: 7, verdict: "approve with nits"}
+  elif has_sev("LOW") or .covered > 0 or $g.checks == "jobless" then {rule: 7, verdict: "approve with nits"}
   else {rule: 8, verdict: "approve"} end;
 
 def verdict_line: {
@@ -403,6 +459,7 @@ def texts: {
   "rationale-5": "Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5).",
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
   "rationale-7-covered": "No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7).",
+  "rationale-7-jobless": "No finding is open, and a workflow ended without starting a job, so the repository's CI did not run. While it has not run, approve with nits is the best verdict (ladder rule 7).",
   "rationale-8": "No finding is open. With nothing open, the change is approved (ladder rule 8).",
   "signal-name-checks": "checks",
   "signal-name-review-decision": "review decision",
@@ -411,6 +468,7 @@ def texts: {
   "checks-fail": "Checks fail.",
   "checks-unknown": "Checks: unknown.",
   "checks-unknown-jobless": "Checks: unknown, as a workflow ended without starting a job.",
+  "checks-jobless": "Checks: not run, as a workflow ended without starting a job.",
   "mergeability-pass": "Mergeable.",
   "mergeability-fail": "Not mergeable.",
   "mergeability-unknown": "Mergeability: unknown.",
@@ -437,6 +495,7 @@ def texts: {
   "unplanned-covered": "- Not planned: {dir} ({gate} hit in {path}, same at base {base}).",
   "unplanned-covered-downloaded": "- Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it).",
   "unplanned-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
+  "unplanned-covered-exception": "- Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}).",
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
   "behaviour-trigger": "- Behaviour change at {location} ({category}): not verified.",
   "behaviour-trigger-groups": "- {count} behaviour changes not verified: {categories}.",
@@ -444,6 +503,7 @@ def texts: {
   "behaviour-trigger-groups-invalid": "- {count} behaviour changes not verified (the head does not validate in any example): {categories}.",
   "behaviour-capped": "- {count} more behaviour changes over the classifier cap: not verified.",
   "behaviour-claim": "- Claim {claim_id} from the description: not verified.",
+  "behaviour-floor-judged": "Provider floor changes judged by Check A, which no behaviour level verifies: {count}.",
   "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "thread-match": "- {location}: this review has a finding at the same path and line.",
   "thread-no-match": "- {location}: this review has no finding at the same path and line.",
@@ -451,6 +511,7 @@ def texts: {
   "todo-lead-closed": "This pull request is closed. If it is reopened, resolve each checklist item below and push to make it mergeable.",
   "todo-lead-4": "This review is incomplete, so a later run may add items. The items below are known.",
   "todo-lead-7": "Nothing blocks merge. The items below are optional.",
+  "todo-lead-7-jobless": "Nothing in the change blocks merge. The workflow item below needs a maintainer; any other item is optional.",
   "todo-lead-0": "This change is breaking. Merge it in the next major release. To merge it sooner, restore compatibility with the fixes named below. Any checklist items below also block merge.",
   "todo-checks": "Fix the failing checks.",
   "todo-mergeability": "Resolve the merge conflict.",
@@ -504,9 +565,14 @@ def texts: {
   "compact-covered-many": "{count} of {total} examples were not planned because of the review safety checks; the changed code was planned {where} (see notes).",
   "rationale-covered-one": "1 of {total} examples was not planned because of the review safety checks; the changed code was planned {where}, as listed below.",
   "rationale-covered-many": "{count} of {total} examples were not planned because of the review safety checks; the changed code was planned {where}, as listed below.",
+  "compact-covered-exception-one": "1 of {total} examples was not planned because of a recorded exception of the plan pass; the changed code was planned {where} (see notes).",
+  "compact-covered-exception-many": "{count} of {total} examples were not planned because of a recorded exception of the plan pass; the changed code was planned {where} (see notes).",
+  "rationale-covered-exception-one": "1 of {total} examples was not planned because of a recorded exception of the plan pass; the changed code was planned {where}, as listed below.",
+  "rationale-covered-exception-many": "{count} of {total} examples were not planned because of a recorded exception of the plan pass; the changed code was planned {where}, as listed below.",
   "evidence-covered": "- Not planned: {dir} ({gate} hit in {path}, same at base {base}).",
   "evidence-covered-downloaded": "- Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it).",
   "evidence-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
+  "evidence-covered-exception": "- Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}).",
   "evidence-reported": "Behaviour change at {location} reported: judged in {findings} ({count} differences).",
   "evidence-claims-one": "1 claim verified.",
   "evidence-claims-many": "{count} claims verified.",
@@ -566,7 +632,8 @@ def rationale($in):
          elif any($f[]; .rule_id == "review.verification-incomplete") then "rationale-4-verification-incomplete"
          else "rationale-4-listed" end)
     # Rule 7 with no LOW finding: covered skips alone keep the verdict off rule 8.
-    elif $r == 7 and (any($f[]; .severity == "LOW") | not) then tx("rationale-7-covered")
+    elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.covered > 0 then tx("rationale-7-covered")
+    elif $r == 7 and (any($f[]; .severity == "LOW") | not) then tx("rationale-7-jobless")
     else tx("rationale-\($r)") end;
 
 # --- Grouping Findings. One severity's findings, in the reviewer's order -> groups by rule_id,
@@ -678,7 +745,7 @@ def todo_items($l; $rule; $p; $gaps):
   | ([ ("checks", "mergeability", "review-decision") as $s
        | select($g[$s | gsub("-"; "_")] == "fail") | {box: true, t: tx("todo-" + $s)} ]
      + ($l.jobless | if . == [] then [] else
-          [{box: true, t: tx(if length == 1 then "todo-checks-jobless-one" else "todo-checks-jobless-many" end;
+          [{box: true, jobless: true, t: tx(if length == 1 then "todo-checks-jobless-one" else "todo-checks-jobless-many" end;
              {workflows: (map(workflow_name) | join(", "))})}] end)
      + (if $l.unresolved == 1 then [{box: true, t: tx("todo-threads-one")}]
         elif $l.unresolved > 1 then [{box: true, t: tx("todo-threads-many"; {count: $l.unresolved})}] else [] end)
@@ -703,7 +770,8 @@ def todo_items($l; $rule; $p; $gaps):
 
 # $closed: the pull request is closed and not merged, so the block lead says what applies on a reopen.
 def todo_md($rule; $items; $closed):
-  tx(if $rule == 0 then "todo-lead-0" elif $rule == 4 then "todo-lead-4" elif $rule == 7 then "todo-lead-7"
+  tx(if $rule == 0 then "todo-lead-0" elif $rule == 4 then "todo-lead-4"
+       elif $rule == 7 and any($items[]; .jobless) then "todo-lead-7-jobless" elif $rule == 7 then "todo-lead-7"
        elif $closed then "todo-lead-closed" else "todo-lead-block" end)
     + (if $items == [] then "" else "\n\n" + ($items | map((if .box then "- [ ] " else "- " end) + .t) | join("\n")) end);
 
@@ -749,8 +817,9 @@ def scoped_run: if has("depth") | not then . else .depth.examples_out_of_scope a
 
 def covered_lines($key; $cov; $run):
   [ ($cov[] as $c
-     | tx($key + (if $c.downloaded then "-downloaded" else "" end);
-         {dir: ($c.dir | nm(allowed)), gate: $c.gate, path: ($c.path | nm(allowed)), base: $run.coverage.skip_base_sha[:7]})),
+     | tx($key + (if $c.downloaded then "-downloaded" elif ($c.gate | skip_mode) == "runner" then "-exception" else "" end);
+         {dir: ($c.dir | nm(allowed)), gate: $c.gate, path: ($c.path | nm(allowed)), base: $run.coverage.skip_base_sha[:7],
+          exception: ({"role": "a role in another account", "docker": "a Docker daemon"}[$c.gate] // "")})),
     (witnesses($cov)[]
      | tx($key + "-by"; {attribute, example: (.example | nm(allowed)),
          address: (.address | nm(test("^[A-Za-z0-9_.-]{1,300}$"))), head: $run.coverage.skip_head_sha[:7]})) ];
@@ -761,7 +830,8 @@ def covered_lines($key; $cov; $run):
 def not_planned($run): [$run.coverage.unplanned[] | select(.reason != "no example directory") | .dir];
 def covered_sentence($k; $run; $cov): (not_planned($run) | length) as $n
   | ([witnesses($cov)[].example] | unique) as $e
-  | tx($k + (if $n == 1 then "-one" else "-many" end); {count: $n, total: $run.examples.count,
+  | tx($k + (if ($cov[0].gate | skip_mode) == "runner" then "-exception" else "" end)
+       + (if $n == 1 then "-one" else "-many" end); {count: $n, total: $run.examples.count,
       where: (if ($e | length) == 1 and ($e[0] | allowed) then "in `\($e[0])`" else "in other examples" end)});
 
 def gap_lines($h; $run; $b; $p; $cov):
@@ -790,7 +860,7 @@ def gap_lines($h; $run; $b; $p; $cov):
   | (if $invalid then "-invalid" else "" end) as $why
   | $b | if . == null then []
      elif .status == "not-run" then [tx("behaviour-not-run"; {reason})]
-     else [ ([.triggers[] | select(.state == "unverifiable" and (ci_gated | not))]
+     else [ ([.triggers[] | select(.state == "unverifiable" and ((ci_gated or floor_ok) | not))]
              | if length <= 5 then .[] | tx("behaviour-trigger" + $why; trigger_at($p))
                # More than five: one line counting them per category; the locations are noise.
                else tx("behaviour-trigger-groups" + $why; {count: length, categories: (group_by(.category)
@@ -818,6 +888,7 @@ def evidence_lines($b):
        claims_refuted: n($b.claims; "refuted"), claims_unverifiable: n($b.claims; "unverifiable")})]
     + ([$b.triggers[] | select(ci_gated)] | length
        | if . > 0 then ["Changes outside Terraform left to the repository's own tests, which the Checks signal reads: \(.)."] else [] end)
+    + ([$b.triggers[] | select(floor_ok)] | length | if . > 0 then [tx("behaviour-floor-judged"; {count: .})] else [] end)
   end;
 
 # The test pass's line under the evidence line, when it marked a trigger tested or refuted.
@@ -837,12 +908,16 @@ def reopen_line($h):
   if ($h | has("reopen")) | not then []
   elif $h.reopen.last_author_comment == null then [tx("reopen-hint")]
   else [tx("reopen-hint-date"; {date: $h.reopen.last_author_comment})] end;
+# The Checks signal the ladder reads: the checks file's, or jobless when render-comment.sh found
+# its only unknown to be workflows that ended action_required or failure without starting a job,
+# every read complete (verdict.md, Host Signals). Any other unknown stays unknown.
+def checks_signal($c): if $c.jobless_only == true and $c.signal == "unknown" then "jobless" else $c.signal end;
 def signals_of($h): $h.signals
   | if .mergeability == "not-applicable" and (is_closed($h) | not) then .mergeability = "unknown" else . end;
 
 def state_lines($h; $c):
-  (signals_of($h) + {checks: $c.signal}) as $g
-  | (if any($g[]; . == "fail" or . == "unknown" or . == "not-applicable") then
+  (signals_of($h) + {checks: checks_signal($c)}) as $g
+  | (if any($g[]; . == "fail" or . == "unknown" or . == "not-applicable" or . == "jobless") then
       # A job-less run makes the signal unknown; the phrase says so, as the job-less lines below detail it.
       [ [tx("checks-" + $g.checks + (if $g.checks == "unknown" and $c.accepted and ($c.jobless // []) != [] then "-jobless" else "" end)),
          tx("mergeability-" + $g.mergeability),
@@ -966,7 +1041,7 @@ def causes($l; $h; $run; $b):
 
 def compact_ok($l; $v; $c; $run; $b):
   ($l.findings | map(select(routed | not))) as $counted
-  | ($v.rule | IN(4, 7, 8))
+  | ($v.rule | IN(4, 7, 8)) and $l.signals.checks != "jobless"
   and (any($l.findings[]; .severity | IN("CRITICAL", "HIGH", "MEDIUM")) | not)
   and ($counted | length) <= 3
   and (any($l.findings[]; .rule_id == "review.tool-disputed") | not)
@@ -1032,18 +1107,19 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
 def covered_of($in; $l; $b):
   $in.run as $run | $run.coverage as $cv | ($cv.covered_skips // []) as $cs | $cv.unplanned as $u
   | if $cs != [] and $cv.skip_head_sha == $in.host.head_sha and $cv.skip_base_sha == $in.host.merge_base
-       and $run.plan_ran and $run.plan_mode == "laptop" and ($cv.inert | not)
+       and $run.plan_ran and ($cv.inert | not)
+       # one mode for the whole run: laptop gate skips, or runner-mode recorded exceptions
+       and all($cs[]; .gate | skip_mode == $run.plan_mode)
        # the witness lines stay bounded, and at least one example was planned
        and (witnesses($cs) | length) <= 100 and ($u | length) < ($run.examples.count // 0)
        and ($u | map(.dir) | length == (unique | length))
-       and all($u[]; .reason | IN("plan gate G1", "plan gate G2", "plan gate G3"))
        # all or nothing: every skip covered, and every covered entry a skip of its own gate
-       and all($u[]; . as $x | any($cs[]; .dir == $x.dir and "plan gate \(.gate)" == $x.reason))
-       and all($cs[]; . as $x | any($u[]; .dir == $x.dir and .reason == "plan gate \($x.gate)"))
+       and all($u[]; . as $x | any($cs[]; .dir == $x.dir and (.gate | skip_reason) == $x.reason))
+       and all($cs[]; . as $x | any($u[]; .dir == $x.dir and .reason == ($x.gate | skip_reason)))
        # a witness is a planned example, never one of the skipped ones
        and all($cs[].witnesses[]; .example as $e | all($u[]; .dir != $e))
        and $b != null and $b.status == "ran" and $b.capped == 0 and ($b.triggers + $b.claims) != []
-       and all($b.triggers[]; .state | IN("verified", "covered", "inert", "reported"))
+       and all($b.triggers[]; (.state | IN("verified", "covered", "inert", "reported")) or floor_ok)
        and all($b.claims[]; .state == "verified")
        and ($run | has("examples")) and $run.examples.validated == $run.examples.count
        and $run.verify_gaps == [] and $l.gaps == 0 and ($l.triage | not)
@@ -1056,8 +1132,9 @@ def covered_of($in; $l; $b):
 def render($in):
   ($in | .run |= scoped_run) as $in
   | $in.host as $h | $in.host.prefix as $p
-  | (behaviour_of($in.run) | with_reported($in.findings) | mark_tests($in.run.tests) | mark_ci($in.checks)) as $b
-  | {findings: $in.findings, signals: (signals_of($h) + {checks: $in.checks.signal}),
+  | (behaviour_of($in.run) | with_reported($in.findings) | mark_tests($in.run.tests) | mark_ci($in.checks)
+     | mark_floors($in.findings; $in.run; $in.host)) as $b
+  | {findings: $in.findings, signals: (signals_of($h) + {checks: checks_signal($in.checks)}),
      unresolved: ($h.unresolved_threads | length), triage: $in.run.triage, refuted: ($b | behaviour_refuted),
      jobless: (if $in.checks.accepted then $in.checks.jobless // [] else [] end),
      # A refuted trigger no blocking claim.* finding words is its own checklist item.
