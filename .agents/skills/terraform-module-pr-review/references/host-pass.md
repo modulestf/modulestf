@@ -48,7 +48,7 @@ The example selection and plan coverage change the files a host exchanges with t
 - `head` equals `--head` (`plan record head`);
 - `merge_base` equals `host.json`'s `merge_base`, which must not be null (`plan record merge base`);
 - each example once (`plan record examples`): every path is `examples/<name>` and no path appears twice. The plan job plans the whole selection, so any example of the module may appear; the plan job's own example list, not this check, decides what is planned;
-- every example's `addresses` a list of at most 1000 strings matching `^[A-Za-z0-9_.-]{1,300}$`, and its `attributes` an object whose keys are among its own `addresses` and whose values are lists of at most 500 names matching `^[a-z0-9_]{1,128}$` (`plan record content`).
+- every example's `addresses` a list of at most 1000 strings of at most 300 characters matching the address pattern of [plan-pass.md](plan-pass.md#saved-plans-and-addresses), a managed or `data.` address under any `module.<call>.` prefixes, and its `attributes` an object whose keys are among its own `addresses` and whose values are lists of at most 500 names matching `^[a-z0-9_]{1,128}$` (`plan record content`).
 
 The plan job finishes up to 105 minutes before the review reads the pull request, and the base branch can move in that time. The review's merge base or `files.json` then differs from the plan's, and a plan record inside the records directory would reject the whole directory. So the review job checks the file first, on its own, against the records it wrote:
 

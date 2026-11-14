@@ -598,6 +598,16 @@ check "refused: a base tree not at --base, and no record written" "$([ $? = 2 ] 
 (cd "$RUN" && "$SH" "$SC" gates "$RUN" --tree base --base "$BASE" --coverage "$TMP/coverage.json" --out "$TMP/bg3.txt" 2> /dev/null)
 check "refused: a relative --tree, and no record written" "$([ $? = 2 ] && [ ! -e "$TMP/bg3.txt" ]; echo $?)"
 
+# The address grammar of the addresses files: managed and data addresses under module calls,
+# nothing else.
+check "safe_address takes managed and data addresses under module calls" \
+  "$(jq -n -e -L "$REF" 'include "skip-coverage";
+    ["aws_a.b", "data.aws_a.b", "module.lb.aws_lb.this", "module.lb.module.l-2.data.aws_c.d"] | all(.[]; safe_address)' > /dev/null; echo $?)"
+check "safe_address refuses a malformed data address, a key and a quote" \
+  "$(jq -n -e -L "$REF" 'include "skip-coverage";
+    ["data.aws_bad", "module.m.data.x", "data.data.a.b", "module.m", "aws_a.b[0]", "aws_a.b\"", "module.m[\"k\"].aws_a.b", "aws_a.b\n"]
+    | all(.[]; safe_address | not)' > /dev/null; echo $?)"
+
 # --- Negative self-check: each mutation of a temp copy must make its named case fail.
 mutate() { # name, perl substitution, case function
   local d="$TMP/mut-$RANDOM"; mkdir -p "$d"; cp "$REF/skip-coverage.sh" "$REF/skip-coverage.jq" "$REF/plan-pass.sh" "$d/"
