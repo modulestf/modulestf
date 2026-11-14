@@ -31,7 +31,7 @@ Its `plan.json` is the plan of this run. Post nothing: the review's body is not 
 merge-run.sh gate "$RUN"
 ```
 
-The verdict comes from the plan; everything else is read live: the pull request, the merge base by `compare/<base>...<head>`, every check run and commit status at the head (all pages), the reviews (all pages), the repository, and the identity again. The first condition that fails refuses with its fixed reason, and nothing is written:
+The verdict comes from the plan; everything else is read live: the pull request, the merge base by `compare/<base>...<head>`, every check run and commit status at the head (all pages), the workflow runs of the head by `actions/runs?head_sha=` (all pages), the base's workflows by `actions/workflows` and each active one's file at the base SHA, the reviews (all pages), the repository, and the identity again. The first condition that fails refuses with its fixed reason, and nothing is written:
 
 | Condition | Refusal |
 |---|---|
@@ -42,9 +42,11 @@ The verdict comes from the plan; everything else is read live: the pull request,
 | The plan's `read_at` and the run's `started_at` are ISO 8601 UTC times with `Z` that parse, and `read_at` is not earlier than `started_at`, so the plan is this run's own review and not one copied from an earlier review at the same pin | `the plan is not this run's review` |
 | The compare read succeeds, since the live pin needs its merge base | `a read failed: compare` |
 | The plan's pin equals the live pin, by `pin_diff` | `the pull request moved since the review: <field>` |
-| The reviews and repository reads succeed | `a read failed: <names>` |
+| The reviews, repository, workflow runs and workflows reads succeed, the base having at most 30 workflows | `a read failed: <names>` |
 | The verdict is `approve` or `approve with nits` | `the verdict is <verdict>, not approve or approve with nits` |
 | `checks_class` with `pinned_total: null` is passing: pending, missing or failed refuses, and nothing waits | `the checks are not passing: <reason>` |
+| No latest workflow run of a workflow on the head ended without passing while its check suite holds no check run: a run awaiting approval (`action_required`) or a startup failure started no job | `ci did not run: a workflow ended without starting a job: <files>` |
+| Every active workflow of the base whose file names the `pull_request` event and has no `paths` or `paths-ignore` filter has a latest run on the head whose check suite holds a check run | `ci did not run: no check run for a workflow the base runs on pull requests: <files>` |
 | The pull request is open and not merged | `the pull request is not open` |
 | It is not a draft | `the pull request is a draft` |
 | It is not locked | `the pull request is locked` |
@@ -54,7 +56,7 @@ The verdict comes from the plan; everything else is read live: the pull request,
 | The pull request title is a string | `the title cannot be read` |
 | The decision itself evaluates | `the merge precondition could not be evaluated` |
 
-A gate refusal ends the run, so a retry costs a new `prepare` and a full review. A head with no checks at all is not finished and refuses. `mergeable_state` is GitHub's view of protection, approvals and conflicts: an extra check, not a substitute for the others.
+A gate refusal ends the run, so a retry costs a new `prepare` and a full review. A head with no checks at all is not finished and refuses. A review may give approve with nits while a workflow never started a job, since a maintainer approves the run and then CI runs ([verdict.md](../../terraform-module-pr-review/references/verdict.md#host-signals)), but this skill never merges until that CI has run: the two `ci did not run` rows hold at the gate and again before the merge. The base's workflow file is read as text: a file that names `pull_request` anywhere, a comment included, counts as one the base runs on pull requests. `mergeable_state` is GitHub's view of protection, approvals and conflicts: an extra check, not a substitute for the others.
 
 ## Step 4
 

@@ -1,7 +1,7 @@
 # Skip Coverage
 
 > **Part of:** [terraform-module-pr-review](../SKILL.md)
-> **Purpose:** Which examples a plan gate kept from planning are covered by the plans of other examples: the script, its inputs, the allow-list of changes, the base and head gate records, the witnesses, the reasons, the output and its limits.
+> **Purpose:** Which examples a plan gate or a recorded exception kept from planning are covered by the plans of other examples: the script, its inputs, the allow-list of changes, the base and head gate records, the witnesses, the reasons, the output and its limits.
 
 A laptop plan pass skips an example whose files hit gate G1, G2 or G3 ([plan-pass.md](plan-pass.md#gates)), and [plan coverage](verify-pass.md#plan-coverage) lists it as not planned, an unknown at [verdict.md](verdict.md#the-ladder) rule 4. Such a skip says nothing about the change when the change cannot reach the gated code and the code it does change was planned elsewhere. This file decides that for conditions 1 and 2 of the rule; the render checks the rest ([render-comment.sh](render-comment.sh)). Any doubt leaves the skip an unknown, as it is today.
 
@@ -11,11 +11,14 @@ The script is [skip-coverage.sh](skip-coverage.sh), with the decision in [skip-c
 
 ```
 <bash|zsh> /abs/path/skip-coverage.sh gates <run-dir> --tree <dir> --base <sha> \
-    --coverage <coverage.json> --out <file>
+    --coverage <coverage.json> --out <file> [--mode laptop|runner]
 <bash|zsh> /abs/path/skip-coverage.sh check <run-dir> --files <files.json> \
     --coverage <coverage.json> --plan <record> --head <sha> --base <sha|unresolved> \
-    --changed-files <n> [--addresses <dir>] [--base-gates <file>] [--prefix <module-root>]
+    --changed-files <n> [--addresses <dir>] [--base-gates <file>] [--prefix <module-root>] \
+    [--mode laptop|runner]
 ```
+
+`--mode` is `laptop` by default, the gate skips of a laptop pass. `runner` covers the recorded exceptions of a runner-mode pass instead ([Recorded exceptions](#recorded-exceptions)); any other value is a usage error.
 
 `gates` writes the base gate record, [Gate records](#gate-records), for every directory in the coverage's `unplanned` list. It refuses, exit 2 and nothing written, unless `--tree` is an absolute path to a git tree whose `HEAD` is the `--base` commit; a step that fails writes nothing either. `check` prints one JSON object, [Output](#output), on standard output.
 
@@ -35,6 +38,7 @@ Exit 0 means the evaluation ran: every directory uncovered is a valid result. `g
 | `--head` | The head commit, the full SHA; the clone must be at it |
 | `--base` | The merge base, the full SHA from the compare read in Workspace, or `unresolved` when it could not be read |
 | `--prefix` | The module root's repository-relative path, empty by default |
+| `--mode` | `laptop`, the default, or `runner`: the plan pass mode whose skips are checked, and the mode of the gates both records run |
 
 ### The base tree
 
@@ -136,9 +140,21 @@ The v1 limit: the address's module path is exactly one `module.<call>` level, ca
  "uncovered": [{"dir": "...", "why": "<reason>"}]}
 ```
 
-Every directory of `unplanned` appears once, in its order, in `covered` or in `uncovered`. `path` is the file of the record's first hit, without its line. `downloaded` is present, and true, only when that hit is in a downloaded module ([Downloaded hits](#downloaded-hits)); a consumer that does not show it may ignore it. `witnesses` holds one entry per changed attribute, the same for every covered directory. `base_sha` is null only for `--base unresolved` or a base commit the clone does not hold, and `covered` is then empty.
+Every directory of `unplanned` appears once, in its order, in `covered` or in `uncovered`. `gate` is `G1`, `G2` or `G3` in laptop mode and `role` or `docker` in runner mode. `path` is the file of the record's first hit, without its line, or in runner mode the first exception hit of the head gate record. `downloaded` is present, and true, only when that hit is in a downloaded module ([Downloaded hits](#downloaded-hits)); a consumer that does not show it may ignore it. `witnesses` holds one entry per changed attribute, the same for every covered directory. `base_sha` is null only for `--base unresolved` or a base commit the clone does not hold, and `covered` is then empty.
 
 The reasons, a closed list: `not-sole-reason`, `wrong-gate-class`, `head-mismatch`, `files-incomplete`, `plan-record-unusable`, `change-not-allowed`, `dir-changed`, `merge-base-unresolved`, `base-record-missing`, `hit-set-differs`, `witness-sensitive`, `no-witness`.
+
+## Recorded exceptions
+
+A runner-mode plan pass does not plan an example whose provider block assumes a fixed role in another account, or that needs a Docker daemon, and records `exception: example assumes a role in another account` or `exception: needs a Docker daemon` instead of a gate hit ([plan-pass.md](plan-pass.md)). `check --mode runner` decides such an exception under the same conditions as a gate skip, all or nothing, with these differences:
+
+- Condition 1: the reason is one of the two exceptions, kind `role` or `docker` (else `wrong-gate-class`, a gate skip included: runner mode covers no gate skip).
+- Condition 3: the record is a runner record (`plan pass mode: runner`), read by the host's own `host example <n>:` lines as plan coverage reads it, and the directory's block has the exception as its `plan:` class (else `plan-record-unusable`). The runner record carries no hit lines for an exception, so the hits come from the gate records alone.
+- Conditions 7 and 8: both gate records are built in runner mode, `plan-pass.sh gates <run-dir> runner clone <dir>`, which adds the exception hits `Xrole` and `Xdocker` to the gate hits, and the header is `skip-gates 1 <sha> runner`; a record of the other mode is `base-record-missing`.
+- Condition 9: the head gate record has no gate hit at all, since any gate hit makes the pass record a gate, not an exception (else `wrong-gate-class`), and at least one exception hit, every one of the recorded kind (else `hit-set-differs`). An exception that only a committed lock file or a downloaded module gives is not in the gate records, so it is never covered.
+- Witnesses: the addresses files are the runner's, `addresses-<n>.json` beside its record, `<n>` the host's own example index.
+
+The covered element's `gate` is the kind, `role` or `docker`, and its `path` is the file of the first exception hit of the head gate record.
 
 ## What crosses to the reviewer
 

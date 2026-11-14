@@ -280,6 +280,17 @@ DEPTH=deep D="$(DEPTH=deep mk "" "$PROV base:.:demo=example/demo:>=1.0" "$DT" ".
   [ "$(sheets | tr ' ' '\n' | grep -c 'demo_lookup')" = 1 ] && [ "$(grep -c '^schema pass: source ' "$R.out")" = 4 ] &&
   (cd "$R/facts" && sha256 --strict -c files.sha256 > /dev/null)
 check "deep full: every type token, not only touched, at latest, minimum, lock and old floor, deduplicated, missing.json empty" "$?"
+[ "$(jq -c '.directories["."]["example/demo"]' "$R/facts/versions.json")" = '{"latest":"1.3.0","minimum":"1.2.0","old_floor":"1.0.0"}' ]
+check "deep full: versions.json gives the old floor and no old_floor_none" "$?"
+c_none() { DEPTH=deep D="$(DEPTH=deep mk "" "$PROV" "$DT" "")" run m-none; }
+k_none() { [ "$RC" = 0 ] && [ "$(jq -c '.directories["."]["example/demo"]' "$R/facts/versions.json")" = '{"latest":"1.3.0","minimum":"1.2.0","old_floor_none":"no_entry"}' ]; }
+c_nolow() { DEPTH=deep D="$(DEPTH=deep mk "" "$PROV base:.:demo=example/demo:<2.0" "$DT" "")" run m-nolow; }
+k_nolow() { [ "$RC" = 0 ] && [ "$(jq -c '.directories["."]["example/demo"]' "$R/facts/versions.json")" = '{"latest":"1.3.0","minimum":"1.2.0","old_floor_none":"no_lower_bound"}' ]; }
+c_none; k_none; check "deep: a minimum with no base entry is recorded old_floor_none no_entry" "$?"
+c_nolow; k_nolow; check "deep: a minimum over a base with no lower bound is recorded old_floor_none no_lower_bound" "$?"
+D="$(mk "" "$PROV" "$DT" "")" run focused-none
+[ "$RC" = 0 ] && [ "$(jq -c '.directories["."]["example/demo"] | has("old_floor_none")' "$R/facts/versions.json")" = false ]
+check "focused: no old_floor_none, as no old floor is read" "$?"
 DEPTH=deep D="$(DEPTH=deep mk "" "$PROV" "$DT .:resource:demo_broken:example/demo" "")" run deep-miss
 [ "$RC" = 0 ] && grep -q '^schema pass: deep partial page, 5 sheets, [0-9]* bytes, 1 types without a sheet$' "$R.out" &&
   [ "$(missing)" = '["resource:demo_broken@1.2.0,1.3.0"]' ] && [ "$(jq -c .reasons "$R/facts/missing.json")" = '["page"]' ] &&
@@ -555,6 +566,8 @@ mutant root-not-stripped 's/"\$SCHEMA_ROOT"\/\*) hd="\${dir#"\$SCHEMA_ROOT"\/}" 
 mutant root-outside-kept 's/^        \*) continue ;;$/        *) ;;/' c_root k_root
 mutant root-root-not-dot 's/"\$SCHEMA_ROOT") hd=\. ;;$/"$SCHEMA_ROOT") ;;/' c_root k_root
 mutant root-unchecked 's/ || hwhy=inputs$//' c_rootbad k_rootbad
+mutant no-floor-none 's/(if \$mode == "deep" and/(if false and/' c_none k_none
+mutant floor-none-one-kind 's/IN("null", "no_lower_bound")/IN("null")/' c_nolow k_nolow
 mutant focused-floor-sheet 's/ || \[ "\$MODE" = focused \] || floor="\$f"; fi$/ || floor="$f"; fi/' c_hfloor k_hfloor
 c_since() { D="$(mk hist_thing "$HP" "$HT" "")" run m-since; }
 k_since() { [ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma 1.6.0|since: gamma.x 1.6.0|' ]; }

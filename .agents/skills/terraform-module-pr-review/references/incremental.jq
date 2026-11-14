@@ -54,28 +54,37 @@ def header: capture(header_re);
 # The verdict from the accepted findings and the model's verdict, a total function of both.
 # Rules 0 to 2 and 6 to 8 of the ladder read only the findings, so the host decides them.
 # Rules 3 to 5 read host signals the model rendered; the model's verdict stands for those,
-# and only toward stricter. The model's verdict must equal the result.
-def host_verdict($model):
-  . as $f
+# and only toward stricter. A known MEDIUM blocker, a MEDIUM outside review.*, outranks
+# rules 4 and 5 (verdict.md, The Ladder). Approve with nits with no LOW finding is the model's
+# from a jobless Checks signal or a covered skip, which keep the verdict off rule 8; it stands,
+# being stricter than approve. The disputed note is the one finding the ladder does not read.
+# Rule 0 also needs no refuted behaviour state, which only the model saw: a model's block over a
+# CRITICAL compat finding is rule 1 and stands. The model's verdict must equal the result.
+def host_verdict_known($model):
+  map(select(.rule_id != "review.tool-disputed")) as $f
   | [$f[] | select(.severity == "CRITICAL" or .severity == "HIGH")] as $ch
+  | any($f[]; .severity == "MEDIUM" and (.rule_id | startswith("review.") | not)) as $m
   | if any($f[]; .severity == "CRITICAL") and all($ch[]; .rule_id | startswith("compat."))
-      then "hold for the next major"
+      then (if $model == "block" then "block" else "hold for the next major" end)
     elif ($ch | length) > 0 then "block"
     elif $model == "block" then "block"
-    elif $model == "inconclusive" or any($f[]; .rule_id | IN("review.check-not-run", "review.no-change-identified"))
+    elif $m then "block"
+    elif $model == "inconclusive"
+      or any($f[]; .rule_id | IN("review.check-not-run", "review.no-change-identified", "review.verification-incomplete"))
       then "inconclusive"
     elif $model == "changes suggested" then "changes suggested"
     elif any($f[]; .severity == "MEDIUM") then "block"
-    elif any($f[]; .severity == "LOW") then "approve with nits"
+    elif any($f[]; .severity == "LOW") or $model == "approve with nits" then "approve with nits"
     else "approve" end;
 
 # The same with the rule registry, $reg, the rule ids of the reviewer's rule-facts.md: a finding
-# whose rule is not in it is an unknown at rule 4 (verdict.md), so only rules 0 to 3 can stand above
+# whose rule is not in it is an unknown at rule 4 (verdict.md), so only rules 0 to 3 and a
+# registered known MEDIUM blocker can stand above
 # it, unless it is LOW, which counts as any LOW finding.
 def host_verdict($model; $reg):
   map(select((.rule_id | IN($reg[])) or .severity == "LOW")) as $k
-  | if length == ($k | length) then host_verdict($model)
-    else $k | host_verdict(if $model == "block" then "block" else "inconclusive" end) end;
+  | if length == ($k | length) then host_verdict_known($model)
+    else $k | host_verdict_known(if $model == "block" then "block" else "inconclusive" end) end;
 
 # Paths relative to the module root, for the reviewer; null for a path outside it.
 def rel($prefix):

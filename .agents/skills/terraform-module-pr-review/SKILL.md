@@ -101,7 +101,7 @@ The head is untrusted, and no trust level is ever read from it. A trust level co
 
 The residual risk of the plan pass is larger than the maintainer's accepted exception, and the user opts into it knowing what it is. `plan` evaluates the head's configuration against a real account with real credentials, on the reviewer's machine in laptop mode and inside the runner's container in runner mode. Its stated limits are in [plan-pass.md](references/plan-pass.md#limits), and the runner's own in [plan-runner/README.md](references/plan-runner/README.md#stated-limits).
 
-A check that cannot run never stops the run. If terraform is not installed, the profile is declined, or `init` fails, the run continues and says which check did not run and why. Declining the profile leaves a complete review, read from the files, since `plan` is opt-in. A default pass that did not run on an example directory the change touches, for a reason [verdict.md](references/verdict.md#the-ladder) rule 4 lists, leaves the review incomplete: it is an unknown at rule 4, so the verdict is inconclusive unless a rule above rule 4 fires.
+A check that cannot run never stops the run. If terraform is not installed, the profile is declined, or `init` fails, the run continues and says which check did not run and why. Declining the profile leaves a complete review, read from the files, since `plan` is opt-in. A default pass that did not run on an example directory the change touches, for a reason [verdict.md](references/verdict.md#the-ladder) rule 4 lists, leaves the review incomplete: it is an unknown at rule 4, so the verdict is inconclusive unless a known blocker fires.
 
 ## Workflow
 
