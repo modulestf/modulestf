@@ -17,6 +17,18 @@ def pos(f): [to_entries[] | select(.value | f) | .key][0];
 # on top: unique ids, no control character in a rendered field, no backtick in a path, and a
 # review.tool-disputed note at LOW, as the spec gives it.
 
+# The rule registry (verdict.md): the rule_id of each row of the reviewer's rule-facts.md, read
+# from its raw text. Only the table under the header `| \`rule_id\` | Provider facts` counts, up to
+# its first line that is not a table row; no header, no rule. A finding whose rule is no row is
+# kept and listed, and is an unknown at rule 4.
+def registry_ids:
+  [splits("\n")] as $l
+  | (first(range($l | length) | select($l[.] | startswith("| `rule_id` | Provider facts |"))) // null) as $h
+  | if $h == null then [] else
+      [ $l[$h + 2:] | label $out | .[] | if startswith("|") then . else break $out end
+        | capture("^\\| `(?<id>" + rule_pat + ")` \\|") | .id ] | unique end;
+def registered($reg): .rule_id | IN($reg[]);
+
 def plain_subject: type == "string" and length > 0 and (test("^" + rule_pat + "@") | not);
 
 # A difference id of claims-eval, "<trigger id>|<level>|<case id>|<attribute>", and its digest.
@@ -399,6 +411,7 @@ def texts: {
   "rationale-4-no-change": "The workspace did not hold the change. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-check-not-run": "A check did not run, so a defect it covers may be open. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-verification-incomplete": "The behaviour evidence handed to the review was incomplete, so a behaviour change may be unchecked. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-unregistered": "A finding names a rule that is not in the rule registry, so its severity cannot decide the verdict. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-listed":"A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-5": "Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5).",
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
@@ -444,6 +457,7 @@ def texts: {
   "behaviour-trigger-groups-invalid": "- {count} behaviour changes not verified (the head does not validate in any example): {categories}.",
   "behaviour-capped": "- {count} more behaviour changes over the classifier cap: not verified.",
   "behaviour-claim": "- Claim {claim_id} from the description: not verified.",
+  "rule-unregistered": "- `{rule_id}` at {location}: rule not in the registry, so this {severity} finding does not decide the verdict.",
   "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "thread-match": "- {location}: this review has a finding at the same path and line.",
   "thread-no-match": "- {location}: this review has no finding at the same path and line.",
@@ -564,6 +578,7 @@ def rationale($in):
          elif any($f[]; .rule_id == "review.no-change-identified") then "rationale-4-no-change"
          elif any($f[]; .rule_id == "review.check-not-run") then "rationale-4-check-not-run"
          elif any($f[]; .rule_id == "review.verification-incomplete") then "rationale-4-verification-incomplete"
+         elif $in.unregistered != [] then "rationale-4-unregistered"
          else "rationale-4-listed" end)
     # Rule 7 with no LOW finding: covered skips alone keep the verdict off rule 8.
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) then tx("rationale-7-covered")
@@ -962,7 +977,7 @@ def causes($l; $h; $run; $b):
        or $run.verify_gaps != [] or any($u[]; (.reason | plan_class) == null)
        # A gate hit is advice only after a laptop-mode plan pass: runner mode refuses what is left.
        or ($run.plan_mode != "laptop" and any($u[]; .reason | plan_class | IN("safety-gate", "file-gate")))
-       or ($b | behaviour_gaps) > 0)};
+       or ($b | behaviour_gaps) > 0 or $l.unregistered != [])};
 
 def compact_ok($l; $v; $c; $run; $b):
   ($l.findings | map(select(routed | not))) as $counted
@@ -1051,19 +1066,23 @@ def covered_of($in; $l; $b):
        and (any($l.findings[]; .rule_id | startswith("review.") and . != "review.tool-disputed") | not)
     then $cs else [] end;
 
-# --- The whole render. $in: {findings, host, checks, run, assessment, standard}.
+# --- The whole render. $in: {findings, host, checks, run, assessment, standard, registry}.
 
 def render($in):
   ($in | .run |= scoped_run) as $in
   | $in.host as $h | $in.host.prefix as $p
-  | (behaviour_of($in.run) | with_reported($in.findings) | mark_tests($in.run.tests) | mark_ci($in.checks)) as $b
-  | {findings: $in.findings, signals: (signals_of($h) + {checks: $in.checks.signal}),
+  # Only a registry rule is read by the ladder; the rest are unknowns (verdict.md). Every rung reads
+  # $known, never $in.findings, so an unregistered MEDIUM is never a MEDIUM that blocks.
+  | ($in.findings | map(select(registered($in.registry)))) as $known
+  | ($in.findings | map(select(registered($in.registry) | not))) as $unreg
+  | (behaviour_of($in.run) | with_reported($known) | mark_tests($in.run.tests) | mark_ci($in.checks)) as $b
+  | {findings: $known, unregistered: $unreg, signals: (signals_of($h) + {checks: $in.checks.signal}),
      unresolved: ($h.unresolved_threads | length), triage: $in.run.triage, refuted: ($b | behaviour_refuted),
      jobless: (if $in.checks.accepted then $in.checks.jobless // [] else [] end),
      # A refuted trigger no blocking claim.* finding words is its own checklist item.
-     refuted_todo: (if any($in.findings[]; (.rule_id | startswith("claim.")) and (.severity | IN("CRITICAL", "HIGH"))) then []
+     refuted_todo: (if any($known[]; (.rule_id | startswith("claim.")) and (.severity | IN("CRITICAL", "HIGH"))) then []
                     else [($b // {triggers: []}).triggers[] | select(.state == "refuted")] end),
-     gaps: (($h.could_not_run | cnr_count) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
+     gaps: (($h.could_not_run | cnr_count) + ($unreg | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
      unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end)} as $l
   | covered_of($in; $l; $b) as $cov
   | ($l + {covered: ($cov | length)} | .unplanned_open = .unplanned - .covered) as $l
@@ -1073,7 +1092,7 @@ def render($in):
   | causes($l; $h; $in.run; $b) as $c
   | (if $v.rule == 8 then [] else todo_items($l; $v.rule; $p;
        ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | cnr_count) + ($in.run.verify_gaps | length)
-       + $l.unplanned_open + ($b | behaviour_gaps)) end) as $items
+       + $l.unplanned_open + ($b | behaviour_gaps) + ($unreg | length)) end) as $items
   # At rule 4 a list of quiet items alone, which section 5 already holds, gives way to the action line.
   | ($v.rule == 4 and all($items[]; .quiet)) as $quiet
   | ([$in.assessment, "**\($v.verdict | verdict_line)**"]
@@ -1089,7 +1108,8 @@ def render($in):
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
      # Covered skips leave no gap, so section 5 then holds only their witness lines, which no
      # check that could not run describes.
-     + section(if $cov != [] then "Examples not planned" else "Checks that could not run" end; gap_lines($h; $in.run; $b; $p; $cov); "\n")
+     + section(if $cov != [] then "Examples not planned" else "Checks that could not run" end; gap_lines($h; $in.run; $b; $p; $cov)
+       + [$unreg[] | tx("rule-unregistered"; {rule_id, severity, location: loc($p)})]; "\n")
      + section("Review depth"; depth_lines($in.run); "\n\n")
      + section("Profile"; profile_lines($in.run); "\n\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")
