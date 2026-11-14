@@ -1,3 +1,12 @@
+## [0.9.1](https://github.com/modulestf/modulestf/compare/v0.9.0...v0.9.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **pr-review:** Read the Carry column in carry_map, which turns on incremental reviews ([#151](https://github.com/modulestf/modulestf/issues/151)) ([a3ede2f](https://github.com/modulestf/modulestf/commit/a3ede2f1614c4d6ee58fb6a5f455a6376cf33a2f))
+
+
+
 # [0.9.0](https://github.com/modulestf/modulestf/compare/v0.8.0...v0.9.0) (2026-11-10)
 
 
