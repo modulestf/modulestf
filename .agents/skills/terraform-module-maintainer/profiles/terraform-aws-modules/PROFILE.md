@@ -446,6 +446,10 @@ release: registry
 
 [plan-providers.txt](plan-providers.txt) adds `hashicorp/*` and `compliancetf/*` to the providers the review's plan pass admits in runner mode, beyond its default eight ([Runner providers](../../../terraform-module-pr-review/references/plan-pass.md#runner-providers)). Laptop mode does not read it.
 
+## Generated artifacts
+
+[generated-artifacts.txt](generated-artifacts.txt) lets the generated-only mode of `terraform-module-pr-fix` regenerate wrapper `versions.tf` files and terraform-docs regions, with the `TERRAFORM_DOCS_VERSION` line of `.github/workflows/pre-commit.yml` as the pin ([Generated artifacts](../../references/profile-format.md#generated-artifacts)).
+
 ## What stays out of a profile
 
 - Provider-neutral workflow: schema gathering, coverage ledger, service archetypes, module structure patterns. These live in `../../references/`.

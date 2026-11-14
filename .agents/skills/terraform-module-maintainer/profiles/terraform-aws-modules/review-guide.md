@@ -223,6 +223,7 @@ Every level-2 section of the profile files this guide draws on is either a sourc
 | [What this profile defines](PROFILE.md#what-this-profile-defines) | An index of the profile, no rule | `c5143087ef65` |
 | [Profile constants](PROFILE.md#profile-constants) | Values restated for tools from the rules above, no rule of its own | `0af83960d37d` |
 | [Plan providers](PROFILE.md#plan-providers) | Providers the review's plan pass admits in runner mode, no review rule | `ff3b742aade6` |
+| [Generated artifacts](PROFILE.md#generated-artifacts) | Generators the pull request fix skill's generated-only mode runs, no review rule | `92b8d97c4547` |
 | [What stays out of a profile](PROFILE.md#what-stays-out-of-a-profile) | About the profile itself, no rule | `4f65d3a61af9` |
 | [Adding another profile](PROFILE.md#adding-another-profile) | About the profile itself, no rule | `3730c3ab0e01` |
 | [Documentation regeneration in an untrusted workspace](PROFILE.md#documentation-regeneration-in-an-untrusted-workspace) | Constants the maintainer uses to regenerate a documentation region in an untrusted workspace, no review rule | `930e64126f30` |
