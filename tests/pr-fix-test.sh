@@ -835,9 +835,10 @@ t_late_refuse() { # the cross review's cases: each is introduced and the gate re
     {id: "F-036", rule_id: "structure.comment-redundant", severity: "MEDIUM", file: "notes.tf", line: 1, summary: "s", suggested_fix: "f"},
     {id: "F-037", rule_id: "structure.comment-unsourced", severity: "MEDIUM", file: "notes.tf", line: 8, summary: "s", suggested_fix: "f"},
     {id: "F-038", rule_id: "structure.comment-redundant", severity: "MEDIUM", file: "notes.tf", line: 13, summary: "s", suggested_fix: "f"},
-    {id: "F-039", rule_id: "structure.comment-redundant", severity: "MEDIUM", file: "notes.tf", line: 19, summary: "s", suggested_fix: "f"}]' > "$TMP/fx.json"
+    {id: "F-039", rule_id: "structure.comment-redundant", severity: "MEDIUM", file: "notes.tf", line: 19, summary: "s", suggested_fix: "f"},
+    {id: "F-040", rule_id: "structure.z", severity: "MEDIUM", file: "extra.tf", line: 15, summary: "s", suggested_fix: "f"}]' > "$TMP/fx.json"
   fr compare "$RUN" --round 1 --findings "$TMP/fx.json" > "$TMP/compare.out" 2>&1 || { cat "$TMP/compare.out"; return 1; }
-  grep -q '^round 1: verdict open, 9 open, 7 introduced$' "$TMP/compare.out" &&
+  grep -q '^round 1: verdict open, 10 open, 8 introduced$' "$TMP/compare.out" &&
     grep -qx '  introduced: structure.comment-redundant notes.tf  MEDIUM' "$TMP/compare.out" && ! grep -q '^surfaced late: .* notes.tf:' "$TMP/compare.out" &&
     grep -qx '  introduced: structure.comment-unsourced notes.tf  MEDIUM' "$TMP/compare.out" &&
     grep -qx '  introduced: scope.boundary extra.tf  HIGH' "$TMP/compare.out" &&
@@ -845,6 +846,7 @@ t_late_refuse() { # the cross review's cases: each is introduced and the gate re
     grep -qx '  introduced: structure.comment-redundant extra.tf  MEDIUM' "$TMP/compare.out" &&
     grep -qx '  introduced: structure.comment-redundant crlf.tf  MEDIUM' "$TMP/compare.out" &&
     grep -qx '  introduced: structure.y main.tf  HIGH' "$TMP/compare.out" &&
+    grep -qx '  introduced: structure.z extra.tf  MEDIUM' "$TMP/compare.out" &&
     grep -qx 'surfaced late: structure.argument-order extra.tf:14 LOW' "$TMP/compare.out" || { cat "$TMP/compare.out"; return 1; }
   GATE && return 1
   grep -qx 'introduced: structure.comment-redundant extra.tf MEDIUM' "$TMP/gate.last" && grep -qx 'introduced: structure.y main.tf HIGH' "$TMP/gate.last" ||
