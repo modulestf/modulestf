@@ -335,6 +335,9 @@ rdir modules/d generated; awk 'BEGIN {for (i = 0; i < 25000; i++) print "padding
 rdir modules/e generated; printf '```\n%s\n```\n' "$B" >>"$RC/modules/e/README.md"
 rdir modules/f generated; : >"$RC/modules/f/.terraform-docs.yml"
 rdir docs generated
+# The profile's own pre-commit configuration: its terraform_docs hook has the pass's settings.
+PCT="$SRC/.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/templates/.pre-commit-config.yaml.template"
+cp "$PCT" "$RC/.pre-commit-config.yaml"
 g add -A && g commit -qm head
 HC=$(g rev-parse HEAD)
 jq -n '[ "README.md", "modules/a/README.md", "modules/b/README.md", "modules/c/README.md", "modules/d/README.md",
@@ -376,6 +379,20 @@ sed 's/v0.23.0/"v0.24.0"/' "$RC/.github/workflows/pre-commit.yml" >"$TMP/wf" && 
 g add -A && g commit -qm same; HC=$(g rev-parse HEAD)
 rr_run
 check "readme regions: the same version pinned, a region that differs is differs" "$(grep -qx 'modules/a/README.md differs' "$RO/regions.txt"; echo $?)"
+HSAME=$HC
+# The same version with a terraform_docs hook of other settings: unknown, never differs.
+for v in "--args=--sort-by=required" "--args=--lockfile=false' # x\n          - '--args=--hide=inputs"; do
+  perl -pe "s/--args=--lockfile=false/$v/ if /lockfile/" "$PCT" >"$RC/.pre-commit-config.yaml"
+  g add -A && g commit -qm custom; HC=$(g rev-parse HEAD)
+  rr_run
+  check "readme regions: custom hook args ($(head -c 24 <<<"$v")) are unknown" "$(grep -qx 'modules/a/README.md unknown custom hook args' "$RO/regions.txt"; echo $?)"
+done
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: terraform_docs\n        args:\n          - --args=--lockfile=false\n' >"$RC/.pre-commit-config.yaml"
+g add -A && g commit -qm local; HC=$(g rev-parse HEAD)
+rr_run
+check "readme regions: a local terraform_docs hook is unknown" "$(grep -qx 'modules/a/README.md unknown custom hook args' "$RO/regions.txt"; echo $?)"
+HCUSTOM=$HC
+cp "$PCT" "$RC/.pre-commit-config.yaml"
 sed 's/"v0.24.0"/latest/' "$RC/.github/workflows/pre-commit.yml" >"$TMP/wf" && cat "$TMP/wf" >"$RC/.github/workflows/pre-commit.yml"
 g add -A && g commit -qm unreadable; HC=$(g rev-parse HEAD)
 rr_run
@@ -460,6 +477,11 @@ m=$MUT/terraform-module-pr-review/references/readme-regions.sh
 perl -0pe 's/mismatch\) r="unknown version mismatch" ;; //' "$RRS" >"$m"
 HC=$HMIS; rr_run "$m"; HC=$(g rev-parse HEAD)
 check "readme regions self-check: the version rule dropped is caught" "$(! grep -qx 'modules/a/README.md unknown version mismatch' "$RO/regions.txt"; echo $?)"
+perl -0pe 's/if \[ "\$hk" = profile \]; then/if true; then/' "$RRS" >"$m"
+HC=$HCUSTOM; rr_run "$m"; HC=$(g rev-parse HEAD)
+check "readme regions self-check: the hook args rule dropped is caught" "$(! grep -qx 'modules/a/README.md unknown custom hook args' "$RO/regions.txt"; echo $?)"
+HC=$HSAME; rr_run; HC=$(g rev-parse HEAD)
+check "readme regions: the profile's hook settings still give differs" "$(grep -qx 'modules/a/README.md differs' "$RO/regions.txt"; echo $?)"
 # Last, as it writes the clone: a copy that runs the pass on the clone itself.
 rr_mut "the pass run on the clone" 's/--workspace "\$WS"/--workspace "\$clone"/'
 

@@ -117,7 +117,7 @@ drops_of() {
 # so a judgment run keeps the generated content rules as they were.
 host_drops_of() {
   case "$1" in
-    e-profile) echo "|h:Host README Evidence|l:^- A .README[.]md. terraform-docs region the task.s .README regions:. line" ;;
+    e-profile) echo "|h:Host README Evidence|l:^Evidence that clears a region: a terraform-docs region" ;;
   esac
 }
 

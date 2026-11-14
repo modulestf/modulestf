@@ -155,6 +155,46 @@ wf_state() {
     END { print (bad ? "unreadable" : mis ? "mismatch" : n ? "same" : "none") }' "$RR/wf"
 }
 
+# The terraform_docs hook of the head's .pre-commit-config.yaml, read as data: prints "profile" when
+# it is the one hook of antonbabenko/pre-commit-terraform with that id and its only setting is the
+# profile's args list, the single '--args=--lockfile=false'. Anything else, or YAML this line reader
+# does not follow, prints "custom": the hook may write other bytes than the pass does.
+hook_state() {
+  head_file .pre-commit-config.yaml "$RR/pc" > /dev/null || { echo custom; return; }
+  perl -e '
+    open(my $h, "<:raw", $ARGV[0]) or exit print "custom\n";
+    local $/; my $s = <$h>; $s = "" unless defined $s;
+    # Fail closed on what a YAML loader could read another way: non-ASCII or control text, an
+    # escape, an anchor, alias, tag, merge or complex key, flow collections, block scalars.
+    exit print "custom\n" if $s =~ /[^\x20-\x7e\n]/ || $s =~ /\\/ || $s =~ /[{}\[\]]/;
+    exit print "custom\n" if $s =~ /(^|[\s,])[&*!]\S/m || $s =~ /^[ ]*(-[ ]+)?(\?|<<)/m;
+    exit print "custom\n" if $s =~ /(^|[ :-])[|>][-+0-9]*[ ]*(#.*)?$/m;
+    my @l = split /\n/, $s;
+    # Every mention of terraform_docs is the one id line, so no second entry, a local hook or a
+    # terraform_docs_* variant, writes the region too.
+    my @m = grep { $l[$_] =~ /terraform_docs/ } 0 .. $#l;
+    exit print "custom\n" unless @m == 1;
+    my $i = $m[0];
+    $l[$i] =~ /^( *)- +id: +(["\x27]?)terraform_docs\2 *(#.*)?$/ or exit print "custom\n";
+    my $ind = length $1;
+    my $repo;
+    for (my $j = $i - 1; $j >= 0; $j--) {
+      if ($l[$j] =~ /^ *- +repo: +(["\x27]?)(\S+?)\1 *(#.*)?$/) { $repo = $2; last }
+    }
+    exit print "custom\n" unless defined $repo && $repo =~ m{^https://github\.com/antonbabenko/pre-commit-terraform(\.git)?$};
+    my (@args, $inargs);
+    for (my $j = $i + 1; $j <= $#l; $j++) {
+      my $t = $l[$j];
+      next if $t =~ /^ *(#.*)?$/;
+      $t =~ /^( *)/; my $n = length $1;
+      last if $n <= $ind;
+      if ($n == $ind + 2 && $t =~ /^ *args: *(#.*)?$/) { $inargs = 1; next }
+      if ($inargs && $n > $ind + 2 && $t =~ /^ *- +(["\x27]?)([^"\x27#]*?)\1 *(#.*)?$/) { push @args, $2; next }
+      exit print "custom\n";
+    }
+    print +(@args == 1 && $args[0] eq "--args=--lockfile=false") ? "profile\n" : "custom\n";' "$RR/pc"
+}
+
 RR="$out/rr" WS="$out/rr/ws"
 mkdir -p "$WS" && WSR="$(cd -P -- "$WS" && pwd -P)" || die "no work directory"
 trap 'rm -rf -- "$RR"' EXIT
@@ -191,7 +231,7 @@ done
 # One pass over every copied directory; its line for the directory decides the result.
 : > "$RR/pass.out"
 [ ${#entries[@]} = 0 ] || bash "$PASS" ${pa[@]+"${pa[@]}"} --workspace "$WS" "${entries[@]}" > "$RR/pass.out" 2> /dev/null
-wf="" i=0
+wf="" hk="" i=0
 for p in ${paths[@]+"${paths[@]}"}; do
   i=$((i + 1)); r="${res[i]}"
   [ "$r" != skip ] || continue
@@ -202,10 +242,11 @@ for p in ${paths[@]+"${paths[@]}"}; do
       regenerated*)
         if cmp -s "$WS/$p" "$RR/orig-$i"; then r=generated
         else
-          # The pinned version wrote other bytes. Only a head workflow that pins that same version
-          # makes it a difference; another version, no pin or a pin it cannot read is unknown.
+          # The pinned version wrote other bytes. Only a head workflow that pins that same version,
+          # with the profile's own hook settings, makes it a difference; any other case is unknown.
           [ -n "$wf" ] || wf="$(wf_state)"
-          case "$wf" in same) r=differs ;; mismatch) r="unknown version mismatch" ;; none) r="unknown no version pin" ;; *) r="unknown version unreadable" ;; esac
+          [ "$wf" != same ] || [ -n "$hk" ] || hk="$(hook_state)"
+          case "$wf" in same) if [ "$hk" = profile ]; then r=differs; else r="unknown custom hook args"; fi ;; mismatch) r="unknown version mismatch" ;; none) r="unknown no version pin" ;; *) r="unknown version unreadable" ;; esac
         fi ;;
       stale*)
         r="$(printf '%s' "${line#stale "$d" }" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9 .-' | cut -c1-60)"
