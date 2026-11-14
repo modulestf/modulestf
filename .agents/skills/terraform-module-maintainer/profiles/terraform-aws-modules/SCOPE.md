@@ -34,11 +34,19 @@ Any module may add these resource types in any boundary directory. The list is c
 | `aws_vpc_security_group_ingress_rule` | Network access |
 | `aws_vpc_security_group_egress_rule` | Network access |
 | `aws_security_group_rule` | Network access, in the older single-rule form |
+| `time_sleep` | A wait out of eventual consistency, as [Waiting Out Provider Eventual Consistency](../../references/module-structure.md#waiting-out-provider-eventual-consistency) describes |
 
 Most services need identity, logs and network access, and the family already creates them
 beside its services: `terraform-aws-efs`, `terraform-aws-rds-aurora` and
 `terraform-aws-elasticache` declare security groups of their own. An adjunct is exempt from
 the boundary, not from the edge rule: an IAM role that nothing uses is a maintainer decision.
+
+`time_sleep` is the wait resource that
+[module-structure.md](../../references/module-structure.md#waiting-out-provider-eventual-consistency)
+calls the accepted remedy, and the family already uses it: `terraform-aws-ecs` waits for its
+capacity providers in `modules/cluster`. Its provider is `hashicorp/time`, so a module whose
+base has no `hashicorp/time` provider still takes the provider rule for it. A wait ordered only
+by `depends_on` has no edge: its `triggers` name the block it waits for.
 
 `aws_kms_key` is deliberately not an adjunct. A key is a service of its own, with its own
 policy, rotation and deletion window, and a module takes its ARN as an input: composition

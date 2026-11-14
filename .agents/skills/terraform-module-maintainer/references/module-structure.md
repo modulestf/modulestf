@@ -510,6 +510,10 @@ resource "time_sleep" "wait_for_identity" {
 
   depends_on      = [<provider>_identity.this]
   create_duration = "10s"
+
+  triggers = {
+    identity_id = <provider>_identity.this[0].id
+  }
 }
 
 resource "<provider>_consumer" "this" {
@@ -521,7 +525,9 @@ resource "<provider>_consumer" "this" {
 }
 ```
 
-`time_sleep` comes from the `time` provider, so `versions.tf` has to declare it.
+`time_sleep` comes from the `time` provider, so `versions.tf` has to declare it. The
+`triggers` reference ties the wait to the resource it waits for, which `depends_on` alone
+does not under [Reference edges](module-scope.md#reference-edges).
 
 A fixed wait is a workaround, not a guarantee. It pays a delay on every apply and can still
 lose the race on a slow day. Use a direct reference whenever one exists, and drop the wait
