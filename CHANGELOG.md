@@ -1,3 +1,12 @@
+## [0.9.2](https://github.com/modulestf/modulestf/compare/v0.9.1...v0.9.2) (2026-11-14)
+
+
+### Bug Fixes
+
+* **pr-review:** Match plan coverage in the module root frame for submodule changes ([#156](https://github.com/modulestf/modulestf/issues/156)) ([9c401e6](https://github.com/modulestf/modulestf/commit/9c401e64fc58f794c2462bb2bf6c816976962732))
+
+
+
 ## [0.9.1](https://github.com/modulestf/modulestf/compare/v0.9.0...v0.9.1) (2026-11-14)
 
 
