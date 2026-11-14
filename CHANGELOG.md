@@ -1,3 +1,12 @@
+## [0.9.3](https://github.com/modulestf/modulestf/compare/v0.9.2...v0.9.3) (2026-11-14)
+
+
+### Bug Fixes
+
+* **pr-review:** Render STANDARD when a finding is over a COMPACT cap ([#152](https://github.com/modulestf/modulestf/issues/152)) ([6677e1c](https://github.com/modulestf/modulestf/commit/6677e1c69c4cf17237ed6070398d0af1f984c722))
+
+
+
 ## [0.9.2](https://github.com/modulestf/modulestf/compare/v0.9.1...v0.9.2) (2026-11-14)
 
 
