@@ -2566,6 +2566,21 @@ acc_case "covered gate skips with no finding, approve with nits" t_cov_rule8
 acc_case "a covered recorded exception, approve with nits" t_cov_exc
 acc_case "a MEDIUM review.path-missing beside an unknown, inconclusive" t_pm_unknown
 acc_case "a MEDIUM review.verification-incomplete, inconclusive" t_bvi
+t_acc_disputed() { render "$(f review.tool-disputed LOW a.tf 1 "S." "F." | list accdisp)"; [ "$(verdict)" = "approve APPROVE" ]; }
+acc_case "a disputed note alone, approve" t_acc_disputed
+t_acc_low_disputed() { render "$(pair structure.grouping LOW review.tool-disputed LOW)"; [ "$(rule)" = 7 ]; }
+acc_case "a LOW and a note disputing it, approve with nits" t_acc_low_disputed
+t_acc_crit_ref() { render "$(f compat.expression-behaviour-changed CRITICAL main.tf 2 "S." "F." | list acccr)" "" "" "$BREF"; [ "$(rule)" = 1 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ]; }
+acc_case "a CRITICAL compat finding beside a refuted state, block at rule 1" t_acc_crit_ref
+t_acc_hold() { render "$(f compat.output-removed CRITICAL a.tf 1 "S." "F." | list acchold)"; [ "$(rule)" = 0 ]; }
+acc_case "a CRITICAL compat finding alone, hold for the next major" t_acc_hold
+t_acc_vi() { # a verification-incomplete finding alone: inconclusive, and a forged changes suggested refused
+  t_bvi > /dev/null 2>&1 && acc || return 1
+  jq '.verdict = "changes suggested"' "$O/result.json" > "$O/r2.json" && mv "$O/r2.json" "$O/result.json"; ! acc
+}
+t_acc_vi; check "accept: a forged changes suggested over review.verification-incomplete is refused" $?
+t_acc_hold_forged() { t_acc_hold > /dev/null 2>&1 || return 1; jq '.verdict = "approve"' "$O/result.json" > "$O/r2.json" && mv "$O/r2.json" "$O/result.json"; ! acc; }
+t_acc_hold_forged; check "accept: a forged approve over a CRITICAL compat finding is refused" $?
 # Toward stricter only: a forged lenient verdict over a known MEDIUM is refused.
 t_acc_forged() { t_km > /dev/null 2>&1 || return 1; jq '.verdict = "inconclusive"' "$O/result.json" > "$O/r2.json" && mv "$O/r2.json" "$O/result.json"; ! acc; }
 t_acc_forged; check "accept: an inconclusive verdict over a known MEDIUM is refused" $?
@@ -2597,6 +2612,11 @@ acc_mutate() { # name, perl substitution on incremental.jq, case function that h
 acc_mutate "accept without the known MEDIUM rung" 's/\n    elif \$m then "block"//' t_acc_forged
 acc_mutate "accept counting a review.* MEDIUM as a known blocker" 's/ and \(\.rule_id \| startswith\("review\."\) \| not\)\) as \$m/) as \$m/' t_acc_pm
 acc_mutate "accept refusing approve with nits with no LOW" 's/ or \$model == "approve with nits" then/ then/' t_acc_jl
+t_acc_d() { t_acc_disputed > /dev/null 2>&1 && acc; }
+t_acc_cr() { t_acc_crit_ref > /dev/null 2>&1 && acc; }
+acc_mutate "accept reading the disputed note" 's/map\(select\(\.rule_id != "review\.tool-disputed"\)\) as \$f/. as \$f/' t_acc_d
+acc_mutate "accept holding over a model's block" 's/then \(if \$model == "block" then "block" else "hold for the next major" end\)/then "hold for the next major"/' t_acc_cr
+acc_mutate "accept without review.verification-incomplete" 's/, "review\.verification-incomplete"\)\)/))/' t_acc_vi
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

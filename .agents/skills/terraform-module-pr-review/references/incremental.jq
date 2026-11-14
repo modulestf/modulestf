@@ -57,17 +57,20 @@ def header: capture(header_re);
 # and only toward stricter. A known MEDIUM blocker, a MEDIUM outside review.*, outranks
 # rules 4 and 5 (verdict.md, The Ladder). Approve with nits with no LOW finding is the model's
 # from a jobless Checks signal or a covered skip, which keep the verdict off rule 8; it stands,
-# being stricter than approve. The model's verdict must equal the result.
+# being stricter than approve. The disputed note is the one finding the ladder does not read.
+# Rule 0 also needs no refuted behaviour state, which only the model saw: a model's block over a
+# CRITICAL compat finding is rule 1 and stands. The model's verdict must equal the result.
 def host_verdict($model):
-  . as $f
+  map(select(.rule_id != "review.tool-disputed")) as $f
   | [$f[] | select(.severity == "CRITICAL" or .severity == "HIGH")] as $ch
   | any($f[]; .severity == "MEDIUM" and (.rule_id | startswith("review.") | not)) as $m
   | if any($f[]; .severity == "CRITICAL") and all($ch[]; .rule_id | startswith("compat."))
-      then "hold for the next major"
+      then (if $model == "block" then "block" else "hold for the next major" end)
     elif ($ch | length) > 0 then "block"
     elif $model == "block" then "block"
     elif $m then "block"
-    elif $model == "inconclusive" or any($f[]; .rule_id | IN("review.check-not-run", "review.no-change-identified"))
+    elif $model == "inconclusive"
+      or any($f[]; .rule_id | IN("review.check-not-run", "review.no-change-identified", "review.verification-incomplete"))
       then "inconclusive"
     elif $model == "changes suggested" then "changes suggested"
     elif any($f[]; .severity == "MEDIUM") then "block"
