@@ -33,6 +33,8 @@ get() {
   case "${3-}" in
     pages) gh api --paginate --slurp "$2" 2> /dev/null | jq -c 'add // []' > "$f" 2> /dev/null || rc=1 ;;
     runs) gh api --paginate --slurp "$2" 2> /dev/null | jq -c 'map(.check_runs) | add // []' > "$f" 2> /dev/null || rc=1 ;;
+    wfruns) gh api --paginate --slurp "$2" 2> /dev/null | jq -c 'map(.workflow_runs) | add // []' > "$f" 2> /dev/null || rc=1 ;;
+    workflows) gh api --paginate --slurp "$2" 2> /dev/null | jq -c 'map(.workflows) | add // []' > "$f" 2> /dev/null || rc=1 ;;
     *) gh api "$2" > "$f" 2> /dev/null || rc=1 ;;
   esac
   if [ "$rc" != 0 ] || ! jq -e 'type == "object" or type == "array"' "$f" > /dev/null 2>&1; then
@@ -53,6 +55,27 @@ identity() {
   case "$PERM" in write | maintain | admin) ;; *) fail "identity refused: $LOGIN has no write access to $REPO" ;; esac
 }
 
+# base_workflows <base sha>: $RAW/wfs.json, each active workflow file of the base as {id, file, pr},
+# pr when the file names the pull_request event and no paths filter; null when a read fails or
+# the base has more than 30 workflows.
+# shortcut: a text match, not a YAML parse; a comment naming pull_request makes the workflow
+# required, and a paths filter anywhere in the file exempts it.
+base_workflows() {
+  local id path
+  echo '[]' > "$RAW/wfs.json"
+  [ "$(jq 'length' "$RAW/workflows.json")" -le 30 ] || { echo null > "$RAW/wfs.json"; return 1; }
+  for id in $(jq -r '.[] | select(.state == "active") | .id | select(type == "number" and . > 0 and . == floor)' "$RAW/workflows.json"); do
+    path="$(jq -r --argjson i "$id" 'first(.[] | select(.id == $i)) | .path | strings' "$RAW/workflows.json")"
+    [[ "$path" =~ ^\.github/workflows/[A-Za-z0-9._-]{1,64}\.ya?ml$ ]] || continue
+    get "wf-$id" "repos/$REPO/contents/$path?ref=$1" || { echo null > "$RAW/wfs.json"; return 1; }
+    jq -c --argjson i "$id" --arg p "${path##*/}" --slurpfile c "$RAW/wf-$id.json" '
+      ($c[0].content // "" | gsub("\\s"; "") | try @base64d catch "") as $t
+      | . + [{id: $i, file: $p, pr: (($t | test("(^|[^A-Za-z0-9_])pull_request($|[^A-Za-z0-9_])"))
+                                       and ($t | test("(^|\\s)paths(-ignore)?\\s*:") | not))}]' \
+      "$RAW/wfs.json" > "$RAW/wfs.tmp" && mv "$RAW/wfs.tmp" "$RAW/wfs.json" || { echo null > "$RAW/wfs.json"; return 1; }
+  done
+}
+
 # The merge precondition of workflow.md, Step 3, as one function: the first refusal, or null, and
 # the values the merge will use.
 DECIDE='include "stage-contract";
@@ -65,7 +88,15 @@ $pr[0] as $p | $plan[0] as $pl | $repo[0] as $r
 | ([($rv[0] // [])[] | select(.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))
     | select(.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED"))]
    | group_by(.user.id) | map(max_by(.id)) | map(select(.state == "CHANGES_REQUESTED") | .user.login | tostring | clean)) as $blocking
-| ([if $rv[0] == null then "reviews" else empty end, if $r == null then "repository" else empty end]) as $failed
+| ([($runs[0] // [])[] | .check_suite.id]) as $suites
+| (($wfr[0] // []) | group_by(.workflow_id) | map(max_by([.created_at, .id]))) as $latest
+| ([$latest[] | select(.check_suite_id | IN($suites[]) | not)
+    | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped")) | not)
+    | .path | if type == "string" then split("/") | last | .[0:64] | clean else "(unnamed)" end]) as $jobless
+| ([$latest[] | select(.check_suite_id | IN($suites[])) | .workflow_id]) as $ran
+| ([($wfs[0] // [])[] | select(.pr and (.id | IN($ran[]) | not)) | .file | clean]) as $unrun
+| ([if $rv[0] == null then "reviews" else empty end, if $r == null then "repository" else empty end,
+    if $wfr[0] == null then "workflow runs" else empty end, if $wfs[0] == null then "workflows" else empty end]) as $failed
 | {refusal:
     (if $p == null then "a read failed: pr"
      elif ($pl | stage_ok("review-plan")) | not then "the plan is not a review-plan stage file of schema 1"
@@ -75,6 +106,8 @@ $pr[0] as $p | $plan[0] as $pl | $repo[0] as $r
      elif ($failed | length) > 0 then "a read failed: \($failed | join(", "))"
      elif ($pl.verdict | IN("approve", "approve with nits")) | not then "the verdict is \($pl.verdict | word), not approve or approve with nits"
      elif $c.class != "passing" then "the checks are not passing: \($c.reason | clean)"
+     elif ($jobless | length) > 0 then "ci did not run: a workflow ended without starting a job: \($jobless | .[0:5] | join(", "))"
+     elif ($unrun | length) > 0 then "ci did not run: no check run for a workflow the base runs on pull requests: \($unrun | .[0:5] | join(", "))"
      elif $p.state != "open" or $p.merged != false then "the pull request is not open"
      elif $p.draft != false then "the pull request is a draft"
      elif $p.locked != false then "the pull request is locked"
@@ -102,11 +135,16 @@ live() {
   if [[ "$hsha" =~ $sha_re ]]; then
     get runs "repos/$REPO/commits/$hsha/check-runs?per_page=100" runs && cok=true
     get statuses "repos/$REPO/commits/$hsha/statuses?per_page=100" pages || cok=false
-  else echo null > "$RAW/runs.json"; echo null > "$RAW/statuses.json"; fi
+    # CI that never ran has no check run: the head's workflow runs, and the base's workflows.
+    get wfruns "repos/$REPO/actions/runs?head_sha=$hsha&per_page=100" wfruns
+  else echo null > "$RAW/runs.json"; echo null > "$RAW/statuses.json"; echo null > "$RAW/wfruns.json"; fi
+  if [[ "$bsha" =~ $sha_re ]] && get workflows "repos/$REPO/actions/workflows?per_page=100" workflows; then base_workflows "$bsha"
+  else echo null > "$RAW/wfs.json"; fi
   get reviews "repos/$REPO/pulls/$NUM/reviews?per_page=100" pages
   get repo "repos/$REPO"
   J -n --argjson cok "$cok" --arg started "$STARTED" --slurpfile pr "$RAW/pr.json" --slurpfile plan "$RAW/plan.json" --slurpfile repo "$RAW/repo.json" \
     --slurpfile cmp "$RAW/compare.json" --slurpfile runs "$RAW/runs.json" --slurpfile st "$RAW/statuses.json" \
+    --slurpfile wfr "$RAW/wfruns.json" --slurpfile wfs "$RAW/wfs.json" \
     --slurpfile rv "$RAW/reviews.json" "$DECIDE" > "$RAW/decision.json" || fail "the merge precondition could not be evaluated"
   local x; x="$(jq -r '.refusal // ""' "$RAW/decision.json")"
   [ -z "$x" ] || fail "refused: $x"

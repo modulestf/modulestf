@@ -31,7 +31,7 @@ Per head directory and provider, with the directory's constraints:
 
 - **Latest:** the highest candidate that satisfies them.
 - **Minimum:** the lowest candidate that satisfies them, only when they have a lower bound (`=`, a bare version, `>=`, `>` or `~>`).
-- **Old floor:** the lowest candidate that satisfies the base's constraints for the same directory and provider, when those have a lower bound, given only when it differs from the minimum or there is no minimum. A base constraint that is unparsable, a base directory that is unresolved, or a base constraint no candidate satisfies gives `old_floor_unresolved` with `constraint_unparsable` or `constraint_unsatisfiable`, never a silent gap.
+- **Old floor:** the lowest candidate that satisfies the base's constraints for the same directory and provider, when those have a lower bound, given only when it differs from the minimum or there is no minimum. A base constraint that is unparsable, a base directory that is unresolved, or a base constraint no candidate satisfies gives `old_floor_unresolved` with `constraint_unparsable` or `constraint_unsatisfiable`, never a silent gap. At deep, a minimum whose base has no entry for the provider in that directory, or an entry with no lower bound, gives `old_floor_none` with `no_entry` or `no_lower_bound`, so a floor raised from none is never mistaken for one that did not move.
 - A provider a head type is bound to with no `required_providers` entry is unconstrained: latest only.
 - No candidate satisfies them: `constraint_unsatisfiable`. The version list could not be read: its reason. Either way the pair is unresolved.
 
@@ -119,7 +119,7 @@ The first version that has an argument or block, for `coverage.argument-above-mi
 
 ## Output
 
-- `versions.json`: `{"format": 1, "directories": {"<dir>": {"<namespace>/<name>": {"latest", "minimum", "old_floor", "old_floor_unresolved"} or {"unresolved": "<reason>"}}}}`, with `!<local>` in place of the provider for a `registry_host` source.
+- `versions.json`: `{"format": 1, "directories": {"<dir>": {"<namespace>/<name>": {"latest", "minimum", "old_floor", "old_floor_unresolved", "old_floor_none"} or {"unresolved": "<reason>"}}}}`, with `!<local>` in place of the provider for a `registry_host` source.
 - `<namespace>/<name>/<version>/index.json`: `{"provider", "version", "schema_sha256", "types": {"<resource|data>:<type>": "sheet" | "absent" | "page"}}` for every type needed at that version, and in a [depth mode](#depth-modes) `same_as` for a sheet kept at another version.
 - `<namespace>/<name>/<version>/<resources|data-sources>/<type>.facts`: one sheet per `sheet` entry, the full type name.
 - `missing.json`: in deep mode only, every type without a sheet, as in [Depth Modes](#depth-modes).

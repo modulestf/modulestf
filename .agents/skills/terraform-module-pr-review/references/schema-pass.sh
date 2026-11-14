@@ -750,14 +750,18 @@ while read -r prov ver; do
   mkdir -p "$OUT/$ns/$name" && mv "$WORK/stage/$ns/$name/$ver" "$OUT/$ns/$name/$ver" || exit 1
 done < "$WORK/pvok"
 {
-  awk '{ print $1, $2, $3, $4, $5, $6, ($7 == "" ? "-" : $7) }' "$WORK/resolved"
+  awk '{ print $1, $2, $3, $4, $5, $6, ($7 == "" ? "-" : $7), ($8 == "" ? "-" : $8) }' "$WORK/resolved"
   awk '$1 == "head" && NF == 4 { print $2, $3, "unresolved", $4 }' "$WORK/unres"
-} | jq -R -s -c '
+} | jq -R -s -c --arg mode "$MODE" '
   split("\n") | map(select(. != "") | split(" "))
   | reduce .[] as $r ({};
       .[$r[0]][$r[1]] = (if $r[2] == "ok"
         then {latest: $r[3]} + (if $r[4] != "-" then {minimum: $r[4]} else {} end) + (if $r[5] != "-" then {old_floor: $r[5]} else {} end)
           + (if $r[6] != "-" then {old_floor_unresolved: $r[6]} else {} end)
+          # A minimum the base did not bound, by no entry or no lower bound, is recorded where an
+          # old floor would be, so the floors writer never mistakes it for a floor that did not move.
+          + (if $mode == "deep" and $r[4] != "-" and $r[5] == "-" and $r[6] == "-" and ($r[7] | IN("null", "no_lower_bound"))
+             then {old_floor_none: (if $r[7] == "null" then "no_entry" else "no_lower_bound" end)} else {} end)
         else {unresolved: $r[3]} end))
   | {format: 1, directories: .}' > "$OUT/versions.json" || exit 1
 [ "$MODE" != deep ] || cp "$WORK/missing.json" "$OUT/missing.json" || exit 1

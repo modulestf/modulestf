@@ -81,8 +81,17 @@ fresh() {
     base: {ref: "main", sha: $b, repo: {full_name: "o/r"}}, head: {ref: "fix/x", sha: $h, repo: {full_name: "f/r"}}}' \
     > "$FX/api/repos/o/r/pulls/7.json"
   jq -n --arg m "$M" '{merge_base_commit: {sha: $m}}' > "$FX/api/repos/o/r/compare/$B...$H.json"
-  echo '[{"total_count": 1, "check_runs": [{"id": 1, "name": "test", "status": "completed", "conclusion": "success"}]}]' \
+  echo '[{"total_count": 1, "check_runs": [{"id": 1, "name": "test", "status": "completed", "conclusion": "success", "check_suite": {"id": 50}}]}]' \
     > "$FX/api/repos/o/r/commits/$H/check-runs.json"
+  # the base runs ci.yml on pull requests, and its run on the head reported check run 1
+  mkdir -p "$FX/api/repos/o/r/actions" "$FX/api/repos/o/r/contents/.github/workflows"
+  echo '[{"total_count": 1, "workflow_runs": [{"id": 70, "workflow_id": 9, "check_suite_id": 50, "path": ".github/workflows/ci.yml",
+    "status": "completed", "conclusion": "success", "created_at": "2026-11-14T10:00:00Z"}]}]' > "$FX/api/repos/o/r/actions/runs.json"
+  echo '[{"total_count": 2, "workflows": [{"id": 9, "path": ".github/workflows/ci.yml", "state": "active"},
+    {"id": 10, "path": ".github/workflows/release.yml", "state": "active"}]}]' > "$FX/api/repos/o/r/actions/workflows.json"
+  wfile ci.yml 'on:\n  pull_request:\n  push:\n    branches: [main]\njobs: {}\n'
+  wfile release.yml 'on:\n  push:\n    branches: [main]\njobs: {}\n'
+  touch "$FX/api/repos/o/r/actions/runs.json.pages" "$FX/api/repos/o/r/actions/workflows.json.pages"
   echo '[[{"id": 1, "context": "ci/lint", "state": "success"}]]' > "$FX/api/repos/o/r/commits/$H/statuses.json"
   echo '[[{"id": 1, "user": {"login": "bob", "id": 2}, "author_association": "MEMBER", "state": "CHANGES_REQUESTED"},
     {"id": 2, "user": {"login": "bob", "id": 2}, "author_association": "MEMBER", "state": "APPROVED"},
@@ -93,6 +102,7 @@ fresh() {
   jq -n --arg b "$B" '{sha: "x", parents: [{sha: $b}]}' > "$FX/api/repos/o/r/commits/$C.json"
   : > "$FX/put.log"
 }
+wfile() { printf "$2" | base64 | jq -R -s '{content: .}' > "$FX/api/repos/o/r/contents/.github/workflows/$1.json"; } # a base workflow file by the contents API
 fx() { local f="$FX/api/$1.json"; jq "$2" "$f" > "$f.tmp" && mv "$f.tmp" "$f"; } # edit a fixture with a jq filter
 fx2() { local f="$FX/api/$1.json"; jq "$2" "$f" > "$f.second"; } # every read after the first answers the edited fixture
 plan() { # writes the plan pr-review would leave in $RUN/review, edited by an optional jq filter
@@ -182,7 +192,24 @@ refuse_gate "a maintainer's latest review CHANGES_REQUESTED" "a write-capable re
 refuse_gate "squash disallowed" "the repository does not allow squash merges" "fx repos/o/r '.allow_squash_merge = false'"
 refuse_gate "a failed pull request read" "a read failed: pr" "rm \"\$FX/api/repos/o/r/pulls/7.json\""
 refuse_gate "a failed compare read" "a read failed: compare" "rm \"\$FX/api/repos/o/r/compare/$B...$H.json\""
+# ci did not run: a job-less workflow run, or no check run for a workflow the base runs on pull requests
+JOBLESS='.[0].workflow_runs += [{id: 71, workflow_id: 11, check_suite_id: 51, path: ".github/workflows/lint.yml", status: "completed", conclusion: "action_required", created_at: "2026-11-14T10:00:00Z"}]'
+refuse_gate "a workflow awaiting approval with no job" "ci did not run: a workflow ended without starting a job: lint.yml" "fx repos/o/r/actions/runs '$JOBLESS'"
+refuse_gate "a workflow that failed at startup" "ci did not run: a workflow ended without starting a job: lint.yml" \
+  "fx repos/o/r/actions/runs '${JOBLESS/action_required/startup_failure}'"
+refuse_gate "a pull request workflow of the base with no run on the head" \
+  "ci did not run: no check run for a workflow the base runs on pull requests: ci.yml" "fx repos/o/r/actions/runs '.[0].workflow_runs = []'"
+refuse_gate "a pull request workflow whose run reported no check run" \
+  "ci did not run: a workflow ended without starting a job: ci.yml" "fx repos/o/r/actions/runs '.[0].workflow_runs[0].check_suite_id = 52 | .[0].workflow_runs[0].conclusion = \"failure\"'"
+refuse_gate "a failed workflow runs read" "a read failed: workflow runs" "rm \"\$FX/api/repos/o/r/actions/runs.json\""
+refuse_gate "a failed workflow file read" "a read failed: workflows" "rm \"\$FX/api/repos/o/r/contents/.github/workflows/ci.yml.json\""
 [ ! -s "$GITLOG" ]; check "the refusals make no git call" $?
+
+# a pull request workflow with a paths filter, or a disabled one, needs no run; a newer job-less run of a workflow whose latest run passed is the latest
+fresh; prep; plan
+wfile lint.yml 'on:\n  pull_request:\n    paths: ["**.tf"]\njobs: {}\n'
+fx repos/o/r/actions/workflows '.[0].workflows += [{id: 11, path: ".github/workflows/lint.yml", state: "active"}, {id: 12, path: ".github/workflows/old.yml", state: "disabled_manually"}]'
+mr gate "$RUN" > /dev/null; check "gate passes a paths-filtered and a disabled pull request workflow with no run" $?
 
 # a dismissed latest review and a commenter's request do not block; approve with nits passes
 fresh; prep; plan '.verdict = "approve with nits"'
@@ -211,6 +238,8 @@ refuse_merge "no --target" "--target" "--confirm-head $H"
 # Review Focus 4: a check turns failed between gate and merge
 refuse_merge "a check failed after the gate" "the checks are not passing" "--target o/r#7 --confirm-head $H" \
   "fx repos/o/r/commits/$H/check-runs '.[0].check_runs[0].conclusion = \"failure\"'"
+refuse_merge "a job-less workflow run after the gate" "ci did not run: a workflow ended without starting a job: lint.yml" "--target o/r#7 --confirm-head $H" \
+  "fx repos/o/r/actions/runs '$JOBLESS'"
 refuse_merge "a title edited after the gate" "changed since the gate: title" "--target o/r#7 --confirm-head $H" \
   "fx repos/o/r/pulls/7 '.title = \"feat: Something else\"'"
 refuse_merge "a head pushed after the gate" "the pull request moved since the review: head_sha" "--target o/r#7 --confirm-head $H" \
@@ -283,6 +312,10 @@ mutate "approve with nits swapped for changes suggested" 's/"approve with nits"/
   'fresh; prep; plan ".verdict = \"changes suggested\""; ! mr gate "$RUN"'
 mutate "the fresh review check dropped" 's/^     elif \(\$pl\.read_at \| iso_time\)[^\n]*\n//m' \
   'fresh; prep; plan ".read_at = \"2020-01-01T00:00:00Z\""; ! mr gate "$RUN"'
+mutate "the job-less workflow refusal dropped" 's/^     elif \(\$jobless \| length\)[^\n]*\n//m' \
+  'fresh; prep; plan; fx repos/o/r/actions/runs '"'$JOBLESS'"'; ! mr gate "$RUN"'
+mutate "the unrun base workflow refusal dropped" 's/^     elif \(\$unrun \| length\)[^\n]*\n//m' \
+  'fresh; prep; plan; fx repos/o/r/actions/runs ".[0].workflow_runs = []"; ! mr gate "$RUN"'
 mutate "the read after a failed PUT limited to a 405" 's/    get after "repos\/\$REPO\/pulls\/\$NUM" \|\| fail/    case "\$err" in *"HTTP 405"*) ;; *) fail "the merge failed: \$err; nothing retried" ;; esac\n    get after "repos\/\$REPO\/pulls\/\$NUM" || fail/' \
   'fresh; prep; plan; mr gate "$RUN"; echo "timeout" > "$FX/put-fail"; fx2 repos/o/r/pulls/7 ".merged = true"; domerge'
 
