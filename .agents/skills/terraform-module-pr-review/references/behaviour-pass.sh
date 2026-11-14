@@ -1,5 +1,3 @@
-  prefix="\${prefix%/}"
-  case "\$prefix" in /* | *..* | .) die "--prefix must be repository-relative" ;; esac
 #!/bin/bash
 # behaviour-pass.sh: Steps 5.4 and 5.5 of terraform-module-pr-review, the behaviour classifier and
 # the claims evaluation, both by mtf-facts. Rules: behaviour-pass.md. Invoke it by an absolute path

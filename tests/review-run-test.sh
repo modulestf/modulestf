@@ -340,6 +340,20 @@ check "verify: a light run with every example passing stays light" "$([ "$(jq -r
 check "plan: at light every example is unplanned as skipped at light depth" \
   "$(q "$RUN/coverage.json" '.class == "none" and (.unplanned | map(.reason) | unique) == ["plan pass skipped at light depth"]')"
 check "ladder: the claims evaluation ran" "$([ -f "$RUN/behaviour/run-behaviour.json" ]; echo $?)"
+# The claims evaluation gets the run's module root prefix, so the plan coverage reaches it in the
+# module root frame (behaviour-pass.md); a copy that does not pass it is caught.
+eval_prefix() { # review-run.sh copy: ladder again with the run's prefix set to modules/x; 0 when eval got it
+  local h="$RUN/host/host.json" n
+  cp "$h" "$TMP/host-keep.json"; jq '.prefix = "modules/x"' "$TMP/host-keep.json" > "$h"
+  n="$(wc -l < "$STUB_LOG")"; (cd "$TMP/cwd" && "$SH" "$1" ladder "$RUN") > /dev/null 2>&1
+  cp "$TMP/host-keep.json" "$h"
+  tail -n +"$((n + 1))" "$STUB_LOG" | grep -qE '^behaviour eval .* --prefix modules/x( |$)'
+}
+check "ladder: the claims evaluation gets the run's module root prefix" "$(eval_prefix "$RR"; echo $?)"
+sed 's/ --prefix "\$PREFIX" / /' "$RR" > "$SK/review-run-noprefix.sh"
+check "self-check: the mutant passes no --prefix to eval" "$(cmp -s "$RR" "$SK/review-run-noprefix.sh"; [ $? = 1 ]; echo $?)"
+check "self-check: without --prefix the eval prefix check fails" "$(eval_prefix "$SK/review-run-noprefix.sh"; [ $? = 1 ]; echo $?)"
+rm -f "$SK/review-run-noprefix.sh"
 run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render0" > /dev/null 2>&1
 check "render: refused before handover" "$([ $? = 1 ] && [ ! -e "$TMP/render0/comment.md" ]; echo $?)"
 run_rr handover "$RUN" > "$TMP/ho.out"
