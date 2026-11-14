@@ -147,8 +147,8 @@ def loop_decision:
     reason: "the local verdict is \(.verdict): finished among attributable findings, \(.unattributed // 0) unattributed"}
   elif .nonactionable then {stop: true, finished_review: false, reason: "every open item is non-actionable"}
   elif $n >= 1 and any($now[]; IN($closed[])) then {stop: true, finished_review: false, reason: "no progress: a closed item reappears"}
-  elif $n >= 1 and ((($now | length) >= ($h[$n - 1] | length)) or (msub($now; $h[$n - 1]) | length) > 0)
-  then {stop: true, finished_review: false, reason: "no progress: the open set did not shrink"}
+  elif $n >= 1 and (msub($h[$n - 1]; $now) | length) == 0
+  then {stop: true, finished_review: false, reason: "no progress: no item of the open set closed"}
   elif .round >= .limit then {stop: true, finished_review: false, reason: "round \(.round) is the last"}
   else {stop: false, finished_review: false, reason: "the next round may start"} end;
 
@@ -164,20 +164,40 @@ def under($prefix): $prefix == "" or startswith($prefix + "/");
 def dir_of: rindex("/") as $i | if $i == null then "" else .[0:$i] end;
 # The NUL-separated output of git diff-tree --name-only as module-relative paths.
 def module_paths($x): [split("\u0000")[] | select(. != "" and under($x)) | if $x == "" then . else .[($x | length) + 1:] end];
+# The fix's lines: the TSV lines "path<TAB>first<TAB>last" of the new side of each hunk of
+# git diff -U0 between the pinned head and the judged tree, as {module-relative path: [[first, last]]}.
+def fix_hunks($x):
+  [split("\n")[] | select(. != "") | split("\t") | select(length == 3 and (.[0] | under($x)))
+   | {p: (if $x == "" then .[0] else .[0][($x | length) + 1:] end), r: [(.[1] | tonumber), (.[2] | tonumber)]}]
+  | group_by(.p) | map({key: .[0].p, value: map(.r)}) | from_entries;
+# The line after line $l that closes the block it opens: the first later line that is "}" at column 0.
+def block_end($t; $l): first(range($l; $t | length) | select($t[.] | test("^\\}[ \\t]*$")) | . + 1) // ($t | length);
+# On the fix's lines: within 3 lines of a changed line, or the opening line of a top-level block
+# that holds a changed line. $h the file's ranges, $t its lines in the judged tree, $l the line.
+def on_fix($h; $t; $l):
+  any($h[]; .[0] - 3 <= $l and $l <= .[1] + 3)
+  or (($t[$l - 1] | test("^[a-z_]+( +\"[^\"]*\")* *\\{[ \\t]*$"))
+      and (block_end($t; $l) as $e | any($h[]; .[0] <= $e and .[1] >= $l)));
 # Attribution (write-path.md, Fingerprints and the Local Verdict). Input {findings, pinned, changed,
-# prefix}: findings the round's list with module-relative files, pinned the pinned head's list,
-# repository-relative, changed the round's changed paths, module-relative. Output {attributable,
-# unattributed}, both repository-relative. A5 comes first, so a malformed file never reaches A2.
+# prefix, hunks, texts}: findings the round's list with module-relative files, pinned the pinned
+# head's list, repository-relative, changed the round's changed paths, module-relative, hunks the
+# fix's lines (fix_hunks), texts {module-relative path: content in the judged tree}. Output
+# {attributable, unattributed, late}, repository-relative; late are the attributable findings that
+# surfaced late (L1 to L4). A5 comes first, so a malformed file never reaches A2.
 def attribution:
-  .prefix as $x | .changed as $ch | [.pinned[] | [.rule_id, .file, addr]] as $pk |
-  [.findings[] | .file as $f |
+  .prefix as $x | .changed as $ch | (.hunks // {}) as $hk | (.texts // {}) as $tx |
+  [.pinned[] | [.rule_id, .file, addr]] as $pk |
+  [.findings[] | .file as $f | ([.rule_id, fp($x)[1], addr] | IN($pk[])) as $a3 |
     ( ($f != "." and ($f | path_grammar | not))
       or ($f | IN($ch[]))
       or ($f != "" and $f != "." and (($f | dir_of) as $d | any($ch[]; endswith(".tf") and dir_of == $d)))
-      or ([.rule_id, fp($x)[1], addr] | IN($pk[]))
+      or $a3
       or (.severity | IN("HIGH", "CRITICAL")) ) as $a
-    | {a: $a, f: (.file = fp($x)[1])}]
-  | {attributable: map(select(.a) | .f), unattributed: map(select(.a | not) | .f)};
+    | ($a and ($a3 | not) and $f != "." and ($f | path_grammar) and (.line | type == "number" and . >= 1 and floor == .)
+       and ($tx[$f] | type == "string") and (($tx[$f] | split("\n")) as $t | .line <= ($t | length)
+       and (on_fix($hk[$f] // []; $t; .line) | not))) as $late
+    | {a: $a, late: $late, f: (.file = fp($x)[1])}]
+  | {attributable: map(select(.a) | .f), unattributed: map(select(.a | not) | .f), late: map(select(.late) | .f)};
 
 # Clauses 1 to 3 of write-path.md, Allowed Paths, on one path: "" when they hold, else the clause.
 def path_clause($prefix):
