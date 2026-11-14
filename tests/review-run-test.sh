@@ -328,6 +328,16 @@ check "fix-plan.md: the items with kind, origin, the excerpt cut to 300 bytes at
 check "fix-plan.md: the list of findings and items with no proposed code change, and the apply line" \
   "$([ "$(sed -n '/^## No proposed code change$/,/^## Apply$/p' "$H" | grep '^- ')" = "$(printf '%s\n' '- Finding 2, `` F`2 ``: its fix opens with `no code change:`' '- Finding 3, `F-3`: its fix opens with `needs decision:`' '- Item 1, title: a feedback item, for which plan.json carries no fix' '- Item 2, body: a feedback item, for which plan.json carries no fix' '- Item 3, thread: a feedback item, for which plan.json carries no fix' '- Item 4, conversation: a feedback item, for which plan.json carries no fix')" ] &&
      [ "$(tail -n 1 "$H")" = 'Nothing was applied. pr-fix would apply this plan with `fix-run.sh prepare --repo example-org/terraform-aws-widget --pr 12`, then `fix-run.sh clone <run>`, then `fix-run.sh items <run> --plan <dir>`, `<dir>` being this directory.' ]; echo $?)"
+check "fix-plan.md: a fix of two options repeats each stale sentence to its own end, never option (b)" \
+  "$(jq '.findings[0].suggested_fix = "needs decision: (a) drop it; Generated content made stale: the terraform-docs region of README.md. (b) keep it and say so; Generated content made stale: none."' "$PJ" > "$TMP/two-plan.json" &&
+     fixplan "$TMP/two-plan.json" > "$TMP/two.md" &&
+     [ "$(awk '/^Generated content made stale, repeated from the fix:$/{getline; getline; getline; print}' "$TMP/two.md")" = "$(printf '%s\n' 'Generated content made stale: the terraform-docs region of README.md.' 'Generated content made stale: none.')" ]; echo $?)"
+check "fix-plan.md: the schema caps hold in the preview: a 500 and 600 character finding builds, one more character builds none" \
+  "$(a="$(printf 'a%.0s' $(seq 500))"; f="$(printf 'f%.0s' $(seq 600))"
+     jq --arg a "$a" --arg f "$f" '.findings[0].summary = $a | .findings[0].suggested_fix = $f' "$PJ" > "$TMP/cap-plan.json" &&
+     fixplan "$TMP/cap-plan.json" > /dev/null &&
+     jq '.findings[0].suggested_fix += "f"' "$TMP/cap-plan.json" > "$TMP/cap-fix.json" && ! fixplan "$TMP/cap-fix.json" > /dev/null 2>&1 &&
+     jq '.findings[0].summary += "a"' "$TMP/cap-plan.json" > "$TMP/cap-sum.json" && ! fixplan "$TMP/cap-sum.json" > /dev/null 2>&1; echo $?)"
 check "fix-plan.md: a handover block not in the block form builds no preview" \
   "$(jq '.handover_block = "no block"' "$PJ" > "$TMP/bad-plan.json"; ! fixplan "$TMP/bad-plan.json" > /dev/null 2>&1; echo $?)"
 # Negative self-check: each weakened copy of fix-plan.jq lets hostile text out.

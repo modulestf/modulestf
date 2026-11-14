@@ -43,9 +43,11 @@ def plan_items:
 def not_applicable: .suggested_fix | tostring | (if startswith("needs decision:") then "needs decision:"
   elif startswith("no code change:") then "no code change:" else null end);
 
-# Every "Generated content made stale:" sentence of a fix, each to the next one or the end.
+# Every "Generated content made stale:" sentence of a fix: from the marker to its first period
+# followed by white space, or to the next marker or the end, so option (b) after it is not repeated.
 def stale_sentences:
-  "Generated content made stale:" as $m | .suggested_fix | tostring | split($m) | .[1:] | map($m + . | rtrimstr(" "));
+  "Generated content made stale:" as $m | .suggested_fix | tostring | split($m) | .[1:]
+  | map($m + (sub("\\.\\s[\\s\\S]*$"; ".") | sub("\\s+$"; "")));
 
 def scope_line:
   if .severity | IN("CRITICAL", "HIGH", "MEDIUM") then
@@ -75,7 +77,10 @@ def item_section($i; $n):
 
 # Input: a review-plan stage file. Output: the text of fix-plan.md.
 def fix_plan:
-  (.findings | length) as $nf
+  # The hard caps of the findings schema, held here too, so a plan over them builds no preview.
+  if any(.findings[]; (.summary | tostring | length) > 500 or (.suggested_fix | tostring | length) > 600)
+  then error("a finding is over the summary cap of 500 or the suggested_fix cap of 600 characters") else . end
+  | (.findings | length) as $nf
   | (.handover_block | plan_items) as $items
   | "# Fix plan preview\n\n"
   + "**Proposed fixes - not applied and not verified.**\n\n"
