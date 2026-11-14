@@ -55,13 +55,16 @@ case "${SCHEMA_STUB:-overflow}" in
   deeppartial) mkdir -p "$1"; echo '{"format": 1, "reasons": ["page"], "missing": []}' > "$1/missing.json"; echo "$src"
     echo "schema pass: deep partial page, 1 sheets, 10 bytes, 1 types without a sheet"; exit 0 ;;
   badsource) mkdir -p "$1"; echo "$src"; echo "schema pass: source modulestf/m x \$(touch x)"; echo "schema pass: focused"; exit 0 ;;
+  floorsmany) mkdir -p "$1"; jq -n '{format: 1, directories: ([range(0; 257) | {key: "modules/m\(.)", value: {"hashicorp/aws": {minimum: "6.44.0", old_floor: "6.42.0"}}}] | from_entries)}' > "$1/versions.json"
+    echo "$src"; echo "schema pass: deep, mirror stub, 0 sheets, 0 bytes"; exit 0 ;;
   floors) mkdir -p "$1/hashicorp/aws/6.42.0" "$1/hashicorp/aws/6.44.0" "$1/hashicorp/random/3.6.0" "$1/hashicorp/null/3.1.0" "$1/hashicorp/null/3.2.0" "$1/hashicorp/random/3.5.0"
     for v in aws/6.42.0 aws/6.44.0 random/3.6.0 random/3.5.0 null/3.1.0 null/3.2.0; do echo '{}' > "$1/hashicorp/$v/index.json"; done
     echo '{"format": 1, "directories": {".": {"hashicorp/aws": {"latest": "6.70.0", "minimum": "6.44.0", "old_floor": "6.42.0"},
       "hashicorp/random": {"latest": "3.7.0", "minimum": "3.6.0", "old_floor": "3.1.0"}, "hashicorp/time": {"latest": "0.13.0", "minimum": "0.9.0"},
       "!aws": {"unresolved": "registry_host"}}, "modules/x": {"hashicorp/null": {"latest": "3.2.4", "minimum": "3.2.0", "old_floor": "3.1.0"}},
       "modules/y": {"hashicorp/aws": {"latest": "6.70.0", "minimum": "6.44.0", "old_floor_unresolved": "constraint_unparsable"},
-        "hashicorp/random": {"latest": "3.7.0", "minimum": "3.6.0", "old_floor": "3.5.0"}, "hashicorp/tls": {"unresolved": "network"}}}}' > "$1/versions.json"
+        "hashicorp/random": {"latest": "3.7.0", "minimum": "3.6.0", "old_floor": "3.5.0"}, "hashicorp/tls": {"unresolved": "network"},
+        "hashicorp/time": {"latest": "0.13.0", "old_floor": "0.9.0"}}}}' > "$1/versions.json"
     echo '{"format": 1, "reasons": ["page"], "missing": [{"provider": "hashicorp/null", "type": "resource:null_resource", "versions": ["3.1.0"]}]}' > "$1/missing.json"
     echo "$src"; echo "schema pass: deep partial page, 4 sheets, 10 bytes, 1 types without a sheet"; exit 0 ;;
 esac
@@ -579,12 +582,18 @@ check "render: the run file's floors from versions.json and missing.json" "$(jq 
     {dir: "modules/x", provider: "hashicorp/null", old_floor: "3.1.0", floor: "3.2.0", read: false},
     {dir: "modules/y", provider: "hashicorp/aws", old_floor: null, floor: null, read: false},
     {dir: "modules/y", provider: "hashicorp/random", old_floor: "3.5.0", floor: "3.6.0", read: true},
+    {dir: "modules/y", provider: "hashicorp/time", old_floor: null, floor: null, read: false},
     {dir: "modules/y", provider: "hashicorp/tls", old_floor: null, floor: null, read: false}]}' "$RUN/render/run-file.json" > /dev/null; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 DEPTH_STUB=deep prep
 SCHEMA_STUB=deeppartial with_tf run_rr schema "$RUN" > /dev/null
 full; run_rr handover "$RUN" > /dev/null; render_to "$TMP/render-nofl"
 check "render: no versions.json gives the run file no floors" "$(q "$RUN/render/run-file.json" 'has("floors") | not')"
+run_rr cleanup "$RUN" > /dev/null
+DEPTH_STUB=deep prep
+SCHEMA_STUB=floorsmany with_tf run_rr schema "$RUN" > /dev/null
+full; run_rr handover "$RUN" > /dev/null; render_to "$TMP/render-flmany"
+check "render: more than 256 floor entries give no floors, never a cut list" "$(q "$RUN/render/run-file.json" 'has("floors") | not')"
 run_rr cleanup "$RUN" > /dev/null
 
 # A module root below the repository root: schema passes it as SCHEMA_ROOT and the inputs

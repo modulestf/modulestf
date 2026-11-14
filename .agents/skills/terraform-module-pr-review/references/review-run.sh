@@ -1098,9 +1098,12 @@ floors_of() {
       | (.key | test("^[a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63}$")) as $ok
       | if $ok and .value.minimum? and .value.old_floor? then
           {dir: $d, provider: .key, old_floor: .value.old_floor, floor: .value.minimum}
-        elif ($ok | not) or .value.unresolved? or .value.old_floor_unresolved? then
+        elif ($ok | not) or .value.unresolved? or .value.old_floor_unresolved? or .value.old_floor? then
           {dir: $d, provider: (if $ok then .key else null end), old_floor: null, floor: null, unresolved: true}
         else empty end] | unique_by([.dir, .provider])' "$v")" || return 1
+  # Over the render's 256 entries no list is written, never a cut one: a cut list could leave a
+  # directory with only its read entries, and without floors no trigger is cleared by them.
+  [ "$(jq length <<< "$list")" -le 256 ] || return 1
   local out='[]' e dir prov of fv read
   while IFS= read -r e; do
     [ -n "$e" ] || continue
@@ -1113,7 +1116,7 @@ floors_of() {
     fi
     out="$(jq -c --argjson e "$e" --argjson r "$read" '. + [$e + {read: $r} | del(.unresolved)]' <<< "$out")" || return 1
   done < <(jq -c '.[]' <<< "$list")
-  jq -c -n --arg h "$HEAD_SHA" --arg b "$mbs" --argjson d "$out" '{head_sha: $h, base_sha: $b, dirs: $d[:256]}'
+  jq -c -n --arg h "$HEAD_SHA" --arg b "$mbs" --argjson d "$out" '{head_sha: $h, base_sha: $b, dirs: $d}'
 }
 
 build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
