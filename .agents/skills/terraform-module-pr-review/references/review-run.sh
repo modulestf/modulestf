@@ -515,7 +515,9 @@ cmd_verify() {
 
 plan_dirs() { # the examples to plan, repository-relative, in selection order
   if [ "$(depth)" = focused ]; then
-    jq -r --slurpfile d "$RUN/depth.json" '.dirs[].dir | select(IN($d[0].examples_selected[]))' "$RUN/selection.json"
+    # An example outside the module root, which the depth does not list, stays unless it is out of scope.
+    jq -r --slurpfile d "$RUN/depth.json" --arg pre "${PREFIX:+$PREFIX/}" '.dirs[].dir | select(IN($d[0].examples_selected[])
+      or ((startswith($pre) | not) and (IN($d[0].examples_out_of_scope[]) | not)))' "$RUN/selection.json"
   else jq -r '.dirs[].dir' "$RUN/selection.json"; fi
 }
 
@@ -556,7 +558,13 @@ cmd_plan() {
       "$RUN/coverage.json" > "$RUN/coverage.tmp" && mv "$RUN/coverage.tmp" "$RUN/coverage.json" || fail "the coverage could not be rewritten"
     echo "plan: $missed"
   elif [ -f "$RUN/state/plan" ]; then echo "plan: $(grep -m1 '^plan summary:' "$(plan_record)" 2> /dev/null || echo 'no summary line')"
-  else echo "plan: not run ($( [ -n "$profile" ] && echo "depth $(depth)" || echo 'no AWS profile named'))"; fi
+  elif [ -z "$profile" ]; then echo "plan: not run (no AWS profile named)"
+  elif ! jq -e '.selection | type == "object"' "$RUN/selection.json" > /dev/null 2>&1; then echo "plan: not run (example selection failed)"
+  elif jq -e '.dirs == []' "$RUN/selection.json" > /dev/null 2>&1; then
+    if [ -d "$MROOT/examples" ] || { [ -n "$PREFIX" ] && [ -d "$RUN/clone/examples" ]; }; then
+      echo "plan: not run (no example calls the module)"
+    else echo "plan: not run (no example directory)"; fi
+  else echo "plan: not run (no example in scope at depth $(depth))"; fi
   jq -r '"plan coverage: \(.class), \(.unplanned | length) not planned"' "$RUN/coverage.json"
 }
 plan_record() { if [ -f "$RUN/plan-record/plan-pass.txt" ]; then echo "$RUN/plan-record/plan-pass.txt"; else echo "$RUN/plan-out.txt"; fi; }
