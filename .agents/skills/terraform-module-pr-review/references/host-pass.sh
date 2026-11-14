@@ -745,9 +745,9 @@ TEXT_CAP=65535
 token_re='^[A-Za-z0-9._-]{1,64}$'
 ref_re='^[A-Za-z0-9._/-]{1,255}$'
 
-carry_map() { # rule-facts.md -> {"<rule_id>": "file"|"never"} on stdout
-  grep -E '^\| `[a-z]+\.[a-z0-9-]+` \|.*\| (file|never) \|$' "$1" |
-    sed -E 's/^\| `([a-z]+\.[a-z0-9-]+)` \|.*\| (file|never) \|$/\1 \2/' |
+carry_map() { # rule-facts.md -> {"<rule_id>": "file"|"never"} on stdout, from the fifth column, Carry
+  grep -E '^\| `[a-z]+\.[a-z0-9-]+` \|( [^|]* \|){3} (file|never) \|' "$1" |
+    sed -E 's/^\| `([a-z]+\.[a-z0-9-]+)` \|( [^|]* \|){3} (file|never) \|.*$/\1 \3/' |
     jq -R -s 'split("\n") | map(select(. != "") | split(" ") | {(.[0]): .[1]}) | add // {}'
 }
 
@@ -1017,7 +1017,8 @@ cmd_accept() {
   IJ -e 'include "incremental"; findings_list(true)' "$findings" > /dev/null 2>&1 || reject "the findings do not match the contract"
   local head
   head="$(jq -r '.head_sha' "$result" 2> /dev/null)"
-  check_prior "$prior" "$head" > /dev/null || reject "the prior directory did not pass its check"
+  # A subshell: check_prior defines its own reject, which returns where this one exits.
+  ( check_prior "$prior" "$head" ) > /dev/null || reject "the prior directory did not pass its check"
   local verdict
   verdict="$(jq -r '.verdict' "$result")"
   IJ -e --arg v "$verdict" 'include "incremental"; host_verdict($v) == $v' "$findings" > /dev/null 2>&1 ||
@@ -1034,7 +1035,8 @@ cmd_accept() {
     include "incremental";
     ($c[0] | map(canon)) as $carried
     | all(.[] | select((canon | IN($carried[])) | not);
-          ($carry[.rule_id] // "unknown") as $k
+          # A rule the table does not name is never, as prior takes it (host-pass.md).
+          ($carry[.rule_id] // "never") as $k
           | $k == "never" or ($k == "file" and (.file | IN($m[0].scope[]))))' "$findings" > /dev/null 2>&1 ||
     reject "a finding outside the scope of an incremental review"
   echo "findings accepted: incremental"
