@@ -525,7 +525,9 @@ resource "<provider>_consumer" "this" {
 }
 ```
 
-`time_sleep` comes from the `time` provider, so `versions.tf` has to declare it. The
+`time_sleep` comes from the `time` provider, so `versions.tf` has to declare it. A module
+that has no `time` provider yet lands an `Allowed providers` entry for it in its
+`docs/SCOPE.md` first, under [Exceptions](module-scope.md#exceptions-docsscopemd). The
 `triggers` reference ties the wait to the resource it waits for, which `depends_on` alone
 does not under [Reference edges](module-scope.md#reference-edges).
 

@@ -190,7 +190,7 @@ For any other `resource` type a change adds, fit is decided per directory, from 
 
 IDs: `scope.boundary`, `scope.new-submodule`, `scope.composition`.
 
-Source: [SCOPE.md#adjunct-types](SCOPE.md#adjunct-types) `c339d1e5c10d`
+Source: [SCOPE.md#adjunct-types](SCOPE.md#adjunct-types) `39ddba13e831`
 Source: [SCOPE.md#ambient-data-sources](SCOPE.md#ambient-data-sources) `abb674d7e8f1`
 Source: [module-scope.md#the-boundary-of-a-directory](../../references/module-scope.md#the-boundary-of-a-directory) `94a5360dd3db`
 Source: [module-scope.md#reference-edges](../../references/module-scope.md#reference-edges) `c72310bf7d19`
@@ -227,7 +227,7 @@ Every level-2 section of the profile files this guide draws on is either a sourc
 | [Adding another profile](PROFILE.md#adding-another-profile) | About the profile itself, no rule | `3730c3ab0e01` |
 | [Documentation regeneration in an untrusted workspace](PROFILE.md#documentation-regeneration-in-an-untrusted-workspace) | Constants the maintainer uses to regenerate a documentation region in an untrusted workspace, no review rule | `930e64126f30` |
 | [Not a ban here](SCOPE.md#not-a-ban-here-a-literal-only-one-caller-wants) | Points at rules above and at provider schema coverage, which needs the Terraform MCP tools | `27f0054a37bb` |
-| [Worked cases](SCOPE.md#worked-cases) | Examples of the rules above, not rules | `049348f99abe` |
+| [Worked cases](SCOPE.md#worked-cases) | Examples of the rules above, not rules | `1661b9d43623` |
 | [Open questions](SCOPE.md#open-questions) | Undecided, no rule | `d1ff50cd5d62` |
 | [Template location](templates-map.md#template-location) | How a maintainer creates a module, not a review rule | `4444750ebf98` |
 | [Skeletal templates](templates-map.md#skeletal-templates-copy-then-customize) | How a maintainer creates a module, not a review rule | `9f6624fbb89a` |

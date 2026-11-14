@@ -235,3 +235,6 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 +	references/check-d-examples.md	- Example `README.md` prose outside the markers lists features, and the change adds one it omits (`examples.docs-incomplete`, LOW); viewer mTLS does not name origin mTLS.
 +	references/check-d-examples.md	Generic prose is no finding.
 +	references/check-d-examples.md	For prose the change left stale, rewrite the named sentences outside the markers to describe what the example now demonstrates.
++	references/check-f-scope.md	`time_sleep` is an adjunct of the profile, the reference is an edge, and `hashicorp/time` is a base provider through `modules/cluster`.
++	references/check-f-scope.md	| `terraform-aws-ecs` pull request 433 adds `time_sleep.infrastructure_iam_role` to `modules/service`, its `triggers` reading the base block `aws_iam_role.infrastructure_iam_role` | No finding.
++	references/check-f-scope.md	The same block with only `depends_on` is `scope.composition`, MEDIUM | C1, C2 and A1, [Adjunct types]() |
