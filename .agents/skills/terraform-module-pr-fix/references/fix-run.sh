@@ -1037,17 +1037,23 @@ span_same() {
     my @j = lines($jf); my @p = lines($pf);
     exit 3 unless $l =~ /^[1-9][0-9]*$/ && $l <= @j;
     # Depth at the start and the end of each line: braces outside strings, comments and heredocs.
+    # @st nests the strings ("s") and their interpolations (the count of braces open inside one).
     sub depths {
       my ($a) = @_; my ($d, $bc, $hd) = (0, 0, undef); my (@d0, @d1);
       for my $t (@$a) {
         push @d0, $d;
         if (defined $hd) { undef $hd if $t =~ /^\s*\Q$hd\E\s*$/; push @d1, $d; next }
-        my ($k, $in, $n) = (0, 0, length $t);
+        my ($k, $n) = (0, length $t); my @st;
         while ($k < $n) {
           my $c = substr($t, $k, 1); my $c2 = substr($t, $k, 2);
           if ($bc) { if ($c2 eq "*/") { $bc = 0; $k += 2 } else { $k++ } next }
-          if ($in) { if ($c eq "\\") { $k += 2; next } $in = 0 if $c eq "\""; $k++; next }
-          if ($c eq "\"") { $in = 1; $k++; next }
+          if (@st && $st[-1] eq "s") {
+            if ($c eq "\\" || $c2 eq "\$\$" || $c2 eq "%%") { $k += 2; next }
+            if ($c2 eq "\${" || $c2 eq "%{") { push @st, 0; $k += 2; next }
+            pop @st if $c eq "\""; $k++; next;
+          }
+          if ($c eq "\"") { push @st, "s"; $k++; next }
+          if (@st) { if ($c eq "{") { $st[-1]++ } elsif ($c eq "}") { if ($st[-1] == 0) { pop @st } else { $st[-1]-- } } $k++; next }
           last if $c eq "#" || $c2 eq "//";
           if ($c2 eq "/*") { $bc = 1; $k += 2; next }
           if (substr($t, $k) =~ /^<<-?([A-Za-z_][A-Za-z0-9_]*)\s*$/) { $hd = $1; last }
@@ -1055,14 +1061,15 @@ span_same() {
           if ($c eq "}") { $d--; return () if $d < 0 }
           $k++;
         }
-        return () if $in;
+        return () if @st;
         push @d1, $d;
       }
       return () if $d != 0 || $bc || defined $hd;
       return (\@d0, \@d1);
     }
     # The top-level item that holds line $i: its block with the comment lines right above it, or a
-    # comment run at depth 0 with the block right after it. The whole file when the depths fail.
+    # comment run at depth 0 through the next block, the lines between included, or through the
+    # end of the file when no block follows. The whole file when the depths fail.
     sub item {
       my ($a, $i) = @_; my ($d0, $d1) = depths($a);
       return (0, $#$a) unless $d0;
@@ -1071,8 +1078,10 @@ span_same() {
       my $b = $i;
       if ($d0->[$i] == 0 && $com->($i)) {
         $b++ while $b < $#$a && $d0->[$b + 1] == 0 && $com->($b + 1);
-        return run($a, $d0, $com, $b, $b) if $b == $#$a || $blank->($b + 1);
-        $b++;
+        my $f = $b + 1; $f++ while $f <= $#$a && $d0->[$f] == 0 && ($blank->($f) || $com->($f));
+        return run($a, $d0, $com, $b, $#$a) if $f > $#$a;
+        $f++ while $d1->[$f] > 0;
+        return run($a, $d0, $com, $b, $f);
       }
       $b-- while $d0->[$b] > 0;
       my $f = $b; $f++ while $d1->[$f] > 0;

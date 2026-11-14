@@ -176,6 +176,8 @@ printf '# module\n' > "$M/README.md"
 printf '%s\n' '# The name comes from the input.' 'resource "null_resource" "a" {' '  count = 1' '' '  triggers = {' '    x = "1"' '  }' '' \
   '  lifecycle {' '    create_before_destroy = true' '  }' '}' '' 'resource "null_resource" "b" {' '  triggers = {' '    y = "2"' '  }' '}' > "$M/extra.tf"
 printf '# Note.\r\nresource "null_resource" "c" {\r\n  count = 1\r\n}\r\n' > "$M/crlf.tf"
+printf '%s\n' '# Sets count to 1.' '' 'resource "null_resource" "d" {' '  count = 1' '}' '' 'resource "null_resource" "e" {' \
+  '  a = "${ "}" }"' '  count = 1' '  b = "${ "{" }"' '}' > "$M/notes.tf"
 RG -C "$M" add -A; RG -C "$M" commit -qm base
 B="$(RG -C "$M" rev-parse HEAD)"
 RG -C "$M" checkout -q -b feat
@@ -797,9 +799,11 @@ t_late_e2e() { # identical spans: allowlisted findings surface late, pass the ga
   fx_default
   jq -n -c --argjson u "$LATEU" '[{id: "F-010", rule_id: "structure.comment-redundant", severity: "MEDIUM", file: "extra.tf", line: 1, summary: "The comment restates the code.", suggested_fix: "Remove it."},
     {id: "F-011", rule_id: "structure.comment-redundant", severity: "MEDIUM", file: "crlf.tf", line: 1, summary: "The comment restates the code.", suggested_fix: "Remove it."},
-    {id: "F-012", rule_id: "structure.grouping", severity: "LOW", file: "extra.tf", line: 14, summary: "Out of its group.", suggested_fix: "Move it."}] + $u' > "$TMP/fl.json"
+    {id: "F-012", rule_id: "structure.grouping", severity: "LOW", file: "extra.tf", line: 14, summary: "Out of its group.", suggested_fix: "Move it."},
+    {id: "F-013", rule_id: "structure.comment-redundant", severity: "MEDIUM", file: "notes.tf", line: 1, summary: "The comment restates the code.", suggested_fix: "Remove it."}] + $u' > "$TMP/fl.json"
   reviewed_run "$ROUND0" "$TMP/fl.json" || { cat "$TMP/compare.out"; return 1; }
-  grep -qx 'round 1: verdict open, 2 open, 0 introduced' "$TMP/compare.out" &&
+  grep -qx 'round 1: verdict open, 3 open, 0 introduced' "$TMP/compare.out" &&
+    grep -qx 'surfaced late: structure.comment-redundant notes.tf:1 MEDIUM' "$TMP/compare.out" &&
     grep -qx 'surfaced late: structure.comment-redundant extra.tf:1 MEDIUM' "$TMP/compare.out" &&
     grep -qx 'surfaced late: structure.comment-redundant crlf.tf:1 MEDIUM' "$TMP/compare.out" &&
     grep -qx 'loop: the next round may start' "$TMP/compare.out" ||
@@ -818,16 +822,20 @@ t_late_refuse() { # the cross review's cases: each is introduced and the gate re
   fr clone "$RUN" > /dev/null 2>&1 && fr items "$RUN" --review "$OUT/round-0" --handover "$OUT/handover-task.md" > /dev/null 2>&1 && fr round "$RUN" > /dev/null || return 1
   fix_edit
   mkdir -p "$RUN/clone/.git/info"; printf '*.tf -diff\n' > "$RUN/clone/.git/info/attributes"
-  perl -pi -e 's/x = "1"/x = "2"/' "$RUN/clone/extra.tf"; perl -pi -e 's/\r\n/\n/ if $. == 3' "$RUN/clone/crlf.tf"
+  perl -pi -e 's/x = "1"/x = "2"/' "$RUN/clone/extra.tf"; perl -pi -e 's/\r\n/\n/ if $. == 3' "$RUN/clone/crlf.tf"; perl -pi -e 's/count = 1/count = 2/' "$RUN/clone/notes.tf"
   fr docs "$RUN" --round 1 > /dev/null 2>&1 && fr commit "$RUN" --round 1 > /dev/null 2>&1 || return 1
   jq -n -c '[{id: "F-030", rule_id: "scope.boundary", severity: "HIGH", file: "extra.tf", line: 3, summary: "s", suggested_fix: "f"},
     {id: "F-031", rule_id: "structure.x", severity: "MEDIUM", file: "extra.tf", line: 9, summary: "s", suggested_fix: "f"},
     {id: "F-032", rule_id: "structure.comment-redundant", severity: "MEDIUM", file: "extra.tf", line: 1, summary: "s", suggested_fix: "f"},
     {id: "F-033", rule_id: "structure.comment-redundant", severity: "MEDIUM", file: "crlf.tf", line: 1, summary: "s", suggested_fix: "f"},
     {id: "F-034", rule_id: "structure.y", severity: "HIGH", file: "main.tf", line: 1, summary: "s", suggested_fix: "f"},
-    {id: "F-035", rule_id: "structure.argument-order", severity: "LOW", file: "extra.tf", line: 14, summary: "s", suggested_fix: "f"}]' > "$TMP/fx.json"
+    {id: "F-035", rule_id: "structure.argument-order", severity: "LOW", file: "extra.tf", line: 14, summary: "s", suggested_fix: "f"},
+    {id: "F-036", rule_id: "structure.comment-redundant", severity: "MEDIUM", file: "notes.tf", line: 1, summary: "s", suggested_fix: "f"},
+    {id: "F-037", rule_id: "structure.comment-unsourced", severity: "MEDIUM", file: "notes.tf", line: 8, summary: "s", suggested_fix: "f"}]' > "$TMP/fx.json"
   fr compare "$RUN" --round 1 --findings "$TMP/fx.json" > "$TMP/compare.out" 2>&1 || { cat "$TMP/compare.out"; return 1; }
-  grep -q '^round 1: verdict open, 5 open, 5 introduced$' "$TMP/compare.out" &&
+  grep -q '^round 1: verdict open, 7 open, 7 introduced$' "$TMP/compare.out" &&
+    grep -qx '  introduced: structure.comment-redundant notes.tf  MEDIUM' "$TMP/compare.out" &&
+    grep -qx '  introduced: structure.comment-unsourced notes.tf  MEDIUM' "$TMP/compare.out" &&
     grep -qx '  introduced: scope.boundary extra.tf  HIGH' "$TMP/compare.out" &&
     grep -qx '  introduced: structure.x extra.tf  MEDIUM' "$TMP/compare.out" &&
     grep -qx '  introduced: structure.comment-redundant extra.tf  MEDIUM' "$TMP/compare.out" &&
@@ -2001,6 +2009,8 @@ mutate "the allowlist of late rules dropped" 's/ and \(\.rule_id as \$r \| late_
 mutate "the allowlist of late rules dropped, end to end" 's/ and \(\.rule_id as \$r \| late_rules \| has\(\$r\)\)//' t_late_refuse
 mutate "late without the span check" 's/ and \(\$i \| IN\(\$sm\[\]\)\)\) as \$late/) as \$late/' t_late_refuse
 mutate "the span reduced to the reported line" 's/\(\$s, \$e\) = item\(\\\@j, \$l - 1\) if \$kind eq "item";/(\$s, \$e) = (\$l - 1, \$l - 1);/' t_late_refuse
+mutate "a depth-0 comment without its block after a blank line" 's/\(\$blank->\(\$f\) \|\| \$com->\(\$f\)\)/\$com->(\$f)/' t_late_refuse
+mutate "template strings not nested" 's/            if \(\$c2 eq "\\\$\{" \|\| \$c2 eq "%\{"\) \{ push \@st, 0; \$k \+= 2; next \}\n//' t_late_refuse
 mutate "CR stripped before the span comparison" 's/\$c = "" unless defined \$c;/\$c = "" unless defined \$c; \$c =~ s{\\r}{}g;/' t_late_refuse
 mutate "a raised pinned tuple surfacing late" 's/\(\$a and \(\$a3 \| not\) and/(\$a and/' t_late
 mutate "late tuples of two rounds summed" 's/\(\[\$c\[\] \| \.\[\$k\] \/\/ 0\] \| max\)/([\$c[] | .[\$k] \/\/ 0] | add)/' t_late
