@@ -1384,6 +1384,21 @@ ad_mut lookahead 's/\(\?!data\\\\\.\|module\\\\\.\)//' '.addresses | index("data
 ad_mut nested 's/\(\.after \| if type == "object" then to_entries\[\]/(.after | if type == "object" then (.. | objects | to_entries[])/' \
   '.attributes["data.aws_x.map"] | index("leaked_map_key")'
 ad_mut sensitive 's/after_sensitive: \.sensitive_values/after_sensitive: {}/' '.sensitive["data.aws_secretsmanager_secret_version.s"] == []'
+# An index key is removed whole: a quoted key holding "]" and a fake segment, or escaped quotes,
+# never leaves part of itself in the address, and an address with a key that does not close is
+# dropped.
+KEYS='{resource_changes: [
+  {address: "module.leak[\"x].module.secret123[\"].terraform_data.r", change: {}},
+  {address: "module.q[\"a\\\"].module.secret456.x[\\\"b\"].aws_a.b", change: {}},
+  {address: "aws_a.b[\"k\\\\\"]", change: {}},
+  {address: "data.x.y[0]", change: {}},
+  {address: "aws_c.d[\"open].aws_e.f", change: {}}]}'
+o="$(aj "$(jq -n -c "$KEYS")" nosha)"
+check "addresses: a quoted key holding ] or escaped quotes is removed whole, a key that does not close drops its address" \
+  "$(jq -e '.addresses == ["aws_a.b","data.x.y","module.leak.terraform_data.r","module.q.aws_a.b"]' <<< "$o" > /dev/null 2>&1; echo $?)"
+check "addresses: no text of a key reaches the addresses file" "$(lacks "$o" secret)"
+ad_mut nokey 's/^def nokey: .*$/def nokey: gsub("\\\\[[^\\\\]]*\\\\]"; "");/' \
+  '.addresses | index("module.leak.module.secret123.terraform_data.r")' "$KEYS"
 ad_mut errored 's/if \$plan\.errored == true then empty else/if false then empty else/' '.addresses | index("data.aws_x.map")' '. + {errored: true}'
 
 # The runner's clean_addresses in run-pass.sh, which writes the record's addresses files: a
@@ -1397,6 +1412,15 @@ check "clean_addresses: an old file without sensitive is accepted, still without
 o="$(ca '{"addresses":["data.aws_a.b","module.m.data.aws_c.d","data.aws_e","module.m.data.f"],"attributes":{"data.aws_a.b":["json"],"data.aws_e":["x"]},"sensitive":{"data.aws_a.b":["json"]}}')"
 check "clean_addresses: data source addresses kept with their names, a malformed data address dropped" \
   "$(jq -e '. == {addresses:["data.aws_a.b","module.m.data.aws_c.d"],attributes:{"data.aws_a.b":["json"]},module_calls:{},sensitive:{"data.aws_a.b":["json"]}}' <<< "$o" > /dev/null 2>&1; echo $?)"
+o="$(ca '{"addresses":["aws_a.b[0]","module.m[\"k\"].aws_a.b","aws_a.b]","aws_a.b\"","module.leak.terraform_data.r"]}')"
+check "clean_addresses: an address that still holds [, ] or a quote is dropped" \
+  "$(jq -e '.addresses == ["module.leak.terraform_data.r"]' <<< "$o" > /dev/null 2>&1; echo $?)"
+# One address grammar in every writer and reader of the addresses files, word for word.
+GRAMMAR='^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z'
+for f in plan-pass.sh plan-runner/run-pass.sh plan-runner/hosted-record.sh host-pass.sh verify-pass.sh skip-coverage.jq; do
+  check "address grammar: $f holds it once, and no older pattern" \
+    "$([ "$(grep -cF -- "$GRAMMAR" "${PP%/*}/$f")" = 1 ] && ! grep -qF -- 'test("^[A-Za-z0-9_.-]{1,300}' "${PP%/*}/$f"; echo $?)"
+done
 o="$(ca '{"addresses":["aws_a.b","aws_c.d"],"attributes":{"aws_a.b":["x","y"]},"sensitive":{"aws_a.b":["y","x","y"],"aws_c.d":[],"aws_e.f":["x"]}}')"
 check "clean_addresses: sensitive kept for planned addresses, sorted, an empty list kept" \
   "$(jq -e '.sensitive == {"aws_a.b":["x","y"],"aws_c.d":[]}' <<< "$o" > /dev/null 2>&1; echo $?)"

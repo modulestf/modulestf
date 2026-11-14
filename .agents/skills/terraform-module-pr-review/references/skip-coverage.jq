@@ -5,7 +5,8 @@
 
 def sha: type == "string" and test("^[0-9a-f]{40}$");
 def safe_path: type == "string" and test("^[A-Za-z0-9._/-]{1,300}$");
-def safe_address: type == "string" and test("^[A-Za-z0-9_.-]{1,300}$");
+def safe_address: type == "string" and length <= 300
+  and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z");
 def attr_name: type == "string" and test("^[a-z0-9_]{1,128}$");
 
 # --- The plan record: a laptop record only, read by its "example:" lines in order, as
