@@ -242,7 +242,31 @@ A finding of a round counts against the fix only when the fix could have caused 
 - A4. Its severity is HIGH or CRITICAL.
 - A5. Its file is not exactly `.` and fails the path grammar with an empty prefix: an empty file, a leading slash, an empty, `.` or `..` component, or any other grammar failure. Such a file is attributable and never reaches A2.
 
-Otherwise it is unattributed. A tuple `(rule_id, file, block address, severity)` with severity MEDIUM or higher is introduced when its count among the round's attributable findings is above its count among all of the pinned head's findings. Counting is by multiset, so a second finding with the same tuple and no address is introduced, and so is a LOW finding raised to MEDIUM. The local verdict, the open set and every [Loop](#loop) row read attributable findings only. Comment items are frozen at `prepare` and unchanged. Each unattributed finding is recorded as `unattributed: <rule_id> <file> <severity>`, the file repository-relative, in the round's `review.json` and in the gate's information file `$RUN/gate/info.txt`. `compare` prints the first ten, then the count of the rest and the path of `review.json`; the gate prints its information lines at Step 11, all of them when there are at most six, else the first five and the path of the information file. pr-review's final review still reports every finding.
+Otherwise it is unattributed.
+
+An attributable finding may have surfaced late, as [Surfaced Late](#surfaced-late) says.
+
+A tuple `(rule_id, file, block address, severity)` with severity MEDIUM or higher is introduced when its count among the round's attributable findings that did not surface late is above its count among all of the pinned head's findings and the tuples that surfaced late in the earlier reviewed rounds and not again in this round, each at its largest count over those rounds. Counting is by multiset, so a second finding with the same tuple and no address is introduced, and so is a LOW finding raised to MEDIUM. The local verdict, the open set and every [Loop](#loop) row read attributable findings only, the ones that surfaced late among them: such a finding is the pull request's, so the loop may fix it, and it is not introduced. Comment items are frozen at `prepare` and unchanged. Each unattributed finding is recorded as `unattributed: <rule_id> <file> <severity>`, the file repository-relative, in the round's `review.json` and in the gate's information file `$RUN/gate/info.txt`. Each finding that surfaced late is recorded as `surfaced late: <rule_id> <file>:<line> <severity>` in `review.json` and in `$RUN/gate/late.txt`. `compare` prints the first ten of each kind, then the count of the rest and the path of `review.json`; the gate prints its information lines at Step 11, all of them when there are at most six, else the first five and the path of the information file, and then every `surfaced late:` line, uncapped. pr-review's final review still reports every finding.
+
+## Surfaced Late
+
+A finding surfaced late when the pull request already held what it reports and the round-0 review did not raise it. Line distance cannot tell that apart from a defect the fix caused somewhere else, so only a rule whose verdict depends on the text it cites alone qualifies, and only when that text is unchanged. An attributable finding surfaced late when all of these hold:
+
+- S1. Its rule is on the list below.
+- S2. Its evidence span is byte-identical at the pinned head: the span's bytes, as whole lines, occur in the pinned head's file at least once and at least as often as in the judged tree's file, so a copy the fix adds never counts.
+- S3. Its `(rule_id, file, block address)` does not occur among the pinned head's findings, so a severity raise is never late.
+
+| Rule | Span | Why its verdict reads the span alone |
+|---|---|---|
+| `structure.comment-redundant` | item | It compares a comment with the code beside it, and the item holds both |
+| `structure.comment-unsourced` | item | It reads the comment's own claim and whether a source or a date is next to it |
+| `structure.suppression-unexplained` | item | It reads a suppression comment and the comment lines next to it |
+| `structure.argument-order` | item | It reads the order of the arguments inside one block |
+| `structure.grouping` | file | It reads where a block sits among the other blocks of its file |
+
+Every other rule, a rule about values, types, references, scope or behaviour among them, can be caused by a change elsewhere, so a new finding of it is introduced as before, file-level ones included.
+
+The span is read from the raw blobs, `git cat-file blob` at the pinned head and in the judged tree: no attribute, filter, text conversion or diff driver applies, and a CR is a byte like any other. A `file` span is the whole file. An `item` span is the top-level item that holds the finding's line: the top-level block that holds it, from its opening line to the line that brings the brace depth back to 0, with the comment lines right above it; a comment line at depth 0 takes its run of comment lines through the next block, the blank and comment lines between included, or through the end of the file when no block follows, since a comment describes the code after it. Braces count outside strings, comments and heredocs, with each `${` or `%{` of a string opening an interpolation whose own braces and strings nest; a string or interpolation still open at the end of its line, a multi-line template among them, makes the span the whole file. A blank line at depth 0, a depth below 0, an unclosed string, comment or heredoc, or a depth that does not end at 0 makes the span the whole file. A finding with a null or out-of-range line, at the module level, on a malformed file, or on a file one of the two trees does not hold never surfaces late.
 
 ## Loop
 
@@ -255,7 +279,7 @@ After round n, the first row that holds decides:
 | 1 | The local verdict is clean or nits | Stop, the review is finished: `finished among attributable findings, <n> unattributed` |
 | 2 | The open set is not empty, and every open finding's item was decided with something other than `apply`, and every open comment item has a decision | Stop: every open item is non-actionable |
 | 3 | An item closed between two earlier rounds is open again | Stop: no progress |
-| 4 | The open set is not strictly smaller than the previous reviewed round's, as a multiset contained in it | Stop: no progress |
+| 4 | No item of the previous reviewed round's open set is gone from this round's, counted as a multiset | Stop: no progress |
 | 5 | n is 3 | Stop: the last round |
 | 6 | Otherwise | The next round may start |
 
@@ -268,7 +292,7 @@ Part of `gate` and `push`, after the content gate:
 - At least one item is resolved: a fingerprint of the pinned head, of any severity, is gone from the last reviewed round's attributable findings, or a disposition applied a comment item.
 - No tuple is introduced.
 
-An unattributed finding never stops the loop and never blocks the push.
+An unattributed finding never stops the loop and never blocks the push. A finding that surfaced late joins the open set, so row 4 counts a round that closes an item as progress even when such a finding joins, and it never blocks the push.
 
 ## Checks
 

@@ -147,8 +147,8 @@ def loop_decision:
     reason: "the local verdict is \(.verdict): finished among attributable findings, \(.unattributed // 0) unattributed"}
   elif .nonactionable then {stop: true, finished_review: false, reason: "every open item is non-actionable"}
   elif $n >= 1 and any($now[]; IN($closed[])) then {stop: true, finished_review: false, reason: "no progress: a closed item reappears"}
-  elif $n >= 1 and ((($now | length) >= ($h[$n - 1] | length)) or (msub($now; $h[$n - 1]) | length) > 0)
-  then {stop: true, finished_review: false, reason: "no progress: the open set did not shrink"}
+  elif $n >= 1 and (msub($h[$n - 1]; $now) | length) == 0
+  then {stop: true, finished_review: false, reason: "no progress: no item of the open set closed"}
   elif .round >= .limit then {stop: true, finished_review: false, reason: "round \(.round) is the last"}
   else {stop: false, finished_review: false, reason: "the next round may start"} end;
 
@@ -164,20 +164,35 @@ def under($prefix): $prefix == "" or startswith($prefix + "/");
 def dir_of: rindex("/") as $i | if $i == null then "" else .[0:$i] end;
 # The NUL-separated output of git diff-tree --name-only as module-relative paths.
 def module_paths($x): [split("\u0000")[] | select(. != "" and under($x)) | if $x == "" then . else .[($x | length) + 1:] end];
+# The rules a finding may surface late on (write-path.md, Surfaced Late), each with its evidence
+# span: "item", the top-level item that holds the line, or "file", the whole file.
+def late_rules: {"structure.comment-redundant": "item", "structure.comment-unsourced": "item",
+  "structure.suppression-unexplained": "item", "structure.argument-order": "item", "structure.grouping": "file"};
+def span_kind: .rule_id as $r | late_rules[$r] // "item";
 # Attribution (write-path.md, Fingerprints and the Local Verdict). Input {findings, pinned, changed,
-# prefix}: findings the round's list with module-relative files, pinned the pinned head's list,
-# repository-relative, changed the round's changed paths, module-relative. Output {attributable,
-# unattributed}, both repository-relative. A5 comes first, so a malformed file never reaches A2.
+# prefix, same}: findings the round's list with module-relative files, pinned the pinned head's
+# list, repository-relative, changed the round's changed paths, module-relative, same the indexes
+# of the findings whose evidence span is byte-identical at the pinned head. Output {attributable,
+# unattributed, late}, repository-relative; late are the attributable findings that surfaced
+# late (S1 to S3). A5 comes first, so a malformed file never reaches A2.
 def attribution:
-  .prefix as $x | .changed as $ch | [.pinned[] | [.rule_id, .file, addr]] as $pk |
-  [.findings[] | .file as $f |
+  .prefix as $x | .changed as $ch | (.same // []) as $sm |
+  [.pinned[] | [.rule_id, .file, addr]] as $pk |
+  [.findings | to_entries[] | .key as $i | .value | .file as $f | ([.rule_id, fp($x)[1], addr] | IN($pk[])) as $a3 |
     ( ($f != "." and ($f | path_grammar | not))
       or ($f | IN($ch[]))
       or ($f != "" and $f != "." and (($f | dir_of) as $d | any($ch[]; endswith(".tf") and dir_of == $d)))
-      or ([.rule_id, fp($x)[1], addr] | IN($pk[]))
+      or $a3
       or (.severity | IN("HIGH", "CRITICAL")) ) as $a
-    | {a: $a, f: (.file = fp($x)[1])}]
-  | {attributable: map(select(.a) | .f), unattributed: map(select(.a | not) | .f)};
+    | ($a and ($a3 | not) and (.rule_id as $r | late_rules | has($r)) and ($i | IN($sm[]))) as $late
+    | {a: $a, late: $late, f: (.file = fp($x)[1])}]
+  | {attributable: map(select(.a) | .f), unattributed: map(select(.a | not) | .f), late: map(select(.late) | .f)};
+# The multiset union by maximum of lists of values: a tuple late in two rounds counts once.
+def mmax: [.[] | counts] as $c | [$c[] | keys[]] | unique
+  | [.[] as $k | ([$c[] | .[$k] // 0] | max) as $n | range($n) | $k | fromjson];
+# The introduced tuples of a round: the round's attributable tuples less its late ones, against the
+# pinned head's tuples and the earlier rounds' late tuples that are not late again in this round.
+def introduced_late($pin; $lb; $now; $late): introduced($pin + msub($lb; $late); msub($now; $late));
 
 # Clauses 1 to 3 of write-path.md, Allowed Paths, on one path: "" when they hold, else the clause.
 def path_clause($prefix):

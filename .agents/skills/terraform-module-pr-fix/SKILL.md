@@ -69,7 +69,7 @@ This skill owns the review loop: the maintainer gets `Review loop: caller` and m
 | 3 | pr-review render-only to `<out>/round-0`, or an earlier `plan.json` taken by `items --plan` with no new review; `clone`; `items`; ask once which items to apply; `apply` |
 | 7, 6, 9 | Per round: `round`; maintainer; `wrappers`; `docs`; `commit`; `verify`; reviewer; `compare` |
 | 10 | `gate` |
-| 11 | Show the gate, with its `outside findings:`, `not-convention:` and `unattributed:` lines; confirm; `push`; `checks` |
+| 11 | Show the gate, with its `outside findings:`, `not-convention:`, `unattributed:` and `surfaced late:` lines; confirm; `push`; `checks` |
 | 12 | Confirm and post the review through pr-review; confirm and `replies`; `cleanup` |
 
 ## Read When
