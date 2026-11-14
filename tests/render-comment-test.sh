@@ -13,6 +13,7 @@ REF="$SRC/.agents/skills/terraform-module-pr-review/references"
 STEPS="$REF/workflow.md"; [ -f "$STEPS" ] || STEPS="$SRC/.agents/skills/terraform-module-pr-review/SKILL.md"
 CF="$REF/comment-format.md"
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/render-comment-test.XXXXXX")" && pwd -P)" && [ -n "$TMP" ] || { echo "FAIL no temporary directory"; exit 1; }
+[ -z "${KEEP:-}" ] || echo "kept: $TMP" >&2
 [ -n "${KEEP:-}" ] || trap 'rm -rf "$TMP"' EXIT
 fails=0
 HEAD=0123456789abcdef0123456789abcdef01234567
