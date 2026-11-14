@@ -530,7 +530,8 @@ def bnorm: gate | if IN(classes[]) or IN(base_results[]) then . else "not availa
     ($a | add // {}) as $addr
     | def clean: . as $x
         | [($x.addresses | if type == "array" then .[] else empty end)
-           | select(type == "string" and test("^[A-Za-z0-9_.-]{1,300}$"))] | unique | .[:1000]
+           | select(type == "string" and length <= 300
+             and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z"))] | unique | .[:1000]
         | . as $s
         | {addresses: $s,
            attributes: (($x.attributes | if type == "object" then . else {} end)

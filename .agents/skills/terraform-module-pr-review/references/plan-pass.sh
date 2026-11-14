@@ -861,7 +861,7 @@ def addr_ok: length <= 300
   and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z");
 def cfg_data: (.resources[]? | objects | select(.mode == "data") | .address | strings),
   (.module_calls? | objects | to_entries[] | .key as $k | .value.module? | objects | cfg_data | "module.\($k).\(.)");
-def nokey: gsub("\\[[^\\]]*\\]"; "");
+def nokey: gsub("\\[(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)\\]"; ""); # a whole quoted or numeric key, never cut at a ] inside it
 . as $plan
 | [$plan.configuration | objects | .root_module | objects | cfg_data] as $cfg
 | [(.resource_changes[]? | select(type == "object" and (.address | type == "string"))
