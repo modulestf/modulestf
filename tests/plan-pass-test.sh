@@ -1078,13 +1078,20 @@ mutate region-free-all 's/&& \$rfree\{\$b->\[0\]\[0\]\}/\&\& 1/' rfree-az
 # parent's directory but not the package terraform downloaded, and never through a link.
 g2pl() { sed -n "/^  perl -MJSON::PP -MCwd=realpath -e '\$/,/^  ' \"\$2\" \"\$CROOT\"/p" "$1" | sed '1d;$d'; }
 G="$TMP/g2"; GM="$G/data/modules"
-mkdir -p "$G/clone/examples/ex" "$G/clone/modules/y" "$G/outside" "$GM/other/x" \
+mkdir -p "$G/clone/examples/ex" "$G/clone/modules/y" "$G/outside/modules/ng" "$GM/other/x" \
   "$GM/eks/modules/eks-managed-node-group" "$GM/eks/modules/_user_data" "$GM/ng/modules/eks-managed-node-group" "$GM/ng/modules/_user_data"
 ln -s _user_data "$GM/eks/modules/lnk"
 ln -s "$G/outside" "$GM/eks/modules/out"
+ln -s "$G/outside" "$GM/lr"
+ln -s "$G/clone" "$GM/lc"
 g2e() { printf ',{"Key":"%s","Source":"%s","Dir":"%s"}' "$1" "$2" "$GM/$3"; }
 { printf '{"Modules":[{"Key":"","Source":"","Dir":"."}'
   printf ',{"Key":"eks","Source":"terraform-aws-modules/eks/aws","Version":"21.0.0","Dir":"%s"}' "$GM/eks"
+  for k in lr lc; do printf ',{"Key":"%s","Source":"terraform-aws-modules/eks/aws","Version":"21.0.0","Dir":"%s"}' "$k" "$GM/$k"; done
+  printf ',{"Key":"far","Source":"terraform-aws-modules/eks/aws","Version":"21.0.0","Dir":"%s"}' "$G/outside"
+  g2e lr.ng ./modules/ng lr/modules/ng
+  g2e lc.y ./modules/y lc/modules/y
+  g2e eks.ng.lnk2 ../lnk eks/modules/_user_data
   printf ',{"Key":"ng","Source":"terraform-aws-modules/eks/aws//modules/eks-managed-node-group","Version":"21.0.0","Dir":"%s"}' "$GM/ng/modules/eks-managed-node-group"
   g2e eks.ng ./modules/eks-managed-node-group eks/modules/eks-managed-node-group
   g2e eks.ng.user_data ../_user_data eks/modules/_user_data
@@ -1102,16 +1109,19 @@ check "G2: the program is taken from the script" "$([ -n "$(g2pl "$PP")" ]; echo
 for k in eks.ng eks.ng.user_data ng.user_data; do
   check "G2: $k inside its downloaded package passes" "$([ "$(has "$out" "G2 $GM/modules.json:$k")" = 1 ]; echo $?)"
 done
-for k in eks.ng.other eks.ng.pkg eks.ng.lnk eks.ng.out eks.ng.data eks.ng.ws; do
-  check "G2: $k outside its package or through a link is refused" "$(has "$out" "G2 $GM/modules.json:$k")"
+for k in eks.ng.other eks.ng.pkg eks.ng.lnk eks.ng.lnk2 eks.ng.out eks.ng.data eks.ng.ws lr lr.ng lc lc.y far; do
+  check "G2: $k outside its package or the modules directory, or through a link, is refused" "$(has "$out" "G2 $GM/modules.json:$k")"
 done
 g2mut() { # name, perl substitution, key the weakened copy lets through
   perl -pe "$2" "$PP" > "$TMP/mut/$1.sh"
   check "mutation $1 changes the script" "$(cmp -s "$PP" "$TMP/mut/$1.sh"; test $? -eq 1; echo $?)"
   check "mutation $1 is caught by $3" "$([ "$(has "$(g2run "$TMP/mut/$1.sh")" "G2 $GM/modules.json:$3")" = 1 ]; echo $?)"
 }
-g2mut g2-no-link-check 's/ && \(!defined \$want \|\| \$r eq \$want\)//' eks.ng.lnk
-g2mut g2-all-packages 's/\$lim = "\$mr\/\$1"; my \@p;/\$lim = \$mr; my \@p;/' eks.ng.other
+g2mut g2-no-source-walk 's/ && \(!defined \$want \|\| \$r eq \$want\)//' eks.ng.lnk2
+g2mut g2-all-packages 's/\("\$mr\/\$1", lex/(\$mr, lex/' eks.ng.other
+g2mut g2-link-package-root 's/if \(\$in && \$r ne/if (0 \&\& \$r ne/' lr
+g2mut g2-link-clone-child 's/if \(\$in && \$r ne/if (0 \&\& \$r ne/' lc.y
+g2mut g2-remote-anywhere 's/ && !\$in\) \{/ \&\& 0) {/' far
 
 # plan-session.sh: one fixed reason on standard error per failure class, nothing on standard output.
 SESS="${PP%/*}/plan-session.sh"
