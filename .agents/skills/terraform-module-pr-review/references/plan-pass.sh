@@ -848,17 +848,31 @@ exit 3 if $bad;
 my ($first) = split /\n/, $b; print substr($first // "", 0, 160), "\n";
 '
 kept() { PROFILE="$PROFILE" LEAKS="$LEAKS" perl -e "$EVID_PL"; }
-# The addresses of a saved plan's resource changes, each index key removed, and per address
-# the top-level attributes it plans a value for: names only, never a value or a key, which can
-# carry what the account returned. Per address too, those attributes the plan marks sensitive
-# in any instance, the head commit given as $h when it is a full SHA, and the example directory
-# given as $e when it is a plain repository-relative path.
+# The addresses of a saved plan's resource changes, and of the data sources it read during the
+# plan (prior_state and planned_values, each matched to a data block of the configuration at
+# the same module path, only when the plan did not error), each index key removed, and per
+# address the top-level attributes it plans or reads a value for: names only, never a value
+# or a key, which can carry what the account returned. Per address too, those attributes the
+# plan marks sensitive in any instance, the head commit given as $h when it is a full SHA, and
+# the example directory given as $e when it is a plain repository-relative path.
 # shellcheck disable=SC2016 # a jq program
 ADDR_JQ='
+def addr_ok: length <= 300
+  and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z");
+def cfg_data: (.resources[]? | objects | select(.mode == "data") | .address | strings),
+  (.module_calls? | objects | to_entries[] | .key as $k | .value.module? | objects | cfg_data | "module.\($k).\(.)");
+def nokey: gsub("\\[(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)\\]"; ""); # a whole quoted or numeric key, never cut at a ] inside it
 . as $plan
-| [.resource_changes[]? | select(type == "object" and (.address | type == "string"))
- | {a: (.address | gsub("\\[[^\\]]*\\]"; "")), c: (.change // {})}
- | select(.a | test("^[A-Za-z0-9_.-]{1,300}$"))]
+| [$plan.configuration | objects | .root_module | objects | cfg_data] as $cfg
+| [(.resource_changes[]? | select(type == "object" and (.address | type == "string"))
+   | {a: (.address | nokey), c: (.change // {})}),
+   (if $plan.errored == true then empty else
+      (($plan.prior_state | objects | .values | objects | .root_module), ($plan.planned_values | objects | .root_module))
+      | objects | recurse(.child_modules[]? | objects) | .resources[]? | objects
+      | select(.mode == "data" and (.address | type == "string"))
+      | {a: (.address | nokey), c: {after: .values, after_sensitive: .sensitive_values}}
+      | select(.a | IN($cfg[])) end)
+ | select(.a | addr_ok)]
 | (group_by(.a) | map(.[0].a as $a | [.[].c] as $cs
    | ([$cs[] | ((.after | if type == "object" then to_entries[] | select(.value != null) | .key else empty end),
                 (.after_unknown | if type == "object" then to_entries[] | select(.value == true) | .key else empty end))]

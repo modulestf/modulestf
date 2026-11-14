@@ -10,8 +10,8 @@
 # be examples/<name> (the plan record needs an empty module root prefix), the class
 # of its plan: line and, for planned, the three Plan: counts, and the class of its base: line,
 # or null when the block has none, and the planned addresses run-pass.sh wrote for the block as
-# addresses-<n>.json: config addresses and attribute names, each checked against its pattern
-# again. Of the refused hosts it keeps the count. No kept line, no free text and no host name
+# addresses-<n>.json: config addresses of resources and data sources and attribute names,
+# each checked against its pattern again. Of the refused hosts it keeps the count. No kept line, no free text and no host name
 # enters the output. A class outside the fixed list, a path outside
 # the safe pattern, a duplicate path, a block with no plan: line, or a record that did not end
 # with the runner's summary line is refused: nothing is written, a fixed reason goes to
@@ -71,7 +71,8 @@ def counts:
 def path_ok: test("^examples/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$");
 def clean: . as $x
   | [($x.addresses? | if type == "array" then .[] else empty end)
-     | select(type == "string" and test("^[A-Za-z0-9_.-]{1,300}$"))] | unique | .[:1000]
+     | select(type == "string" and length <= 300
+       and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z"))] | unique | .[:1000]
   | . as $s
   | {addresses: $s,
      attributes: (($x.attributes? | if type == "object" then . else {} end)

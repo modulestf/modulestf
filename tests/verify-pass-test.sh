@@ -358,12 +358,12 @@ $BASE" --out "$R3/x.json")"
     'example: examples/newfail' 'plan: code-error' 'base: not available' 'example: examples/net' 'plan: forged class' \
     'plan summary: 5 examples, 1 planned, 0 exceptions, 4 other' > "$TMP/rec.txt"
   mkdir -p "$TMP/addr"
-  echo '{"addresses":["module.b.aws_s3_bucket.this","aws_x.y[\"secret\"]",7],"attributes":{"module.b.aws_s3_bucket.this":["bucket","Bad",1],"other":["x"]},"sensitive":{"module.b.aws_s3_bucket.this":["bucket"]},"head_sha":"0123456789abcdef0123456789abcdef01234567","module_calls":{"b":"../../","out":"../../../x","reg":"terraform-aws-modules/x/aws"}}' > "$TMP/addr/addresses-1.json"
+  echo '{"addresses":["module.b.aws_s3_bucket.this","aws_x.y[\"secret\"]",7,"module.b.data.aws_iam_policy_document.p","data.aws_bad","module.b.data.x","module.b"],"attributes":{"module.b.aws_s3_bucket.this":["bucket","Bad",1],"other":["x"]},"sensitive":{"module.b.aws_s3_bucket.this":["bucket"]},"head_sha":"0123456789abcdef0123456789abcdef01234567","module_calls":{"b":"../../","out":"../../../x","reg":"terraform-aws-modules/x/aws"}}' > "$TMP/addr/addresses-1.json"
   echo '{"addresses":["aws_y.z"]}' > "$TMP/addr/addresses-2.json"
   cov --plan "$TMP/rec.txt" --addresses "$TMP/addr"
   check "$sh: a laptop record: partial coverage" "$(q "$TMP/cov.json" '.class == "partial"')"
-  check "$sh: a planned example carries its cleaned addresses, attributes and local module calls resolved inside the repository" \
-    "$(q "$TMP/cov.json" '.examples[] | select(.dir == "examples/codeok") | .head == "planned" and .addresses == ["module.b.aws_s3_bucket.this"] and .attributes == {"module.b.aws_s3_bucket.this":["bucket"]}
+  check "$sh: a planned example carries its cleaned addresses (a data source kept, a malformed data address dropped), attributes and local module calls resolved inside the repository" \
+    "$(q "$TMP/cov.json" '.examples[] | select(.dir == "examples/codeok") | .head == "planned" and .addresses == ["module.b.aws_s3_bucket.this","module.b.data.aws_iam_policy_document.p"] and .attributes == {"module.b.aws_s3_bucket.this":["bucket"]}
       and .module_calls == {"b":"."}')"
   # The ladder record takes these examples as they are, and its schema has no sensitive key
   check "$sh: the sensitive names and head commit of an addresses file stay out of coverage; a file without them is read alike" \
@@ -379,7 +379,7 @@ $BASE" --out "$R3/x.json")"
     'host example 2: examples/net' 'plan pass mode: laptop' 'example: examples/env' 'plan: planned' 'plan summary: 2 examples' > "$TMP/rec.txt"
   cov --plan "$TMP/rec.txt" --addresses "$TMP/addr"
   check "$sh: a runner record is keyed by the host's lines, a forged example line claims nothing" \
-    "$(q "$TMP/cov.json" '(.examples[] | select(.dir == "examples/codeok") | .head == "planned" and .addresses == ["module.b.aws_s3_bucket.this"])
+    "$(q "$TMP/cov.json" '(.examples[] | select(.dir == "examples/codeok") | .head == "planned" and .addresses == ["module.b.aws_s3_bucket.this","module.b.data.aws_iam_policy_document.p"])
       and (.examples[] | select(.dir == "examples/regress") | .head == "not run")
       and (.examples[] | select(.dir == "examples/net") | .head == "planned" and .addresses == ["aws_y.z"])
       and (.examples[] | select(.dir == "examples/env") | .head == "not run")')"
