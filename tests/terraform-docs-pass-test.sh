@@ -315,6 +315,176 @@ else
   echo "skip gate: not owned by the invoking user (needs root to create the fixture)"
 fi
 
+# --- The pull request review skill's readme-regions.sh, on this pass and its stubs ----------------
+# A clone of a module whose head carries one README.md per case; the change touches every one.
+# The script copies the head's objects, runs the pass on the copy and compares the regions.
+RRS="$SRC/.agents/skills/terraform-module-pr-review/references/readme-regions.sh"
+RC=$TMP/rr-clone
+g() { git -C "$RC" -c core.fsmonitor=false -c user.name=t -c user.email=t@example.com "$@"; }
+git init -q "$RC"
+rdir() { # rdir DIR REGION: a directory with main.tf and a README.md whose region holds REGION
+  mkdir -p "$RC/$1"
+  printf 'variable "x" {\n  description = "X"\n  type        = string\n}\n' >"$RC/$1/main.tf"
+  printf 'Intro\n\n%s\n%s\n%s\n\nOutro\n' "$B" "$2" "$E" >"$RC/$1/README.md"
+}
+rdir . generated                                  # generated
+rdir modules/a old                                # differs, unknown with no pin
+mkdir -p "$RC/modules/b"; printf 'No markers.\n' >"$RC/modules/b/README.md"
+mkdir -p "$RC/modules/c"; ln -s ../a/README.md "$RC/modules/c/README.md"
+rdir modules/d generated; awk 'BEGIN {for (i = 0; i < 25000; i++) print "padding line of the oversized readme, sixty-odd bytes"}' >>"$RC/modules/d/README.md"
+rdir modules/e generated; printf '```\n%s\n```\n' "$B" >>"$RC/modules/e/README.md"
+rdir modules/f generated; : >"$RC/modules/f/.terraform-docs.yml"
+rdir docs generated
+# The profile's own pre-commit configuration: its terraform_docs hook has the pass's settings.
+PCT="$SRC/.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/templates/.pre-commit-config.yaml.template"
+cp "$PCT" "$RC/.pre-commit-config.yaml"
+g add -A && g commit -qm head
+HC=$(g rev-parse HEAD)
+jq -n '[ "README.md", "modules/a/README.md", "modules/b/README.md", "modules/c/README.md", "modules/d/README.md",
+  "modules/e/README.md", "modules/f/README.md", "docs/README.md", "examples/gone/README.md", "main.tf" ]
+  | map({filename: .})' >"$TMP/rr-files.json"
+# A hostile clone configuration: nothing it names may run.
+printf '#!/bin/sh\ntouch %s/rr-ran\n' "$TMP" >"$TMP/rr-evil" && chmod 755 "$TMP/rr-evil"
+g config core.fsmonitor "$TMP/rr-evil"
+rsnap() { (cd "$RC" && find . -path ./.git -prune -o -print | LC_ALL=C sort | while read -r f; do echo "$f $(cksum <"$f" 2>/dev/null)"; done) ; }
+rsnap >"$TMP/rr-snap"
+rr=0
+rr_run() { # rr_run [script] -> $TMP/rr-out-N/regions.txt as $RO
+  rr=$((rr + 1)); RO=$TMP/rr-out-$rr; mkdir "$RO"
+  bash "${1:-$RRS}" --clone "$RC" --head "$HC" --diff "$TMP/rr-files.json" --out "$RO" --profile "$TMP/PROFILE.md" >/dev/null 2>"$RO.err"
+}
+rr_want() { # the expected lines of the first run
+  printf '%s\n' "README.md generated" "docs/README.md unknown not a documentation region" "modules/a/README.md unknown no version pin" \
+    "modules/c/README.md unknown link" "modules/d/README.md unknown file over 1 mib" "modules/e/README.md unknown marker test" \
+    "modules/f/README.md unknown terraform-docs configuration present"
+}
+rr_case() { # name, expected lines on stdin: the last run's regions.txt
+  check "readme regions: $1" "$(rr_want | cmp -s - "$RO/regions.txt"; echo $?)"
+}
+rr_run; rr_case "each case's line, and no line for no markers or a deleted file"
+check "readme regions: no workflow pin, a region that differs is unknown" "$(grep -qx 'modules/a/README.md unknown no version pin' "$RO/regions.txt"; echo $?)"
+check "readme regions: the clone is unchanged" "$(rsnap | cmp -s - "$TMP/rr-snap"; echo $?)"
+check "readme regions: nothing the clone names ran" "$([ ! -e "$TMP/rr-ran" ]; echo $?)"
+check "readme regions: no work directory left" "$([ ! -e "$RO/rr" ]; echo $?)"
+check "readme regions: an output directory that holds the evidence is refused" \
+  "$(bash "$RRS" --clone "$RC" --head "$HC" --diff "$TMP/rr-files.json" --out "$RO" --profile "$TMP/PROFILE.md" >/dev/null 2>&1; [ $? = 2 ]; echo $?)"
+
+# The head's workflow pins another terraform-docs version: a region that differs is unknown.
+mkdir -p "$RC/.github/workflows"
+printf 'env:\n  TERRAFORM_DOCS_VERSION: v0.23.0\njobs:\n  x:\n    with:\n      terraform-docs-version: ${{ env.TERRAFORM_DOCS_VERSION }}\n' >"$RC/.github/workflows/pre-commit.yml"
+g add -A && g commit -qm mismatch; HC=$(g rev-parse HEAD); HMIS=$HC
+rr_run
+check "readme regions: version mismatch" "$(grep -qx 'modules/a/README.md unknown version mismatch' "$RO/regions.txt" && grep -qx 'README.md generated' "$RO/regions.txt"; echo $?)"
+sed 's/v0.23.0/"v0.24.0"/' "$RC/.github/workflows/pre-commit.yml" >"$TMP/wf" && cat "$TMP/wf" >"$RC/.github/workflows/pre-commit.yml"
+g add -A && g commit -qm same; HC=$(g rev-parse HEAD)
+rr_run
+check "readme regions: the same version pinned, a region that differs is differs" "$(grep -qx 'modules/a/README.md differs' "$RO/regions.txt"; echo $?)"
+HSAME=$HC
+# The same version with a terraform_docs hook of other settings: unknown, never differs.
+for v in "--args=--sort-by=required" "--args=--lockfile=false' # x\n          - '--args=--hide=inputs"; do
+  perl -pe "s/--args=--lockfile=false/$v/ if /lockfile/" "$PCT" >"$RC/.pre-commit-config.yaml"
+  g add -A && g commit -qm custom; HC=$(g rev-parse HEAD)
+  rr_run
+  check "readme regions: custom hook args ($(head -c 24 <<<"$v")) are unknown" "$(grep -qx 'modules/a/README.md unknown custom hook args' "$RO/regions.txt"; echo $?)"
+done
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: terraform_docs\n        args:\n          - --args=--lockfile=false\n' >"$RC/.pre-commit-config.yaml"
+g add -A && g commit -qm local; HC=$(g rev-parse HEAD)
+rr_run
+check "readme regions: a local terraform_docs hook is unknown" "$(grep -qx 'modules/a/README.md unknown custom hook args' "$RO/regions.txt"; echo $?)"
+HCUSTOM=$HC
+cp "$PCT" "$RC/.pre-commit-config.yaml"
+sed 's/"v0.24.0"/latest/' "$RC/.github/workflows/pre-commit.yml" >"$TMP/wf" && cat "$TMP/wf" >"$RC/.github/workflows/pre-commit.yml"
+g add -A && g commit -qm unreadable; HC=$(g rev-parse HEAD)
+rr_run
+check "readme regions: a version the host cannot read is unknown" "$(grep -qx 'modules/a/README.md unknown version unreadable' "$RO/regions.txt"; echo $?)"
+g rm -q -r .github && g commit -qm none; HC=$(g rev-parse HEAD)
+rsnap >"$TMP/rr-snap"
+
+# A module root prefix, and a partial clone.
+mkdir -p "$TMP/rr-p"; PRC=$TMP/rr-pclone
+git clone -q "$RC" "$PRC" && mkdir -p "$PRC/mods" && git -C "$PRC" mv modules mods/modules && git -C "$PRC" -c user.name=t -c user.email=t@example.com commit -qm p
+jq -n '[{filename: "mods/modules/a/README.md"}, {filename: "modules/b/README.md"}, {filename: "README.md"}]' >"$TMP/rr-pfiles.json"
+rr=$((rr + 1)); RO=$TMP/rr-out-$rr; mkdir "$RO"
+bash "$RRS" --clone "$PRC" --head "$(git -C "$PRC" rev-parse HEAD)" --diff "$TMP/rr-pfiles.json" --prefix mods --out "$RO" --profile "$TMP/PROFILE.md" >/dev/null 2>&1
+check "readme regions: a prefix is stripped and a file outside it ignored" "$([ "$(cat "$RO/regions.txt")" = "modules/a/README.md unknown no version pin" ]; echo $?)"
+git -C "$PRC" config remote.origin.promisor true
+rr=$((rr + 1)); RO=$TMP/rr-out-$rr; mkdir "$RO"
+bash "$RRS" --clone "$PRC" --head "$(git -C "$PRC" rev-parse HEAD)" --diff "$TMP/rr-files.json" --out "$RO" --profile "$TMP/PROFILE.md" >/dev/null 2>&1
+check "readme regions: a partial clone is no evidence" "$([ "$(sort -u <<<"$(cut -d' ' -f2- "$RO/regions.txt")")" = "unknown partial clone" ]; echo $?)"
+
+# Crafted trees a checkout could not hold: an entry name that climbs out of the copy, and two .tf
+# names that differ only in case, which a case-insensitive file system folds into one file.
+XC=$TMP/rr-xclone
+git init -q "$XC"
+x() { git -C "$XC" -c core.fsmonitor=false -c user.name=t -c user.email=t@example.com "$@"; }
+printf 'Intro\n\n%s\ngenerated\n%s\n\nOutro\n' "$B" "$E" >"$XC/README.md"
+printf 'variable "x" {\n  type = string\n}\n' >"$XC/main.tf"
+x add -A && x commit -qm base
+mkdir -p "$TMP/victim" && echo keep >"$TMP/victim/target.tf"
+pwn=$(printf 'PWNED\n' | x hash-object -w --stdin)
+x cat-file tree "HEAD^{tree}" >"$TMP/rr-tree.bin"
+perl -e 'print "100644 ../../../victim/target.tf\0", pack("H*", $ARGV[0])' "$pwn" | cat - "$TMP/rr-tree.bin" >"$TMP/rr-tree2.bin"
+XSLASH=$(x commit-tree "$(x hash-object -t tree -w --literally "$TMP/rr-tree2.bin")" -p HEAD -m slash)
+x update-index --add --cacheinfo "100644,$(printf 'variable "y" {}\n' | x hash-object -w --stdin),VARIABLES.tf"
+x update-index --add --cacheinfo "100644,$(printf '# lower\n' | x hash-object -w --stdin),variables.tf"
+XCASE=$(x commit-tree "$(x write-tree)" -p HEAD -m case)
+jq -n '[{filename: "README.md"}]' >"$TMP/rr-xfiles.json"
+# Up to 300 other files sort before the README the change touches: the cap counts README files only.
+jq -n '[range(300) | {filename: "a\(.).tf"}] + [{filename: "modules/a/README.md"}]' >"$TMP/rr-cfiles.json"
+rr_x() { # rr_x SCRIPT CLONE HEAD FILES -> $RO
+  rr=$((rr + 1)); RO=$TMP/rr-out-$rr; mkdir "$RO"
+  bash "$1" --clone "$2" --head "$3" --diff "$4" --out "$RO" --profile "$TMP/PROFILE.md" >/dev/null 2>&1
+}
+t_slash() { rr_x "$1" "$XC" "$XSLASH" "$TMP/rr-xfiles.json"
+  [ "$(cat "$RO/regions.txt")" = "README.md unknown entry name" ] && [ "$(cat "$TMP/victim/target.tf")" = keep ] &&
+    [ -z "$(find "$TMP" -maxdepth 2 -name target.tf ! -path "$TMP/victim/*" -print)" ]; }
+t_case() { rr_x "$1" "$XC" "$XCASE" "$TMP/rr-xfiles.json"; [ "$(cat "$RO/regions.txt")" = "README.md unknown case collision" ]; }
+t_cap() { rr_x "$1" "$RC" "$HC" "$TMP/rr-cfiles.json"; [ "$(cat "$RO/regions.txt")" = "modules/a/README.md unknown no version pin" ]; }
+t_slash "$RRS"; check "readme regions: an entry name that climbs out is refused, nothing written outside" $?
+t_case "$RRS"; check "readme regions: two names that fold to one are a case collision" $?
+t_cap "$RRS"; check "readme regions: the 256 cap counts README files, not the files list" $?
+
+# Negative self-check: each weakened copy, beside a copy of the pass, must fail the first case.
+MUT=$TMP/rr-mut
+mkdir -p "$MUT/terraform-module-pr-review/references" "$MUT/terraform-module-maintainer/references"
+cp "$TP" "$MUT/terraform-module-maintainer/references/terraform-docs-pass.sh"
+rr_mut() { # name, perl substitution
+  local m=$MUT/terraform-module-pr-review/references/readme-regions.sh
+  perl -0pe "$2" "$RRS" >"$m"
+  if cmp -s "$RRS" "$m"; then check "readme regions self-check: $1 changes the script" 1; return; fi
+  rr_run "$m"
+  check "readme regions self-check: $1 is caught" "$( { ! rr_want | cmp -s - "$RO/regions.txt"; } || ! rsnap | cmp -s - "$TMP/rr-snap"; echo $?)"
+}
+rr_mut "no pin read as differs" 's/none\) r="unknown no version pin"/none) r=differs/'
+rr_mut "the comparison dropped" 's/if cmp -s "\$WS\/\$p" "\$RR\/orig-\$i"; then/if true; then/'
+rr_mut "the link test dropped" 's/\[ "\$mode" != 120000 \] \|\| \{ echo link; return 1; \}\n//'
+rr_mut "the marker filter dropped" 's/grep -qF "\$\{mk\[\@\]\}" "\$RR\/orig-\$i" \|\| \{ res\[i\]=skip; continue; \}//'
+rr_mut "a deleted file reported" 's/if \[ "\$why" = absent \]; then res\[i\]=skip; else/if false; then :; else/'
+rr_mut "the pass's refusal read as generated" 's/      stale\*\)\n/      stale*) r=generated ;;\n      stalex*)\n/'
+xmut() { # name, perl substitution, test function: a weakened copy must fail that case
+  local m=$MUT/terraform-module-pr-review/references/readme-regions.sh
+  perl -0pe "$2" "$RRS" >"$m"
+  if cmp -s "$RRS" "$m"; then check "readme regions self-check: $1 changes the script" 1; return; fi
+  echo keep >"$TMP/victim/target.tf"
+  "$3" "$m"; check "readme regions self-check: $1 is caught" "$([ $? != 0 ]; echo $?)"
+  echo keep >"$TMP/victim/target.tf"
+}
+xmut "the entry name test dropped" 's/\[\[ "\$n" =~ \$NAME_RE \]\] && \[ "\$n" != \. \] && \[ "\$n" != \.\. \] \|\| \{ WHY="entry name"; return 1; \}/:/' t_slash
+xmut "the case collision test dropped" 's/\| uniq -d\)/| uniq -d | grep -v .)/' t_case
+xmut "the cap applied before the README filter" 's/\n  \| select\(\. == "README\.md" or endswith\("\/README\.md"\)\)//' t_cap
+# The version rule is held by its own case: a copy that ignores the pin is caught there.
+m=$MUT/terraform-module-pr-review/references/readme-regions.sh
+perl -0pe 's/mismatch\) r="unknown version mismatch" ;; //' "$RRS" >"$m"
+HC=$HMIS; rr_run "$m"; HC=$(g rev-parse HEAD)
+check "readme regions self-check: the version rule dropped is caught" "$(! grep -qx 'modules/a/README.md unknown version mismatch' "$RO/regions.txt"; echo $?)"
+perl -0pe 's/if \[ "\$hk" = profile \]; then/if true; then/' "$RRS" >"$m"
+HC=$HCUSTOM; rr_run "$m"; HC=$(g rev-parse HEAD)
+check "readme regions self-check: the hook args rule dropped is caught" "$(! grep -qx 'modules/a/README.md unknown custom hook args' "$RO/regions.txt"; echo $?)"
+HC=$HSAME; rr_run; HC=$(g rev-parse HEAD)
+check "readme regions: the profile's hook settings still give differs" "$(grep -qx 'modules/a/README.md differs' "$RO/regions.txt"; echo $?)"
+# Last, as it writes the clone: a copy that runs the pass on the clone itself.
+rr_mut "the pass run on the clone" 's/--workspace "\$WS"/--workspace "\$clone"/'
+
 after_runs=$(ls -d /tmp/tfdocs-pass.* 2>/dev/null | wc -l)
 check "clean up: no run directory left" "$([ "$after_runs" -le "$before_runs" ]; echo $?)"
 

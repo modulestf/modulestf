@@ -113,6 +113,13 @@ drops_of() {
     f-scope) echo "u:Reads, Fails When and Severity|h:The suggested fix|h:Suggested Fixes|h:The base revision|h:A new module|h:Renamed files|h:Not evaluated|h:Where Check F yields|h:Decisions|h:Worked Cases" ;;
   esac
 }
+# Check E's Host README Evidence and its pointer line are left out: the prefix is at its size cap,
+# so a judgment run keeps the generated content rules as they were.
+host_drops_of() {
+  case "$1" in
+    e-profile) echo "|h:Host README Evidence|l:^Evidence that clears a region: a terraform-docs region" ;;
+  esac
+}
 
 CHECKS="a-compatibility b-coverage c-structure d-examples e-profile f-scope"
 copy "$J/workflow.md" "" "-" ""
@@ -134,7 +141,7 @@ copy "$R/workflow.md" "../" "Skill" \
 for c in $CHECKS; do
   echo
   # Pointer lines to the engine files and the rule id lists say nothing a judgment run needs.
-  copy "$R/check-$c.md" "../" "Check $(printf '%s' "${c%%-*}" | tr a-f A-F)" "l:moved to .*engine/|l:^.rule_id. prefix|$(drops_of "$c")"
+  copy "$R/check-$c.md" "../" "Check $(printf '%s' "${c%%-*}" | tr a-f A-F)" "l:moved to .*engine/|l:^.rule_id. prefix|$(drops_of "$c")$(host_drops_of "$c")"
 done
 echo
 echo "## Candidate Criteria"

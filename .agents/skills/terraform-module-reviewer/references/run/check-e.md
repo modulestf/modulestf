@@ -36,3 +36,4 @@ When any row below applies: [Reads, Fails When and Severity](../check-e-profile.
 | Section | Open when |
 |---------|-----------|
 | [Suggested Fixes](../check-e-profile.md#suggested-fixes) | Check E reports a finding. |
+| [Host README Evidence](../check-e-profile.md#host-readme-evidence) | The task carries a `README regions:` line. |
