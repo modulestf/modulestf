@@ -18,7 +18,7 @@ diff --git a/main.tf b/main.tf
    dynamic "timeouts" {
      for_each = var.cluster_timeouts != null ? [var.cluster_timeouts] : []
 ```
-Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.
+Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the comment then renders in STANDARD.
 Diff: RUN/handover/change.diff
 Merge base: b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
 Output: write the findings list as JSON to RUN/review/findings.json, the summary line and the profile lines to RUN/review/summary.txt and the facts comparison note to RUN/review/facts-comparison.txt, and nothing else.
