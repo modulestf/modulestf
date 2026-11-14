@@ -1,3 +1,5 @@
+  prefix="\${prefix%/}"
+  case "\$prefix" in /* | *..* | .) die "--prefix must be repository-relative" ;; esac
 #!/bin/bash
 # behaviour-pass.sh: Steps 5.4 and 5.5 of terraform-module-pr-review, the behaviour classifier and
 # the claims evaluation, both by mtf-facts. Rules: behaviour-pass.md. Invoke it by an absolute path
@@ -6,7 +8,7 @@
 #   behaviour-pass.sh classify --facts <mtf-facts> --dir <module root>
 #       (--diff <files.json> [--prefix <module root prefix>] | --base <dir>) [--schema <schema.json>] --out <dir>
 #   behaviour-pass.sh eval --facts <mtf-facts> --out <dir> --head <sha> --base-sha <sha>
-#       [--claims <claims.json>] [--ladder <ladder.json>]
+#       [--claims <claims.json>] [--ladder <ladder.json>] [--prefix <module root prefix>]
 #
 # classify writes <out>/behaviour.json, the checked classifier output, or <out>/status, the reason
 # nothing was classified, and prints one line. eval writes <out>/run-behaviour.json, the run file's
@@ -168,6 +170,8 @@ not_run() {
 evaluate() {
   [[ "$head" =~ $sha_re ]] && [[ "$bsha" =~ $sha_re ]] || die "--head and --base-sha must be 40 character SHAs"
   [ ! -e "$out/run-behaviour.json" ] && [ ! -e "$out/record.txt" ] || die "--out already holds an evaluation"
+  prefix="${prefix%/}"
+  case "$prefix" in /* | *..* | .) die "--prefix must be repository-relative" ;; esac
   [ -n "$ladder" ] && { abs "$ladder" --ladder; [ -f "$ladder" ] && [ ! -L "$ladder" ] || die "--ladder is not a regular file"; }
   [ -n "$claims" ] && { abs "$claims" --claims; [ -f "$claims" ] && [ ! -L "$claims" ] || die "--claims is not a regular file"; }
   if [ -f "$out/status" ]; then not_run "$(cat "$out/status")"; fi
@@ -186,6 +190,19 @@ evaluate() {
     ladder="$out/ladder-empty.json"
     jq -n --arg h "$head" --arg b "$bsha" '{schema_version: 1, head_sha: $h, base_sha: $b, terraform_version: null,
       pins: [], runs: [], coverage: {class: "none", examples: []}}' > "$ladder"
+  fi
+  # The triggers are module-relative and the plan coverage is repository-relative: with a module
+  # root prefix, each example directory and module call directory moves into the module root's
+  # frame, "." for the root itself. A module call outside the module root is dropped and an example
+  # directory outside it takes a leading slash, so neither can equal a trigger's directory.
+  if [ -n "$prefix" ]; then
+    jq --arg p "$prefix" '
+      def rel: if . == $p then "." elif startswith($p + "/") and (split("/") | all(. != "..")) then .[($p | length) + 1:]
+        else null end;
+      .coverage.examples |= map((.dir |= (rel // ("/" + .)))
+        | if has("module_calls") then .module_calls |= with_entries((.value |= rel) | select(.value != null)) else . end)' \
+      "$ladder" > "$out/ladder-module.json" 2> /dev/null || not_run "ladder refused"
+    ladder="$out/ladder-module.json"
   fi
   set -- claims-eval --behaviour "$out/behaviour.json" --ladder "$ladder" --head-sha "$head" --base-sha "$bsha"
   [ -n "$claims" ] && set -- "$@" --claims "$claims"
