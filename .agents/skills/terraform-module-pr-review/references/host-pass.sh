@@ -657,7 +657,8 @@ def part($base): type == "object" and keys == ["class", "plan"]
   and (.class | type == "string" and (IN(classes[]) or ($base and IN(base_results[]))))
   and (.plan == null or (.class == "planned" and (.plan | type == "object"
        and keys == ["add", "change", "destroy"] and all(.[]; nat))));
-def addrs: type == "array" and length <= 1000 and all(.[]; type == "string" and test("^[A-Za-z0-9_.-]{1,300}\\z"));
+def addrs: type == "array" and length <= 1000 and all(.[]; type == "string" and length <= 300
+  and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z"));
 "examples/" as $ex
 | if ($p | length) != 1 or ($p[0] | type) != "object" then "plan record content"
   elif $h[0].prefix != "" then "plan record prefix"
