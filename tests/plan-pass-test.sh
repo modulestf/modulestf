@@ -25,6 +25,48 @@ unset big
 
 # Stubs. terraform keys its behaviour on the example directory's name, and logs each call.
 mkdir -p "$TMP/bin" "$TMP/noaws"
+# What the stubbed terraform show -json prints: resource changes, a deferred data source read
+# among them, and the data sources the plan read, in prior_state and planned_values: one in a
+# module instance, one with a map attribute, one sensitive, one orphaned (in no data block of
+# the configuration), a managed entry of prior_state, and a malformed data address.
+jq -n -c '{
+  resource_changes: [
+    {address: "module.s3.aws_s3_bucket.this[\"k1\"]", change: {
+      after: {bucket: "b", tags: null, versioning: [{enabled: true}], logging: [{target: "t"}]},
+      after_unknown: {arn: true, id: false},
+      after_sensitive: {bucket: true, tags: false, versioning: [{enabled: false}], logging: [{target: true}]}}},
+    {address: "module.s3.aws_s3_bucket.this[\"k2\"]", change: {after: {region: "r"}, after_sensitive: {region: false}}},
+    {address: "aws_kms_key.this", change: {after: {policy: "p"}}},
+    {address: "weird name", change: {}},
+    {address: "data.aws_iam_policy_document.deferred", mode: "data", change: {actions: ["read"],
+      after: {json: null}, after_unknown: {json: true, statement: true}, after_sensitive: {}}}],
+  prior_state: {values: {root_module: {
+    resources: [
+      {address: "data.aws_iam_policy_document.this", mode: "data", values: {json: "leaked-data-value",
+        statement: [{actions: ["s3:GetObject"], condition: [{values: ["leaked-data-value"]}]}],
+        override_policy_documents: null}, sensitive_values: {statement: [{condition: [{}]}]}},
+      {address: "data.aws_x.map", mode: "data", values: {name: "n",
+        filter: {leaked_map_key: "v", leaked_nested: {leaked_deep: "x"}}}, sensitive_values: {filter: {}}},
+      {address: "data.aws_secretsmanager_secret_version.s", mode: "data",
+        values: {arn: "a", secret_string: "leaked-data-value"}, sensitive_values: {secret_string: true}},
+      {address: "data.aws_iam_policy_document.gone", mode: "data", values: {json: "j"}, sensitive_values: {}},
+      {address: "data.aws_bad", mode: "data", values: {json: "j"}, sensitive_values: {}},
+      {address: "aws_s3_bucket.stale", mode: "managed", values: {bucket: "b"}, sensitive_values: {}}],
+    child_modules: [{address: "module.s3[\"k1\"]", resources: [
+      {address: "module.s3[\"k1\"].data.aws_iam_policy_document.bucket[0]", mode: "data",
+        values: {json: "j"}, sensitive_values: {}}]}]}}},
+  planned_values: {root_module: {resources: [
+    {address: "data.aws_iam_policy_document.deferred", mode: "data", values: {json: null}, sensitive_values: {}},
+    {address: "data.aws_iam_policy_document.planned_only", mode: "data", values: {policy_id: "x"}, sensitive_values: {}}]}},
+  configuration: {root_module: {
+    resources: ([
+      "data.aws_iam_policy_document.this", "data.aws_x.map", "data.aws_secretsmanager_secret_version.s",
+      "data.aws_iam_policy_document.deferred", "data.aws_iam_policy_document.planned_only", "data.aws_bad"]
+      | map({address: ., mode: "data"})) + [{address: "aws_s3_bucket.stale", mode: "managed"}],
+    module_calls: {
+      s3: {source: "terraform-aws-modules/s3-bucket/aws",
+        module: {resources: [{address: "data.aws_iam_policy_document.bucket", mode: "data"}]}},
+      local: {source: "../../"}}}}}' > "$TMP/show.json"
 cat > "$TMP/bin/terraform" <<EOF
 #!/bin/sh
 echo "\${PWD##*/} \$1" >> "$TMP/tf.log"
@@ -33,7 +75,7 @@ show)
   # The saved plan is read with no credentials, from the file the plan wrote
   [ -z "\$AWS_ACCESS_KEY_ID" ] || echo "show with credentials" >> "$TMP/tf.log"
   for a; do f="\$a"; done; [ -f "\$f" ] || { echo "Error: no saved plan"; exit 1; }
-  printf '{"resource_changes":[{"address":"module.s3.aws_s3_bucket.this[\\\\"k1\\\\"]","change":{"after":{"bucket":"b","tags":null,"versioning":[{"enabled":true}],"logging":[{"target":"t"}]},"after_unknown":{"arn":true,"id":false},"after_sensitive":{"bucket":true,"tags":false,"versioning":[{"enabled":false}],"logging":[{"target":true}]}}},{"address":"module.s3.aws_s3_bucket.this[\\\\"k2\\\\"]","change":{"after":{"region":"r"},"after_sensitive":{"region":false}}},{"address":"aws_kms_key.this","change":{"after":{"policy":"p"}}},{"address":"weird name","change":{}}],"configuration":{"root_module":{"module_calls":{"s3":{"source":"terraform-aws-modules/s3-bucket/aws"},"local":{"source":"../../"}}}}}\n' ;;
+  cat "$TMP/show.json" ;;
 init)
   printf 'provider "registry.terraform.io/hashicorp/aws" {\n}\n' >> .terraform.lock.hcl
   if [ "\${PWD##*/}" = ok ]; then
@@ -961,7 +1003,21 @@ for sh in bash zsh; do
     "$(grep -qx 'ok plan' "$TMP/tf.log" && grep -qx 'ok show' "$TMP/tf.log" && ! grep -q 'show with credentials' "$TMP/tf.log"; echo $?)"
   A="$R/plan-addresses/addresses-13.json"
   check "$sh: the addresses file of the planned example: config addresses, attribute names only" \
-    "$(jq -e '{addresses, attributes, module_calls} == {addresses:["aws_kms_key.this","module.s3.aws_s3_bucket.this"], attributes:{"aws_kms_key.this":["policy"],"module.s3.aws_s3_bucket.this":["arn","bucket","logging","region","versioning"]}, module_calls:{"local":"../../"}}' "$A" > /dev/null 2>&1; echo $?)"
+    "$(jq -e '{addresses, attributes, module_calls} | .addresses |= map(select(contains("data.") | not)) | .attributes |= with_entries(select(.key | contains("data.") | not))
+      | . == {addresses:["aws_kms_key.this","module.s3.aws_s3_bucket.this"], attributes:{"aws_kms_key.this":["policy"],"module.s3.aws_s3_bucket.this":["arn","bucket","logging","region","versioning"]}, module_calls:{"local":"../../"}}' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: the data sources the plan read, matched to the configuration at their module path; no orphan, managed state entry or malformed address" \
+    "$(jq -e '[.addresses[] | select(contains("data."))] == ["data.aws_iam_policy_document.deferred","data.aws_iam_policy_document.planned_only",
+      "data.aws_iam_policy_document.this","data.aws_secretsmanager_secret_version.s","data.aws_x.map","module.s3.data.aws_iam_policy_document.bucket"]
+      and (.addresses | index("aws_s3_bucket.stale") == null)' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: a data source lists the top-level names of its values, a map by its own name, never a key inside it" \
+    "$(jq -e '.attributes["data.aws_x.map"] == ["filter","name"] and .attributes["data.aws_iam_policy_document.this"] == ["json","statement"]
+      and .attributes["data.aws_iam_policy_document.planned_only"] == ["policy_id"] and .attributes["module.s3.data.aws_iam_policy_document.bucket"] == ["json"]' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: a deferred data source read keeps its resource change names, merged with its planned_values entry" \
+    "$(jq -e '.attributes["data.aws_iam_policy_document.deferred"] == ["json","statement"]' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: a data source attribute its sensitive_values marks is listed sensitive, by name" \
+    "$(jq -e '.sensitive["data.aws_secretsmanager_secret_version.s"] == ["secret_string"] and .sensitive["data.aws_x.map"] == []
+      and .sensitive["data.aws_iam_policy_document.this"] == []' "$A" > /dev/null 2>&1; echo $?)"
+  check "$sh: no value or map key of a data source reaches the addresses file" "$(lacks "$(cat "$A")" leaked)"
   check "$sh: the addresses file keys, in order, the head commit and the example last" \
     "$(jq -e 'keys_unsorted == ["addresses","attributes","module_calls","sensitive","head_sha","example"] and .example == "examples/ok"' "$A" > /dev/null 2>&1; echo $?)"
   check "$sh: the head commit the example was planned at" \
@@ -1126,6 +1182,7 @@ good="$(hrec good 'host example 1: examples/complete' 'example: examples/complet
   'host example 7: examples/new' 'plan: code-error' 'base: new under this change (absent at base)')"
 echo '{"addresses":["module.s3.aws_s3_bucket.this","x[\"k\"]"],"attributes":{"module.s3.aws_s3_bucket.this":["bucket","Name"],"y":["z"]},"sensitive":{"module.s3.aws_s3_bucket.this":["bucket"]}}' > "$good/addresses-1.json"
 echo '{"addresses":["aws_b.c"]}' > "$good/addresses-2.json"
+echo '{"addresses":["data.aws_iam_policy_document.this","module.s3.data.aws_iam_policy_document.bucket","data.aws_bad","module.m.data.x"],"attributes":{"data.aws_iam_policy_document.this":["json","statement"],"data.aws_bad":["json"]}}' > "$good/addresses-5.json"
 check "hosted-record: a good record is reduced" "$(hr "$good")"
 check "hosted-record: the exact top-level keys, head and merge base" \
   "$(hq "keys == [\"examples\",\"head\",\"merge_base\",\"refused_hosts\",\"schema_version\"] and .schema_version == 1 and .head == \"$HH\" and .merge_base == \"$HM\"")"
@@ -1146,6 +1203,26 @@ jq '.examples[0].attributes.other = ["x"]' "$TMP/hr.json" > "$TMP/hp-bad2.json"
 check "host-pass: attributes of an address not planned are refused" "$([ "$(hp "$TMP/hp-bad2.json")" = "plan record content" ] && echo 0 || echo 1)"
 jq 'del(.examples[0].addresses)' "$TMP/hr.json" > "$TMP/hp-bad3.json"
 check "host-pass: an example without addresses is refused" "$([ "$(hp "$TMP/hp-bad3.json")" = "plan record content" ] && echo 0 || echo 1)"
+check "hosted-record: data source addresses are kept, a malformed data address dropped" \
+  "$(hq '.examples[4].addresses == ["data.aws_iam_policy_document.this","module.s3.data.aws_iam_policy_document.bucket"]
+    and .examples[4].attributes == {"data.aws_iam_policy_document.this":["json","statement"]}')"
+for bad in data.aws_bad module.m.data.x data.data.a.b 'data.a.b c'; do
+  jq --arg a "$bad" '.examples[4].addresses += [$a]' "$TMP/hr.json" > "$TMP/hp-bad4.json"
+  check "host-pass: a malformed data address is refused ($bad)" "$([ "$(hp "$TMP/hp-bad4.json")" = "plan record content" ] && echo 0 || echo 1)"
+done
+# Negative self-check: a copy of host-pass.sh or hosted-record.sh without the address grammar
+# takes the malformed data address.
+jq '.examples[4].addresses += ["data.aws_bad"]' "$TMP/hr.json" > "$TMP/hp-bad4.json"
+HPM="$(sed -n "/^PLAN_HOSTED_JQ='\$/,/^'\$/p" "${PP%/*}/host-pass.sh" | sed '1d;$d' | perl -pe 's/\(\?!data\\\\\.\|module\\\\\.\)//')"
+check "mutation host-pass-grammar changes the rule" "$([ "$HPM" != "$HPJ" ]; echo $?)"
+check "mutation host-pass-grammar is caught" \
+  "$([ "$(jq -n -r --arg head "$HH" --slurpfile p "$TMP/hp-bad4.json" --slurpfile h "$TMP/hp-host.json" --slurpfile f "$TMP/hp-files.json" "$HPM")" = ok ]; echo $?)"
+perl -pe 's/\(\?!data\\\\\.\|module\\\\\.\)//' "$HR" > "$TMP/hr-mut.sh"
+check "mutation hosted-record-grammar changes the script" "$(cmp -s "$HR" "$TMP/hr-mut.sh"; test $? -eq 1; echo $?)"
+cp "$TMP/hr.json" "$TMP/hr-real.json"; rm -f "$TMP/hr.json"
+bash "$TMP/hr-mut.sh" --record "$good" --head "$HH" --merge-base "$HM" --out "$TMP/hr.json" 2> /dev/null
+check "mutation hosted-record-grammar is caught" "$(hq '.examples[4].addresses | index("data.aws_bad")')"
+mv "$TMP/hr-real.json" "$TMP/hr.json"
 check "hosted-record: an import count is not kept" "$(hq '.examples[5].head.plan == {add: 1, change: 0, destroy: 4}')"
 check "hosted-record: a code-error keeps its class and its base result" \
   "$(hq '.examples[1] == {path: "examples/broken", head: {class: "code-error", plan: null}, base: {class: "reproduces at base", plan: null},
@@ -1278,6 +1355,36 @@ for bad in '../x' 'examples/../x' 'examples/a b' 'examples/..'; do
 done
 check "addresses: a plain example directory is kept" \
   "$(aj '{"resource_changes":[]}' nosha 'modules/x/examples/a.b_c-d' | jq -e '.example == "modules/x/examples/a.b_c-d"' > /dev/null 2>&1; echo $?)"
+# Data sources, on the stub's show JSON: none from a plan that errored, its resource changes kept.
+o="$(aj "$(jq -c '. + {errored: true}' "$TMP/show.json")" nosha)"
+check "addresses: a plan that errored adds no data source read at plan, only its resource changes" \
+  "$(jq -e '.addresses == ["aws_kms_key.this","data.aws_iam_policy_document.deferred","module.s3.aws_s3_bucket.this"]' <<< "$o" > /dev/null 2>&1; echo $?)"
+for good in data.a_b.c module.m.data.a_b.c module.m.module.n-2.data.a-b.c_d module.data.a_b.c a_b.data; do
+  check "addresses: the address pattern takes $good" \
+    "$(aj "{\"resource_changes\":[{\"address\":\"$good\",\"change\":{}}]}" nosha | jq -e --arg a "$good" '.addresses == [$a]' > /dev/null 2>&1; echo $?)"
+done
+for bad in data.a_b data.data.a.b module.m.data.a module.m a.b.c data..a.b 'data.a.b c'; do
+  check "addresses: the address pattern refuses $bad" \
+    "$(aj "{\"resource_changes\":[{\"address\":\"$bad\",\"change\":{}}]}" nosha | jq -e '.addresses == []' > /dev/null 2>&1; echo $?)"
+done
+# Negative self-check of the data source rules: each weakened copy of ADDR_JQ lets its case
+# through, and the real one does not.
+ad_mut() { # name, perl substitution, jq check on the output that the real ADDR_JQ fails[, input jq]
+  local m="$TMP/mut-addr-$1.sh" mj in
+  perl -pe "$2" "$PP" > "$m"
+  mj="$(sed -n "/^ADDR_JQ='\$/,/^'\$/p" "$m" | sed '1d;$d')"
+  in="$(jq -c "${4:-.}" "$TMP/show.json")"
+  check "mutation addresses-$1 changes ADDR_JQ" "$([ "$mj" != "$AJ" ]; echo $?)"
+  check "mutation addresses-$1 is caught" \
+    "$(! aj "$in" nosha | jq -e "$3" > /dev/null 2>&1 &&
+       jq -c --arg h nosha --arg e '' "$mj" <<< "$in" | jq -e "$3" > /dev/null 2>&1; echo $?)"
+}
+ad_mut config-match 's/\| select\(\.a \| IN\(\$cfg\[\]\)\) end\)/end)/' '.addresses | index("data.aws_iam_policy_document.gone")'
+ad_mut lookahead 's/\(\?!data\\\\\.\|module\\\\\.\)//' '.addresses | index("data.aws_bad")'
+ad_mut nested 's/\(\.after \| if type == "object" then to_entries\[\]/(.after | if type == "object" then (.. | objects | to_entries[])/' \
+  '.attributes["data.aws_x.map"] | index("leaked_map_key")'
+ad_mut sensitive 's/after_sensitive: \.sensitive_values/after_sensitive: {}/' '.sensitive["data.aws_secretsmanager_secret_version.s"] == []'
+ad_mut errored 's/if \$plan\.errored == true then empty else/if false then empty else/' '.addresses | index("data.aws_x.map")' '. + {errored: true}'
 
 # The runner's clean_addresses in run-pass.sh, which writes the record's addresses files: a
 # sensitive entry outside its shape is dropped, never emptied, and an old file stays without one.
@@ -1287,6 +1394,9 @@ ca() { jq -c "$CA" <<< "$1"; }
 o="$(ca '{"addresses":["aws_a.b"],"attributes":{"aws_a.b":["x"]},"module_calls":{}}')"
 check "clean_addresses: an old file without sensitive is accepted, still without it" \
   "$([ "$o" = '{"addresses":["aws_a.b"],"attributes":{"aws_a.b":["x"]},"module_calls":{}}' ]; echo $?)"
+o="$(ca '{"addresses":["data.aws_a.b","module.m.data.aws_c.d","data.aws_e","module.m.data.f"],"attributes":{"data.aws_a.b":["json"],"data.aws_e":["x"]},"sensitive":{"data.aws_a.b":["json"]}}')"
+check "clean_addresses: data source addresses kept with their names, a malformed data address dropped" \
+  "$(jq -e '. == {addresses:["data.aws_a.b","module.m.data.aws_c.d"],attributes:{"data.aws_a.b":["json"]},module_calls:{},sensitive:{"data.aws_a.b":["json"]}}' <<< "$o" > /dev/null 2>&1; echo $?)"
 o="$(ca '{"addresses":["aws_a.b","aws_c.d"],"attributes":{"aws_a.b":["x","y"]},"sensitive":{"aws_a.b":["y","x","y"],"aws_c.d":[],"aws_e.f":["x"]}}')"
 check "clean_addresses: sensitive kept for planned addresses, sorted, an empty list kept" \
   "$(jq -e '.sensitive == {"aws_a.b":["x","y"],"aws_c.d":[]}' <<< "$o" > /dev/null 2>&1; echo $?)"
