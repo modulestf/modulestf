@@ -759,20 +759,19 @@ post_init() { # example key, absolute example directory
       next if $_->{Key} eq "";
       my ($k, $s, $r, $lp) = ($_->{Key}, $_->{Source}, $d{$_->{Key}}, $l{$_->{Key}});
       unless (defined $r && -d $r) { print "G2 $j:$k\n"; next }
-      # Below the modules directory, no path component may be a symbolic link.
-      my $in = $lp ne $ml && index("$lp/", "$ml/") == 0;
-      if ($in && $r ne $mr . substr($lp, length $ml)) { print "G2 $j:$k\n"; next }
-      if (($s =~ $reg || ($gm eq "runner" && $s =~ $gh)) && !$in) { print "G2 $j:$k\n"; next }
+      # Below the modules directory, written as given or as its real path, no path component may be a symbolic link.
+      my $in; for my $pre ($ml, $mr) { if ($lp ne $pre && index("$lp/", "$pre/") == 0) { $in = $mr . substr($lp, length $pre); last } }
+      if (defined $in && $r ne $in) { print "G2 $j:$k\n"; next }
+      if (($s =~ $reg || ($gm eq "runner" && $s =~ $gh)) && !defined $in) { print "G2 $j:$k\n"; next }
       print "dir $r\n" if index("$r/", "$mr/") == 0;
       if ($s =~ $reg) { print "version $k $s $_->{Version}\n"; next }
       if ($gm eq "runner" && $s =~ $gh) { print "version $k $s -\n"; next }
       (my $pk = $k) =~ s/\.?[^.]*\z//;
       my $pd = $d{$pk}; my ($lim, $want);
-      if (defined $pd && index("$pd/", "$root/") == 0) { $lim = $root }
-      elsif (defined $pd && index("$pd/", "$mr/") == 0 && substr($pd, length($mr) + 1) =~ m{\A([^/]+)}) {
-        # A downloaded parent: its whole package, reached with no symbolic link on the way.
-        ($lim, $want) = ("$mr/$1", lex("$pd/$s"));
-      }
+      if (defined $pd && index("$pd/", "$mr/") == 0) {
+        # A downloaded parent, even with the data directory in the clone: its whole package, reached with no symbolic link on the way.
+        ($lim, $want) = ("$mr/$1", lex("$pd/$s")) if substr($pd, length($mr) + 1) =~ m{\A([^/]+)};
+      } elsif (defined $pd && index("$pd/", "$root/") == 0) { $lim = $root }
       print "G2 $j:$k\n" unless $s =~ m{\A\.\.?/} && defined $lim && index("$r/", "$lim/") == 0 && (!defined $want || $r eq $want);
     }
   ' "$2" "$CROOT" "$M/modules.json" "$MR" "$GMODE" > "$PLAN/out/$1-modules.txt"

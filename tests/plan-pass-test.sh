@@ -1112,6 +1112,22 @@ done
 for k in eks.ng.other eks.ng.pkg eks.ng.lnk eks.ng.lnk2 eks.ng.out eks.ng.data eks.ng.ws lr lr.ng lc lc.y far; do
   check "G2: $k outside its package or the modules directory, or through a link, is refused" "$(has "$out" "G2 $GM/modules.json:$k")"
 done
+# The modules.json a real init of the eks node group submodule writes with the default data
+# directory, byte for byte: relative Dir values, read against the example directory.
+G3="$TMP/g2real/ex"; GR="$G3/.terraform/modules"
+mkdir -p "$GR/ng/modules/eks-managed-node-group" "$GR/ng/modules/_user_data" "$G3/.terraform/up"
+printf '%s\n' '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"ng","Source":"registry.terraform.io/terraform-aws-modules/eks/aws//modules/eks-managed-node-group","Version":"21.29.0","Dir":".terraform/modules/ng/modules/eks-managed-node-group"},{"Key":"ng.user_data","Source":"../_user_data","Dir":".terraform/modules/ng/modules/_user_data"}]}' > "$GR/modules.json"
+g2real() { perl -MJSON::PP -MCwd=realpath -e "$(g2pl "$PP")" "$G3" "$G3" "$GR/modules.json" "$GR" laptop; }
+out="$(g2real)"
+check "G2: the real eks modules.json with relative Dir values passes" "$(lacks "$out" 'G2 ')"
+check "G2: the real eks modules.json records the version" \
+  "$(has "$out" 'version ng registry.terraform.io/terraform-aws-modules/eks/aws//modules/eks-managed-node-group 21.29.0')"
+perl -0pi -e 's/\]\}\n\z/,{"Key":"ng.up","Source":"..\/..\/..\/..\/up","Dir":".terraform\/modules\/ng\/..\/..\/up"},{"Key":"far2","Source":"terraform-aws-modules\/eks\/aws","Version":"21.29.0","Dir":".terraform\/modules\/..\/up"}]}\n/' "$GR/modules.json"
+out="$(g2real)"
+for k in ng.up far2; do
+  check "G2: a relative Dir that climbs out of the modules directory is refused ($k)" "$(has "$out" "G2 $GR/modules.json:$k")"
+done
+check "G2: the climbing entries leave ng.user_data passing" "$([ "$(has "$out" "G2 $GR/modules.json:ng.user_data")" = 1 ]; echo $?)"
 g2mut() { # name, perl substitution, key the weakened copy lets through
   perl -pe "$2" "$PP" > "$TMP/mut/$1.sh"
   check "mutation $1 changes the script" "$(cmp -s "$PP" "$TMP/mut/$1.sh"; test $? -eq 1; echo $?)"
@@ -1119,9 +1135,9 @@ g2mut() { # name, perl substitution, key the weakened copy lets through
 }
 g2mut g2-no-source-walk 's/ && \(!defined \$want \|\| \$r eq \$want\)//' eks.ng.lnk2
 g2mut g2-all-packages 's/\("\$mr\/\$1", lex/(\$mr, lex/' eks.ng.other
-g2mut g2-link-package-root 's/if \(\$in && \$r ne/if (0 \&\& \$r ne/' lr
-g2mut g2-link-clone-child 's/if \(\$in && \$r ne/if (0 \&\& \$r ne/' lc.y
-g2mut g2-remote-anywhere 's/ && !\$in\) \{/ \&\& 0) {/' far
+g2mut g2-link-package-root 's/if \(defined \$in && \$r ne/if (0 \&\& \$r ne/' lr
+g2mut g2-link-clone-child 's/if \(defined \$in && \$r ne/if (0 \&\& \$r ne/' lc.y
+g2mut g2-remote-anywhere 's/ && !defined \$in\) \{/ \&\& 0) {/' far
 
 # plan-session.sh: one fixed reason on standard error per failure class, nothing on standard output.
 SESS="${PP%/*}/plan-session.sh"
