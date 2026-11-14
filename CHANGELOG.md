@@ -1,3 +1,12 @@
+## [0.9.4](https://github.com/modulestf/modulestf/compare/v0.9.3...v0.9.4) (2026-11-14)
+
+
+### Bug Fixes
+
+* **pr-review:** Count a finding whose rule is not in the registry as an unknown ([#149](https://github.com/modulestf/modulestf/issues/149)) ([9be3094](https://github.com/modulestf/modulestf/commit/9be30941e28459a8b7677260db532516edcbb32e)), closes [#151](https://github.com/modulestf/modulestf/issues/151)
+
+
+
 ## [0.9.3](https://github.com/modulestf/modulestf/compare/v0.9.2...v0.9.3) (2026-11-14)
 
 
