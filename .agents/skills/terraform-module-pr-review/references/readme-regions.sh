@@ -59,6 +59,8 @@ safe_git_partial() {
 }
 ENTRY_RE=$'^([0-7]{6}) [a-z]+ ([0-9a-f]{40,64}) +([0-9-]+)\t(.+)$'
 REG_RE='^100(644|755)$'
+# A tree entry name the copy writes: one plain path segment, never . or .., no leading dash.
+NAME_RE='^[A-Za-z0-9._][A-Za-z0-9._+-]{0,254}$'
 MAX_FILE=1048576
 
 # head_file <repository path> <file>: the head's blob into the file, or prints why not: absent,
@@ -84,7 +86,11 @@ copy_dir() {
   local a="$1" rp t n=0 files=0 bytes=0 e mode obj size name f
   rp="${prefix:+$prefix/}$a"; [ "$a" != . ] || rp="$prefix"
   if [ -z "$rp" ]; then t="$head^{tree}"; else t="$head:$rp"; fi
-  mkdir -p -- "$WS/$a" && safe_git ls-tree -l -z "$t" > "$RR/list" 2> /dev/null || { WHY="directory read failed"; return 1; }
+  local want="$WSR"; [ "$a" = . ] || want="$WSR/$a"
+  # The copy's directory resolves to its own place under the work directory, through no link.
+  mkdir -p -- "$WS/$a" && [ "$(cd -P -- "$WS/$a" 2> /dev/null && pwd -P)" = "$want" ] || { WHY="directory path"; return 1; }
+  safe_git ls-tree -l -z "$t" > "$RR/list" 2> /dev/null || { WHY="directory read failed"; return 1; }
+  names_ok "$RR/list" || return 1
   while IFS= read -r -d '' e; do
     [[ "$e" =~ $ENTRY_RE ]] || { WHY="directory read failed"; return 1; }
     mode="${BASH_REMATCH[1]}" obj="${BASH_REMATCH[2]}" size="${BASH_REMATCH[3]}" name="${BASH_REMATCH[4]}"
@@ -95,6 +101,8 @@ copy_dir() {
       [ "$size" -le "$MAX_FILE" ] || { WHY="file over 1 mib"; return 1; }
       [ "$files" -le 200 ] || { WHY="over 200 files"; return 1; }
       [ "$bytes" -le 8388608 ] || { WHY="over 8 mib"; return 1; }
+      # No-follow: a link there is never written through.
+      [ ! -L "$f" ] || { WHY="entry name"; return 1; }
       safe_git cat-file blob "$obj" > "$f" 2> /dev/null || { WHY="read failed"; return 1; }
     elif [ -e "$f" ] || [ -L "$f" ]; then
       :
@@ -110,12 +118,24 @@ copy_dir() {
     fi
   done < "$RR/list"
 }
+# names_ok <ls-tree -z output>: every entry name is in NAME_RE, and no two names fold to the same
+# name on a case-insensitive file system, where the copy would keep only one of them.
+names_ok() {
+  local e n
+  while IFS= read -r -d '' e; do
+    n="${e#*$'\t'}"
+    [[ "$n" =~ $NAME_RE ]] && [ "$n" != . ] && [ "$n" != .. ] || { WHY="entry name"; return 1; }
+  done < "$1"
+  [ -z "$(tr '\0' '\n' < "$1" | cut -f2- | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C sort | uniq -d)" ] ||
+    { WHY="case collision"; return 1; }
+}
 copy_config() { # <repository path of a .config tree> <its copy>: the entry names, as empty files
   local e
   safe_git ls-tree -z "$head:${1#/}" > "$RR/config" 2> /dev/null || { WHY="directory read failed"; return 1; }
+  names_ok "$RR/config" || return 1
   while IFS= read -r -d '' e; do
     e="${e#*$'\t'}"
-    [ -e "$2/$e" ] || : > "$2/$e" || { WHY="copy failed"; return 1; }
+    [ -e "$2/$e" ] || [ -L "$2/$e" ] || : > "$2/$e" || { WHY="copy failed"; return 1; }
   done < "$RR/config"
 }
 
@@ -136,13 +156,14 @@ wf_state() {
 }
 
 RR="$out/rr" WS="$out/rr/ws"
-mkdir -p "$WS" || die "no work directory"
+mkdir -p "$WS" && WSR="$(cd -P -- "$WS" && pwd -P)" || die "no work directory"
 trap 'rm -rf -- "$RR"' EXIT
 # The README.md files the change touches, module-relative, at most 256, in path order.
 re="^($seg/){0,8}README\\.md\$"
 paths=()
 while IFS= read -r p; do [[ "$p" =~ $re ]] && paths+=("$p"); done < <(jq -r --arg p "${prefix:+$prefix/}" '.[] | .filename
-  | select((contains("\n") | not) and ($p == "" or startswith($p))) | .[($p | length):]' "$diff" | LC_ALL=C sort -u | head -n 256)
+  | select((contains("\n") | not) and ($p == "" or startswith($p))) | .[($p | length):]
+  | select(. == "README.md" or endswith("/README.md"))' "$diff" | LC_ALL=C sort -u | head -n 256)
 
 all=""
 if [ ${#paths[@]} -gt 0 ]; then

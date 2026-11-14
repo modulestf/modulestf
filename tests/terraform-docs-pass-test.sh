@@ -395,6 +395,38 @@ rr=$((rr + 1)); RO=$TMP/rr-out-$rr; mkdir "$RO"
 bash "$RRS" --clone "$PRC" --head "$(git -C "$PRC" rev-parse HEAD)" --diff "$TMP/rr-files.json" --out "$RO" --profile "$TMP/PROFILE.md" >/dev/null 2>&1
 check "readme regions: a partial clone is no evidence" "$([ "$(sort -u <<<"$(cut -d' ' -f2- "$RO/regions.txt")")" = "unknown partial clone" ]; echo $?)"
 
+# Crafted trees a checkout could not hold: an entry name that climbs out of the copy, and two .tf
+# names that differ only in case, which a case-insensitive file system folds into one file.
+XC=$TMP/rr-xclone
+git init -q "$XC"
+x() { git -C "$XC" -c core.fsmonitor=false -c user.name=t -c user.email=t@example.com "$@"; }
+printf 'Intro\n\n%s\ngenerated\n%s\n\nOutro\n' "$B" "$E" >"$XC/README.md"
+printf 'variable "x" {\n  type = string\n}\n' >"$XC/main.tf"
+x add -A && x commit -qm base
+mkdir -p "$TMP/victim" && echo keep >"$TMP/victim/target.tf"
+pwn=$(printf 'PWNED\n' | x hash-object -w --stdin)
+x cat-file tree "HEAD^{tree}" >"$TMP/rr-tree.bin"
+perl -e 'print "100644 ../../../victim/target.tf\0", pack("H*", $ARGV[0])' "$pwn" | cat - "$TMP/rr-tree.bin" >"$TMP/rr-tree2.bin"
+XSLASH=$(x commit-tree "$(x hash-object -t tree -w --literally "$TMP/rr-tree2.bin")" -p HEAD -m slash)
+x update-index --add --cacheinfo "100644,$(printf 'variable "y" {}\n' | x hash-object -w --stdin),VARIABLES.tf"
+x update-index --add --cacheinfo "100644,$(printf '# lower\n' | x hash-object -w --stdin),variables.tf"
+XCASE=$(x commit-tree "$(x write-tree)" -p HEAD -m case)
+jq -n '[{filename: "README.md"}]' >"$TMP/rr-xfiles.json"
+# Up to 300 other files sort before the README the change touches: the cap counts README files only.
+jq -n '[range(300) | {filename: "a\(.).tf"}] + [{filename: "modules/a/README.md"}]' >"$TMP/rr-cfiles.json"
+rr_x() { # rr_x SCRIPT CLONE HEAD FILES -> $RO
+  rr=$((rr + 1)); RO=$TMP/rr-out-$rr; mkdir "$RO"
+  bash "$1" --clone "$2" --head "$3" --diff "$4" --out "$RO" --profile "$TMP/PROFILE.md" >/dev/null 2>&1
+}
+t_slash() { rr_x "$1" "$XC" "$XSLASH" "$TMP/rr-xfiles.json"
+  [ "$(cat "$RO/regions.txt")" = "README.md unknown entry name" ] && [ "$(cat "$TMP/victim/target.tf")" = keep ] &&
+    [ -z "$(find "$TMP" -maxdepth 2 -name target.tf ! -path "$TMP/victim/*" -print)" ]; }
+t_case() { rr_x "$1" "$XC" "$XCASE" "$TMP/rr-xfiles.json"; [ "$(cat "$RO/regions.txt")" = "README.md unknown case collision" ]; }
+t_cap() { rr_x "$1" "$RC" "$HC" "$TMP/rr-cfiles.json"; [ "$(cat "$RO/regions.txt")" = "modules/a/README.md unknown no version pin" ]; }
+t_slash "$RRS"; check "readme regions: an entry name that climbs out is refused, nothing written outside" $?
+t_case "$RRS"; check "readme regions: two names that fold to one are a case collision" $?
+t_cap "$RRS"; check "readme regions: the 256 cap counts README files, not the files list" $?
+
 # Negative self-check: each weakened copy, beside a copy of the pass, must fail the first case.
 MUT=$TMP/rr-mut
 mkdir -p "$MUT/terraform-module-pr-review/references" "$MUT/terraform-module-maintainer/references"
@@ -412,6 +444,17 @@ rr_mut "the link test dropped" 's/\[ "\$mode" != 120000 \] \|\| \{ echo link; re
 rr_mut "the marker filter dropped" 's/grep -qF "\$\{mk\[\@\]\}" "\$RR\/orig-\$i" \|\| \{ res\[i\]=skip; continue; \}//'
 rr_mut "a deleted file reported" 's/if \[ "\$why" = absent \]; then res\[i\]=skip; else/if false; then :; else/'
 rr_mut "the pass's refusal read as generated" 's/      stale\*\)\n/      stale*) r=generated ;;\n      stalex*)\n/'
+xmut() { # name, perl substitution, test function: a weakened copy must fail that case
+  local m=$MUT/terraform-module-pr-review/references/readme-regions.sh
+  perl -0pe "$2" "$RRS" >"$m"
+  if cmp -s "$RRS" "$m"; then check "readme regions self-check: $1 changes the script" 1; return; fi
+  echo keep >"$TMP/victim/target.tf"
+  "$3" "$m"; check "readme regions self-check: $1 is caught" "$([ $? != 0 ]; echo $?)"
+  echo keep >"$TMP/victim/target.tf"
+}
+xmut "the entry name test dropped" 's/\[\[ "\$n" =~ \$NAME_RE \]\] && \[ "\$n" != \. \] && \[ "\$n" != \.\. \] \|\| \{ WHY="entry name"; return 1; \}/:/' t_slash
+xmut "the case collision test dropped" 's/\| uniq -d\)/| uniq -d | grep -v .)/' t_case
+xmut "the cap applied before the README filter" 's/\n  \| select\(\. == "README\.md" or endswith\("\/README\.md"\)\)//' t_cap
 # The version rule is held by its own case: a copy that ignores the pin is caught there.
 m=$MUT/terraform-module-pr-review/references/readme-regions.sh
 perl -0pe 's/mismatch\) r="unknown version mismatch" ;; //' "$RRS" >"$m"
