@@ -264,7 +264,9 @@ for my $n (sort grep { $_ ne "." && $_ ne ".." } readdir $dh) {
 
 # With a module root prefix, the example directories at the repository root that call the
 # module root: "examples/<name>", a real directory reached through no link, holding a .tf file
-# directly whose local module source, resolved from it, is the module root, through no link.
+# directly with a module block whose own source argument, a local path resolved from it, is the
+# module root, through no link. Comments, heredocs, strings and other blocks are never read as
+# a source: the scanner below walks the text and tracks the blocks.
 # One line each, "touched<TAB><dir>" when the change has a path under it, else
 # "caller<TAB><dir>", touched first, each in byte order. A name outside [A-Za-z0-9._-], a link,
 # a .tf file that is a link or over 1 MiB, and a source that climbs out of the repository are
@@ -284,6 +286,42 @@ sub resolve { # a relative path from a repository-relative directory, or undef w
   }
   return join "/", @s;
 }
+sub sources { # the string value of each source argument directly in a module block
+  my $t = shift; my ($i, $n, $cur, @stack, @out) = (0, length $t, "");
+  while ($i < $n) {
+    my $ch = substr($t, $i, 1);
+    if ($ch eq "#" || substr($t, $i, 2) eq "//") { my $e = index($t, "\n", $i); $i = $e < 0 ? $n : $e; next }
+    if (substr($t, $i, 2) eq "/*") { my $e = index($t, "*/", $i + 2); $i = $e < 0 ? $n : $e + 2; next }
+    if (substr($t, $i) =~ /\A<<-?([A-Za-z_][A-Za-z0-9_-]*)[ \t]*\r?\n/) {
+      my $id = $1; $i += length $&;
+      while ($i < $n) {
+        my $e = index($t, "\n", $i); $e = $n if $e < 0;
+        my $l = substr($t, $i, $e - $i); $i = $e + 1;
+        last if $l =~ /\A\s*\Q$id\E\s*\z/;
+      }
+      $cur .= "H"; next;
+    }
+    if ($ch eq "\"") {
+      my ($j, $v, $dep) = ($i + 1, "", 0);
+      while ($j < $n) {
+        my $c = substr($t, $j, 1);
+        if ($c eq "\\") { $v .= substr($t, $j, 2); $j += 2; next }
+        if ($dep == 0 && $c eq "\"") { last }
+        if ($c eq "\n" && $dep == 0) { last }
+        $dep++ if ($c eq "{" && $j > 0 && substr($t, $j - 1, 1) =~ /[\$%]/);
+        $dep-- if $c eq "}" && $dep > 0;
+        $v .= $c; $j++;
+      }
+      push @out, $v if @stack && $stack[-1] && $cur =~ /\A\s*source\s*=\s*\z/;
+      $cur .= "S"; $i = $j + 1; next;
+    }
+    if ($ch eq "{") { push @stack, ($cur =~ /\A\s*module\s+S\s*\z/ ? 1 : 0); $cur = ""; $i++; next }
+    if ($ch eq "}") { pop @stack; $cur = ""; $i++; next }
+    if ($ch eq "\n") { $cur = ""; $i++; next }
+    $cur .= $ch; $i++;
+  }
+  return @out;
+}
 my (@t, @c);
 opendir my $dh, $ex or exit 0;
 for my $n (sort grep { /\A[A-Za-z0-9._-]+\z/ && $_ ne "." && $_ ne ".." } readdir $dh) {
@@ -296,8 +334,9 @@ for my $n (sort grep { /\A[A-Za-z0-9._-]+\z/ && $_ ne "." && $_ ne ".." } readdi
     next if -l $fp || !-f $fp || (-s $fp // 0) > 1048576;
     open my $fh, "<", $fp or next;
     my $text = do { local $/; <$fh> } // "";
-    while ($text =~ /\bsource\s*=\s*"(\.\.?\/[^"]*)"/g) {
-      my $r = resolve("examples/$n/$1");
+    for my $src (sources($text)) {
+      next unless $src =~ m{\A\.\.?/} && index($src, "\${") < 0 && index($src, "%{") < 0;
+      my $r = resolve("examples/$n/$src");
       next unless defined $r && $r eq $pre;
       my $rp = realpath("$root/$r");
       $calls = 1 if defined $rp && $rp eq "$root/$r";

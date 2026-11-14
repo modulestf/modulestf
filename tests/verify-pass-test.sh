@@ -331,6 +331,12 @@ $BASE" --out "$R3/x.json")"
   echo 'module "a" { source = "../../../clone/modules/a" }' > "$C9/examples/escape/main.tf"
   ln -s modules/a "$C9/alink"; echo 'module "a" { source = "../../alink" }' > "$C9/examples/vialink/main.tf"
   ln -s calls "$C9/examples/linked"
+  # A source that is no module call: commented out, in a block comment, in a heredoc, a file source.
+  mkdir -p "$C9/examples/commented" "$C9/examples/blockcomment" "$C9/examples/heredoc" "$C9/examples/filesource"
+  printf 'module "b" { source = "../../modules/b" }\n# module "a" { source = "../../modules/a" }\n' > "$C9/examples/commented/main.tf"
+  printf '/* module "a" {\n  source = "../../modules/a"\n} */\n' > "$C9/examples/blockcomment/main.tf"
+  printf 'locals {\n  x = <<-EOT\n    module "a" {\n      source = "../../modules/a"\n    }\n    EOT\n}\n' > "$C9/examples/heredoc/main.tf"
+  printf 'resource "aws_s3_object" "o" {\n  source = "../../modules/a/main.tf"\n}\nresource "aws_s3_object" "p" {\n  source = "../../modules/a"\n}\n' > "$C9/examples/filesource/main.tf"
   ln -s ../examples/calls/main.tf "$C9/outside/x.tf"; mkdir "$C9/examples/tflink"; ln -s ../../outside/x.tf "$C9/examples/tflink/main.tf"
   git -C "$C9" init -q && git -C "$C9" add -A && git -C "$C9" -c user.name=t -c user.email=t@example.invalid commit -qm head
   { f modules/a/main.tf modified; f examples/touched/main.tf modified; } | jq -s . > "$TMP/files9.json"
@@ -340,22 +346,24 @@ $BASE" --out "$R3/x.json")"
     "$(q "$TMP/sel9.json" '[.dirs[] | "\(.affected) \(.dir)"] == ["all modules/a/examples/own", "touched examples/touched", "caller examples/calls"]')"
   check "$sh: a root example calling another submodule, a source out of the repository, a link or a .tf link is not selected" \
     "$(q "$TMP/sel9.json" '[.dirs[].dir] | all(.[]; IN("examples/other", "examples/escape", "examples/vialink", "examples/linked", "examples/tflink") | not)')"
+  check "$sh: a source in a comment, a block comment, a heredoc or a resource is no module call" \
+    "$(q "$TMP/sel9.json" '[.dirs[].dir] | all(.[]; IN("examples/commented", "examples/blockcomment", "examples/heredoc", "examples/filesource") | not)')"
+  check "$sh: the other submodule is called from beside a commented-out call" \
+    "$(q <(sel9 modules/b) '[.dirs[].dir] == ["examples/commented", "examples/other"]')"
   jq -n '{schema_version:1, inert:false, fallback:null, changed:["main.tf"], examples:[{dir:"examples/own", reason:"touched"}]}' > "$TMP/facts.out"; : > "$TMP/facts.mode"
   check "$sh: with mtf-facts, the root examples follow the tool's own list" \
     "$(q <(sel9 modules/a "$TMP/facts") '.selection.tool == "mtf-facts" and [.dirs[] | "\(.affected) \(.dir)"] == ["touched modules/a/examples/own", "touched examples/touched", "caller examples/calls"]')"
-  check "$sh: the other submodule selects only its caller" \
-    "$(q <(sel9 modules/b) '[.dirs[] | "\(.affected) \(.dir)"] == ["caller examples/other"]')"
   EXPECT_CACHE="$R9/plugin-cache" run run "$R9" --files "$TMP/files9.json" --base "$BASE" --out "$R9/v.json" --prefix modules/b > /dev/null
   check "$sh: the pass verifies a root example that calls the submodule" \
-    "$(q "$R9/v.json" '[.dirs[] | {dir, reason}] == [{dir:"examples/other", reason:"verified"}] and .dirs[0].head.record == "code-result"')"
+    "$(q "$R9/v.json" '[.dirs[] | {dir, reason}] == [{dir:"examples/commented", reason:"verified"}, {dir:"examples/other", reason:"verified"}] and .dirs[1].head.record == "code-result"')"
   mv "$C9/modules/a" "$C9/outside/a"; ln -s ../outside/a "$C9/modules/a"
   check "$sh: a module root reached through a link selects no root example" \
     "$(q <(sel9 modules/a) 'all(.dirs[]; .dir | startswith("modules/a/"))')"
   check "$sh: with no module root prefix the root examples are the module's own, as before" \
-    "$(q <(sel9 "") '[.dirs[].dir] == ["examples/calls", "examples/escape", "examples/linked", "examples/other", "examples/tflink", "examples/touched", "examples/vialink"]')"
+    "$(q <(sel9 "") '[.dirs[].dir] == ["examples/blockcomment", "examples/calls", "examples/commented", "examples/escape", "examples/filesource", "examples/heredoc", "examples/linked", "examples/other", "examples/tflink", "examples/touched", "examples/vialink"]')"
   run coverage "$R9" --files "$TMP/files9.json" --out "$TMP/cov9.json" --prefix modules/b --no-plan > /dev/null
   check "$sh: coverage lists a root example that calls the submodule" \
-    "$(q "$TMP/cov9.json" '[.examples[].dir] == ["examples/other"] and .unplanned == [{dir:"examples/other", reason:"no AWS profile named"}]')"
+    "$(q "$TMP/cov9.json" '[.examples[].dir] == ["examples/commented", "examples/other"] and .unplanned[-1] == {dir:"examples/other", reason:"no AWS profile named"}')"
 
   # The selection reaches the results and the check binds it.
   facts '{schema_version:1, inert:false, fallback:null, changed:["main.tf"],

@@ -559,7 +559,11 @@ cmd_plan() {
     echo "plan: $missed"
   elif [ -f "$RUN/state/plan" ]; then echo "plan: $(grep -m1 '^plan summary:' "$(plan_record)" 2> /dev/null || echo 'no summary line')"
   elif [ -z "$profile" ]; then echo "plan: not run (no AWS profile named)"
-  elif jq -e '.dirs == []' "$RUN/selection.json" > /dev/null 2>&1; then echo "plan: not run (no example calls the module)"
+  elif ! jq -e '.selection | type == "object"' "$RUN/selection.json" > /dev/null 2>&1; then echo "plan: not run (example selection failed)"
+  elif jq -e '.dirs == []' "$RUN/selection.json" > /dev/null 2>&1; then
+    if [ -d "$MROOT/examples" ] || { [ -n "$PREFIX" ] && [ -d "$RUN/clone/examples" ]; }; then
+      echo "plan: not run (no example calls the module)"
+    else echo "plan: not run (no example directory)"; fi
   else echo "plan: not run (no example in scope at depth $(depth))"; fi
   jq -r '"plan coverage: \(.class), \(.unplanned | length) not planned"' "$RUN/coverage.json"
 }

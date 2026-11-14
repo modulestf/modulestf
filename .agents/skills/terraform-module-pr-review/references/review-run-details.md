@@ -38,7 +38,7 @@ An escalation is refused once `handover` has run. A refusal of that kind, a `dep
 
 ## Plan Examples
 
-`plan` passes the plan pass the examples of the selection in order. At focused it keeps those the depth selects, and an example outside the module root, such as one at the repository root that calls a submodule, unless the depth puts it out of scope. With a profile named and no example selected, its line is `plan: not run (no example calls the module)`, never the depth.
+`plan` passes the plan pass the examples of the selection in order. At focused it keeps those the depth selects, and an example outside the module root, such as one at the repository root that calls a submodule, unless the depth puts it out of scope. With a profile named and no example selected, its line names the cause, never the depth: `plan: not run (example selection failed)` when `verify-pass.sh select` failed, `plan: not run (no example directory)` when neither the module root nor, under a prefix, the repository root has an `examples/` directory, and `plan: not run (no example calls the module)` otherwise.
 
 ## Handover
 

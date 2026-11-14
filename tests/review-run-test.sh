@@ -668,6 +668,12 @@ jq '.dirs = []' "$RUN/selection.json" > "$TMP/sel-empty.json" && cat "$TMP/sel-e
 run_rr plan "$RUN" > "$TMP/pl.out"
 check "plan: with a profile and no example selected, the line names the cause" \
   "$(grep -qE '^plan: not run \(no example calls the module\) \([0-9]+s\)$' "$TMP/pl.out"; echo $?)"
+rm -rf "$RUN/clone/examples" "$RUN/coverage.json"; run_rr plan "$RUN" > "$TMP/pl.out"
+check "plan: with no examples directory, the line says so" \
+  "$(grep -qE '^plan: not run \(no example directory\) \([0-9]+s\)$' "$TMP/pl.out"; echo $?)"
+echo '{"selection": null, "dirs": []}' > "$RUN/selection.json"; rm -f "$RUN/coverage.json"; run_rr plan "$RUN" > "$TMP/pl.out"
+check "plan: a failed example selection is named as such" \
+  "$(grep -qE '^plan: not run \(example selection failed\) \([0-9]+s\)$' "$TMP/pl.out"; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 # At focused under a module root prefix, an example outside it is planned unless out of scope.
 DEPTH_STUB=focused prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review
