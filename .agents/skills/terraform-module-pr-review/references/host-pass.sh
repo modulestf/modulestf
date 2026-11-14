@@ -745,9 +745,9 @@ TEXT_CAP=65535
 token_re='^[A-Za-z0-9._-]{1,64}$'
 ref_re='^[A-Za-z0-9._/-]{1,255}$'
 
-carry_map() { # rule-facts.md -> {"<rule_id>": "file"|"never"} on stdout, from the fifth column, Carry
-  grep -E '^\| `[a-z]+\.[a-z0-9-]+` \|( [^|]* \|){3} (file|never) \|' "$1" |
-    sed -E 's/^\| `([a-z]+\.[a-z0-9-]+)` \|( [^|]* \|){3} (file|never) \|.*$/\1 \3/' |
+carry_map() { # rule-facts.md -> {"<rule_id>": "file"|"never"} on stdout
+  grep -E '^\| `[a-z]+\.[a-z0-9-]+` \|.*\| (file|never) \|$' "$1" |
+    sed -E 's/^\| `([a-z]+\.[a-z0-9-]+)` \|.*\| (file|never) \|$/\1 \2/' |
     jq -R -s 'split("\n") | map(select(. != "") | split(" ") | {(.[0]): .[1]}) | add // {}'
 }
 

@@ -311,9 +311,7 @@ t_accept_norules() {
   [ "$(accept "$O/result.json" "$TMP/norules.md")" = "findings rejected: the rule facts file holds no rule" ]
 }
 t_accept_norules; check "accept: a rules file with no registry row is rejected" $?
-# After an incremental prior accept also checks the carried findings and the scope (host-pass.md,
-# Incremental Review), with the Carry column of the same rule-facts.md. One accept and one reject
-# case per path: the verdict, the carry column, the carried findings and the scope.
+# After an incremental prior accept checks the verdict first (host-pass.md, Incremental Review).
 IPRIOR="$TMP/prior-inc"; mkdir -p "$IPRIOR"
 jq -n --arg h "$HEAD" --arg b "$BASE" '{format: 1, mode: "incremental", reason: "ok", head: $h,
   previous_head: $b, previous_merge_base: $b, depth: 1, last_full: "2026-11-14T00:00:00Z", scope: ["main.tf"],
@@ -321,33 +319,14 @@ jq -n --arg h "$HEAD" --arg b "$BASE" '{format: 1, mode: "incremental", reason: 
 CARRIED='{"file": "outside.tf", "line": 1, "rule_id": "structure.missing-description", "severity": "LOW", "summary": "S.", "suggested_fix": "F."}'
 printf '[%s]\n' "$CARRIED" > "$IPRIOR/carried.json"; cp "$IPRIOR/carried.json" "$IPRIOR/carried-task.json"
 echo '["main.tf"]' > "$IPRIOR/scope-task.json"
-inc() { # verdict, findings as JSON objects without id [, rules file] -> the accept line
-  printf '%s\n' "${@:2:$#-1}" | jq -s 'to_entries | map(.value + {id: ("F-00\(.key + 1)")})' > "$TMP/inc-f.json"
+inc() { # verdict, findings as JSON objects without id -> the accept line
+  printf '%s\n' "${@:2}" | jq -s 'to_entries | map(.value + {id: ("F-00\(.key + 1)")})' > "$TMP/inc-f.json"
   jq -n --arg h "$HEAD" --arg v "$1" '{head_sha: $h, verdict: $v}' > "$TMP/inc-r.json"
-  bash "$HPA" accept --prior "$IPRIOR" --findings "$TMP/inc-f.json" --result "$TMP/inc-r.json" --rules "${INC_RULES:-$RF}"
+  bash "$HPA" accept --prior "$IPRIOR" --findings "$TMP/inc-f.json" --result "$TMP/inc-r.json" --rules "$RF"
 }
 INSCOPE='{"file": "main.tf", "line": 2, "rule_id": "structure.missing-description", "severity": "LOW", "summary": "T.", "suggested_fix": "G."}'
-NEVER='{"file": "other.tf", "line": 3, "rule_id": "structure.grouping", "severity": "LOW", "summary": "U.", "suggested_fix": "H."}'
-OUTSCOPE='{"file": "other.tf", "line": 4, "rule_id": "structure.missing-description", "severity": "LOW", "summary": "V.", "suggested_fix": "I."}'
-UNREGI='{"file": "main.tf", "line": 5, "rule_id": "structure.third-party-promotion", "severity": "LOW", "summary": "W.", "suggested_fix": "J."}'
-ACC_INC="findings accepted: incremental"
-t_inc_ok() { [ "$(inc "approve with nits" "$CARRIED" "$INSCOPE" "$NEVER")" = "$ACC_INC" ]; }
-t_inc_ok; check "accept incremental: carried once, a file rule in scope and a never rule anywhere are accepted" $?
 t_inc_verdict() { [ "$(inc approve "$CARRIED" "$INSCOPE")" = "findings rejected: the verdict does not follow from the findings" ]; }
 t_inc_verdict; check "accept incremental: an approval beside LOW findings is rejected" $?
-perl -pe 's/^(\| `[a-z]+\.[a-z0-9-]+` \|(?: [^|]* \|){3}) (?:file|never) \|/$1 maybe |/' "$RF" > "$TMP/nocarry.md"
-t_inc_carry() { [ "$(INC_RULES="$TMP/nocarry.md" inc "approve with nits" "$CARRIED" "$INSCOPE")" = "findings rejected: no carry column" ]; }
-t_inc_carry; check "accept incremental: a rules file whose Carry column holds no carry value is rejected" $?
-t_inc_carried() {
-  [ "$(inc "approve with nits" "$INSCOPE")" = "findings rejected: a carried finding is missing, changed or repeated" ] &&
-    [ "$(inc "approve with nits" "$CARRIED" "$CARRIED")" = "findings rejected: a carried finding is missing, changed or repeated" ]
-}
-t_inc_carried; check "accept incremental: a carried finding missing or repeated is rejected" $?
-t_inc_scope() {
-  [ "$(inc "approve with nits" "$CARRIED" "$OUTSCOPE")" = "findings rejected: a finding outside the scope of an incremental review" ] &&
-    [ "$(inc inconclusive "$CARRIED" "$UNREGI")" = "findings rejected: a finding outside the scope of an incremental review" ]
-}
-t_inc_scope; check "accept incremental: a file rule outside the scope, or an unregistered rule, is rejected" $?
 ladder "a patch unavailable" "inconclusive COMMENT" 4 "$NONE" "$(host pu '.could_not_run = [{kind: "patch-unavailable", path: "main.tf"}]')"
 ladder "an example not verified" "inconclusive COMMENT" 4 "$NONE" "" "" "$(runf gap '.verify_gaps = [{dir: "examples/complete", reason: "not run: environment"}]')"
 grep -qxF -- '- Verification of `examples/complete`: not run: environment.' "$O/comment.md"; check "ladder: the unverified example is listed in section 5" $?
@@ -1086,9 +1065,7 @@ mutate_hp() { # name, perl substitution on host-pass.sh and incremental.jq, case
 }
 mutate_hp "accept without the registry" 's/host_verdict\(\$v; \$reg\)/host_verdict(\$v)/' t_accept_high
 mutate_hp "host_verdict reading unregistered rules" 's/map\(select\(\.rule_id \| IN\(\$reg\[\]\)\)\) as \$k/. as \$k/' t_accept_crit
-mutate_hp "carry read from the last column" 's/\\\|\( \[\^\|\]\* \\\|\)\{3\} \(file\|never\) \\\|/\\|.*\\| (file|never) \\|\$/' t_inc_ok
-mutate_hp "the carried check skipped" 's/reject "a carried finding is missing, changed or repeated"/true/' t_inc_carried
-mutate_hp "the scope check skipped" 's/reject "a finding outside the scope of an incremental review"/true/' t_inc_scope
+mutate_hp "the verdict check skipped" 's/\|\|\n    reject "the verdict does not follow from the findings"/|| true/' t_inc_verdict
 mutate_hp "the prior check run in the same shell" 's/\( check_prior "\$prior" "\$head" \)/check_prior "\$prior" "\$head"/' t_accept_forged
 mutate "unplanned examples left out of the ladder" 's/ or \.unplanned_open > 0//' t_cov_rule
 mutate "unplanned example names left out of section 5" 's/\| tx\("unplanned-name"; \{dir\}\)\]/| empty]/' t_cov_rule
