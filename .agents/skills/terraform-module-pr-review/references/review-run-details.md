@@ -36,6 +36,10 @@ A refused run renders nothing. The reply says the review is inconclusive and why
 
 An escalation is refused once `handover` has run. A refusal of that kind, a `depth.json` that differs from its pin and a failed `depth.sh escalate` each write `state/stop` and exit 1; every later command but `cleanup` then refuses, so a run never renders at a depth it could not raise. `render` refuses findings that are not a JSON list, and passes every refusal of render-comment.sh through unchanged, the COMPACT cap advice included.
 
+## Plan Examples
+
+`plan` passes the plan pass the examples of the selection in order. At focused it keeps those the depth selects, and an example outside the module root, such as one at the repository root that calls a submodule, unless the depth puts it out of scope. With a profile named and no example selected, its line is `plan: not run (no example calls the module)`, never the depth.
+
 ## Handover
 
 `handover/task.md` is the records' `task.md` with these changes, as [host-pass.md](host-pass.md#handover) sets out:

@@ -262,6 +262,55 @@ for my $n (sort grep { $_ ne "." && $_ ne ".." } readdir $dh) {
 }
 '
 
+# With a module root prefix, the example directories at the repository root that call the
+# module root: "examples/<name>", a real directory reached through no link, holding a .tf file
+# directly whose local module source, resolved from it, is the module root, through no link.
+# One line each, "touched<TAB><dir>" when the change has a path under it, else
+# "caller<TAB><dir>", touched first, each in byte order. A name outside [A-Za-z0-9._-], a link,
+# a .tf file that is a link or over 1 MiB, and a source that climbs out of the repository are
+# never read or followed. Exit 3: not an array of file objects.
+ROOTEX_PL='
+use strict; use warnings; use JSON::PP; use Cwd qw(realpath);
+my ($root, $pre, $files) = @ARGV; $pre =~ s{/\z}{};
+my $d = do { local $/; open my $fh, "<", $files or exit 3; eval { decode_json(<$fh>) } };
+exit 3 unless ref $d eq "ARRAY" && !grep { ref $_ ne "HASH" } @$d;
+my $ex = "$root/examples";
+exit 0 if -l $ex || !-d $ex;
+sub resolve { # a relative path from a repository-relative directory, or undef when it climbs out
+  my @s;
+  for my $p (split m{/}, shift) {
+    next if $p eq "" || $p eq ".";
+    if ($p eq "..") { return undef unless @s; pop @s } else { push @s, $p }
+  }
+  return join "/", @s;
+}
+my (@t, @c);
+opendir my $dh, $ex or exit 0;
+for my $n (sort grep { /\A[A-Za-z0-9._-]+\z/ && $_ ne "." && $_ ne ".." } readdir $dh) {
+  my $p = "$ex/$n";
+  next if -l $p || !-d $p;
+  opendir my $d2, $p or next;
+  my $calls = 0;
+  for my $f (sort grep { /\.tf\z/ } readdir $d2) {
+    my $fp = "$p/$f";
+    next if -l $fp || !-f $fp || (-s $fp // 0) > 1048576;
+    open my $fh, "<", $fp or next;
+    my $text = do { local $/; <$fh> } // "";
+    while ($text =~ /\bsource\s*=\s*"(\.\.?\/[^"]*)"/g) {
+      my $r = resolve("examples/$n/$1");
+      next unless defined $r && $r eq $pre;
+      my $rp = realpath("$root/$r");
+      $calls = 1 if defined $rp && $rp eq "$root/$r";
+    }
+  }
+  next unless $calls;
+  my $touched = grep { my $f = $_; grep { defined && !ref && index($_, "examples/$n/") == 0 } $f->{filename}, $f->{previous_filename} } @$d;
+  push @{$touched ? \@t : \@c}, "examples/$n";
+}
+print "touched\t$_\n" for @t;
+print "caller\t$_\n" for @c;
+'
+
 # The hosts named by a module or provider source on a line the change adds to a .tf file,
 # lowercased, one per line.
 HOSTS_PL='
@@ -389,6 +438,10 @@ select_examples() {
   else
     awk -F '\t' '{ print "all\t" $2 }' "$W/all.tsv" > "$W/sel.tsv"
     jq -cn --arg t "$tool" '{tool: $t, fallback: null, inert: false}' > "$W/selection.json"
+  fi
+  # A submodule's examples can sit at the repository root: those that call it come last.
+  if [ -n "$PREFIX" ]; then
+    perl -e "$ROOTEX_PL" "$CROOT" "$PREFIX" "$FILES" >> "$W/sel.tsv" || die "--files is not a JSON array of file objects"
   fi
 }
 dirs_list() { # the selected example directories, their reasons and affected reasons, into the named file
@@ -692,7 +745,10 @@ while IFS="$TAB" read -r reason aff rel; do
   if [ "$HAVE_TF" = 0 ]; then
     HEADJ="$(side "" "" terraform-absent "")"
   else
-    verify "$CROOT" "$MROOT" "$rel"; HEADJ=$SIDEJ
+    # The tree whose own files a marker is looked for in: the module root, or for an example
+    # at the repository root outside it, the whole tree.
+    MR="${PREFIX%/}"; case "$rel" in "$PREFIX"*) ;; *) MR= ;; esac
+    verify "$CROOT" "$CROOT${MR:+/$MR}" "$rel"; HEADJ=$SIDEJ
     if [ "$(printf '%s' "$HEADJ" | jq -r 'select(.record == "code-result" and .validate != 0) | "rerun"')" = rerun ]; then
       if ! base_ready; then
         BASEJ="$(side "" "" base-unavailable "")"
@@ -701,7 +757,7 @@ while IFS="$TAB" read -r reason aff rel; do
       else
         BROOT="$(cd "$BTREE" && pwd -P)"
         if [ "$(cd "$BROOT/$rel" 2> /dev/null && pwd -P)" = "$BROOT/$rel" ]; then
-          verify "$BROOT" "$BROOT/${PREFIX%/}" "$rel"; BASEJ=$SIDEJ
+          verify "$BROOT" "$BROOT/$MR" "$rel"; BASEJ=$SIDEJ
         else # a symbolic link, or reached through one, at the base: never entered
           BASEJ="$(side "" "" base-unavailable "")"
         fi

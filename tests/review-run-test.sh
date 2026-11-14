@@ -661,6 +661,24 @@ for rc in 2 1; do
   run_rr cleanup "$RUN" > /dev/null
 done
 
+# A named profile and no example selected: the plan line names the cause, not the depth.
+DEPTH_STUB=deep prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review
+run_rr verify "$RUN" > /dev/null
+jq '.dirs = []' "$RUN/selection.json" > "$TMP/sel-empty.json" && cat "$TMP/sel-empty.json" > "$RUN/selection.json"
+run_rr plan "$RUN" > "$TMP/pl.out"
+check "plan: with a profile and no example selected, the line names the cause" \
+  "$(grep -qE '^plan: not run \(no example calls the module\) \([0-9]+s\)$' "$TMP/pl.out"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+# At focused under a module root prefix, an example outside it is planned unless out of scope.
+DEPTH_STUB=focused prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review
+jq '.prefix = "modules/a"' "$RUN/host/host.json" > "$TMP/host-prefix.json" && cat "$TMP/host-prefix.json" > "$RUN/host/host.json"
+jq '.dirs = [{dir: "examples/one"}, {dir: "examples/two"}, {dir: "examples/three"}, {dir: "modules/a/examples/four"}]' \
+  "$RUN/selection.json" > "$TMP/sel-root.json" && cat "$TMP/sel-root.json" > "$RUN/selection.json"
+: > "$STUB_LOG"; run_rr plan "$RUN" > /dev/null 2>&1
+check "plan: at focused a repository root example outside the module root is planned, one out of scope is not" \
+  "$(grep '^plan-pass plan ' "$STUB_LOG" | grep -qE ' examples/one examples/three$'; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
 # --- 3b. evidence: the depth's commands in one, side by side at deep; no .tf change skips schema ---------
 prep
 run_rr evidence "$RUN" > "$TMP/e.out"
