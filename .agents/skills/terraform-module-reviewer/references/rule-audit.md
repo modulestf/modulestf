@@ -57,11 +57,13 @@ Three rows change `scope` after the facts engine review found them:
 ## Severities that needed a reading
 
 - `compat.variable-removed`, `compat.variable-now-required`, `compat.type-narrowed`, `compat.resource-address-changed`, `compat.version-constraint-raised`, `compat.generated-policy-narrowed`: CRITICAL undeclared, HIGH declared with no migration path. Check A gives the declared break with a migration path no level, so it is not a finding of these rules.
-- `compat.default-changed` adds MEDIUM: the Check A band "a default whose effect is cosmetic".
+- `compat.default-changed` adds MEDIUM, the Check A band "a default whose effect is cosmetic", and LOW, its bands for a default moved from a rejected value to null and for a new input's default that a service announced.
 - `coverage.attribute-not-output`: HIGH for an output wrong in a supported mode, MEDIUM for a computed attribute with no output.
-- `structure.input-ignored-in-branch`: CRITICAL, HIGH and MEDIUM, all three named in its Check C bullet.
+- `structure.input-ignored-in-branch`: CRITICAL, HIGH, MEDIUM and LOW, all four named in its Check C bullets.
+- `structure.docs-contradict-code`: HIGH, MEDIUM and LOW, by what a caller who follows the text gets, all three named in its Check C bullet.
 - `structure.passthrough-default-drift`: HIGH, MEDIUM and LOW; its CRITICAL case is reported as `structure.insecure-default`, so CRITICAL is not in its set.
 - `structure.passthrough-field-drift`: HIGH and MEDIUM.
+- `examples.disabled-call-missing`: MEDIUM, and LOW for a call the base's complete example lacked too, both named in the Check D block.
 - `structure.insecure-default`: CRITICAL, the only level Check C gives a weakened secure default.
 - `examples.stale-reference`: HIGH. The Check D block names no level for it; an example that "can no longer initialize" is broken by the change before apply, the HIGH bullet.
 - `profile.layout-divergence`: MEDIUM for a `LICENSE` that is not Apache 2.0 ("at the severity of a missing required file") and LOW when cosmetic.
