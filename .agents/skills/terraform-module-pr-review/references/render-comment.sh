@@ -161,12 +161,13 @@ RJ -e -R --slurp 'include "render-comment"; valid_assessment' "$assessment" > /d
   || die "the assessment is not printable ASCII text of at most two paragraphs and 700 characters, the STANDARD limit"
 
 # The Checks signal: the checks file when host-pass.sh accepts it, else unknown (host-pass.md).
-# jobless_only: every read complete, every check run and commit status passed, and the only
+# jobless_only: every read complete, the job-less list under host-pass.sh's cap of 10 (a list at
+# the cap may have lost an entry), every check run and commit status passed, and the only
 # unknown is workflows that ended action_required or failure without starting a job
 # (verdict.md, Host Signals); the ladder then reads the signal as jobless, not unknown.
 if [ "$(bash "$HERE/host-pass.sh" check "$checks" --head "$head" 2> /dev/null)" = "checks accepted" ]; then
   cj="$(jq -c '{accepted: true, signal, own_check, own_check_dropped, own_jobs_dropped, own_jobs_unreadable, jobless,
-    jobless_only: (.jobless != [] and .reads == "ok" and (.own_jobs_unreadable | not)
+    jobless_only: (.jobless != [] and (.jobless | length) < 10 and .reads == "ok" and (.own_jobs_unreadable | not)
       and all(.jobless[]; .conclusion | IN("action_required", "failure"))
       and all(.check_runs[]; .status == "completed" and (.conclusion | IN("success", "neutral", "skipped")))
       and (.statuses == null or .statuses.total_count == 0 or .statuses.state == "success")),

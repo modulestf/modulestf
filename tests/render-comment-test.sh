@@ -2390,7 +2390,7 @@ t_km_gap_and() { render "$(pair review.verification-incomplete MEDIUM structure.
 t_km_gap_and; check "known MEDIUM: a gap MEDIUM beside a known one blocks at rule 6" $?
 mutate "rule 4 above the known MEDIUM" 's/elif \(\$m \| not\) and \(\.triage/elif (.triage/' t_km
 mutate "rule 5 above the known MEDIUM" 's/elif \(\$m \| not\) and \.unresolved > 0/elif .unresolved > 0/' t_km_threads
-mutate "a gap MEDIUM counted as a known blocker" 's/ and \(\.rule_id \| IN\(gap_rules\[\]\) \| not\)\)/)/' t_km_gap
+mutate "a gap MEDIUM counted as a known blocker" 's/and \(\.rule_id \| startswith\("review\."\) \| not\)\);/);/' t_km_gap
 
 # Job-less: the COMPACT tier is not taken, so the maintainer item stays; the mutations.
 t_jobless_compact() {
@@ -2409,7 +2409,7 @@ mutate "jobless reaches rule 8" 's/ or \$g\.checks == "jobless" then/ then/' t_j
 mutate "jobless for any conclusion" 's/\n      and all\(\.jobless\[\]; \.conclusion \| IN\("action_required", "failure"\)\)//' t_jobless_cancelled
 mutate "jobless beside an open check run" 's/\n      and all\(\.check_runs\[\]; \.status == "completed" and \(\.conclusion \| IN\("success", "neutral", "skipped"\)\)\)//' t_jobless_queued
 mutate "jobless with a pending status" 's/\n      and \(\.statuses == null or \.statuses\.total_count == 0 or \.statuses\.state == "success"\)\)/)/' t_jobless_pending
-mutate "jobless with a failed read" 's/\.jobless != \[\] and \.reads == "ok" and/.jobless != [] and/' t_jobless_reads
+mutate "jobless with a failed read" 's/ and \.reads == "ok" and/ and/' t_jobless_reads
 mutate "jobless in COMPACT" 's/\(\$v\.rule \| IN\(4, 7, 8\)\) and \$l\.signals\.checks != "jobless"/($v.rule | IN(4, 7, 8))/' t_jobless_compact
 mutate "missing jobs taken as test evidence" 's/ or \(\(\$checks\.jobless \/\/ \[\]\) != \[\]\) then \./ then ./' t_jobless_ci
 mutate "the jobless rule 7 rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) then tx\("rationale-7-jobless"\)//' t_jobless
@@ -2510,6 +2510,34 @@ mutate "the exception mode not checked" 's/if IN\("role", "docker"\) then "runne
 mutate "the exception lines dropped" 's/ elif \(\$c\.gate \| skip_mode\) == "runner" then "-exception"//' t_cov_exc
 mutate "the exception sentence dropped" 's/\(if \(\$cov\[0\]\.gate \| skip_mode\) == "runner" then "-exception" else "" end\)/""/' t_cov_exc
 mutate "a laptop run takes exception entries" 's/and all\(\$cs\[\]; \.gate \| skip_mode == \$run\.plan_mode\)//' t_cov_exc_laptop
+
+# --- Review follow-ups: a job-less list at host-pass.sh's cap may have lost an entry, so it stays
+# unknown; an unresolved provider keeps its directory's floor triggers unknown; review.path-missing
+# is no known blocker; the floors merge base is checked.
+t_jobless_cap() {
+  t_jobless_amb cap "$(jq -nc '[range(0; 10) | {workflow: "w\(.).yml", conclusion: "failure"}]' | sed 's/^/.jobless = /') | .check_runs = []"
+}
+t_jobless_cap; check "checks: a job-less list at the cap of 10 stays unknown at rule 4" $?
+t_jobless_nine() { render "$NONE" "" "$(checks jl9 unknown "$(jq -nc '[range(0; 9) | {workflow: "w\(.).yml", conclusion: "failure"}]' | sed 's/^/.jobless = /') | .check_runs = []")"; [ "$(rule)" = 7 ]; }
+t_jobless_nine; check "checks: nine job-less entries are jobless, approve with nits" $?
+mutate "a job-less list at the cap taken as whole" 's/ and \(\.jobless \| length\) < 10//' t_jobless_cap
+FLU='{head_sha: "'"$HEAD"'", base_sha: "'"$BASE"'", dirs: [{dir: ".", provider: "hashicorp/aws", old_floor: null, floor: null, read: false},
+  {dir: ".", provider: "hashicorp/random", old_floor: "3.5.0", floor: "3.6.0", read: true}]}'
+t_fl_unresolved() { t_fl_unread ".floors = $FLU"; }
+t_fl_unresolved; check "floor: a provider not resolved beside one read leaves the trigger an unknown" $?
+t_fl_unread ".floors = $FLU | .floors.dirs[0].provider = null"; check "floor: a source outside the grammar beside one read leaves the trigger an unknown" $?
+refused "a floors entry read with no versions" "$NONE" "" "" "$(RFL b8 ".floors = $FLU | .floors.dirs[0].read = true")"
+refused "a floors entry read with no provider" "$NONE" "" "" "$(RFL b9 ".floors = $FLR | .floors.dirs[0].provider = null")"
+t_fl_base() { t_fl_unread ".floors = $FLR | .floors.base_sha = \"$HEAD\""; }
+mutate "floors of another merge base accepted" 's/\n       and \$h\.merge_base != null and \$fl\.base_sha == \$h\.merge_base\)/)/' t_fl_base
+mutate "a floors entry read with no versions accepted" 's/and \(\(\.read \| not\) or \(\.provider != null and \.floor != null and \.old_floor != null\)\)/and true/' t_fl_read_noversion
+t_fl_read_noversion() { render "$NONE" "" "" "$(RFL b10 ".floors = $FLU | .floors.dirs[0].read = true")"; [ "$ST" = 2 ]; }
+PM="$(f review.path-missing MEDIUM main.tf null "The change names a path the workspace does not have." "no code change: none." | list pm)"
+t_pm_unknown() { render "$PM" "$HKM"; [ "$(rule)" = 4 ] && [ "$(verdict)" = "inconclusive COMMENT" ]; }
+t_pm_unknown; check "known MEDIUM: review.path-missing with an unknown stays inconclusive at rule 4" $?
+t_pm_alone() { render "$PM"; [ "$(rule)" = 6 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ]; }
+t_pm_alone; check "known MEDIUM: review.path-missing alone still blocks at rule 6" $?
+mutate "a review.* MEDIUM counted as a known blocker" 's/and \(\.rule_id \| startswith\("review\."\) \| not\)\);/);/' t_pm_unknown
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

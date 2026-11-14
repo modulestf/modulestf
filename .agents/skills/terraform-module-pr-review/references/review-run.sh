@@ -1092,21 +1092,26 @@ floors_of() {
   mbs="$(jq -r '.binding.merge_base // ""' "$RUN/depth.json" 2> /dev/null)"
   [[ "$mbs" =~ $sha_re ]] || return 1
   [ ! -f "$RUN/facts/missing.json" ] || miss="$(cat "$RUN/facts/missing.json")"
+  # A provider whose floor the pass could not resolve, an old floor unresolved, the pair
+  # unresolved or a source outside the grammar, gives an entry with no versions that is never read.
   local list; list="$(jq -c '[.directories | to_entries[] | .key as $d | .value | to_entries[]
-      | select(.key | test("^[a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63}$"))
-      | select(.value.minimum? and .value.old_floor?)
-      | {dir: $d, provider: .key, old_floor: .value.old_floor, floor: .value.minimum}]' "$v")" || return 1
+      | (.key | test("^[a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63}$")) as $ok
+      | if $ok and .value.minimum? and .value.old_floor? then
+          {dir: $d, provider: .key, old_floor: .value.old_floor, floor: .value.minimum}
+        elif ($ok | not) or .value.unresolved? or .value.old_floor_unresolved? then
+          {dir: $d, provider: (if $ok then .key else null end), old_floor: null, floor: null, unresolved: true}
+        else empty end] | unique_by([.dir, .provider])' "$v")" || return 1
   local out='[]' e dir prov of fv read
   while IFS= read -r e; do
     [ -n "$e" ] || continue
     prov="$(jq -r .provider <<< "$e")"; of="$(jq -r .old_floor <<< "$e")"; fv="$(jq -r .floor <<< "$e")"
     read=false
-    if [ -f "$RUN/facts/$prov/$of/index.json" ] && [ -f "$RUN/facts/$prov/$fv/index.json" ] &&
+    if [ "$(jq -r '.unresolved // false' <<< "$e")" = false ] && [ -f "$RUN/facts/$prov/$of/index.json" ] && [ -f "$RUN/facts/$prov/$fv/index.json" ] &&
       jq -e --arg p "$prov" --arg a "$of" --arg b "$fv" \
         'all(.missing[]?; .provider != $p or (any(.versions[]?; . == $a or . == $b) | not))' <<< "$miss" > /dev/null 2>&1; then
       read=true
     fi
-    out="$(jq -c --argjson e "$e" --argjson r "$read" '. + [$e + {read: $r}]' <<< "$out")" || return 1
+    out="$(jq -c --argjson e "$e" --argjson r "$read" '. + [$e + {read: $r} | del(.unresolved)]' <<< "$out")" || return 1
   done < <(jq -c '.[]' <<< "$list")
   jq -c -n --arg h "$HEAD_SHA" --arg b "$mbs" --argjson d "$out" '{head_sha: $h, base_sha: $b, dirs: $d[:256]}'
 }

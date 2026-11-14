@@ -173,8 +173,11 @@ def valid_floors: type == "object" and keys == ["base_sha", "dirs", "head_sha"]
         and keys == ["dir", "floor", "old_floor", "provider", "read"]
         and (.dir == "." or (.dir | type == "string" and length <= 1024 and test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
              and all(split("/")[]; . != "." and . != "..")))
-        and (.provider | type == "string" and test("^[a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63}$"))
-        and (.floor | floor_ver) and (.old_floor | floor_ver) and (.read | type == "boolean"))
+        and (.provider == null or (.provider | type == "string" and test("^[a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63}$")))
+        and (.floor == null or (.floor | floor_ver)) and (.old_floor == null or (.old_floor | floor_ver))
+        and (.read | type == "boolean")
+        # a provider or a floor not resolved is never read
+        and ((.read | not) or (.provider != null and .floor != null and .old_floor != null)))
         and (map([.dir, .provider]) | length == (unique | length)));
 # compat.claim-contradicts-analysis sits one band below the highest compat.* code finding that
 # refutes its claim, compat.break-unexplained aside, and never fires without one (quoted-claims.md).
@@ -390,11 +393,12 @@ def trigger_at($p): {category, location: loc_at(.file | repo_path($p))};
 # (verdict.md, Covered safety-gate skips): they leave rule 4, and keep the verdict off rule 8, as
 # a Checks signal of jobless does (verdict.md, Host Signals).
 
-# The findings that are themselves verification gaps: rule 4 reads them, rule 6 never does.
+# The findings that are themselves verification gaps: rule 4 reads them as unknowns.
 def gap_rules: ["review.check-not-run", "review.no-change-identified", "review.verification-incomplete"];
-# A known MEDIUM blocker: a MEDIUM finding that is no gap. It outranks every unknown, so rules 4
-# and 5 apply only without one and rule 6 blocks on it (verdict.md, The Ladder).
-def known_medium: any(.[]; .severity == "MEDIUM" and (.rule_id | IN(gap_rules[]) | not));
+# A known MEDIUM blocker: a MEDIUM finding outside review.*, which says how far the review reached
+# and is no defect of the change. It outranks every unknown, so rules 4 and 5 apply only without
+# one and rule 6 blocks on it (verdict.md, The Ladder).
+def known_medium: any(.[]; .severity == "MEDIUM" and (.rule_id | startswith("review.") | not));
 
 def ladder:
   (.findings | map(select(.rule_id != "review.tool-disputed"))) as $f

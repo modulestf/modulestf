@@ -55,11 +55,13 @@ case "${SCHEMA_STUB:-overflow}" in
   deeppartial) mkdir -p "$1"; echo '{"format": 1, "reasons": ["page"], "missing": []}' > "$1/missing.json"; echo "$src"
     echo "schema pass: deep partial page, 1 sheets, 10 bytes, 1 types without a sheet"; exit 0 ;;
   badsource) mkdir -p "$1"; echo "$src"; echo "schema pass: source modulestf/m x \$(touch x)"; echo "schema pass: focused"; exit 0 ;;
-  floors) mkdir -p "$1/hashicorp/aws/6.42.0" "$1/hashicorp/aws/6.44.0" "$1/hashicorp/random/3.6.0" "$1/hashicorp/null/3.1.0" "$1/hashicorp/null/3.2.0"
-    for v in aws/6.42.0 aws/6.44.0 random/3.6.0 null/3.1.0 null/3.2.0; do echo '{}' > "$1/hashicorp/$v/index.json"; done
+  floors) mkdir -p "$1/hashicorp/aws/6.42.0" "$1/hashicorp/aws/6.44.0" "$1/hashicorp/random/3.6.0" "$1/hashicorp/null/3.1.0" "$1/hashicorp/null/3.2.0" "$1/hashicorp/random/3.5.0"
+    for v in aws/6.42.0 aws/6.44.0 random/3.6.0 random/3.5.0 null/3.1.0 null/3.2.0; do echo '{}' > "$1/hashicorp/$v/index.json"; done
     echo '{"format": 1, "directories": {".": {"hashicorp/aws": {"latest": "6.70.0", "minimum": "6.44.0", "old_floor": "6.42.0"},
       "hashicorp/random": {"latest": "3.7.0", "minimum": "3.6.0", "old_floor": "3.1.0"}, "hashicorp/time": {"latest": "0.13.0", "minimum": "0.9.0"},
-      "!aws": {"unresolved": "registry_host"}}, "modules/x": {"hashicorp/null": {"latest": "3.2.4", "minimum": "3.2.0", "old_floor": "3.1.0"}}}}' > "$1/versions.json"
+      "!aws": {"unresolved": "registry_host"}}, "modules/x": {"hashicorp/null": {"latest": "3.2.4", "minimum": "3.2.0", "old_floor": "3.1.0"}},
+      "modules/y": {"hashicorp/aws": {"latest": "6.70.0", "minimum": "6.44.0", "old_floor_unresolved": "constraint_unparsable"},
+        "hashicorp/random": {"latest": "3.7.0", "minimum": "3.6.0", "old_floor": "3.5.0"}, "hashicorp/tls": {"unresolved": "network"}}}}' > "$1/versions.json"
     echo '{"format": 1, "reasons": ["page"], "missing": [{"provider": "hashicorp/null", "type": "resource:null_resource", "versions": ["3.1.0"]}]}' > "$1/missing.json"
     echo "$src"; echo "schema pass: deep partial page, 4 sheets, 10 bytes, 1 types without a sheet"; exit 0 ;;
 esac
@@ -564,15 +566,20 @@ run_rr cleanup "$RUN" > /dev/null
 
 # The provider floors of the run file (verdict.md, Provider floor changes): each directory and
 # provider whose floor moved, read when both versions were published and none is missing, bound
-# to the head and the merge base the depth was bound to.
+# to the head and the merge base the depth was bound to; a provider not resolved, its old floor
+# or its source, gives an entry never read, so a read one beside it clears nothing.
 DEPTH_STUB=deep prep
 SCHEMA_STUB=floors with_tf run_rr schema "$RUN" > /dev/null
 full; run_rr handover "$RUN" > /dev/null; render_to "$TMP/render-fl"
 check "render: the run file's floors from versions.json and missing.json" "$(jq -e --arg h "$(git -C "$RUN/clone" rev-parse HEAD)" --arg b "$(jq -r .binding.merge_base "$RUN/depth.json")" '
   .floors == {head_sha: $h, base_sha: $b, dirs: [
+    {dir: ".", provider: null, old_floor: null, floor: null, read: false},
     {dir: ".", provider: "hashicorp/aws", old_floor: "6.42.0", floor: "6.44.0", read: true},
     {dir: ".", provider: "hashicorp/random", old_floor: "3.1.0", floor: "3.6.0", read: false},
-    {dir: "modules/x", provider: "hashicorp/null", old_floor: "3.1.0", floor: "3.2.0", read: false}]}' "$RUN/render/run-file.json" > /dev/null; echo $?)"
+    {dir: "modules/x", provider: "hashicorp/null", old_floor: "3.1.0", floor: "3.2.0", read: false},
+    {dir: "modules/y", provider: "hashicorp/aws", old_floor: null, floor: null, read: false},
+    {dir: "modules/y", provider: "hashicorp/random", old_floor: "3.5.0", floor: "3.6.0", read: true},
+    {dir: "modules/y", provider: "hashicorp/tls", old_floor: null, floor: null, read: false}]}' "$RUN/render/run-file.json" > /dev/null; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 DEPTH_STUB=deep prep
 SCHEMA_STUB=deeppartial with_tf run_rr schema "$RUN" > /dev/null
@@ -1212,6 +1219,8 @@ ghfiles open false APPROVED
 # repeating the head, lock and identity checks without a second unlock.
 # Updated for the pr-merge line in the description and Don't activate list, with Rule 5's runner
 # sentence shortened, leaving its detail to plan-pass.md, to keep SKILL.md under 16384 bytes.
+# Updated for the verdict ladder where a known MEDIUM blocker outranks unknowns (the rule 4 sentences
+# of SKILL.md and Step 5.5) and skip-coverage covering runner-mode recorded exceptions (Step 5.5).
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1220,7 +1229,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=068b1c3b05eb
+want=e72d7c2fbef9
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"
