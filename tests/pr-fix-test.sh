@@ -413,19 +413,69 @@ t_attrib() {
 }
 t_attrib; check "attribution: A1 to A5 with A5 first, an unchanged main.tf beside a changed variables.tf at the root and in a submodule, an unchanged directory, a HIGH and a MEDIUM at the module level, an empty and a malformed file, a pinned LOW raised to MEDIUM" $?
 
+# --- 4c. Surfaced late (write-path.md, Fingerprints and the Local Verdict, L1 to L4) ---------------
+
+VT='variable "name" {\n  type = string\n}\n\nvariable "size" {\n  description = "Size."\n  type        = number\n}\n'
+late() { # finding, pinned findings, hunks TSV, file text (printf form) [, prefix]: "late", "fix" or "unattributed"
+  JL -r -n --argjson f "$1" --argjson p "$2" --arg h "$(printf "$3")" --arg t "$(printf "$4")" --arg x "${5:-}" 'include "fix-run";
+    {findings: [$f], pinned: $p, changed: ["variables.tf", "main.tf"], prefix: $x, hunks: ($h | fix_hunks($x)),
+     texts: {($f.file): $t}} | attribution | if (.late | length) == 1 then "late" elif (.attributable | length) == 1 then "fix" else "unattributed" end'
+}
+fl() { fnd "$1" "$2" "$3" | jq -c --argjson l "$4" --arg s "${5:-s}" '.line = $l | .summary = $s'; }
+t_late() {
+  local h='variables.tf\t6\t7\n' r='resource "a" "b" {\n' k
+  for k in $(seq 2 20); do r="$r  x$k = $k\n"; done; r="$r}\n"
+  # The three shapes of a live batch: a comment the fix did not touch and a HIGH on the change's own block surface late,
+  # a MEDIUM on a line the fix reworded is the fix's.
+  [ "$(late "$(fl structure.comment-redundant MEDIUM variables.tf 2)" '[]' "$h" "$VT")" = late ] &&
+  [ "$(late "$(fl scope.boundary HIGH variables.tf 1 'In `variable "name"`.')" '[]' "$h" "$VT")" = late ] &&
+  [ "$(late "$(fl structure.comment-wording MEDIUM variables.tf 6)" '[]' "$h" "$VT")" = fix ] &&
+  # The window: 3 lines either side of a changed line; a deletion marks the line before it.
+  [ "$(late "$(fl structure.x MEDIUM variables.tf 3)" '[]' "$h" "$VT")" = fix ] &&
+  [ "$(late "$(fl structure.x MEDIUM variables.tf 2)" '[]' 'variables.tf\t5\t5\n' "$VT")" = fix ] &&
+  [ "$(late "$(fl structure.x MEDIUM variables.tf 1)" '[]' 'variables.tf\t5\t5\n' "$VT")" = late ] &&
+  # The block rule: the opening line of a block that holds a changed line is the fix's; a line inside it outside the window is not.
+  [ "$(late "$(fl structure.x MEDIUM main.tf 1)" '[]' 'main.tf\t15\t15\n' "$r")" = fix ] &&
+  [ "$(late "$(fl structure.x MEDIUM main.tf 5)" '[]' 'main.tf\t15\t15\n' "$r")" = late ] &&
+  [ "$(late "$(fl structure.x MEDIUM main.tf 1)" '[]' 'main.tf\t25\t25\n' "$r")" = late ] &&
+  # L1 to L4: a pinned tuple raised, a null line, a file not in the tree, the module level and a malformed file stay the fix's.
+  [ "$(late "$(fl structure.x MEDIUM variables.tf 1)" "[$(fnd structure.x LOW variables.tf)]" "$h" "$VT")" = fix ] &&
+  [ "$(late "$(fl structure.x MEDIUM variables.tf null)" '[]' "$h" "$VT")" = fix ] &&
+  [ "$(late "$(fl structure.x MEDIUM variables.tf 40)" '[]' "$h" "$VT")" = fix ] &&
+  [ "$(JL -r -n --argjson f "$(fl structure.x MEDIUM variables.tf 1)" 'include "fix-run";
+      {findings: [$f], pinned: [], changed: ["variables.tf"], prefix: "", hunks: {}, texts: {}} | attribution | .late | length')" = 0 ] &&
+  [ "$(late "$(fl prose.x HIGH . 1)" '[]' "$h" "$VT")" = fix ] &&
+  [ "$(late "$(fl structure.x MEDIUM 'x//y.tf' 1)" '[]' "$h" "$VT")" = fix ] &&
+  # The hunks: under the prefix, made module-relative, a sibling directory left out; the late file repository-relative.
+  [ "$(JL -c -n 'include "fix-run"; "modules/x/a.tf\t3\t4\nmodules/x/a.tf\t9\t9\nmodules/xy/b.tf\t1\t1\nc.tf\t1\t1\n" | fix_hunks("modules/x")')" = '{"a.tf":[[3,4],[9,9]]}' ] &&
+  [ "$(JL -r -n --argjson f "$(fl structure.x MEDIUM variables.tf 1)" --arg t "$(printf "$VT")" 'include "fix-run";
+      {findings: [$f], pinned: [], changed: ["variables.tf"], prefix: "modules/x", hunks: {"variables.tf": [[6, 7]]},
+       texts: {"variables.tf": $t}} | attribution | .late[0].file')" = modules/x/variables.tf ] &&
+  # The count: the surfaced-late findings are not introduced, the fix's are.
+  [ "$(JL -c -n --argjson f "[$(fl structure.comment-redundant MEDIUM variables.tf 2), $(fl structure.comment-wording MEDIUM variables.tf 6)]" \
+      --arg t "$(printf "$VT")" 'include "fix-run";
+      ({findings: $f, pinned: [], changed: ["variables.tf"], prefix: "", hunks: {"variables.tf": [[6, 7]]}, texts: {"variables.tf": $t}} | attribution) as $r
+      | introduced([]; msub([$r.attributable[] | fp("")]; [$r.late[] | fp("")]))')" = '[["structure.comment-wording","variables.tf","","MEDIUM"]]' ]
+}
+t_late; check "surfaced late: a comment the fix did not touch and a HIGH on an untouched block are not introduced, a reworded line is; the window, the block rule, a raise, a null line, an absent file, the module level, a malformed file, the hunks and the count" $?
+
 # --- 5. Loop stops -----------------------------------------------------------------------------
 
 loop() { JL -r -n --argjson x "$1" 'include "fix-run"; $x | loop_decision | "\(.stop) \(.reason)"'; }
 t_loop() {
   loop '{"history": [["a","b"],["a"]], "round": 1, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^false ' &&
-  loop '{"history": [["a","b"],["a","b"]], "round": 1, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^true no progress: the open set' &&
-  loop '{"history": [["a","b"],["a","c"]], "round": 1, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^true no progress: the open set' &&
+  loop '{"history": [["a","b"],["a","b"]], "round": 1, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^true no progress: no item of the open set closed' &&
+  loop '{"history": [["a","b"],["a","c"]], "round": 1, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^false the next round may start' &&
+  loop '{"history": [["a"],["a","c"]], "round": 1, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^true no progress: no item of the open set closed' &&
+  loop '{"history": [["a","a"],["a","c"]], "round": 1, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^false ' &&
+  loop '{"history": [["a","b"],["b","x"],["x","y"]], "round": 2, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^false the next round may start' &&
+  loop '{"history": [["a","b"],["b","x"],["x","y"],["y","z"]], "round": 3, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^true round 3 is the last' &&
   loop '{"history": [["a","b"],["b"],["a"]], "round": 2, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^true no progress: a closed item reappears' &&
   loop '{"history": [["a","b","c"],["a","b"],["a"]], "round": 3, "limit": 3, "verdict": "open", "nonactionable": false}' | grep -q '^true round 3 is the last' &&
   loop '{"history": [["a"],[]], "round": 1, "limit": 3, "verdict": "nits", "nonactionable": false}' | grep -q '^true the local verdict is nits' &&
   loop '{"history": [["a"],["a"]], "round": 1, "limit": 3, "verdict": "open", "nonactionable": true}' | grep -q '^true every open item is non-actionable'
 }
-t_loop; check "loop: no progress, a reappearing fingerprint, round 3, nits and non-actionable stop" $?
+t_loop; check "loop: no item closed is no progress, a closed item with a new one joining is progress, a reappearing fingerprint, round 3 with new items joining, nits and non-actionable stop" $?
 
 # --- 6. Checks ---------------------------------------------------------------------------------
 
@@ -723,7 +773,7 @@ t_loop_e2e() { # round 1 leaves the finding open and adds one: no progress stops
   fr docs "$RUN" --round 1 > /dev/null && fr commit "$RUN" --round 1 > /dev/null || return 1
   jq --argjson f "$ROUND0" '$f + [$f[0] | .line = 9 | .summary = "Another." | .suggested_fix = "x"]' -n > "$TMP/f1.json"
   fr compare "$RUN" --round 1 --findings "$TMP/f1.json" > "$TMP/c.out" 2>&1 || return 1
-  grep -q '^loop: stop, no progress: the open set did not shrink' "$TMP/c.out" && grep -q 'introduced: structure.variable-description variables.tf  MEDIUM' "$TMP/c.out" || { cat "$TMP/c.out"; return 1; }
+  grep -q '^loop: stop, no progress: no item of the open set closed' "$TMP/c.out" && grep -q 'introduced: structure.variable-description variables.tf  MEDIUM' "$TMP/c.out" || { cat "$TMP/c.out"; return 1; }
   fr round "$RUN" > "$TMP/c.out" 2>&1 && return 1
   grep -q 'the loop stopped' "$TMP/c.out" || return 1
   fr apply "$RUN" --item C-701 > "$TMP/c.out" 2>&1 && return 1
@@ -745,15 +795,45 @@ t_unattr() { # the cloudfront case: a finding on the title, which the fix did no
   fr cleanup "$RUN" > /dev/null
 }
 t_unattr; check "attribution end to end: a title finding the fix did not cause is listed at compare and gate, the loop finishes and the gate passes" $?
-t_intro_attr() { # a new MEDIUM on an unchanged main.tf beside the changed variables.tf is introduced and blocks the gate
-  fx_default; fnd structure.x MEDIUM main.tf | jq -s . > "$TMP/fi.json"
+t_intro_attr() { # a new file-level MEDIUM on an unchanged main.tf beside the changed variables.tf is introduced and blocks the gate
+  fx_default; fnd structure.x MEDIUM main.tf | jq -s '.[0].line = null' > "$TMP/fi.json"
   reviewed_run "$ROUND0" "$TMP/fi.json" || { cat "$TMP/compare.out"; return 1; }
   grep -qx '  introduced: structure.x main.tf  MEDIUM' "$TMP/compare.out" && ! grep -q '^unattributed:' "$TMP/compare.out" || { cat "$TMP/compare.out"; return 1; }
   GATE && return 1
   grep -qx 'introduced: structure.x main.tf MEDIUM' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
   fr cleanup "$RUN" > /dev/null
 }
-t_intro_attr; check "attribution end to end: a new MEDIUM on an unchanged main.tf beside a changed variables.tf is introduced" $?
+t_intro_attr; check "attribution end to end: a new file-level MEDIUM on an unchanged main.tf beside a changed variables.tf is introduced" $?
+LATE1='[{"id": "F-010", "rule_id": "structure.comment-redundant", "severity": "MEDIUM", "file": "variables.tf", "line": 2, "summary": "The comment restates the code.", "suggested_fix": "Remove the comment."},
+  {"id": "F-011", "rule_id": "scope.boundary", "severity": "HIGH", "file": "variables.tf", "line": 1, "summary": "`variable \"name\"` is outside the scope.", "suggested_fix": "needs decision: keep it."},
+  {"id": "F-012", "rule_id": "structure.x", "severity": "MEDIUM", "file": "main.tf", "line": 1, "summary": "s", "suggested_fix": "f"}]'
+t_late_e2e() { # the live batch: findings the fix did not cause surface late, join the open set, count as no introduced tuple and pass the gate
+  fx_default; printf '%s\n' "$LATE1" > "$TMP/fl.json"
+  reviewed_run "$ROUND0" "$TMP/fl.json" || { cat "$TMP/compare.out"; return 1; }
+  grep -qx 'round 1: verdict open, 3 open, 0 introduced' "$TMP/compare.out" &&
+    grep -qx 'surfaced late: structure.comment-redundant variables.tf:2 MEDIUM' "$TMP/compare.out" &&
+    grep -qx 'surfaced late: scope.boundary variables.tf:1 HIGH' "$TMP/compare.out" &&
+    grep -qx 'surfaced late: structure.x main.tf:1 MEDIUM' "$TMP/compare.out" &&
+    grep -qx 'loop: the next round may start' "$TMP/compare.out" && [ "$(jq '.late | length' "$RUN/rounds/1/review.json")" = 3 ] ||
+    { cat "$TMP/compare.out"; return 1; }
+  GATE || { cat "$TMP/gate.last"; return 1; }
+  grep -qx 'surfaced late: structure.comment-redundant variables.tf:2 MEDIUM' "$TMP/gate.last" &&
+    grep -qx 'surfaced late: scope.boundary variables.tf:1 HIGH' "$TMP/gate.last" && ! grep -q '^introduced:' "$TMP/gate.last" &&
+    grep -q '^new SHA: ' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_late_e2e; check "surfaced late end to end: a comment the fix did not touch, a HIGH on a block of the change the fix did not touch and a line on an unchanged file are listed at compare and gate, count as progress and pass the gate" $?
+t_late_fix_e2e() { # a MEDIUM on the line the fix reworded is introduced and blocks the gate
+  fx_default
+  jq -n -c '[{id: "F-013", rule_id: "structure.comment-wording", severity: "MEDIUM", file: "variables.tf", line: 6, summary: "The description is vague.", suggested_fix: "Reword it."}]' > "$TMP/fw.json"
+  reviewed_run "$ROUND0" "$TMP/fw.json" || { cat "$TMP/compare.out"; return 1; }
+  grep -qx '  introduced: structure.comment-wording variables.tf  MEDIUM' "$TMP/compare.out" && ! grep -q '^surfaced late:' "$TMP/compare.out" ||
+    { cat "$TMP/compare.out"; return 1; }
+  GATE && return 1
+  grep -qx 'introduced: structure.comment-wording variables.tf MEDIUM' "$TMP/gate.last" || { cat "$TMP/gate.last"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_late_fix_e2e; check "surfaced late end to end: a MEDIUM on a line the fix reworded is introduced and blocks the gate" $?
 t_rows_attr() { # the open set and the loop rows read attributable findings only
   fx_default; jq -n --argjson f "$ROUND0B" --argjson x "$(fnd structure.x MEDIUM modules/zzz/main.tf)" '[$f[1], $x]' > "$TMP/fr.json"
   reviewed_run "$ROUND0B" "$TMP/fr.json" || { cat "$TMP/compare.out"; return 1; }
@@ -1884,10 +1964,17 @@ mutate "the extract checked out with links" 's/o=\(-c core\.symlinks=false\)/o=(
 mutate "the push without the http hardening" 's/ -c http\.proxy= -c http\.sslVerify=true -c http\.extraHeader= \\\n/ \\\n/' t_e2e
 mutate "attribution without A1 (a changed path)" 's/      or \(\$f \| IN\(\$ch\[\]\)\)\n/      or false\n/' t_attrib
 mutate "attribution without A2 (a changed .tf in its directory)" 's/or \(\$f != "" and \$f != "\." and \(\(/or (false and \$f != "" and \$f != "." and ((/' t_attrib
-mutate "attribution without A3 (a pinned tuple)" 's/      or \(\[\.rule_id, fp\(\$x\)\[1\], addr\] \| IN\(\$pk\[\]\)\)\n/      or false\n/' t_attrib
+mutate "attribution without A3 (a pinned tuple)" 's/      or \$a3\n/      or false\n/' t_attrib
 mutate "attribution without A4 (HIGH or CRITICAL)" 's/or \(\.severity \| IN\("HIGH", "CRITICAL"\)\) \) as \$a/or false ) as \$a/' t_attrib
 mutate "attribution without A5 (a malformed path)" 's/\( \(\$f != "\." and \(\$f \| path_grammar \| not\)\)\n/( (false)\n/' t_attrib
 mutate "A3 at the same severity only" 's/\[\.pinned\[\] \| \[\.rule_id, \.file, addr\]\] as \$pk/[.pinned[] | [.rule_id, .file, addr, .severity]] as \$pk/; s/\[\.rule_id, fp\(\$x\)\[1\], addr\] \| IN\(\$pk\[\]\)/[.rule_id, fp(\$x)[1], addr, .severity] | IN(\$pk[])/' t_attrib
+mutate "attribution at file level again (nothing surfaces late)" 's/and \(on_fix\(\$hk\[\$f\] \/\/ \[\]; \$t; \.line\) \| not\)\)\) as \$late/and false)) as \$late/' t_late
+mutate "attribution at file level again, end to end" 's/and \(on_fix\(\$hk\[\$f\] \/\/ \[\]; \$t; \.line\) \| not\)\)\) as \$late/and false)) as \$late/' t_late_e2e
+mutate "the block rule dropped" 's/  or \(\(\$t\[\$l - 1\] \| test/  or (false and (\$t[\$l - 1] | test/' t_late
+mutate "the context window dropped" 's/\.\[0\] - 3 <= \$l and \$l <= \.\[1\] \+ 3/.[0] <= \$l and \$l <= .[1]/' t_late
+mutate "a raised pinned tuple surfacing late" 's/\(\$a and \(\$a3 \| not\) and/(\$a and/' t_late
+mutate "the gate counting a surfaced-late finding as introduced" 's/msub\(\$b \| map\(fromjson\); \[\$v\[0\]\.late\[\]\? \| fp\(""\)\]\)/\$b | map(fromjson)/' t_late_e2e
+mutate "progress as a strictly smaller open set again" 's/\(msub\(\$h\[\$n - 1\]; \$now\) \| length\) == 0/((\$now | length) >= (\$h[\$n - 1] | length)) or (msub(\$now; \$h[\$n - 1]) | length) > 0/' t_loop
 mutate "the severity left out of the count" 's/def introduced\(\$pin; \$now\):\n  \(\$pin \| counts\) as \$a/def introduced(\$pin; \$now):\n  (\$pin | map(.[0:3] + ["MEDIUM"]) | counts) as \$a/' t_attrib
 mutate "the verdict from every finding" 's/\$at\[0\]\.attributable as \$now \| \(\$now \| verdict\) as \$v/\$all[0] as \$now | (\$now | verdict) as \$v/' t_unattr
 mutate "the wrapper equality test dropped" 's/blob_at "\$1" "\$2" "\$d\/tw" && cmp -s "\$d\/tm\.d" "\$d\/tw"/blob_at "\$1" "\$2" "\$d\/tw" \&\& true/' t_wrap_refusals
