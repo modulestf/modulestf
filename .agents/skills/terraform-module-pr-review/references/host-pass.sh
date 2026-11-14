@@ -745,9 +745,9 @@ TEXT_CAP=65535
 token_re='^[A-Za-z0-9._-]{1,64}$'
 ref_re='^[A-Za-z0-9._/-]{1,255}$'
 
-carry_map() { # rule-facts.md -> {"<rule_id>": "file"|"never"} on stdout
-  grep -E '^\| `[a-z]+\.[a-z0-9-]+` \|.*\| (file|never) \|$' "$1" |
-    sed -E 's/^\| `([a-z]+\.[a-z0-9-]+)` \|.*\| (file|never) \|$/\1 \2/' |
+carry_map() { # rule-facts.md -> {"<rule_id>": "file"|"never"} on stdout, from the fifth column, Carry
+  grep -E '^\| `[a-z]+\.[a-z0-9-]+` \|( [^|]* \|){3} (file|never) \|' "$1" |
+    sed -E 's/^\| `([a-z]+\.[a-z0-9-]+)` \|( [^|]* \|){3} (file|never) \|.*$/\1 \3/' |
     jq -R -s 'split("\n") | map(select(. != "") | split(" ") | {(.[0]): .[1]}) | add // {}'
 }
 
@@ -894,7 +894,7 @@ cmd_prior() {
   # holds. A file in the scope is judged again, so its findings are not carried.
   IJ --slurpfile sc "$w/scope.json" --slurpfile carry "$w/carry.json" --arg prefix "$prefix" '
     include "incremental";
-    [.[] | select(($carry[0][.rule_id] // "never") == "file") | select(.file | IN($sc[0].scope[]) | not)]
+    carry_select($carry[0]; $sc[0].scope)
     | if all(.[]; (.file | IN($sc[0].blobs[])) and (.file | rel($prefix)) != null and (.file | rel($prefix)) != ".")
       then map(del(.id)) else error("target") end' "$w/found.json" > "$stage/carried.json" 2> /dev/null || full target-not-file
   IJ --arg prefix "$prefix" 'include "incremental"; map(.file |= rel($prefix))' "$stage/carried.json" > "$stage/carried-task.json"
@@ -1017,7 +1017,8 @@ cmd_accept() {
   IJ -e 'include "incremental"; findings_list(true)' "$findings" > /dev/null 2>&1 || reject "the findings do not match the contract"
   local head
   head="$(jq -r '.head_sha' "$result" 2> /dev/null)"
-  check_prior "$prior" "$head" > /dev/null || reject "the prior directory did not pass its check"
+  # A subshell: check_prior defines its own reject, which returns where this one exits.
+  ( check_prior "$prior" "$head" ) > /dev/null || reject "the prior directory did not pass its check"
   local verdict
   verdict="$(jq -r '.verdict' "$result")"
   IJ -e --arg v "$verdict" 'include "incremental"; host_verdict($v) == $v' "$findings" > /dev/null 2>&1 ||
@@ -1030,11 +1031,14 @@ cmd_accept() {
     (map(canon)) as $all
     | all($c[0][]; canon as $x | ([$all[] | select(. == $x)] | length) == 1)' "$findings" > /dev/null 2>&1 ||
     reject "a carried finding is missing, changed or repeated"
+  IJ -e --argjson carry "$carry" 'include "incremental"; carried_ok($carry)' "$prior/carried.json" > /dev/null 2>&1 ||
+    reject "a carried finding is not of a file rule"
   IJ -e --slurpfile c "$prior/carried.json" --slurpfile m "$prior/meta.json" --argjson carry "$carry" '
     include "incremental";
     ($c[0] | map(canon)) as $carried
     | all(.[] | select((canon | IN($carried[])) | not);
-          ($carry[.rule_id] // "unknown") as $k
+          # A rule the table does not name is never, as prior takes it (host-pass.md).
+          carry_kind($carry) as $k
           | $k == "never" or ($k == "file" and (.file | IN($m[0].scope[]))))' "$findings" > /dev/null 2>&1 ||
     reject "a finding outside the scope of an incremental review"
   echo "findings accepted: incremental"
