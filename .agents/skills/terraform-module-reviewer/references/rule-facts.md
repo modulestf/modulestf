@@ -98,9 +98,9 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `scope.tooling` | none | - | - | never | candidate | path | newly-introduced | no | root, submodule, example | candidates, file-index | HIGH | lead | lead |
 | `structure.argument-order` | none | - | - | file | candidate | config-semantic | touched-block | no | root, submodule | candidates | LOW | lead | small |
 | `structure.arn-partition-hardcoded` | none | - | - | file | candidate | config-semantic | newly-introduced | no | root, submodule | candidates | HIGH | lead | small |
-| `structure.comment-redundant` | none | - | - | file | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
-| `structure.comment-unsourced` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM, LOW | - | - |
-| `structure.copied-content-unattributed` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
+| `structure.comment-redundant` | none | - | - | file | llm | config-semantic | newly-introduced | no | root, submodule | none | LOW | - | - |
+| `structure.comment-unsourced` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule, example | none | MEDIUM, LOW | - | - |
+| `structure.copied-content-unattributed` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM, LOW | - | - |
 | `structure.create-flag-ignored` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | interface-diff | HIGH | - | - |
 | `structure.docs-contradict-code` | page | data source behaviour | A changed block, output, local or documentation line depends on what a data source of the type does with its inputs. | never | llm | config-semantic | touched-block | no | root, submodule, example | interface-diff | HIGH | - | - |
 | `structure.embedded-code-defect` | none | - | - | never | llm | path | touched-block | no | root, submodule | none | CRITICAL, HIGH, LOW | - | - |
