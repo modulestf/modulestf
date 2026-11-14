@@ -176,7 +176,7 @@ Source: [code-conventions.md#embedded-code](code-conventions.md#embedded-code) `
 
 Two closed lists never count against scope:
 
-- Adjunct types, which any module may add in any directory: `aws_iam_role`, `aws_iam_role_policy`, `aws_iam_role_policy_attachment`, `aws_iam_policy`, `aws_iam_instance_profile`, `aws_cloudwatch_log_group`, `aws_cloudwatch_log_resource_policy`, `aws_security_group`, `aws_vpc_security_group_ingress_rule`, `aws_vpc_security_group_egress_rule`, `aws_security_group_rule`. `aws_kms_key` is not one: the module takes a key ARN as an input.
+- Adjunct types, which any module may add in any directory: `aws_iam_role`, `aws_iam_role_policy`, `aws_iam_role_policy_attachment`, `aws_iam_policy`, `aws_iam_instance_profile`, `aws_cloudwatch_log_group`, `aws_cloudwatch_log_resource_policy`, `aws_security_group`, `aws_vpc_security_group_ingress_rule`, `aws_vpc_security_group_egress_rule`, `aws_security_group_rule`, and `time_sleep`, the wait out of eventual consistency. `aws_kms_key` is not one: the module takes a key ARN as an input.
 - Ambient data sources, which any module may read: `aws_caller_identity`, `aws_region`, `aws_partition`, `aws_availability_zones`, `aws_service_principal`, `aws_iam_policy_document`. Data sources are never judged against the boundary.
 
 For any other `resource` type a change adds, fit is decided per directory, from the base revision, and never from the type's name:
@@ -190,7 +190,7 @@ For any other `resource` type a change adds, fit is decided per directory, from 
 
 IDs: `scope.boundary`, `scope.new-submodule`, `scope.composition`.
 
-Source: [SCOPE.md#adjunct-types](SCOPE.md#adjunct-types) `b73e5a8f3b44`
+Source: [SCOPE.md#adjunct-types](SCOPE.md#adjunct-types) `39ddba13e831`
 Source: [SCOPE.md#ambient-data-sources](SCOPE.md#ambient-data-sources) `abb674d7e8f1`
 Source: [module-scope.md#the-boundary-of-a-directory](../../references/module-scope.md#the-boundary-of-a-directory) `94a5360dd3db`
 Source: [module-scope.md#reference-edges](../../references/module-scope.md#reference-edges) `c72310bf7d19`
@@ -221,13 +221,13 @@ Every level-2 section of the profile files this guide draws on is either a sourc
 | Profile section | Why it is not in this guide | Hash |
 |-----------------|-----------------------------|------|
 | [What this profile defines](PROFILE.md#what-this-profile-defines) | An index of the profile, no rule | `c5143087ef65` |
-| [Profile constants](PROFILE.md#profile-constants) | Values restated for tools from the rules above, no rule of its own | `0af83960d37d` |
+| [Profile constants](PROFILE.md#profile-constants) | Values restated for tools from the rules above, no rule of its own | `7dfc731d5bc7` |
 | [Plan providers](PROFILE.md#plan-providers) | Providers the review's plan pass admits in runner mode, no review rule | `ff3b742aade6` |
 | [What stays out of a profile](PROFILE.md#what-stays-out-of-a-profile) | About the profile itself, no rule | `4f65d3a61af9` |
 | [Adding another profile](PROFILE.md#adding-another-profile) | About the profile itself, no rule | `3730c3ab0e01` |
 | [Documentation regeneration in an untrusted workspace](PROFILE.md#documentation-regeneration-in-an-untrusted-workspace) | Constants the maintainer uses to regenerate a documentation region in an untrusted workspace, no review rule | `930e64126f30` |
 | [Not a ban here](SCOPE.md#not-a-ban-here-a-literal-only-one-caller-wants) | Points at rules above and at provider schema coverage, which needs the Terraform MCP tools | `27f0054a37bb` |
-| [Worked cases](SCOPE.md#worked-cases) | Examples of the rules above, not rules | `049348f99abe` |
+| [Worked cases](SCOPE.md#worked-cases) | Examples of the rules above, not rules | `1661b9d43623` |
 | [Open questions](SCOPE.md#open-questions) | Undecided, no rule | `d1ff50cd5d62` |
 | [Template location](templates-map.md#template-location) | How a maintainer creates a module, not a review rule | `4444750ebf98` |
 | [Skeletal templates](templates-map.md#skeletal-templates-copy-then-customize) | How a maintainer creates a module, not a review rule | `9f6624fbb89a` |
