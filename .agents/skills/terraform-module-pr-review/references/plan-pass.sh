@@ -762,8 +762,14 @@ post_init() { # example key, absolute example directory
       if ($gm eq "runner" && $s =~ $gh) { print "version $_->{Key} $s -\n"; next }
       (my $pk = $_->{Key}) =~ s/\.?[^.]*\z//;
       my $pd = $d{$pk};
-      my $lim = defined $pd && index("$pd/", "$root/") == 0 ? $root : $pd;
-      print "G2 $j:$_->{Key}\n" unless $s =~ m{\A\.\.?/} && defined $lim && index("$r/", "$lim/") == 0;
+      my ($lim, $want) = defined $pd && index("$pd/", "$root/") == 0 ? ($root) : ($pd);
+      # A downloaded parent: its whole package, reached with no symbolic link on the way.
+      if (defined $pd && $lim ne $root && index("$pd/", "$mr/") == 0 && substr($pd, length($mr) + 1) =~ m{\A([^/]+)}) {
+        $lim = "$mr/$1"; my @p;
+        for (split m{/}, "$pd/$s") { next if $_ eq "" || $_ eq "."; if ($_ eq "..") { pop @p } else { push @p, $_ } }
+        $want = "/" . join("/", @p);
+      }
+      print "G2 $j:$_->{Key}\n" unless $s =~ m{\A\.\.?/} && defined $lim && index("$r/", "$lim/") == 0 && (!defined $want || $r eq $want);
     }
   ' "$2" "$CROOT" "$M/modules.json" "$MR" "$GMODE" > "$PLAN/out/$1-modules.txt"
   grep -v '^dir ' "$PLAN/out/$1-modules.txt"
