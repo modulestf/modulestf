@@ -459,24 +459,23 @@ t_table; check "strings: the Host Render Strings table equals the script's strin
 
 # The reviewer writes short by default: the length targets, the COMPACT caps below, are stated
 # word for word in the findings schema and in the caller instruction of the handover.
-LT='Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.'
+LT='Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the comment then renders in STANDARD.'
 t_targets_stated() {
   awk '/^## Length Targets$/ { on = 1; next } on && /^## / { exit } on' \
     "$SRC/.agents/skills/terraform-module-reviewer/references/findings-schema.md" | grep -qF -- "$LT" &&
     awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -F -- "$LT" > /dev/null
 }
 t_targets_stated; check "strings: the length targets are stated in the findings schema and the handover" $?
-# A COMPACT refusal gives one piece of advice, the same in the script, SKILL.md Step 10, the
-# handover and Tiers. grep reads the whole section (no -q): with pipefail, an early exit would let
-# a SIGPIPE to awk fail the check at random.
-ADVICE='send it back to the reviewer once; if it keeps the finding because it is within the schema targets, render with --standard'
-t_advice() {
-  grep -qF -- "\$refuse; $ADVICE\"" "$RCU" &&
-    grep -F -- '- **Step 10 - Render.**' "$STEPS" | grep -qF -- "\`$ADVICE\`" &&
-    awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -F -- "\`$ADVICE\`" > /dev/null &&
-    awk '/^## Tiers$/ { on = 1; next } on && /^## / { exit } on' "$CF" | grep -qF -- "\`$ADVICE\`"
+# Text over a COMPACT cap renders STANDARD, never a refusal: the script prints the fallback line,
+# and SKILL.md Step 10, the handover and Tiers state it.
+FALLBACK='rendered STANDARD, over the COMPACT limits:'
+t_fallback_stated() {
+  grep -qF -- '"rendered STANDARD, \(.)"' "$RCU" &&
+    grep -F -- '- **Step 10 - Render.**' "$STEPS" | grep -qF -- "\`$FALLBACK" &&
+    awk '/^## Handover$/ { on = 1; next } on && /^## / { exit } on' "$REF/github-io.md" | grep -F -- "\`$FALLBACK" > /dev/null &&
+    awk '/^## Tiers$/ { on = 1; next } on && /^## / { exit } on' "$CF" | grep -qF -- "\`$FALLBACK"
 }
-t_advice; check "strings: the COMPACT refusal advice is one sentence in the script, SKILL.md Step 10, the handover and Tiers" $?
+t_fallback_stated; check "strings: the COMPACT fallback line is stated in SKILL.md Step 10, the handover and Tiers" $?
 
 # --- Leak scan: a match blocks every file and says what matched and where.
 
@@ -1488,9 +1487,12 @@ t_withheld_loc() {
   [ "$(tier)" = COMPACT ] && grep -qF -- '- Behaviour change at name withheld reported: judged in F-001 (12 differences).' "$O/comment.md"
 }
 t_withheld_loc; check "tiers: a trigger location outside the charset is withheld in the details block" $?
+# Text over a COMPACT cap renders STANDARD in place of a COMPACT-eligible body, with one line
+# that names every offender; nothing is cut.
 over() { # name, findings, assessment file, want message
   render "$1" "$H556" "" "$(R556 "over-$oc")" "$2"
-  check "refused: COMPACT $4" "$([ "$ST" = 2 ] && empty_out && printf '%s' "$MSG" | grep -qF "$3" && printf '%s' "$MSG" | grep -qF 'COMPACT limit'; echo $?)"
+  check "fallback: COMPACT $4 renders STANDARD" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] &&
+    printf '%s\n' "$MSG" | grep -F "$FALLBACK" | grep -qF "$3" && [ -s "$O/result.json" ]; echo $?)"
 }
 { head -c 351 /dev/zero | tr '\0' a; echo; } > "$TMP/a-351.txt"
 over "$(F556)" "$TMP/a-351.txt" 'the assessment is 351 characters, limit 350' "an assessment over 350 characters"
@@ -1512,9 +1514,27 @@ t_over_all() {
     --arg s2 "$(head -c 230 /dev/zero | tr '\0' t)" '.[0].summary = $s1 | .[0].suggested_fix = $x1 | .[1].summary = $s2' \
     "$(F556)" > "$TMP/over-all.json"
   render "$TMP/over-all.json" "$H556" "" "$(R556 overall)" "$TMP/a-351.txt"
-  [ "$ST" = 2 ] && empty_out && [ "$MSG" = 'render-comment.sh: over the COMPACT limits: the assessment is 351 characters, limit 350; finding F-001 summary is 201 characters, limit 200; finding F-001 suggested_fix is 260 characters, limit 250; finding F-002 summary is 230 characters, limit 200; send it back to the reviewer once; if it keeps the finding because it is within the schema targets, render with --standard' ]
+  [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && [ "$(printf '%s\n' "$MSG" | sed -n '1p')" = 'rendered STANDARD, over the COMPACT limits: the assessment is 351 characters, limit 350; finding F-001 summary is 201 characters, limit 200; finding F-001 suggested_fix is 260 characters, limit 250; finding F-002 summary is 230 characters, limit 200' ] &&
+    [ "$(printf '%s\n' "$MSG" | wc -l | tr -d ' ')" = 2 ] && grep -qxF -- "$(head -c 201 /dev/zero | tr '\0' s)" <(jq -r '.[0].summary' "$O/findings.json")
 }
-t_over_all; check "refused: COMPACT every offender named in one message with its length and limit" $?
+t_over_all; check "fallback: COMPACT every offender named in one line with its length and limit, the text kept whole" $?
+# The live case: one summary of 227 characters in a COMPACT-eligible run renders the STANDARD body
+# the same inputs render with --standard, plus the fallback line.
+t_227() {
+  local s227; s227="$(head -c 227 /dev/zero | tr '\0' s)"
+  rc "$(F556 "{summary: \"$s227\"}")" "$(R556 s227s)" "" --standard; cp "$O/comment.md" "$TMP/want-227.md"
+  printf '%s\n' "$MSG" | grep -qF "$FALLBACK" && return 1
+  rc "$(F556 "{summary: \"$s227\"}")" "$(R556 s227)"
+  [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && cmp -s "$O/comment.md" "$TMP/want-227.md" &&
+    [ "$(printf '%s\n' "$MSG" | sed -n '1p')" = 'rendered STANDARD, over the COMPACT limits: finding F-001 summary is 227 characters, limit 200' ]
+}
+t_227; check "fallback: a COMPACT-eligible run with a summary of 227 characters renders STANDARD with the note" $?
+# Over a STANDARD cap the input is still refused: the message names the finding, field, length and limit.
+t_std_fix() {
+  render "$(F556 "{suggested_fix: \"needs decision: $(head -c 589 /dev/zero | tr '\0' d)\"}")" "$H556" "" "$(R556 std605)" "$TMP/assess-556.txt"
+  [ "$ST" = 2 ] && empty_out && [ "$MSG" = 'render-comment.sh: over the STANDARD limits: finding F-001 suggested_fix is 605 characters, limit 600; send the finding back to the reviewer' ]
+}
+t_std_fix; check "refused: STANDARD a fix of 605 characters, the message names the finding, field, length and limit" $?
 
 # The band of compat.claim-contradicts-analysis (quoted-claims.md): one below the highest compat.*
 # code finding, compat.break-unexplained aside, and never without one. Above it, refused.
@@ -1532,7 +1552,7 @@ check "band: a MEDIUM description finding below the highest code finding, HIGH, 
 render "$(F556 "{summary: \"$(head -c 201 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-std)" "$TMP/a-351.txt" --standard
 check "tiers: the same text passes in STANDARD with --standard" "$([ "$ST" = 0 ] && [ "$(tier)" = STANDARD ]; echo $?)"
 render "$(F556 "{summary: \"$(head -c 501 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-501)" "" --standard
-check "refused: STANDARD a summary over 500 characters, the message names the limit and the tier" "$([ "$ST" = 2 ] && printf '%s' "$MSG" | grep -qF 'at most 500 characters' && printf '%s' "$MSG" | grep -qF 'STANDARD limits'; echo $?)"
+check "refused: STANDARD a summary over 500 characters, the message names the finding, the limit and the tier" "$([ "$ST" = 2 ] && empty_out && [ "$MSG" = 'render-comment.sh: over the STANDARD limits: finding F-001 summary is 501 characters, limit 500; send the finding back to the reviewer' ]; echo $?)"
 t_approve() {
   rc "$NONE" "$(runf appr '.plan_ran = true | .examples = {count: 9, validated: 9}')" "$HOST"
   [ "$(tier)" = COMPACT ] && [ "$(verdict)" = "approve APPROVE" ] &&
@@ -1612,7 +1632,7 @@ t_floorcat() { rc "$(F556)" "$(R556 floorcat2 '.behaviour.triggers += [{id: "T-0
 t_four() { rc "$(four b)" "$(R556 fourb)"; [ "$(tier)" = STANDARD ]; }
 t_g3() { rc "$TMP/g3b.json" "$TMP/run-r556-g3b.json"; [ "$(tier)" = STANDARD ]; }
 t_vgap() { rc "$(F556)" "$TMP/run-r556-vgap.json"; [ "$(tier)" = STANDARD ]; }
-t_over() { render "$(F556)" "$H556" "" "$(R556 overm)" "$TMP/a-351.txt"; [ "$ST" = 2 ] && empty_out; }
+t_over() { render "$(F556)" "$H556" "" "$(R556 overm)" "$TMP/a-351.txt"; [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && printf '%s\n' "$MSG" | grep -qF "$FALLBACK"; }
 t_force() { rc "$(F556)" "$(R556 force)" "" --standard; [ "$(tier)" = STANDARD ]; }
 t_root_rule0_item() { t_root_rule0; [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] Resolve `compat.claim-contradicts-analysis`: see its Fix under Findings.'; }
 t_root_one_item() { t_root_one; [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] Resolve `scope.description-only`: see its Fix under Findings.'; }
@@ -1639,9 +1659,12 @@ mutate "causes outside the table admitted" 's/and \(\$c\.other \| not\)/and true
 mutate "G0 sent to the runner clause" 's/\{"plan gate G0": "file-gate"/{"plan gate G0": "safety-gate"/' t_g0
 mutate "the name allowlist dropped" 's/def allowed: test\("\^\[A-Za-z0-9\._\/-\]\+\$"\);/def allowed: true;/' t_names
 mutate "names not sorted" 's/def name_list: sort \|/def name_list:/' t_names
-mutate "the COMPACT caps dropped" 's/refuse: \(if \$tier == "COMPACT" then compact_refusal\(\$in\) else null end\)/refuse: null/' t_over
+mutate "the COMPACT caps dropped" 's/then compact_refusal\(\$in\) else null end/then null else null end/' t_over
+mutate "the STANDARD fallback removed" 's/if \$fit and \$over == null then "COMPACT"/if $fit then "COMPACT"/' t_227
+mutate "the fallback line not printed" 's/jq -r \x27\.fallback \/\/ empty[^\n]*\n//' t_over_all
+mutate "the STANDARD caps named only by the schema check" 's/\[ -z "\$over" \] \|\| die/true ||/' t_std_fix
 mutate "the needs decision fix held to 250 in COMPACT" 's/then 600 else 250 end/then 250 else 250 end/' t_nd409
-mutate "the refusal advice reworded in the script only" 's/send it back to the reviewer once; if it keeps the finding because it is within the schema targets, render with --standard/send it back to the reviewer, or render with --standard/' t_advice
+mutate "the fallback line reworded in the script only" 's/"rendered STANDARD, \\\(\.\)"/"tier STANDARD, \\(.)"/' t_fallback_stated
 mutate "only the first COMPACT offender named" 's/\(\$o \| join\("; "\)\)/$o[0]/' t_over_all
 mutate "the description band not enforced" 's/def band_ok:/def band_ok: true; def band_ok_unused:/' t_band_low
 mutate "the module root item dropped under rule 0" 's/def compat_item: [^\n]*/def compat_item: (.rule | startswith("compat."));/' t_root_rule0_item

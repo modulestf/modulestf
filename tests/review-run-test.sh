@@ -315,7 +315,7 @@ check "prepare: index.json holds the enumerated fields" \
 check "prepare: index.json carries no title, body or branch text" "$(! grep -q 'touch\|author1\|feat' "$RUN/index.json"; echo $?)"
 check "prepare: nothing in a title, branch or file name ran" "$(no_stray)"
 check "defect: task.md carries the Write short line word for word" \
-  "$(grep -qxF 'Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.' "$RUN/host/task.md"; echo $?)"
+  "$(grep -qxF 'Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the comment then renders in STANDARD.' "$RUN/host/task.md"; echo $?)"
 check "defect: the posting login's own CHANGES_REQUESTED is left out of a render-only run" \
   "$(q "$RUN/host/host.json" '.signals.review_decision == "none" and .own_review.state == "CHANGES_REQUESTED"')"
 # The review decision counts only reviewers with write access, as GitHub's own does: the replay of
@@ -1187,6 +1187,8 @@ ghfiles open false APPROVED
 # repeating the head, lock and identity checks without a second unlock.
 # Updated for the pr-merge line in the description and Don't activate list, with Rule 5's runner
 # sentence shortened, leaving its detail to plan-pass.md, to keep SKILL.md under 16384 bytes.
+# Updated for Step 10: text over a COMPACT cap renders STANDARD with a line that says so, and only
+# text over a STANDARD cap is refused and goes back to the reviewer.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1195,7 +1197,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=068b1c3b05eb
+want=7fd4745c4f4b
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"

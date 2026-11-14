@@ -976,7 +976,7 @@ def compact_ok($l; $v; $c; $run; $b):
   and ($c.other | not) and ($v.rule != 4 or $c.admitted != [])
   and ($run | has("examples"));
 
-# Over a COMPACT cap the model text goes back to the reviewer; nothing is cut.
+# Over a COMPACT cap the body falls back to STANDARD and the script prints why; nothing is cut.
 # Every offender, in input order, with its length and its limit, in one message.
 # A needs decision: fix keeps its length target, 600, which is also its STANDARD cap.
 def compact_refusal($in):
@@ -987,6 +987,12 @@ def compact_refusal($in):
         (.suggested_fix | (if startswith("needs decision:") then 600 else 250 end) as $cap
           | length | select(. > $cap) | "finding \($id) suggested_fix is \(.) characters, limit \($cap)")) ] as $o
   | if $o == [] then null else "over the COMPACT limits: " + ($o | join("; ")) end;
+
+# Over a STANDARD cap of a finding, the hard caps of the findings schema: every offender with its
+# id, field, length and limit, so the caller can send the finding back to the reviewer.
+def standard_over: [ if type == "array" then .[] else empty end | objects | .id as $id
+  | (.summary | strings | length | select(. > 500) | "finding \($id) summary is \(.) characters, limit 500"),
+    (.suggested_fix | strings | length | select(. > 600) | "finding \($id) suggested_fix is \(.) characters, limit 600") ];
 
 # Names the pull request controls render only in the details block: allowlisted, sorted, at most
 # three and the count of the rest; a name outside the charset is withheld and still counts.
@@ -1096,11 +1102,14 @@ def render($in):
      + section("Existing threads"; thread_lines($h; $in.findings; $p); "\n")
      + section("Conversation comments"; conversation_lines($h.conversation; $in.run.counts); "\n\n")
      | join("\n\n") + "\n") as $standard
-  | (if ($in.standard | not) and compact_ok($l; $v; $c; $in.run; $b) then "COMPACT" else "STANDARD" end) as $tier
+  # A COMPACT body whose text is over a COMPACT cap renders STANDARD; $over says why.
+  | (($in.standard | not) and compact_ok($l; $v; $c; $in.run; $b)) as $fit
+  | (if $fit then compact_refusal($in) else null end) as $over
+  | (if $fit and $over == null then "COMPACT" else "STANDARD" end) as $tier
   | (if $tier == "COMPACT" then compact_body($in; $l; $v; $c; $b; $p; $cov)
      else {body: $standard, findings: ($in.findings | body_order($p))} end) as $out
   | {rule: $v.rule, verdict: $v.verdict, event: ($v.verdict | proposed_event($h.state)), tier: $tier,
-     refuse: (if $tier == "COMPACT" then compact_refusal($in) else null end),
+     fallback: $over,
      body: $out.body, findings: $out.findings,
      parts: ([{src: "the assessment", text: $in.assessment}]
              + [$in.findings[] | {src: "finding \(.id)", text: "\(.file) \(.summary) \(.suggested_fix)"}]
