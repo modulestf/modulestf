@@ -1,3 +1,12 @@
+## [0.9.6](https://github.com/modulestf/modulestf/compare/v0.9.5...v0.9.6) (2026-11-14)
+
+
+### Bug Fixes
+
+* **pr-review:** List data sources read at plan in the plan addresses file ([#154](https://github.com/modulestf/modulestf/issues/154)) ([db3fa8d](https://github.com/modulestf/modulestf/commit/db3fa8d4291d5a8037d5536048070d74fc0a48b7))
+
+
+
 ## [0.9.5](https://github.com/modulestf/modulestf/compare/v0.9.4...v0.9.5) (2026-11-14)
 
 
