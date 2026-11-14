@@ -291,8 +291,11 @@ def valid_run:
   and ((any(.coverage.unplanned[]?; .reason == "plan pass skipped at light depth") | not) or .depth.depth? == "light")
   # The plan pass mode of the plan record, and the example counts the COMPACT verdict line states.
   and ((has("plan_mode") | not) or (.plan_mode | IN("laptop", "runner")))
-  and ((has("examples") | not) or (.examples | type == "object" and keys == ["count", "validated"]
-        and (.count | nat) and (.validated | nat)) and .examples.validated <= .examples.count - (.verify_gaps | length)
+  # count is every selected example, skipped those not run for a version bump only, validated those
+  # that passed validate: neither a skipped one nor a verification gap can have passed.
+  and ((has("examples") | not) or (.examples | type == "object" and keys == ["count", "skipped", "validated"]
+        and (.count | nat) and (.skipped | nat) and (.validated | nat))
+        and .examples.validated + .examples.skipped <= .examples.count - (.verify_gaps | length)
         and ([.coverage.unplanned[] | select(.reason != "no example directory")] | length) <= .examples.count)
   and .format == 1
   and (.triage | type == "boolean") and (.plan_ran | type == "boolean")
@@ -784,8 +787,9 @@ def gap_lines($h; $run; $b; $p; $cov):
                   + [$shown[] | select(.reason == $r) | tx("unplanned-name"; {dir})] | join("\n")) end ])
      + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end) end)
   # Every selected example ran validate at the head and none passed: the trigger lines say so. A
-  # verification gap other than a merge base re-run means validate did not run there, so no clause.
-  + ((($run.examples // {count: 0} | .count > 0 and .validated == 0)
+  # verification gap other than a merge base re-run, or a version bump skip, means validate did not
+  # run there, so no clause.
+  + ((($run.examples // {count: 0} | .count > 0 and .validated == 0 and .skipped == 0)
       and all($run.verify_gaps[]; .reason | startswith("merge base "))) as $invalid
   | (if $invalid then "-invalid" else "" end) as $why
   | $b | if . == null then []
