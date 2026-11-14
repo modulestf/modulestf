@@ -101,7 +101,7 @@ The three pull request skills are stages of one pipeline: review, apply, merge. 
 
 | Stage | Skill | Reads | Writes |
 |-------|-------|-------|--------|
-| Review | terraform-module-pr-review | the pull request | the comment, after confirmation, and `plan.json` beside the render's other files |
+| Review | terraform-module-pr-review | the pull request | the comment, after confirmation, and `plan.json` with its preview `fix-plan.md` beside the render's other files |
 | Apply | terraform-module-pr-fix, `items --plan` after `clone` | `plan.json` as round 0, instead of a second review | the fix push after confirmation, and `applied.json` after a passing gate |
 | Merge | terraform-module-pr-merge | the `plan.json` of its own fresh review, never an earlier one | one squash merge after confirmation |
 
