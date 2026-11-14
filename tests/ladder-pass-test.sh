@@ -390,19 +390,24 @@ lease_env() { # name, env...: a run of the script that writes this shell's lease
 }
 lease_env tzutc1 TZ=UTC LC_ALL=C
 lease_env tzoth1 TZ=Pacific/Auckland LC_ALL=C
-lease_env loc1xx TZ=UTC LC_ALL=de_DE.UTF-8
+DELOC=de_DE.UTF-8; locale -a 2> /dev/null | grep -Eix 'de_DE\.utf-?8' > /dev/null || { echo "skip the non-C locale checks: $DELOC is not installed"; DELOC=; }
+[ -z "$DELOC" ] || lease_env loc1xx TZ=UTC LC_ALL="$DELOC"
 mkdir -p "$TMP/runs/pr-review.deadtz/ladder"; echo "$dead Mon_Jan_1_00:00:00_2024 $((now + 999)) aa" > "$TMP/runs/pr-review.deadtz/ladder/lease"
 mkdir -p "$TMP/mut"; cp -R "$REF"/. "$TMP/mut/"
 perl -pi -e 's/LC_ALL=C TZ=UTC ps/ps/' "$TMP/mut/ladder-pass.sh"
 reset; TZ=Asia/Tokyo LC_ALL=C run > /dev/null
 check "a lease written under TZ=UTC survives a sweep under another zone" "$([ -d "$TMP/runs/pr-review.tzutc1/ladder" ]; echo $?)"
 check "a lease written under another zone survives a sweep under TZ=UTC" "$([ -d "$TMP/runs/pr-review.tzoth1/ladder" ]; echo $?)"
-check "a lease written under a non-C locale survives a sweep under LC_ALL=C" "$([ -d "$TMP/runs/pr-review.loc1xx/ladder" ]; echo $?)"
+[ -z "$DELOC" ] || check "a lease written under a non-C locale survives a sweep under LC_ALL=C" "$([ -d "$TMP/runs/pr-review.loc1xx/ladder" ]; echo $?)"
 check "a lease whose owner is gone is still swept" "$([ ! -e "$TMP/runs/pr-review.deadtz/ladder" ]; echo $?)"
-reset; LC_ALL=de_DE.UTF-8 run > /dev/null
-check "a lease survives a sweep under a non-C locale" "$([ -d "$TMP/runs/pr-review.tzutc1/ladder" ]; echo $?)"
-LC_ALL=de_DE.UTF-8 bash "$TMP/mut/ladder-pass.sh" run "$RUND" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" > /dev/null 2>&1
+reset; TZ=Asia/Tokyo bash "$TMP/mut/ladder-pass.sh" run "$RUND" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" > /dev/null 2>&1
 check "a sweep without the normalization deletes a live owner's run (mutation caught)" "$([ ! -e "$TMP/runs/pr-review.tzutc1/ladder" ]; echo $?)"
+# An empty ps answer for a live pid is not dead: a stub ps answers nothing for lstart.
+mkdir -p "$TMP/psstub" "$TMP/runs/pr-review.psempt/ladder"
+printf '#!/bin/sh\ncase "$*" in *lstart=*) exit 0 ;; esac\nexec /bin/ps "$@"\n' > "$TMP/psstub/ps"; chmod 755 "$TMP/psstub/ps"
+echo "$$ Mon_Jan_1_00:00:00_2024 $((now + 999)) aa" > "$TMP/runs/pr-review.psempt/ladder/lease"
+reset; PATH="$TMP/psstub:$PATH" run > /dev/null
+check "an empty ps answer for a live owner pid does not sweep its run" "$([ -d "$TMP/runs/pr-review.psempt/ladder" ]; echo $?)"
 
 # --- the budget, taken from the script: each timeout is clipped to what is left
 eval "$(sed -n '/^left() {/,/^}/p' "$LP")"
