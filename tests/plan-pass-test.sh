@@ -1210,6 +1210,11 @@ for bad in data.aws_bad module.m.data.x data.data.a.b 'data.a.b c'; do
   jq --arg a "$bad" '.examples[4].addresses += [$a]' "$TMP/hr.json" > "$TMP/hp-bad4.json"
   check "host-pass: a malformed data address is refused ($bad)" "$([ "$(hp "$TMP/hp-bad4.json")" = "plan record content" ] && echo 0 || echo 1)"
 done
+jq --arg a "aws_a.$(printf '%294s' '' | tr ' ' b)" '.examples[0].addresses += [$a]' "$TMP/hr.json" > "$TMP/hp-cap300.json"
+jq --arg a "aws_a.$(printf '%295s' '' | tr ' ' b)" '.examples[0].addresses += [$a]' "$TMP/hr.json" > "$TMP/hp-cap301.json"
+check "host-pass: an address of 300 characters is accepted, one of 301 refused" \
+  "$([ "$(jq -r '.examples[0].addresses[-1] | length' "$TMP/hp-cap300.json")" = 300 ] && [ "$(hp "$TMP/hp-cap300.json")" = ok ] &&
+     [ "$(jq -r '.examples[0].addresses[-1] | length' "$TMP/hp-cap301.json")" = 301 ] && [ "$(hp "$TMP/hp-cap301.json")" = "plan record content" ]; echo $?)"
 # Negative self-check: a copy of host-pass.sh or hosted-record.sh without the address grammar
 # takes the malformed data address.
 jq '.examples[4].addresses += ["data.aws_bad"]' "$TMP/hr.json" > "$TMP/hp-bad4.json"
@@ -1418,9 +1423,21 @@ check "clean_addresses: an address that still holds [, ] or a quote is dropped" 
 # One address grammar in every writer and reader of the addresses files, word for word.
 GRAMMAR='^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z'
 for f in plan-pass.sh plan-runner/run-pass.sh plan-runner/hosted-record.sh host-pass.sh verify-pass.sh skip-coverage.jq; do
-  check "address grammar: $f holds it once, and no older pattern" \
-    "$([ "$(grep -cF -- "$GRAMMAR" "${PP%/*}/$f")" = 1 ] && ! grep -qF -- 'test("^[A-Za-z0-9_.-]{1,300}' "${PP%/*}/$f"; echo $?)"
+  check "address grammar: $f holds it once, the 300 character cap on the line before it, and no older pattern" \
+    "$([ "$(grep -cF -- "$GRAMMAR" "${PP%/*}/$f")" = 1 ] && grep -B1 -F -- "$GRAMMAR" "${PP%/*}/$f" | head -1 | grep -q 'length <= 300$' &&
+       ! grep -qF -- 'test("^[A-Za-z0-9_.-]{1,300}' "${PP%/*}/$f"; echo $?)"
 done
+# The cap itself: an address of 300 characters is kept, one of 301 is dropped by ADDR_JQ and
+# clean_addresses and refused by host-pass.sh, and a copy of ADDR_JQ without the cap keeps it.
+A300="$(jq -n -r '"aws_a." + ("b" * 294)')"; A301="$(jq -n -r '"aws_a." + ("b" * 295)')"
+check "address cap: the test addresses are 300 and 301 characters" "$([ "${#A300}" = 300 ] && [ "${#A301}" = 301 ]; echo $?)"
+check "address cap: ADDR_JQ keeps 300 characters and drops 301" \
+  "$(aj "{\"resource_changes\":[{\"address\":\"$A300\",\"change\":{}},{\"address\":\"$A301\",\"change\":{}}]}" nosha |
+     jq -e --arg a "$A300" '.addresses == [$a]' > /dev/null 2>&1; echo $?)"
+check "address cap: clean_addresses keeps 300 characters and drops 301" \
+  "$(ca "{\"addresses\":[\"$A300\",\"$A301\"]}" | jq -e --arg a "$A300" '.addresses == [$a]' > /dev/null 2>&1; echo $?)"
+ad_mut cap 's/^def addr_ok: length <= 300$/def addr_ok: true/' '.addresses | any(length == 301)' \
+  '.resource_changes += [{address: ("aws_a." + ("b" * 295)), change: {}}]'
 o="$(ca '{"addresses":["aws_a.b","aws_c.d"],"attributes":{"aws_a.b":["x","y"]},"sensitive":{"aws_a.b":["y","x","y"],"aws_c.d":[],"aws_e.f":["x"]}}')"
 check "clean_addresses: sensitive kept for planned addresses, sorted, an empty list kept" \
   "$(jq -e '.sensitive == {"aws_a.b":["x","y"],"aws_c.d":[]}' <<< "$o" > /dev/null 2>&1; echo $?)"
