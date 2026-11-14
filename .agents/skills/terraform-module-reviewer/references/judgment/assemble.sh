@@ -104,12 +104,14 @@ copy() {
 # on-demand reads workflow.md names, and so is Check A's Reverts paragraph with its list;
 # Check B's Fails when sits in its Rules section. The
 # heading that opens that text is an anchor for the run summaries, so it is unwrapped.
+# Check E's Host Wrapper Evidence is left out for the size cap; its pointer line, kept, carries
+# the rule a judgment run needs: a derived or copied wrapper has no finding.
 drops_of() {
   case "$1" in
     a-compatibility) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:No base|l:^[*][*]Reverts:[*][*] |l:^1[.] A commit in the change carries git.s own revert line|l:^2[.] .git merge-base --is-ancestor|l:^3[.] .git describe --tags|l:^4[.] Each line the finding would rest on|l:^Condition 3 reads tags|l:^If any of the four cannot be established" ;;
     b-coverage) echo "u:Reads|h:Which blocks|h:Documented omissions|h:Suggested Fixes" ;;
     c-structure) echo "u:Reads, Fails When and Severity|h:Embedded Code|h:Suggested Fixes" ;;
-    e-profile) echo "u:Reads, Fails When and Severity|h:Suggested Fixes" ;;
+    e-profile) echo "u:Reads, Fails When and Severity|h:Host Wrapper Evidence|h:Suggested Fixes" ;;
     d-examples) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:Plan evidence" ;;
     f-scope) echo "u:Reads, Fails When and Severity|h:The suggested fix|h:Suggested Fixes|h:The base revision|h:A new module|h:Renamed files|h:Not evaluated|h:Where Check F yields|h:Decisions|h:Worked Cases" ;;
   esac
