@@ -50,9 +50,9 @@
 - LOW when the divergence is cosmetic.
 - LOW when `feat` is used for a change that only fixes behaviour.
 - LOW when a `feat` change edits a module directory that takes no part in the feature (`profile.unrelated-change-bundled`): the edit ships, under the wrong release entry.
-- MEDIUM, not LOW, when a word in the title misspells an identifier the diff contains (`profile.title-misspelling`): the title squash-merges into the commit message and from there into a generated `CHANGELOG.md` the profile forbids editing by hand, so the typo is permanent once merged. It renders with `file` `.` and `line` null, the shape [findings-schema.md](findings-schema.md) gives a defect with no single file.
-- MEDIUM for the same reason when the title's description names no capability, fix or surface (`profile.title-uninformative`): `feat: Update module` and `fix: Fixes` fire, a title that could merely be better does not.
+- MEDIUM when the title's description names no capability, fix or surface (`profile.title-uninformative`): the title squash-merges into the commit message and from there into a generated `CHANGELOG.md` the profile forbids editing by hand, so it is permanent once merged. `feat: Update module` and `fix: Fixes` fire, a title that could merely be better does not.
 - MEDIUM for the same reason when the title is cut off (`profile.title-truncated`), with `file` `.`, `line` null.
+- LOW when a word in the title misspells an identifier the diff contains (`profile.title-misspelling`): the maintainer who squash-merges can correct one word of the title, and the finding gives the corrected title. It renders with `file` `.` and `line` null, the shape [findings-schema.md](findings-schema.md) gives a defect with no single file.
 - MEDIUM when the profile cannot be resolved, via `review.check-not-run` under Rule 4.
 - MEDIUM, via `review.check-not-run` under Rule 4 and never HIGH, when generated content loses or reshapes content relative to its source and the same change moves the version of its generator: what that version emits is unknown to the review, so the loss is unverified rather than hand-written. Content it gains stays HIGH.
 

@@ -82,24 +82,30 @@ Engine: `candidate`
 
 ### Rule text: `compat.default-changed`
 
+**Provider facts:** whether a value a new input's default now sends is what the provider or the API already plans for an existing resource when the argument is unset, and whether changing it replaces the resource, is read from the type's page, as the [Budget](../large-changes.md#budget) says. Without it (Rule 2), the area's `review.check-not-run` under [Rule 4](../../SKILL.md#rule-4-a-check-that-cannot-run-is-a-finding) names `compat.default-changed` with the input, the argument and the type.
+
 **Fails when:**
-- A default value changes in a way that changes the resources a user gets without them editing anything.
+- A default value of an existing input changes in a way that changes the resources a user gets without them editing anything.
+- A new input's default makes the module send a value it did not send at the base. A new input whose default leaves everything the module sends as it was is no finding.
 - A `data` block carries no address a `moved` block can name, so its removal is never `compat.resource-address-changed`: judge it by what it fed - `compat.generated-policy-narrowed` when a document the module produces changed, `compat.default-changed` when a value the caller sees changed, nothing when neither did.
 
 **Severity:**
 - CRITICAL when the change is breaking and nothing in the change declares it as breaking.
 - HIGH when the change is breaking and declared as breaking but the migration path is missing: no `moved` block, no upgrade note, no replacement input or output.
 - MEDIUM when a user-visible surface is changed compatibly but silently, for example a description or a default whose effect is cosmetic.
+- LOW when a default moves from a value the provider rejects to null and a source the review cites shows that every provider version the module's floor allows rejects the old value; otherwise the move is judged by its effect.
+- A new input is judged by the effect of the value it now sends. No finding only when a source the review cites shows that the provider or the API already plans that value for an existing resource when the argument is unset; a create-time default that applies to new resources only does not count. LOW when the value is a new default the service has announced, only under that same cite: the source shows that the provider or the API already plans that value when the argument is unset, for existing resources. MEDIUM when it changes an existing resource in place. CRITICAL or HIGH by the two bands above when it is known to replace a resource or lose data or access. When no fact sheet or page tells which of these holds, it is the `review.check-not-run` of the Provider facts line above, MEDIUM, and never a CRITICAL `compat.default-changed`.
 
 ### Confirm when: `compat.default-changed`
 
-- The head default, or a removed `data` block, changes what a caller who edits nothing gets: a resource argument or a value the caller sees. Equal values written differently are no change.
-- Severity: CRITICAL when nothing declares the break; HIGH when declared with no migration path; MEDIUM when the effect is cosmetic.
+- The head default of an existing input, a new input's default, or a removed `data` block changes what a caller who edits nothing gets: a resource argument or a value the caller sees. Equal values written differently are no change.
+- Severity: CRITICAL when nothing declares the break; HIGH when declared with no migration path; MEDIUM when the effect is cosmetic; LOW for a default moved from a value every version of the floor rejects to null, by a cited source.
+- A new input by its effect: none when a cited source shows the provider already plans the value for an existing resource left unset; LOW for a service's announced new default, only under that same cite; MEDIUM in place; CRITICAL or HIGH for a known replacement or loss of data or access. With no source to tell, `review.check-not-run` MEDIUM.
 
 ### Host templates: `compat.default-changed`
 
-- `summary`: `The default of {subject} changed, so callers that do not set it get different resources or values without editing anything.`
-- `suggested_fix`: `Restore the base default on {subject} and make the new behaviour an opt-in value of it or of a new input.`
+- `summary`: `The default of {subject} changes what the module sends, so callers that do not set it get different resources or values without editing anything.`
+- `suggested_fix`: `Restore the base default on {subject}, or for a new input default it to null or to the value the base sent, and make the new behaviour opt-in.`
 
 ## `compat.resource-address-changed`
 
