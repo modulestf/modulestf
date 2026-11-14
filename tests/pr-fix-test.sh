@@ -58,6 +58,7 @@ case " \$* " in
   *" checkout-index "*" --work-tree=/tmp/pr-fix-extract."* | *" --work-tree=/tmp/pr-fix-extract."*" checkout-index "*)
     wt=""; for a in "\$@"; do case "\$a" in --work-tree=*) wt="\${a#--work-tree=}" ;; esac; done
     "$REALGIT" -c "url.file://$REM/.insteadOf=https://github.com/" "\$@"; rc=\$?
+    printf '%s\n' "\$wt" >> "$TMP/extracts.list"
     printf 'extract %s\n' "\$wt" >> "$TMP/extract-links.log"; find "\$wt" -type l >> "$TMP/extract-links.log"; exit \$rc ;;
 esac
 exec "$REALGIT" -c "url.file://$REM/.insteadOf=https://github.com/" "\$@"
@@ -645,15 +646,15 @@ t_plan_pin() { # a plan of another head or another base ref is refused naming th
 }
 t_plan_pin; check "items --plan: a plan for another head_sha, base_ref or merge_base is refused naming the key" $?
 
-t_plan_edited() { # a kept comment edited after read_at refuses, naming its id
+t_plan_edited() { # a kept comment edited after read_at refuses, naming its item id
   fx_default; stamp_all
   local f="$FX/api/repos/o/r/pulls/7/comments.json"
   jq -c 'map(map(if .id == 601 then .updated_at = "2026-11-10T11:00:00Z" else . end))' "$f" > "$f.t" && mv "$f.t" "$f"
   plan_run && return 1
-  grep -qx 'fix-run.sh: a comment changed after the review: 601; review again' "$TMP/pi.out" && [ ! -e "$RUN/items.json" ] || { cat "$TMP/pi.out"; return 1; }
+  grep -qx 'fix-run.sh: a comment changed after the review: T-601; review again' "$TMP/pi.out" && [ ! -e "$RUN/items.json" ] || { cat "$TMP/pi.out"; return 1; }
   fr cleanup "$RUN" > /dev/null
 }
-t_plan_edited; check "items --plan: a comment edited after the review refuses naming its id" $?
+t_plan_edited; check "items --plan: a comment edited after the review refuses naming its item id" $?
 
 t_plan_args() { # --plan excludes --review; an unknown field, kind or schema of the plan is refused; the profile and prefix come from the plan
   fx_default; stamp_all
@@ -1264,7 +1265,11 @@ size_fix() {
 }
 clean_tree() { [ -z "$(CG status --porcelain --untracked-files=all --ignored)" ]; }
 interior() { awk -v b="$B1" -v e="$E1" '$0 == e { f = 0 } f { print } $0 == b { f = 1 }' "$1"; }
-nx() { find /tmp/ -maxdepth 1 -name 'pr-fix-extract.*' 2> /dev/null | LC_ALL=C sort; } # the extracts that exist
+nx() { # the extracts this run made that still exist (the script fixes /tmp, so a scan of /tmp would see other runs)
+  [ -f "$TMP/extracts.list" ] || return 0
+  while IFS= read -r d; do [ -d "$d" ] && printf '%s\n' "$d"; done < "$TMP/extracts.list"
+  return 0
+}
 CGI() { env -i PATH="$PATH" HOME="$HOME" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_INDEX_FILE="$TMP/craft.idx" "$REALGIT" -C "$RUN/clone" "$@"; }
 craft() { # parent, then "add <mode> <path> <content>" or "rm <path>": a commit by the gate identity
   local par="$1" op kw mode path content blob; shift
@@ -1282,7 +1287,7 @@ craft() { # parent, then "add <mode> <path> <content>" or "rm <path>": a commit 
 
 no_extract_left() { # no extract made since $TMP/x0 remains
   # No extract remains; one that does is removed here, so a mutated copy leaves nothing behind either.
-  local left; left="$(nx | comm -13 "$TMP/x0" -)"
+  local left; left="$(nx | LC_ALL=C sort -u | comm -13 "$TMP/x0" -)"
   # Only an extract that holds this test's own example is removed; any other new one is reported, never touched.
   if [ -n "$left" ]; then
     printf 'variable "mtls" {\n  type = bool\n}\n' > "$TMP/mtls.tf"
@@ -1294,7 +1299,7 @@ no_extract_left() { # no extract made since $TMP/x0 remains
   fi
 }
 t_pilot_() { # the live pilot's case: a provider floor in versions.tf, a new example, the root README regenerated
-  nx > "$TMP/x0"
+  nx | LC_ALL=C sort -u > "$TMP/x0"
   pilot_run "$PH" || return 1
   size_fix
   printf 'terraform {\n  required_version = ">= 1.5"\n\n  required_providers {\n    aws = {\n      source  = "hashicorp/aws"\n      version = ">= 6.0"\n    }\n  }\n}\n' > "$RUN/clone/versions.tf"

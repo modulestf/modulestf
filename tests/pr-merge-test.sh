@@ -165,6 +165,7 @@ refuse_gate "a plan read before this run started" "the plan is not this run's re
 refuse_gate "a malformed read_at" "the plan is not this run's review" "plan '.read_at = \"2026-11-10 00:00:00\"'"
 refuse_gate "a read_at that is not a time" "the plan is not this run's review" "plan '.read_at = \"2026-13-40T00:00:00Z\"'"
 refuse_gate "a run file whose started_at is not a time" "the plan is not this run's review" "chmod u+w \"\$RUN/run.json\"; jq '.started_at = \"2026-13-40T00:00:00Z\"' \"\$RUN/run.json\" > \"\$RUN/run.tmp\" && mv -f \"\$RUN/run.tmp\" \"\$RUN/run.json\""
+refuse_gate "a run file with no login (older run)" "the run file has no login" "chmod u+w \"\$RUN/run.json\"; jq 'del(.login)' \"\$RUN/run.json\" > \"\$RUN/run.tmp\" && mv -f \"\$RUN/run.tmp\" \"\$RUN/run.json\""
 refuse_gate "another token user than the one that prepared the run" "the token user is not the one that prepared this run" "bind_other"
 refuse_gate "the pin moved" "the pull request moved since the review: head_sha" "fx repos/o/r/pulls/7 '.head.sha = \"$B\"'; cp \"\$FX/api/repos/o/r/compare/$B...$H.json\" \"\$FX/api/repos/o/r/compare/$B...$B.json\""
 refuse_gate "a retargeted base" "the pull request moved since the review: base_ref" "fx repos/o/r/pulls/7 '.base.ref = \"release\"'"
