@@ -291,8 +291,11 @@ def valid_run:
   and ((any(.coverage.unplanned[]?; .reason == "plan pass skipped at light depth") | not) or .depth.depth? == "light")
   # The plan pass mode of the plan record, and the example counts the COMPACT verdict line states.
   and ((has("plan_mode") | not) or (.plan_mode | IN("laptop", "runner")))
-  and ((has("examples") | not) or (.examples | type == "object" and keys == ["count", "validated"]
-        and (.count | nat) and (.validated | nat)) and .examples.validated <= .examples.count - (.verify_gaps | length)
+  # count is every selected example, skipped those not run for a version bump only, validated those
+  # that passed validate: neither a skipped one nor a verification gap can have passed.
+  and ((has("examples") | not) or (.examples | type == "object" and keys == ["count", "skipped", "validated"]
+        and (.count | nat) and (.skipped | nat) and (.validated | nat))
+        and .examples.validated + .examples.skipped <= .examples.count - (.verify_gaps | length)
         and ([.coverage.unplanned[] | select(.reason != "no example directory")] | length) <= .examples.count)
   and .format == 1
   and (.triage | type == "boolean") and (.plan_ran | type == "boolean")
@@ -484,6 +487,7 @@ def texts: {
   "behaviour-evidence-reported": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "compact-validate-all": "`validate` passed in all {count} examples; {planned} were planned.",
   "compact-validate-some": "`validate` passed in {validated} of {count} examples; {planned} were planned.",
+  "compact-validate-skipped": "`validate` passed in {validated} of {count} examples and {skipped} were skipped as a version bump only; {planned} were planned.",
   "compact-not-checked": "Not checked: {causes}.",
   "compact-action": "To get a conclusive review: {actions}.",
   "cause-description": "the description past 8000 bytes ({cut} cut)",
@@ -784,8 +788,9 @@ def gap_lines($h; $run; $b; $p; $cov):
                   + [$shown[] | select(.reason == $r) | tx("unplanned-name"; {dir})] | join("\n")) end ])
      + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end) end)
   # Every selected example ran validate at the head and none passed: the trigger lines say so. A
-  # verification gap other than a merge base re-run means validate did not run there, so no clause.
-  + ((($run.examples // {count: 0} | .count > 0 and .validated == 0)
+  # verification gap other than a merge base re-run, or a version bump skip, means validate did not
+  # run there, so no clause.
+  + ((($run.examples // {count: 0} | .count > 0 and .validated == 0 and .skipped == 0)
       and all($run.verify_gaps[]; .reason | startswith("merge base "))) as $invalid
   | (if $invalid then "-invalid" else "" end) as $why
   | $b | if . == null then []
@@ -1006,8 +1011,8 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
   | not_planned($run) as $names
   | ($in.findings | ordered) as $o
   | ("**\($v.verdict | verdict_line)**"
-     + (if $run.plan_ran then " " + tx(if $x.validated == $x.count then "compact-validate-all" else "compact-validate-some" end;
-          {validated: $x.validated, count: $x.count, planned: ($x.count - ($names | length))}) else "" end)
+     + (if $run.plan_ran then " " + tx(if $x.skipped > 0 then "compact-validate-skipped" elif $x.validated == $x.count then "compact-validate-all" else "compact-validate-some" end;
+          {validated: $x.validated, count: $x.count, skipped: $x.skipped, planned: ($x.count - ($names | length))}) else "" end)
      + (if $cov != [] then " " + covered_sentence("compact-covered"; $run; $cov) else "" end)
      + (if $v.rule == 4 then " " + tx("compact-not-checked"; {causes: ([$c.admitted[] | tx("cause-" + .key; .)] | join(", "))}) else "" end)) as $verdict
   | (if $v.rule == 4 then action_line($c) else [] end) as $action
@@ -1045,7 +1050,7 @@ def covered_of($in; $l; $b):
        and $b != null and $b.status == "ran" and $b.capped == 0 and ($b.triggers + $b.claims) != []
        and all($b.triggers[]; .state | IN("verified", "covered", "inert", "reported"))
        and all($b.claims[]; .state == "verified")
-       and ($run | has("examples")) and $run.examples.validated == $run.examples.count
+       and ($run | has("examples")) and $run.examples.validated + $run.examples.skipped == $run.examples.count
        and $run.verify_gaps == [] and $l.gaps == 0 and ($l.triage | not)
        and (any($l.signals[]; . == "unknown") | not)
        and (any($l.findings[]; .rule_id | startswith("review.") and . != "review.tool-disputed") | not)

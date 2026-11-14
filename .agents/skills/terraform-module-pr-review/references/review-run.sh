@@ -1102,8 +1102,9 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
           else {} end)),
      counts: \$counts}
     + (if \$triage then {} else {behaviour: \$beh} end | with_entries(select(.value != null)))
-    + (if \$ver != null then {examples: (\$ver | [.dirs[] | select(.reason == \"verified\")]
-         | {count: length, validated: (map(select(.head.validate == 0)) | length)})} else {} end)
+    + (if \$ver != null then {examples: (\$ver.dirs | {count: length,
+         skipped: (map(select(.reason == \"skipped-version-bump\")) | length),
+         validated: (map(select(.reason == \"verified\" and .head.validate == 0)) | length)})} else {} end)
     + (if \$mode != \"\" then {plan_mode: \$mode} else {} end)
     + (if \$depth != null then {depth: \$depth} else {} end)
     + (if \$tests != null then {tests: \$tests} else {} end)

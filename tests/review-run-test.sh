@@ -281,6 +281,18 @@ echo 'not json' > "$TMP/bad.json"
 check "acceptance: render refuses findings that are not a list" \
   "$(run_rr render "$FR" --findings "$TMP/bad.json" --assessment "$FX/reviewer/assessment.txt" --out "$TMP/render2" > /dev/null 2>&1; [ $? = 1 ]; echo $?)"
 
+# A version-floor change verifies one example and skips the rest as a version bump only, while the
+# plan pass still plans them: the run file counts every selected example, so render succeeds.
+FV="$(mktemp -d "$ROOTD/pr-review.XXXXXX")"
+cp -R "$FR/." "$FV/"; rm -rf "$FV/render"
+jq '.dirs |= map(if .dir == "examples/alpha" then . else .reason = "skipped-version-bump" | .head = null | .base = null end)' \
+  "$FR/verify.json" > "$FV/verify.json"
+run_rr render "$FV" --findings "$FX/reviewer/findings.json" --assessment "$FX/reviewer/assessment.txt" \
+  --summary "$FX/reviewer/summary.txt" --out "$TMP/render-vbump" > "$TMP/r-vbump.out" 2>&1
+check "render: 8 of 9 examples skipped as a version bump only and 3 not planned render, each count stated once" \
+  "$([ $? = 0 ] && [ "$(q "$FV/render/run-file.json" '.examples == {count: 9, skipped: 8, validated: 1} and .verify_gaps == []')" = 0 ] &&
+     grep -qF '`validate` passed in 1 of 9 examples and 8 were skipped as a version bump only; 6 were planned.' "$TMP/render-vbump/comment.md"; echo $?)"
+
 # --- 2. prepare to render on a light change with hostile names, through the real depth.sh ---------
 mkrepo widget; ghfiles open false CHANGES_REQUESTED
 prep() { # extra env as words before; sets RUN
@@ -365,7 +377,7 @@ check "render light: the real render-comment.sh states the depth, its reasons an
   "$(grep -qF 'Review depth: light. Reasons: `light-docs-only`.' "$TMP/render-light/comment.md" &&
      grep -qF 'Out of scope at this depth, so not unknowns: Check A, Check B, Check D, Check G beyond its claim reading, the plan pass' "$TMP/render-light/comment.md"; echo $?)"
 check "render light: the run file carries depth, no gaps and the example counts" \
-  "$(q "$RUN/render/run-file.json" '.depth.depth == "light" and .counts == null and .verify_gaps == [] and .examples == {count: 2, validated: 2}')"
+  "$(q "$RUN/render/run-file.json" '.depth.depth == "light" and .counts == null and .verify_gaps == [] and .examples == {count: 2, skipped: 0, validated: 2}')"
 check "render: prints at most 30 lines" "$(lines_ok "$TMP/re.out")"
 # The module profile (github-io.md, Handover): the snapshot's tree and gate list go into the task,
 # and the reviewer's profile line must match them or nothing is rendered.

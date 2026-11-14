@@ -1277,7 +1277,7 @@ T556() { # jq update of the trigger -> trigger json
 }
 CL20="$(jq -nc '[range(1; 21) | {claim_id: "C-\(.)", state: "verified"}]')"
 R556() { # name, jq update -> run file
-  runf "r556-$1" '.plan_ran = true | .plan_mode = "laptop" | .examples = {count: 9, validated: 9}
+  runf "r556-$1" '.plan_ran = true | .plan_mode = "laptop" | .examples = {count: 9, skipped: 0, validated: 9}
     | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/serverless", reason: "plan gate G1"},
         {dir: "examples/mysql", reason: "plan gate G3"}, {dir: "examples/s3-import", reason: "plan gate G1"}]}
     | .behaviour = {status: "ran", reason: null, triggers: ['"$(T556)"'], claims: '"$CL20"', capped: 0} | '"${2:-.}"
@@ -1469,7 +1469,7 @@ t_g0() {
 }
 t_g0; check "tiers: a G0 example gets its own clause, never the runner clause" $?
 t_noplan() {
-  rc "$NONE" "$(runf noplan '.examples = {count: 2, validated: 2}
+  rc "$NONE" "$(runf noplan '.examples = {count: 2, skipped: 0, validated: 2}
     | .coverage = {class: "none", inert: false, unplanned: [{dir: "examples/b", reason: "no AWS profile named"}, {dir: "examples/a", reason: "no AWS profile named"}]}')" "$HOST"
   [ "$(tier)" = COMPACT ] && cmp -s "$O/comment.md" <(printf '%s\n' "$(cat "$TMP/assess-556.txt")" '' \
     '**Inconclusive.** Not checked: no plan was run (no AWS profile named).' '' 'To get a conclusive review: name an AWS profile.' '' \
@@ -1534,20 +1534,33 @@ check "tiers: the same text passes in STANDARD with --standard" "$([ "$ST" = 0 ]
 render "$(F556 "{summary: \"$(head -c 501 /dev/zero | tr '\0' s)\"}")" "$H556" "" "$(R556 over-501)" "" --standard
 check "refused: STANDARD a summary over 500 characters, the message names the limit and the tier" "$([ "$ST" = 2 ] && printf '%s' "$MSG" | grep -qF 'at most 500 characters' && printf '%s' "$MSG" | grep -qF 'STANDARD limits'; echo $?)"
 t_approve() {
-  rc "$NONE" "$(runf appr '.plan_ran = true | .examples = {count: 9, validated: 9}')" "$HOST"
+  rc "$NONE" "$(runf appr '.plan_ran = true | .examples = {count: 9, skipped: 0, validated: 9}')" "$HOST"
   [ "$(tier)" = COMPACT ] && [ "$(verdict)" = "approve APPROVE" ] &&
     cmp -s "$O/comment.md" <(printf '%s\n' "$(cat "$TMP/assess-556.txt")" '' '**Good to merge.** `validate` passed in all 9 examples; 9 were planned.')
 }
 t_approve; check "tiers: approve, K equals M, byte for byte" $?
 t_nits() {
-  rc "$(printf '%s\n' "$(f structure.grouping LOW a.tf 1 'S.' 'F.')" | list nits)" "$(runf nits '.plan_ran = true | .examples = {count: 9, validated: 8}')" "$HOST"
+  rc "$(printf '%s\n' "$(f structure.grouping LOW a.tf 1 'S.' 'F.')" | list nits)" "$(runf nits '.plan_ran = true | .examples = {count: 9, skipped: 0, validated: 8}')" "$HOST"
   [ "$(tier)" = COMPACT ] && [ "$(rule)" = 7 ] && cmp -s "$O/comment.md" <(printf '%s\n' "$(cat "$TMP/assess-556.txt")" '' \
     '**Good to merge, with nits.** `validate` passed in 8 of 9 examples; 9 were planned.' '' '- LOW `structure.grouping` `a.tf:1` - S.' '  - Fix: F.')
 }
 t_nits; check "tiers: approve with nits, K below M, byte for byte" $?
-refused "example counts with more validated than verified" "$G" "" "" "$(runf exbad '.examples = {count: 2, validated: 2} | .verify_gaps = [{dir: "examples/a", reason: "init failed"}]')"
-refused "example counts below the unplanned examples" "$G" "" "" "$(runf exbad2 '.examples = {count: 1, validated: 1} | .coverage = {class: "none", inert: false, unplanned: [{dir: "a", reason: "budget"}, {dir: "b", reason: "budget"}]}')"
+refused "example counts with more validated than verified" "$G" "" "" "$(runf exbad '.examples = {count: 2, skipped: 0, validated: 2} | .verify_gaps = [{dir: "examples/a", reason: "init failed"}]')"
+refused "example counts below the unplanned examples" "$G" "" "" "$(runf exbad2 '.examples = {count: 1, skipped: 0, validated: 1} | .coverage = {class: "none", inert: false, unplanned: [{dir: "a", reason: "budget"}, {dir: "b", reason: "budget"}]}')"
 refused "an unknown argument after --standard" "$G" "" "" "" "" --standard --compact
+# Examples skipped as a version bump only count among the selected examples: 6 selected, 5 of
+# them skipped, 1 verified that passed validate, 3 not planned renders, each count stated once.
+t_vbump() {
+  rc "$(F556)" "$(R556 vbump '.examples = {count: 6, skipped: 5, validated: 1}')"
+  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 4 ] &&
+    cmp -s "$O/comment.md" <(sed -e 's/`validate` passed in all 9 examples; 6 were planned\./`validate` passed in 1 of 6 examples and 5 were skipped as a version bump only; 3 were planned./' \
+      -e 's/3 of 9 examples not planned/3 of 6 examples not planned/' "$TMP/want-556.md")
+}
+t_vbump; check "examples: 5 of 6 skipped as a version bump only and 3 not planned render, byte for byte" $?
+refused "example counts of the verified examples only, below the unplanned examples" "$(F556)" "$H556" "" "$(R556 vbump1 '.examples = {count: 1, skipped: 0, validated: 1}')"
+t_exbad3() { render "$G" "" "" "$(runf exbad3 '.examples = {count: 6, skipped: 5, validated: 2}')"; [ "$ST" = 2 ] && empty_out; }
+t_exbad3; check "refused: example counts with more validated and skipped than selected" $?
+refused "example counts without the skipped count" "$G" "" "" "$(runf exbad4 '.examples = {count: 2, validated: 2}')"
 
 # The plan pass mode (plan-pass.md, Runner or laptop): runner mode still refuses what a gate hit
 # there names, so the runner clause is advice only after a laptop-mode pass. A gate hit after a
@@ -1688,6 +1701,13 @@ Dropping `compact()` fixes the plan: with an unknown group id the base kept the 
 EOF
 t_cov_gold() { rc "$(F556C)" "$(R556K kgold)" "$H556N"; [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 7 ] && cmp -s "$O/comment.md" "$TMP/want-556k.md"; }
 t_cov_gold; check "covered: pull request 556 with its skips covered renders COMPACT at rule 7, byte for byte" $?
+# Two examples skipped as a version bump only are a decision, no unknown: the skips stay covered.
+t_cov_vbump() {
+  rc "$(F556C)" "$(R556K kvbump '.examples = {count: 9, skipped: 2, validated: 7}')" "$H556N"
+  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 7 ] &&
+    cmp -s "$O/comment.md" <(sed 's/`validate` passed in all 9 examples; 6 were planned\./`validate` passed in 7 of 9 examples and 2 were skipped as a version bump only; 6 were planned./' "$TMP/want-556k.md")
+}
+t_cov_vbump; check "covered: version bump skips keep the covered skips at rule 7, byte for byte" $?
 check "covered: approve with nits proposes COMMENT" "$([ "$(verdict)" = "approve with nits COMMENT" ]; echo $?)"
 check "covered: findings.json lists the routed finding last" "$(jq -e 'map(.id) == ["F-001", "F-002", "F-003"]' "$O/findings.json" > /dev/null; echo $?)"
 
@@ -1860,7 +1880,7 @@ check "covered: unresolved threads still land at rule 5" "$([ "$(rule)" = 5 ] &&
 t_cov_base() { unch x "$(F556C)" "$(R556K kbase '.coverage.skip_base_sha = "'"$HEAD"'"')"; }
 t_cov_nomb() { unch x "$(F556C)" "$(R556K knomb)" "$(host knomb '.repo = "example/terraform-aws-rds-aurora" | .number = 556 | .merge_base = null')"; }
 t_cov_noplan() { unch x "$(F556C)" "$(R556K knoplan '.plan_ran = false')"; }
-t_cov_allskip() { unch x "$(F556C)" "$(R556K kall '.examples = {count: 3, validated: 3}')"; }
+t_cov_allskip() { unch x "$(F556C)" "$(R556K kall '.examples = {count: 3, skipped: 0, validated: 3}')"; }
 # 100 witnesses in all cover; 101 do not.
 wits() { printf '[range(%s) | %s + {attribute: "a\\(.)"}]' "$1" "$W1"; } # a jq expression of $1 witnesses
 t_cov_w100() {
@@ -1897,6 +1917,8 @@ t_cov_one() {
 t_cov_one; check "covered: one skip takes the one form in both tiers, with the same count, and STANDARD names no notes" $?
 
 # Negative self-check for covered skips.
+mutate "version bump skips turn the covered skips off" 's/\$run\.examples\.validated \+ \$run\.examples\.skipped == \$run\.examples\.count/\$run.examples.validated == \$run.examples.count/' t_cov_vbump
+mutate "the version bump skips left out of the COMPACT verdict line" 's/if \$x\.skipped > 0 then "compact-validate-skipped" elif/if false then "" elif/' t_vbump
 mutate "covered skips still counted at rule 4" 's/ or \.unplanned_open > 0/ or .unplanned > 0/' t_cov_gold
 mutate "rule 8 reachable with covered skips" 's/elif has_sev\("LOW"\) or \.covered > 0 then/elif has_sev("LOW") then/' t_cov_rule8
 mutate "all or nothing dropped" 's/and all\(\$u\[\]; \. as \$x \| any\(\$cs\[\];/and all(\$u[]; true or any(\$cs[];/' t_cov_partial
@@ -1909,7 +1931,7 @@ mutate "a skipped example accepted as a witness" 's/and all\(\$cs\[\]\.witnesses
 mutate "trigger states not checked" 's/\n\s+and all\(\$b\.triggers\[\]; \.state \| IN\("verified", "covered", "inert", "reported"\)\)\n/\n/' t_cov_reftrig
 mutate "claim states not checked" 's/\n\s+and all\(\$b\.claims\[\]; \.state == "verified"\)\n/\n/' t_cov_refuted
 mutate "no trigger and no claim accepted" 's/ and \(\$b\.triggers \+ \$b\.claims\) != \[\]//' t_cov_zero
-mutate "validated below count accepted" 's/and \$run\.examples\.validated == \$run\.examples\.count//' t_cov_validated
+mutate "validated below count accepted" 's/and \$run\.examples\.validated \+ \$run\.examples\.skipped == \$run\.examples\.count//' t_cov_validated
 mutate "other gaps not checked" 's/and \$l\.gaps == 0 and/and/' t_cov_cut
 mutate "a triage run accepted" 's/and \(\$l\.triage \| not\)//' t_cov_triage
 mutate "unknown signals not checked" 's/and \(any\(\$l\.signals\[\]; \. == "unknown"\) \| not\)//' t_cov_signal
@@ -2052,11 +2074,12 @@ if git -C "$SRC" cat-file -e b3f74cf^{commit} 2> /dev/null; then
   # The checks file grew a jobless key later; the depth property does not depend on the host pass.
   cp "$REF/host-pass.sh" "$OLD/host-pass.sh"
   # The lock in host.json's state came later and is no render input; the old scripts read the host
-  # file without it.
+  # file without it. The skipped example count came later too, and the old scripts read none.
   t_same() { # render args: the same body from the old scripts and the new
-    local keep="$RCU" oh="$TMP/old-host-$oc.json"
+    local keep="$RCU" oh="$TMP/old-host-$oc.json" orun="$TMP/old-run-$oc.json"
     jq 'del(.state.locked, .state.lock_reason)' "${2:-$HOST}" > "$oh"
-    RCU="$OLD/render-comment.sh"; render "$1" "$oh" "${@:3}"; local a="$O/comment.md" s1="$ST"
+    jq 'del(.examples.skipped)' "${4:-$RUNF}" > "$orun"
+    RCU="$OLD/render-comment.sh"; render "$1" "$oh" "${3:-}" "$orun" "${@:5}"; local a="$O/comment.md" s1="$ST"
     RCU="$keep"; render "$@"; [ "$s1" = 0 ] && [ "$ST" = 0 ] && cmp -s "$a" "$O/comment.md"
   }
   t_same "$NONE"; check "depth absent: nothing open renders as before, byte for byte" $?
@@ -2144,7 +2167,7 @@ mutate "triage approves at a depth" 's/elif \.triage or any/elif any/' t_dtriage
 # --- A profile was named and the plan pass gave no record: its own reason, never "no AWS profile
 # named", an unknown at rule 4 in STANDARD with no advice to name a profile.
 t_plan_failed() {
-  render "$NONE" "" "" "$(runf pnr '.plan_ran = false | .examples = {count: 2, validated: 2}
+  render "$NONE" "" "" "$(runf pnr '.plan_ran = false | .examples = {count: 2, skipped: 0, validated: 2}
     | .coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass did not run: failed"}, {dir: "examples/b", reason: "plan pass did not run: failed"}]}')"
   [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(tier)" = STANDARD ] &&
     grep -qxF -- '- 2 examples were not planned: plan pass did not run: failed.' "$O/comment.md" &&
@@ -2265,8 +2288,8 @@ t_shared_collapsed; check "collapse: a collapsed group sharing one fix prints it
 # say so, from the run file's example counts.
 TR6="[$(bt T-001 lifecycle-change unverifiable), $(bt T-002 wrapper-change unverifiable), $(bt T-003 lifecycle-change unverifiable), \
 $(bt T-004 literal-argument-change unverifiable), $(bt T-005 lifecycle-change unverifiable), $(bt T-006 literal-argument-change unverifiable)]"
-binv() { # name, triggers, validated [, verify_gaps [, count]]
-  runf "binv-$1" ".behaviour = {status: \"ran\", reason: null, triggers: $2, claims: [], capped: 0} | .examples = {count: ${5:-3}, validated: $3} | .verify_gaps = ${4:-[]}"
+binv() { # name, triggers, validated [, verify_gaps [, count [, skipped]]]
+  runf "binv-$1" ".behaviour = {status: \"ran\", reason: null, triggers: $2, claims: [], capped: 0} | .examples = {count: ${5:-3}, skipped: ${6:-0}, validated: $3} | .verify_gaps = ${4:-[]}"
 }
 NOTF='- 6 behaviour changes not verified: 3 lifecycle-change, 2 literal-argument-change, 1 wrapper-change.'
 NOTF_INV='- 6 behaviour changes not verified (the head does not validate in any example): 3 lifecycle-change, 2 literal-argument-change, 1 wrapper-change.'
@@ -2296,6 +2319,12 @@ check "behaviour: a head that validates in one example keeps the plain line" "$(
 t_binv_absent; check "behaviour: examples where terraform was not installed get no validate clause" $?
 t_binv_mb; check "behaviour: merge base re-runs that did not run keep the validate clause" $?
 t_binv_zero; check "behaviour: no example counted gives no validate clause" $?
+# Validate never ran in an example skipped as a version bump only: no clause, though none validated.
+t_binv_vbump() {
+  render "$NONE" "" "" "$(binv vbump "$TR6" 0 '[]' 3 3)"
+  [ "$ST" = 0 ] && grep -qxF -- "$NOTF" "$O/comment.md" && ! grep -qF 'does not validate' "$O/comment.md"
+}
+t_binv_vbump; check "behaviour: examples skipped as a version bump only get no validate clause" $?
 
 mutate "the closed lead dropped" 's/elif \$closed then "todo-lead-closed" //' t_closed_lead
 mutate "the job-less Checks phrase dropped" 's/then "-jobless" else "" end/then "" else "" end/' t_open_jobless_line
@@ -2305,6 +2334,8 @@ mutate "a fix shared by entries that differ" 's/\| unique \| length\) == 1;/| un
 mutate "the validate clause dropped" 's/\(if \$invalid then "-invalid" else "" end\)/""/' t_binvalid
 mutate "the validate clause over head-side gaps" 's/\n      and all\(\$run\.verify_gaps\[\]; \.reason \| startswith\("merge base "\)\)//' t_binv_absent
 mutate "the validate clause with no example counted" 's/\.count > 0 and \.validated == 0/.validated == 0/' t_binv_zero
+mutate "the validate clause over version bump skips" 's/ and \.skipped == 0\)/)/' t_binv_vbump
+mutate "skipped examples left out of the example count bound" 's/\.examples\.validated \+ \.examples\.skipped <=/.examples.validated <=/' t_exbad3
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi
