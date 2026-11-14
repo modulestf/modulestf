@@ -72,6 +72,33 @@ t_carried_bad() {
 }
 t_carried_ok; check "carried: the carried finding once, in any place, is accepted" $?
 t_carried_bad; check "carried: the carried finding missing or repeated is rejected" $?
+# A carried set holds only file rules: a prior that carries a never rule or a rule with no row is
+# rejected, even when the findings repeat it once.
+NEVER_C='{"file": "outside.tf", "line": 6, "rule_id": "structure.grouping", "severity": "LOW", "summary": "X.", "suggested_fix": "K."}'
+NOROW_C='{"file": "outside.tf", "line": 7, "rule_id": "structure.third-party-promotion", "severity": "LOW", "summary": "Y.", "suggested_fix": "L."}'
+carry_prior() { # finding -> the prior carries it
+  printf '[%s]\n' "$1" > "$PRIOR/carried.json"; cp "$PRIOR/carried.json" "$PRIOR/carried-task.json"
+}
+t_carried_kind() {
+  local a b
+  carry_prior "$NEVER_C"; a="$(inc "approve with nits" "$NEVER_C" "$INSCOPE")"
+  carry_prior "$NOROW_C"; b="$(inc inconclusive "$NOROW_C" "$INSCOPE")"
+  carry_prior "$CARRIED"
+  [ "$a" = "findings rejected: a carried finding is not of a file rule" ] && [ "$b" = "findings rejected: a carried finding is not of a file rule" ]
+}
+t_carried_kind; check "carried: a prior that carries a never rule or a rule with no row is rejected" $?
+
+# --- prior's carried selection, with the map carry_map reads from the real rule-facts.md: a file
+# rule on a file outside the scope is carried; the same rule in the scope, a never rule and a rule
+# with no row are not.
+eval "$(sed -n '/^carry_map() {/,/^}/p' "$HPA")"
+t_select() {
+  local map; map="$(carry_map "$RF")" || return 1
+  printf '[%s]\n' "$CARRIED,$INSCOPE,$NEVER,$NOROW" |
+    jq -e -L "$(dirname "$HPA")" --argjson carry "$map" --arg c "$CARRIED" '
+      include "incremental"; carry_select($carry; ["main.tf"]) == [$c | fromjson]' > /dev/null
+}
+t_select; check "prior: the carried selection with the real Carry column keeps only a file rule outside the scope" $?
 
 # --- The scope: a file rule only on a file in the scope.
 t_scope_ok() { [ "$(inc "approve with nits" "$CARRIED" "$INSCOPE")" = "$OK" ]; }
@@ -86,18 +113,23 @@ t_norow; check "no Carry value: a new finding of a rule the table does not name 
 
 # --- Negative self-check: each mutation of a temp copy must make its named case fail.
 
-mutate() { # name, perl substitution on host-pass.sh, case function
+mutate() { # name, perl substitution on host-pass.sh and incremental.jq, case function
   local d="$TMP/mut-$1"; d="${d// /-}"; mkdir -p "$d"
   cp "$REF/host-pass.sh" "$REF"/*.jq "$d/"
-  perl -0pi -e "$2" "$d/host-pass.sh"
-  if cmp -s "$d/host-pass.sh" "$REF/host-pass.sh"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
+  perl -0pi -e "$2" "$d/host-pass.sh" "$d/incremental.jq"
+  if cmp -s "$d/host-pass.sh" "$REF/host-pass.sh" && cmp -s "$d/incremental.jq" "$REF/incremental.jq"; then
+    check "self-check: $1 (the mutation changed nothing)" 1; return
+  fi
   local keep="$HPA" before="$fails"; HPA="$d/host-pass.sh"
   "$3" > /dev/null 2>&1; local s=$?
   HPA="$keep"; fails="$before"
   check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
 mutate "carry read from the last column" 's/\\\|\( \[\^\|\]\* \\\|\)\{3\} \(file\|never\) \\\|/\\|.*\\| (file|never) \\|\$/' t_carry_ok
-mutate "a rule the table does not name taken as unknown" 's/\(\$carry\[\.rule_id\] \/\/ "never"\)/(\$carry[.rule_id] \/\/ "unknown")/' t_norow
+mutate "a rule the table does not name taken as unknown" 's/def carry_kind\(\$carry\): \$carry\[\.rule_id\] \/\/ "never";/def carry_kind(\$carry): \$carry[.rule_id] \/\/ "unknown";/' t_norow
+mutate "the carried rule kind not checked" 's/\|\|\n    reject "a carried finding is not of a file rule"/|| true/' t_carried_kind
+mutate "prior carrying a file rule in the scope" 's/ \| select\(\.file \| IN\(\$scope\[\]\) \| not\)\]/]/' t_select
+mutate "prior carrying every rule" 's/\[\.\[\] \| select\(carry_kind\(\$carry\) == "file"\) \|/[.[] |/' t_select
 mutate "the verdict check skipped" 's/\|\|\n    reject "the verdict does not follow from the findings"/|| true/' t_verdict_bad
 mutate "the carried check skipped" 's/\|\|\n    reject "a carried finding is missing, changed or repeated"/|| true/' t_carried_bad
 mutate "the scope check skipped" 's/\|\|\n    reject "a finding outside the scope of an incremental review"/|| true/' t_scope_bad

@@ -894,7 +894,7 @@ cmd_prior() {
   # holds. A file in the scope is judged again, so its findings are not carried.
   IJ --slurpfile sc "$w/scope.json" --slurpfile carry "$w/carry.json" --arg prefix "$prefix" '
     include "incremental";
-    [.[] | select(($carry[0][.rule_id] // "never") == "file") | select(.file | IN($sc[0].scope[]) | not)]
+    carry_select($carry[0]; $sc[0].scope)
     | if all(.[]; (.file | IN($sc[0].blobs[])) and (.file | rel($prefix)) != null and (.file | rel($prefix)) != ".")
       then map(del(.id)) else error("target") end' "$w/found.json" > "$stage/carried.json" 2> /dev/null || full target-not-file
   IJ --arg prefix "$prefix" 'include "incremental"; map(.file |= rel($prefix))' "$stage/carried.json" > "$stage/carried-task.json"
@@ -1031,12 +1031,14 @@ cmd_accept() {
     (map(canon)) as $all
     | all($c[0][]; canon as $x | ([$all[] | select(. == $x)] | length) == 1)' "$findings" > /dev/null 2>&1 ||
     reject "a carried finding is missing, changed or repeated"
+  IJ -e --argjson carry "$carry" 'include "incremental"; carried_ok($carry)' "$prior/carried.json" > /dev/null 2>&1 ||
+    reject "a carried finding is not of a file rule"
   IJ -e --slurpfile c "$prior/carried.json" --slurpfile m "$prior/meta.json" --argjson carry "$carry" '
     include "incremental";
     ($c[0] | map(canon)) as $carried
     | all(.[] | select((canon | IN($carried[])) | not);
           # A rule the table does not name is never, as prior takes it (host-pass.md).
-          ($carry[.rule_id] // "never") as $k
+          carry_kind($carry) as $k
           | $k == "never" or ($k == "file" and (.file | IN($m[0].scope[]))))' "$findings" > /dev/null 2>&1 ||
     reject "a finding outside the scope of an incremental review"
   echo "findings accepted: incremental"

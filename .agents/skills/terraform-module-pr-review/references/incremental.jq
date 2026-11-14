@@ -69,6 +69,13 @@ def host_verdict($model):
     elif any($f[]; .severity == "LOW") then "approve with nits"
     else "approve" end;
 
+# The Carry column (host-pass.md, Incremental Review): $carry maps a rule_id to "file" or "never",
+# and a rule the table does not name is never. prior carries a file rule's finding on a file
+# outside the scope; accept takes a carried set only when every finding in it is a file rule.
+def carry_kind($carry): $carry[.rule_id] // "never";
+def carry_select($carry; $scope): [.[] | select(carry_kind($carry) == "file") | select(.file | IN($scope[]) | not)];
+def carried_ok($carry): all(.[]; carry_kind($carry) == "file");
+
 # Paths relative to the module root, for the reviewer; null for a path outside it.
 def rel($prefix):
   if $prefix == "" then . elif . == $prefix then "." elif startswith($prefix + "/") then .[($prefix | length) + 1:] else null end;
