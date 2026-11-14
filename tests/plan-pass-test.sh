@@ -59,10 +59,10 @@ jq -n -c '{
     {address: "data.aws_iam_policy_document.deferred", mode: "data", values: {json: null}, sensitive_values: {}},
     {address: "data.aws_iam_policy_document.planned_only", mode: "data", values: {policy_id: "x"}, sensitive_values: {}}]}},
   configuration: {root_module: {
-    resources: ([
+    resources: (([
       "data.aws_iam_policy_document.this", "data.aws_x.map", "data.aws_secretsmanager_secret_version.s",
       "data.aws_iam_policy_document.deferred", "data.aws_iam_policy_document.planned_only", "data.aws_bad"]
-      | map({address: ., mode: "data"})) + [{address: "aws_s3_bucket.stale", mode: "managed"}],
+      | map({address: ., mode: "data"})) + [{address: "aws_s3_bucket.stale", mode: "managed"}]),
     module_calls: {
       s3: {source: "terraform-aws-modules/s3-bucket/aws",
         module: {resources: [{address: "data.aws_iam_policy_document.bucket", mode: "data"}]}},
