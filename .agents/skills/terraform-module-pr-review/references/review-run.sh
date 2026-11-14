@@ -24,6 +24,7 @@
 #   review-run.sh evidence <run>        the commands above the depth needs, side by side at deep
 #   review-run.sh handover <run>        <run>/handover/task.md and record.txt for the reviewer, after
 #                                        the module profile snapshot (state/profile.json)
+#                                        and the README evidence (readme-regions.sh)
 #   review-run.sh render <run> --findings <file> --assessment <file> --out <dir>
 #       [--summary <file>] [--standard]
 #                                        the run file, depth.sh verify, render-comment.sh, plan.json
@@ -46,6 +47,8 @@ WRITE_SHORT='Write short: a `summary` of at most 200 characters and a `suggested
 
 # A provenance line of schema-pass.md, Focused Mode: mirror, release tag, schema file SHA-256.
 SOURCE_RE='^schema pass: source [A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100} [a-z0-9][a-z0-9-]{0,63}_[a-z0-9][a-z0-9-]{0,63}-v[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5} [0-9a-f]{64}$'
+# A line of readme-regions.sh (readme-regions.md): a module-relative README.md and its result.
+REGION_LINE_RE='^([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/){0,8}README\.md (generated|differs|unknown [a-z0-9 .-]{1,60})$'
 
 die() { echo "review-run.sh: $1" >&2; exit 2; }
 fail() { echo "review-run.sh: $1"; exit 1; }
@@ -892,6 +895,14 @@ relaxes_text() {
     END { exit !f }' "$1" 2> /dev/null
 }
 
+# The host's README evidence (readme-regions.md): readme-regions.sh on the clone's objects at the
+# head, which runs the maintainer's terraform-docs pass on a copy. A failed step is no evidence.
+readme_regions() {
+  rm -rf "$RUN/readme" && mkdir "$RUN/readme" || return 0
+  bash "$HERE/readme-regions.sh" --clone "$RUN/clone" --head "$HEAD_SHA" --diff "$RUN/host/files.json" \
+    --prefix "$PREFIX" --out "$RUN/readme" > /dev/null 2>&1 || rm -f "$RUN/readme/regions.txt"
+}
+
 cmd_handover() {
   ready handover
   module_profile
@@ -907,6 +918,7 @@ cmd_handover() {
   n="$(grep -n -m1 '^The block below holds text quoted' "$t" | cut -d: -f1)"
   [[ "$n" =~ ^[0-9]+$ ]] || fail "task.md has no block preamble"
   if [ "$TRIAGE" = false ]; then record_lines > "$out/record.txt" || fail "the record could not be assembled"; fi
+  [ "$TRIAGE" = true ] || readme_regions
   # The merge base the depth was bound to, for the reviewer's mtf-facts --merge-base-sha.
   local mbl="$MB" nm=false
   [ ! -f "$RUN/depth.json" ] || mbl="$(jq -r '.binding.merge_base' "$RUN/depth.json")"
@@ -954,6 +966,12 @@ cmd_handover() {
     jq -r 'if .dir != "" then "profile-dir: \(.dir)" elif .id != "" then "profile: \(.id)" else empty end,
       (select(.tree != "none") | "Profile tree: \(.tree)"),
       (select(.gated != []) | "Gated rules: \(.gated | join(" "))")' "$RUN/state/profile.json"
+    # The README evidence as host fact lines: every line in the grammar of readme-regions.sh and at
+    # most 256 of them, or no line at all.
+    if [ "$TRIAGE" = false ] && [ -s "$RUN/readme/regions.txt" ] && [ "$(wc -l < "$RUN/readme/regions.txt")" -le 256 ] &&
+        ! grep -qvE "$REGION_LINE_RE" "$RUN/readme/regions.txt"; then
+      sed 's/^/README regions: /' "$RUN/readme/regions.txt"
+    fi
     printf 'Output: write the findings list as JSON to %s, the summary line and the profile lines to %s and the facts comparison note to %s, and nothing else.\n' \
       "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt"
     [ ! -f "$out/reviewer-references.md" ] || printf 'References: %s\n' "$out/reviewer-references.md"

@@ -19,6 +19,8 @@
 #   - a failed validate at light escalates, a schema escalation at focused escalates;
 #   - a locked pull request: prepare's lock line, the lock in host.json and index.json, and a body
 #     byte for byte the unlocked one, with a negative self-check on the lock line;
+#   - the README evidence: handover runs readme-regions.sh outside a triage run and states its
+#     grammar lines before the block, with a negative self-check;
 #   - the pr-review SKILL.md workflow move: the sentence multiset of SKILL.md and
 #     references/workflow.md and references/inputs.md is the pinned one, navigation excluded,
 #     and SKILL.md and the run guide stay within their size targets.
@@ -83,6 +85,14 @@ if [ -f "$out/behaviour.json" ] || [ -n "${EVAL:-}" ]; then
 else
   echo '{"schema_version": 1, "triggers": [], "capped": 0}' > "$out/behaviour.json"
 fi
+EOF
+
+# readme-regions.sh: the lines a case names, when it names any.
+cat > "$SK/readme-regions.sh" <<'EOF'
+#!/bin/bash
+echo "regions $*" >> "${STUB_LOG:?}"
+while [ $# -gt 0 ]; do [ "$1" = --out ] && out="$2"; shift; done
+[ -z "${REGIONS_STUB:-}" ] || printf '%s\n' "$REGIONS_STUB" > "$out/regions.txt"
 EOF
 
 # The fake host: gh answers from files, terraform validates unless a marker says otherwise.
@@ -475,6 +485,39 @@ jq '.depth = "light" | .reasons = ["light-docs-only"]' "$RUN/depth.json" > "$TMP
 run_rr verify "$RUN" > "$TMP/v.out" 2>&1
 check "depth.json lowered to light is refused before any step" "$([ $? = 1 ] && [ ! -e "$RUN/verify.json" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
+
+# The README evidence: handover runs readme-regions.sh on the clone at the head and states each
+# line in its grammar as a host fact line before the untrusted block; a file with a line outside
+# the grammar crosses no line, and a triage run neither runs the step nor states a line.
+t_regions_rr() {
+  prep; full
+  REGIONS_STUB="$(printf 'README.md generated\nmodules/x/README.md maybe $(touch x)')" run_rr handover "$RUN" > /dev/null 2>&1 || return 1
+  ! grep -q '^README regions: \|maybe' "$RUN/handover/task.md" || { echo "a file outside the grammar crossed"; return 1; }
+  : > "$STUB_LOG"
+  REGIONS_STUB="$(printf 'README.md generated\nmodules/x/README.md unknown version mismatch')" run_rr handover "$RUN" > /dev/null 2>&1 || return 1
+  local T="$RUN/handover/task.md"
+  grep -qxF "regions --clone $RUN/clone --head $HEADC --diff $RUN/host/files.json --prefix  --out $RUN/readme" "$STUB_LOG" ||
+    { echo "the step's arguments"; return 1; }
+  [ "$(grep '^README regions: ' "$T")" = "$(printf 'README regions: README.md generated\nREADME regions: modules/x/README.md unknown version mismatch')" ] &&
+    awk '/^README regions: /{w=NR} /^UNTRUSTED-[0-9a-f]{12} BEGIN$/{b=NR} END{exit !(w && w < b)}' "$T" || { echo "task lines"; return 1; }
+  run_rr cleanup "$RUN" > /dev/null
+  prep --triage; : > "$STUB_LOG"
+  REGIONS_STUB='README.md generated' run_rr handover "$RUN" > /dev/null 2>&1 || { echo "triage handover"; return 1; }
+  ! grep -q '^regions ' "$STUB_LOG" && ! grep -q '^README regions: ' "$RUN/handover/task.md" || { echo "triage"; return 1; }
+  run_rr cleanup "$RUN" > /dev/null
+}
+t_regions_rr; check "readme regions: handover runs the step and states its grammar lines before the block, none in triage" $?
+check "readme regions: nothing in the stub's lines ran" "$(no_stray)"
+regions_mut() { # name, perl substitution: a weakened copy of review-run.sh must fail t_regions_rr
+  local keep="$RR" s; perl -0pe "$2" "$RR" > "$SK/review-run-rmut.sh"
+  if cmp -s "$RR" "$SK/review-run-rmut.sh"; then check "self-check: readme regions mutation $1 changes the script" 1; return; fi
+  RR="$SK/review-run-rmut.sh"; t_regions_rr > /dev/null 2>&1; s=$?; RR="$keep"
+  [ -z "${RUN:-}" ] || [ ! -d "$RUN" ] || run_rr cleanup "$RUN" > /dev/null 2>&1
+  check "self-check: readme regions mutation $1 is caught" "$([ "$s" != 0 ]; echo $?)"
+}
+regions_mut "the grammar check dropped" 's/ &&\n        ! grep -qvE "\$REGION_LINE_RE" "\$RUN\/readme\/regions\.txt"; then/; then/'
+regions_mut "the step not run" 's/  \[ "\$TRIAGE" = true \] \|\| readme_regions\n//'
+regions_mut "the step run in triage" 's/  \[ "\$TRIAGE" = true \] \|\| readme_regions\n/  readme_regions\n/'
 
 # A failed validate at light escalates; a failed escalation stops the run.
 prep
