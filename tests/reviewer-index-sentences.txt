@@ -235,3 +235,39 @@ base	b3f74cfa4a22d70c4f5e7fec4120ee8849488953
 +	references/check-d-examples.md	- Example `README.md` prose outside the markers lists features, and the change adds one it omits (`examples.docs-incomplete`, LOW); viewer mTLS does not name origin mTLS.
 +	references/check-d-examples.md	Generic prose is no finding.
 +	references/check-d-examples.md	For prose the change left stale, rewrite the named sentences outside the markers to describe what the example now demonstrates.
+-	references/engine/check-b-coverage.md	- The `resource` block is new in the change, the argument is Optional in the schema, nothing sets it from an input, and no documented omission covers it.
++	references/engine/check-b-coverage.md	- The `resource` block is new in the change, the argument is Optional in the schema, nothing sets it from an input, no documented omission covers it, and no existing block of the type in the module omits it too.
++	references/engine/check-b-coverage.md	It is silent when a block of the same type that exists at the base in the same module omits the same argument with no documented omission either: the change follows the module's own precedent.
++	references/check-c-structure.md	- HIGH when a dynamic block lacks a field the change promises (`structure.sibling-block-asymmetry`); MEDIUM when it lacks a field a sibling block sets.
+-	references/check-c-structure.md	- MEDIUM when a copied constant carries no source URL and date (`structure.copied-content-unattributed`), or a `validation` block reaches past its own variable (`structure.validation-overreaching`).
++	references/check-c-structure.md	- MEDIUM when a copied constant carries no source URL and date (`structure.copied-content-unattributed`), or a `validation` block reaches past its own variable (`structure.validation-overreaching`); LOW for the former when the value is an AWS identifier (a managed policy ARN, a condition key, an action name) or sits in an example.
++	references/check-c-structure.md	A schema field the change does not mention fires only when a sibling block sets it.
++	references/check-c-structure.md	Silent when an existing flag of the same prefix in the module has the same default.
++	references/check-c-structure.md	So does documentation that says the module cannot do something, or advises a fork or a workaround, while an input already does it.
+-	references/check-d-examples.md	- LOW when a new argument sits in a block an example already sets and no example sets the argument (`examples.argument-undemonstrated`).
++	references/check-d-examples.md	- LOW when a feature added by the change is demonstrated nowhere (`examples.feature-undemonstrated`), or a new argument sits in a block an example already sets and no example sets the argument (`examples.argument-undemonstrated`).
+-	references/check-d-examples.md	- MEDIUM when a feature added by the change is demonstrated nowhere (`examples.feature-undemonstrated`), or the disabled call is missing.
++	references/check-d-examples.md	- MEDIUM when the disabled call is missing.
++	references/check-d-examples.md	A `tests/` fixture root that sets it demonstrates it.
+-	references/engine/check-d-examples.md	- MEDIUM when a feature added by the change is demonstrated nowhere (`examples.feature-undemonstrated`), or the disabled call is missing.
++	references/engine/check-d-examples.md	- MEDIUM when the disabled call is missing.
++	references/check-e-profile.md	`fix` on a README-only change is no mismatch.
+-	references/engine/check-e-profile.md	- **A root on the base:** only the judged blocks the change adds, those whose `count` or `for_each` it edits, and those whose path to a creation input runs through a local it edits.
++	references/engine/check-e-profile.md	- **A root on the base:** silent when the base root's `variables.tf` declares no `putin_khuylo`: the repository has not taken up the gate, and adding it is not this change's work.
+-	references/engine/check-e-profile.md	- On a root the base has, the change adds the block, edits its `count` or `for_each`, or edits a local on its path.
++	references/engine/check-e-profile.md	- On a root the base has, the base root declares `putin_khuylo`, and the change adds the block, edits its `count` or `for_each`, or edits a local on its path.
++	references/engine/check-e-profile.md	Otherwise only the judged blocks the change adds, those whose `count` or `for_each` it edits, and those whose path to a creation input runs through a local it edits.
+-	references/check-g-behaviour.md	- `compat.expression-behaviour-changed`, on the compatibility scale of [Check A](): CRITICAL when a value the variable's type accepts and its description allows, such as a legitimate empty list or a legitimate string value, now plans differently and the change does not declare a break; HIGH when it declares the break and gives no migration path; LOW when the only inputs affected are ones the provider rejects or the variable's description rules out, so the change turns a value the module silently dropped into an error at plan or apply.
++	references/check-g-behaviour.md	- `compat.expression-behaviour-changed`, on the compatibility scale of [Check A](): CRITICAL when a value the variable's type accepts and its description allows, such as a legitimate empty list or a legitimate string value, now plans differently, neither the ignored-input band nor the documented-intent band below holds, and the change does not declare a break; HIGH when it declares the break and gives no migration path; LOW when the only inputs affected are ones the provider rejects or the variable's description rules out, so the change turns a value the module silently dropped into an error at plan or apply.
++	references/check-g-behaviour.md	- `compat.expression-behaviour-changed`, the documented-intent band: LOW too, decided before the CRITICAL band above, when all three conditions below hold, each read as the ignored-input band reads its conditions, never from the pull request text.
++	references/check-g-behaviour.md	1.
++	references/check-g-behaviour.md	2.
++	references/check-g-behaviour.md	3.
++	references/check-g-behaviour.md	A module call that leaves the input unset or at its default plans the same at both revisions.
++	references/check-g-behaviour.md	A type that now rejects a value it accepted is `compat.type-narrowed` of Check A, never this band, and a change that moves a path away from what the input's description or name documents, such as one that removes something the base did for a documented caller, takes the other bands as written.
++	references/check-g-behaviour.md	The base accepted the input and dropped or overrode it on the changed path: as a direct argument, an attribute of a nested or `dynamic` block, an argument of a child module call, or through a local that replaced the value the caller set explicitly.
++	references/check-g-behaviour.md	The head makes that path do what the base description of the input, or the input's name, says the input does.
++	references/check-g-behaviour.md	The summary names the input, the path and the callers whose plan changes, those that set the input to a value other than its default, and asks for a line in the release notes; the change needs no major release.
+-	references/check-g-behaviour.md	When any condition fails, the other bands apply as written.
++	references/check-g-behaviour.md	When any condition fails, the documented-intent band below applies, and then the other bands as written.
++	references/check-g-behaviour.md	`compat.claim-contradicts-analysis` about the same change follows its one-band-below rule.

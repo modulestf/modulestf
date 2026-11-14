@@ -73,7 +73,7 @@ The title becomes the commit message on a squash merge, and from there the relea
 - `feat` releases a minor version, `fix` a patch, the other types nothing. A `!` after the type, or a `BREAKING CHANGE:` trailer, releases a major.
 - The type matches the change. Wrong: a `!` with no break, `fix` on a change that adds an input, an output or a feature, `docs`, `ci` or `chore` on a change to module behaviour, `feat` on a change that only fixes behaviour, and a breaking change released with neither a `!` nor a `BREAKING CHANGE:` trailer. That list is complete. Any other pairing of a type the shape allows with a change is not a finding under this rule: `fix` on a change that only edits documentation, for one.
 - The description names the capability or the fix, and the submodule it lands on when it is not the root. `feat: Update module` fails.
-- A feature carries an example that demonstrates it.
+- A feature carries an example that demonstrates it. A `tests/` fixture root that sets it counts.
 
 IDs: `profile.commit-type-mismatch`, `profile.title-uninformative`, `examples.feature-undemonstrated`.
 

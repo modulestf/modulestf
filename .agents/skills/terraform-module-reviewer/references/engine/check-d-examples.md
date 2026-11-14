@@ -60,7 +60,7 @@ Engine: `candidate`
 - The complete example has no `module "disabled"` call with `create = false`.
 
 **Severity:**
-- MEDIUM when a feature added by the change is demonstrated nowhere (`examples.feature-undemonstrated`), or the disabled call is missing.
+- MEDIUM when the disabled call is missing.
 
 ### Confirm when: `examples.disabled-call-missing`
 

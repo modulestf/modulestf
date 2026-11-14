@@ -73,10 +73,11 @@ Three rows change `scope` after the facts engine review found them:
 
 These rules left a value open. Each value in the table is the reading above; a reviewer of the audit may decide otherwise.
 
-- `structure.sibling-block-asymmetry`: Check C's **Severity** block names no level for it. The table allows HIGH (the nearest band, "a nested input does not match the schema shape") and MEDIUM (the band of an optional argument left unexposed), so the host does not cap a severity the check might mean.
+- `structure.sibling-block-asymmetry`: Check C's **Severity** block gives HIGH for a field the change promises and MEDIUM for a field only a sibling block sets.
 - Check C's MEDIUM for "missing tag propagation" and its **Fails when** bullet on tags have no `rule_id` in the registry. No row takes them; a finding of that kind is minted under [findings-schema.md](findings-schema.md).
 - Check D's bullet on invented input names has no `rule_id` of its own. It is left with the per-example rules, without a row change.
 - Check C does not say whether its rules run in example areas. `area_kinds` adds `example` only where a rule names examples: `structure.docs-contradict-code` ("an example comment") and `structure.version-floor-understated` ("an example against the module it calls"). `structure.multi-provider` excludes examples in its own text.
+- `structure.copied-content-unattributed` adds `example` to `area_kinds` too: its LOW band names a value in an example.
 - `examples.example-broken-at-base` is `cross_area` `no`: the cross-area pass names `examples.example-broken` for untouched examples, not its base variant.
 - `examples.feature-undemonstrated`, `examples.argument-undemonstrated` and `examples.submodule-missing` take the module's area kinds, because the cross-area pass anchors where the rule's text puts the finding and otherwise at the caller, and these rules judge a module feature.
 - `profile.region-not-allowed` fires only "where the literal chooses a region", which includes "an example's locals". Its detector has to decide which locals choose a region from syntax; the confirmer settles the rest.
