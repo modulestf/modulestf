@@ -1,3 +1,12 @@
+# [0.11.0](https://github.com/modulestf/modulestf/compare/v0.10.0...v0.11.0) (2026-11-14)
+
+
+### Features
+
+* **pr-review:** let known blockers outrank unknowns in the verdict ladder ([#148](https://github.com/modulestf/modulestf/issues/148)) ([729160a](https://github.com/modulestf/modulestf/commit/729160a56573d0ae39a3b5d98543cb9f1c1f3c42)), closes [#149](https://github.com/modulestf/modulestf/issues/149) [#149](https://github.com/modulestf/modulestf/issues/149) [#149](https://github.com/modulestf/modulestf/issues/149) [#151](https://github.com/modulestf/modulestf/issues/151) [#152](https://github.com/modulestf/modulestf/issues/152) [#156](https://github.com/modulestf/modulestf/issues/156) [#157](https://github.com/modulestf/modulestf/issues/157)
+
+
+
 # [0.10.0](https://github.com/modulestf/modulestf/compare/v0.9.6...v0.10.0) (2026-11-14)
 
 
