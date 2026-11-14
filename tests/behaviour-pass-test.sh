@@ -438,8 +438,50 @@ t_wr_pins() {
 t_wr_yaml() {
   wrepo 'pin v1.200.0 | perl -pe "s/^(    rev: v1.200.0)\$/\$1\\n    rev:\\n      v1.100.0/" > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf &&
     wrepo 'pin v1.200.0 | perl -pe "s/^(    rev: v1.200.0)\$/\$1\\n    rev : v1.100.0/" > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf &&
-    wrepo '{ pin v1.108.1; printf "  - repo: https://github.com/AntonBabenko/pre-commit-terraform\n    rev: v1.100.0\n"; } > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf &&
+    wrepo '{ pin v1.108.1; printf "  - repo: https://github.com/ANTONBABENKO/PRE-COMMIT-TERRAFORM\n    rev: v1.100.0\n"; } > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf &&
     wrepo 'pin v1.108.1 | perl -pe "s/^(    rev: v1.108.1)\$/\$1\\n    x: \\&a 1/" > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf
+}
+# Configurations that steer a line reader away from what a YAML loader reads, each with one form
+# the reader refuses: no evidence. The first two hide a real v1.105.0 entry behind an escape and
+# show a v1.106.0 decoy in a block scalar or under a second repos key; the others each hold one
+# form alone. CFG_BAD lists them as file name and the form.
+CF="$TMP/cfg"; mkdir -p "$CF"
+H='      - id: terraform_wrapper_module_for_each'
+P='  - repo: https://github.com/antonbabenko/pre-commit-terraform'
+printf 'repos:\n  - repo: "https://github.com/\\x61ntonbabenko/pre-commit-terraform"\n    rev: v1.105.0\n    hooks:\n%s\n  - repo: local\n    hooks:\n      - id: x\n        entry: |\n          %s\n            rev: v1.106.0\n            hooks:\n        %s\n' "$H" "${P#  }" "$H" > "$CF/escape-scalar.yaml"
+printf 'repos:\n%s\n    rev: v1.106.0\n    hooks:\n%s\nrepos:\n  - repo: "https://github.com/\\x61ntonbabenko/pre-commit-terraform"\n    rev: v1.105.0\n    hooks:\n%s\n' "$P" "$H" "$H" > "$CF/escape-repos.yaml"
+# One form alone, beside a readable v1.106.0 entry: the reader would read derived without its check.
+pin v1.106.0 > "$CF/base.yaml"
+{ cat "$CF/base.yaml"; printf '        args: ["--args=a\\x2db"]\n'; } > "$CF/backslash.yaml"
+{ printf -- '---\n'; cat "$CF/base.yaml"; } > "$CF/marker.yaml"
+{ cat "$CF/base.yaml"; printf 'repos:\n  - repo: local\n    hooks: []\n'; } > "$CF/repos-twice.yaml"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: x\n        entry: "a\n%s\n    rev: v1.106.0\n    hooks:\n%s\n          b"\n' "$P" "$H" > "$CF/open-quote.yaml"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: x\n        entry: |\n%s\n    rev: v1.106.0\n    hooks:\n%s\n' "$P" "$H" > "$CF/block-scalar.yaml"
+{ cat "$CF/base.yaml"; printf '  - repo: local\n    hooks:\n      - {id: x, entry: x, language: system}\n'; } > "$CF/flow-map.yaml"
+{ cat "$CF/base.yaml"; printf '        args: [a,\n'; } > "$CF/flow-open.yaml"
+{ cat "$CF/base.yaml"; printf '  - repo: https://example.com/%%61\n    rev: v1\n    hooks:\n      - id: x\n'; } > "$CF/percent.yaml"
+{ cat "$CF/base.yaml"; printf '  - repo: https://github.com/someone/fork\n    rev: v1.105.0\n    hooks:\n%s\n' "$H"; } > "$CF/fork.yaml"
+CFG_BAD="escape-scalar escape-repos backslash marker repos-twice open-quote block-scalar flow-map flow-open percent fork"
+t_wr_steer() { # [names]: each configuration gives unknown pin unreadable
+  local cf # not c: setup counts with it
+  for cf in ${1:-$CFG_BAD}; do
+    wrepo "cp '$CF/$cf.yaml' .pre-commit-config.yaml" && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf || { echo "$cf"; return 1; }
+  done
+}
+# The family's own configuration, with a one-line flow sequence as some of its repositories carry:
+# derived. A hook option that moves it to another provider, and a module with another provider_meta
+# block than aws, are no evidence.
+printf 'repos:\n%s\n    rev: v1.108.1\n    hooks:\n      - id: terraform_fmt\n%s\n      - id: terraform_docs\n        args:\n          - %s\n      - id: terraform_validate\n  - repo: https://github.com/pre-commit/pre-commit-hooks\n    rev: v6.0.0\n    hooks:\n      - id: check-merge-conflict\n      - id: mixed-line-ending\n        args: [--fix=lf]\n' "$P" "$H" "'--args=--lockfile=false'" > "$CF/family.yaml"
+{ cat "$CF/base.yaml"; printf '        args:\n          - --module-repo-provider=azurerm\n'; } > "$CF/provider-option.yaml"
+t_wr_family() {
+  wrepo "cp '$CF/family.yaml' .pre-commit-config.yaml" && wis "wrappers/versions.tf derived" wrappers/versions.tf &&
+    wrepo "cp '$CF/provider-option.yaml' .pre-commit-config.yaml" && wis "wrappers/versions.tf unknown hook options" wrappers/versions.tf
+}
+t_wr_provider() {
+  wrepo 'perl -pi -e "s/provider_meta \"aws\"/provider_meta \"awscc\"/" versions.tf wrappers/versions.tf' &&
+    wis "wrappers/versions.tf unknown provider_meta" wrappers/versions.tf &&
+    wrepo 'pin v1.105.0 > .pre-commit-config.yaml; perl -pi -e "s/provider_meta \"aws\"/provider_meta \"awscc\"/" versions.tf; cp versions.tf wrappers/versions.tf' &&
+    wis "wrappers/versions.tf copied" wrappers/versions.tf
 }
 t_wr_partial() { wrepo : && G config extensions.partialClone origin && wis "wrappers/versions.tf unknown partial clone" wrappers/versions.tf; }
 t_wr_long() { # a sub component over 64 characters is no wrapper of the pairing
@@ -463,6 +505,9 @@ t_wr_links; check "wrappers: a wrapper that is a link, a module under a linked d
 t_wr_module; check "wrappers: a missing module file and a deleted wrapper are unknown" $?
 t_wr_pins; check "wrappers: no config, no pin, a branch, a commit SHA, no wrapper hook and a second mention are unknown; a quoted tag reads" $?
 t_wr_yaml; check "wrappers: a second rev key, a spaced rev key, a mention in another letter case and an anchor are unreadable" $?
+t_wr_steer; check "wrappers: an escape hiding a real v1.105.0 entry behind a block scalar or second repos decoy, a backslash, a document marker, a second repos key, an open quote, a block scalar, a flow mapping, an open flow sequence, a percent escape and a fork listing the hook are unreadable" $?
+t_wr_family; check "wrappers: the family's own configuration with a one-line flow sequence is derived; a provider option is unknown" $?
+t_wr_provider; check "wrappers: a module with another provider_meta block is unknown at v1.106.0 and copied before" $?
 t_wr_partial; check "wrappers: a partial clone is unknown" $?
 t_wr_long; check "wrappers: a sub component of 65 characters is left out, one of 64 is read" $?
 t_wr_size; check "wrappers: an over-size wrapper and a module derive cannot read are unknown" $?
@@ -548,7 +593,18 @@ wmutate "a refuted trigger made inert" 's/if \.state == "unverifiable" and \(\$w
 wmutate "a differing wrapper made inert" 's/IN\("derived", "copied"\)\)\n/IN("derived", "copied", "differs"))\n/' t_wr_eval
 wmutate "the repo or rev key check dropped" 's/      exit print "unknown pin unreadable\\n" if \/\^\[ \\t\]\*\(-[^\n]*\n//' t_wr_yaml
 wmutate "the anchor check dropped" 's/ \|\| \$s =~ \/\^\[ \\t\]\*\(-\[ \\t\]\+\)\?\(\\\?\|<<\)\/m;/;/; s/\(\^\|\[\\s\\\[\{,\]\)\[&\*!\]\\S/NEVER/' t_wr_yaml
-wmutate "the mention count in one letter case" 's/m\{antonbabenko\/pre-commit-terraform\}gi/m{antonbabenko\/pre-commit-terraform}g/' t_wr_yaml
+wmutate "the mention count in one letter case" 's/m\{pre-commit-terraform\}gi/m{pre-commit-terraform}g/' t_wr_yaml
+wmutate "the backslash check dropped" 's/\$s =~ \/\\\\\/ \|\| //' t_wr_steer
+wmutate "the document marker check dropped" 's/\(---\|/(-X-X-|/' t_wr_steer
+wmutate "the second repos key check dropped" 's/\/gmi\) > 1/\/gmi) > 9/' t_wr_steer
+wmutate "the open quote check dropped" 's/if \$q ne "" \|\| /if /' t_wr_steer
+wmutate "the open flow sequence check dropped" 's/ \|\| \$d != 0//' t_wr_steer
+wmutate "the flow mapping check dropped" 's/if \$c eq "\{" \|\| /if /' t_wr_steer
+wmutate "the block scalar check dropped" 's/\[\|>\]\[-\+0-9\]/[~][-+0-9]/' t_wr_steer
+wmutate "the repo URL form check dropped" 's/if defined \$repo && \$repo !~/if 0 \&\& \$repo !~/' t_wr_steer
+wmutate "the hook mention count dropped" 's/for_each\/gi\) > 1/for_each\/gi) > 9/' t_wr_steer
+wmutate "the provider option check dropped" 's/exit print "unknown hook options\\n" if /exit print "unknown hook options\\n" if 0 \&\& /' t_wr_family
+wmutate "the provider_meta label check dropped" 's/if grep -E .\^\[\[:space:\]\]\*provider_meta. "\$out\/wrap\/m" \| grep -qvE [^\n]*; then/if false; then/' t_wr_provider
 wmutate "the partial clone check dropped" 's/    elif safe_git_partial; then all="unknown partial clone"\n//' t_wr_partial
 wmutate "the sub component cap dropped" 's/\{0,63\}/*/g' t_wr_long
 wmutate "the wrappers file grammar not checked" 's/if length <= 256 and all\(\.\[\]; test\(\$re\)\) then/if true then/' t_wr_eval_malformed

@@ -255,9 +255,10 @@ WRAP_RE='^wrappers/([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/)?versions\.tf$'
 WRAP_LINE_RE='^wrappers/([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/)?versions\.tf (derived|copied|differs|unknown [a-z0-9 .-]{1,60})$'
 WRAP_CAP=65536
 DERIVE="$(cd "$(dirname "$0")" && pwd -P)/wrapper-derive.pl"
-# The form of the reviewer's git-safety.md, The form, in the clone. Only ls-tree and cat-file of
-# the head run in it: they read objects, apply no driver or filter, and need no history, so the
-# depth-1 clone serves, as it does for the head revision query.
+# The environment and -c options of the form in the reviewer's git-safety.md, in the clone. Its
+# table lists no ls-tree or cat-file: only those two run here, on the head, and like facts-engine.md's
+# base extraction they read objects only, run no driver, filter or textconv and need no history, so
+# the depth-1 clone serves.
 safe_git() {
   GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_LAZY_FETCH=1 \
   GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null \
@@ -300,6 +301,26 @@ pin_mode() {
     open(my $h, "<:raw", $ARGV[0]) or exit print "unknown pin unreadable\n";
     local $/; my $s = <$h>; $s = "" unless defined $s;
     exit print "unknown pin unreadable\n" if $s =~ /[^\x20-\x7e\t\n]/;
+    # The reader fails closed rather than out-parse YAML: a form a loader could read another pin
+    # from is no evidence. A backslash (an escape in a quoted scalar), a document marker, or more
+    # than one top-level repos key; an option that moves the hook to another provider.
+    exit print "unknown pin unreadable\n" if $s =~ /\\/ || $s =~ /^(---|\.\.\.)([ \t]|$)/m;
+    exit print "unknown pin unreadable\n" if (() = $s =~ /^["\x27]?repos["\x27]?[ \t]*:/gmi) > 1;
+    exit print "unknown hook options\n" if $s =~ /module-repo-provider/i;
+    # Per line, outside quoted text and comments: no quote left open (a multi-line scalar), no flow
+    # mapping, a flow sequence closed on its own line, and no block scalar indicator.
+    for my $l (split /\n/, $s) {
+      my ($b, $q, $d) = ("", "", 0);
+      for my $c (split //, $l) {
+        if ($q ne "") { $q = "" if $c eq $q; next }
+        if ($c eq "\x27" || $c eq "\"") { $q = $c; $b .= "Q"; next }
+        last if $c eq "#" && ($b eq "" || $b =~ /[ \t]\z/);
+        $b .= $c;
+        $d++ if $c eq "[";
+        exit print "unknown pin unreadable\n" if $c eq "{" || ($c eq "]" && --$d < 0);
+      }
+      exit print "unknown pin unreadable\n" if $q ne "" || $d != 0 || $b =~ /(^|[ \t:-])[|>][-+0-9]*[ \t]*$/;
+    }
     # YAML this line reader does not follow, so pre-commit could read another pin: an anchor, an
     # alias, a tag, a merge key or a complex key.
     exit print "unknown pin unreadable\n" if $s =~ /(^|[\s\[{,])[&*!]\S/m || $s =~ /^[ \t]*(-[ \t]+)?(\?|<<)/m;
@@ -311,15 +332,20 @@ pin_mode() {
       $rev = $2 if /^[ \t]+rev:[ \t]*(["\x27]?)([^"\x27\s#]+)\1[ \t]*(#.*)?$/;
       # A repo or rev key in any other spelling, a duplicate a YAML loader would keep last included.
       exit print "unknown pin unreadable\n" if /^[ \t]*(-[ \t]+)?["\x27]?(repo|rev)["\x27]?[ \t]*:/i && !defined $repo && !defined $rev;
+      # A repo URL outside a plain https form, a percent escape for one, could name the repository
+      # where the reader does not see it.
+      exit print "unknown pin unreadable\n" if defined $repo && $repo !~ m{^(https://[A-Za-z0-9._/-]+|local|meta)$};
       if (defined $repo) { $in = $repo =~ /^$url$/; push @e, {rev => [], hook => 0} if $in; next }
       if (/^\S/) { $in = 0; next }
       next unless $in;
       push @{$e[-1]{rev}}, $rev if defined $rev;
       $e[-1]{hook} = 1 if /^[ \t]*-[ \t]+id:[ \t]*(["\x27]?)terraform_wrapper_module_for_each\1[ \t]*(#.*)?$/;
     }
-    # Every mention of the repository, in any letter case, is the one entry read, so no other
-    # form hides a second pin.
-    my $m = () = $s =~ m{antonbabenko/pre-commit-terraform}gi;
+    # Every mention of the repository name, in any letter case and under any owner or host, is the
+    # one entry read, and so is every mention of the hook, so no other entry, a fork included, hides
+    # a second pin.
+    my $m = () = $s =~ m{pre-commit-terraform}gi;
+    exit print "unknown pin unreadable\n" if (() = $s =~ /terraform_wrapper_module_for_each/gi) > 1;
     exit print "unknown no pin\n" if $m == 0;
     exit print "unknown pin unreadable\n" unless @e == 1 && $m == 1 && @{$e[0]{rev}} == 1;
     exit print "unknown hook not listed\n" unless $e[0]{hook};
@@ -351,7 +377,11 @@ wrapper_pairs() {
     elif ! why="$(head_blob "${prefix:+$prefix/}$m" "$out/wrap/m")"; then r="unknown module $why"
     else
       case "$mode" in
-        derive) if perl "$DERIVE" derive "$out/wrap/m" > "$out/wrap/e"; then
+        # The hook strips only its own provider's block, aws by default, and derive strips every
+        # block: a module with any other provider_meta line is no evidence.
+        derive) if grep -E '^[[:space:]]*provider_meta' "$out/wrap/m" | grep -qvE '^[[:space:]]*provider_meta "aws" \{$'; then
+                  r="unknown provider_meta"
+                elif perl "$DERIVE" derive "$out/wrap/m" > "$out/wrap/e"; then
                   cmp -s "$out/wrap/e" "$out/wrap/w" && r=derived || r=differs
                 else r="unknown derive undefined"; fi ;;
         copy) cmp -s "$out/wrap/m" "$out/wrap/w" && r=copied || r=differs ;;
