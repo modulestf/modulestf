@@ -82,7 +82,7 @@ carry_prior() { # finding -> the prior carries it
 t_carried_kind() {
   local a b
   carry_prior "$NEVER_C"; a="$(inc "approve with nits" "$NEVER_C" "$INSCOPE")"
-  carry_prior "$NOROW_C"; b="$(inc inconclusive "$NOROW_C" "$INSCOPE")"
+  carry_prior "$NOROW_C"; b="$(inc "approve with nits" "$NOROW_C" "$INSCOPE")"
   carry_prior "$CARRIED"
   [ "$a" = "findings rejected: a carried finding is not of a file rule" ] && [ "$b" = "findings rejected: a carried finding is not of a file rule" ]
 }
@@ -107,8 +107,9 @@ t_scope_ok; check "scope: a file rule on a file in the scope is accepted" $?
 t_scope_bad; check "scope: a file rule on a file outside the scope is rejected" $?
 
 # --- A rule the table does not name is never, as prior takes it: accepted when new, anywhere.
-# The verdict is inconclusive, which a ladder that holds such a rule at rule 4 also gives.
-t_norow() { [ "$(inc inconclusive "$CARRIED" "$NOROW")" = "$OK" ]; }
+# The verdict is approve with nits: the render and host_verdict count a rule with no row at LOW as
+# any LOW finding (verdict.md).
+t_norow() { [ "$(inc "approve with nits" "$CARRIED" "$NOROW")" = "$OK" ]; }
 t_norow; check "no Carry value: a new finding of a rule the table does not name is never, and accepted" $?
 
 # --- Negative self-check: each mutation of a temp copy must make its named case fail.
