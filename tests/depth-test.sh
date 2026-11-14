@@ -11,6 +11,7 @@ set -uo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd -P)"
 REF="$SRC/.agents/skills/terraform-module-pr-review/references"
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/depth-test.XXXXXX")" && pwd -P)" && [ -n "$TMP" ] || { echo "FAIL no temporary directory"; exit 1; }
+[ -z "${KEEP:-}" ] || echo "kept: $TMP" >&2
 [ -n "${KEEP:-}" ] || trap 'rm -rf "$TMP"' EXIT
 fails=0
 DS="$REF/depth.sh" # the script under test; the self-check swaps in mutated copies

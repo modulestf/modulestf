@@ -12,6 +12,7 @@ set -uo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd -P)"
 SKILLS="$SRC/.agents/skills"
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/pr-merge-test.XXXXXX")" && pwd -P)" && [ -n "$TMP" ] || { echo "FAIL no temporary directory"; exit 1; }
+[ -z "${KEEP:-}" ] || echo "kept: $TMP" >&2
 [ -n "${KEEP:-}" ] || trap 'chmod -R u+w "$TMP" 2> /dev/null; rm -rf "$TMP"' EXIT
 fails=0
 MR="$SKILLS/terraform-module-pr-merge/references/merge-run.sh" # the script under test; the self-check swaps in mutated copies
