@@ -252,6 +252,10 @@ ladder "partial coverage under a LOW finding" "inconclusive COMMENT" 4 "$(one st
   "$(runf cov-part '.verify_gaps = [{dir: "examples/c", reason: "init failed"}] | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/d", reason: "plan gate G1"}]}')"
 grep -A4 -xF '### Checks that could not run' "$O/comment.md" | tail -n 3 | cmp -s - <(printf '%s\n' '- Verification of `examples/c`: `init` failed.' '- 1 example was not planned: plan gate G1.' '  - `examples/d`')
 check "coverage: the verification gaps come first, then the unplanned examples" $?
+ladder "an example ended by the environment" "inconclusive COMMENT" 4 "$NONE" "" "" \
+  "$(runf cov-env '.coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/d", reason: "environment (access-denied)"}]}')"
+grep -A3 -xF '### Checks that could not run' "$O/comment.md" | tail -n 2 | cmp -s - <(printf '%s\n' '- 1 example was not planned: environment (access-denied).' '  - `examples/d`')
+check "coverage: an environment class renders with its fixed reason token" $?
 ladder "a module with no example directory" "inconclusive COMMENT" 4 "$NONE" "" "" \
   "$(runf cov-noex '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples", reason: "no example directory"}]}')"
 awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" |
@@ -571,6 +575,8 @@ refused "host.json for another head" "$G" "$(host other '.head_sha = "89abcdef01
 refused "host.json with an extra key" "$G" "$(host extra '.extra = 1')"
 refused "a coverage class that does not match its list" "$G" "" "" "$(runf cov-bad1 '.coverage = {class: "complete", inert: false, unplanned: [{dir: "examples/a", reason: "budget"}]}')"
 refused "an unplanned reason outside the list" "$G" "" "" "$(runf cov-bad2 '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "flaky"}]}')"
+refused "a bare environment reason" "$G" "" "" "$(runf cov-bad4 '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "environment"}]}')"
+refused "an environment reason with text of its own" "$G" "" "" "$(runf cov-bad5 '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "environment (AccessDenied for x)"}]}')"
 refused "a run file without coverage" "$G" "" "" "$(runf cov-bad3 'del(.coverage)')"
 refused "a run file with an unknown reason" "$G" "" "" "$(runf badreason '.verify_gaps = [{dir: "examples/a", reason: "flaky"}]')"
 refused "a run file with an extra key" "$G" "" "" "$(runf extra '.extra = true')"

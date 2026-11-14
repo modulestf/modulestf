@@ -383,6 +383,12 @@ $BASE" --out "$R3/x.json")"
       and (.examples[] | select(.dir == "examples/regress") | .head == "not run")
       and (.examples[] | select(.dir == "examples/net") | .head == "planned" and .addresses == ["aws_y.z"])
       and (.examples[] | select(.dir == "examples/env") | .head == "not run")')"
+  printf '%s\n' 'plan pass mode: laptop' 'example: examples/env' 'plan: environment (access-denied)' \
+    'example: examples/net' 'plan: environment' 'example: examples/net2' 'plan: environment (dial tcp 10.0.0.1)' > "$TMP/rec.txt"
+  cov --plan "$TMP/rec.txt"
+  check "$sh: an environment class keeps its reason token; a bare or free-text one is output unrecognised" \
+    "$(q "$TMP/cov.json" '[.unplanned[] | select(.dir | IN("examples/env","examples/net","examples/net2")) | .reason] ==
+      ["environment (access-denied)", "output unrecognised", "output unrecognised"]')"
   { echo 'plan pass mode: laptop'; for e in brokenbase bump bumpmajor codeok env initfail linked net net2 newfail regress; do
       printf 'example: examples/%s\nplan: planned-no-changes\n' "$e"; done; } > "$TMP/rec.txt"
   cov --plan "$TMP/rec.txt"
