@@ -1201,6 +1201,8 @@ ghfiles open false APPROVED
 # repeating the head, lock and identity checks without a second unlock.
 # Updated for the pr-merge line in the description and Don't activate list, with Rule 5's runner
 # sentence shortened, leaving its detail to plan-pass.md, to keep SKILL.md under 16384 bytes.
+# Updated for Rule 5's plan pass ending in an environment class with its reason token, with the
+# relayed quote's "in quotation marks" shortened to keep SKILL.md under 16384 bytes.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1209,7 +1211,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=068b1c3b05eb
+want=14bdb241aa6e
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"
