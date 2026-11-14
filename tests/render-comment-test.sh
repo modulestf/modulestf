@@ -132,7 +132,7 @@ check "worked example 3: approve with nits at rule 7" "$([ "$(verdict)" = "appro
 n=0
 { f scope.profile-file HIGH .github/workflows/security.yml null "New workflow file running Trivy, Checkov and Gitleaks; the profile's workflow set is exactly the five templates." "Remove the workflow."
   f scope.profile-file HIGH .github/workflows/test.yml null "New workflow file running Terraform native tests; the profile's workflow set is exactly the five templates." "Remove the workflow."
-  f structure.comment-redundant MEDIUM main.tf 7 "The comment at line 7 restates the conditional on the next line." "Remove the comment."
+  f structure.comment-redundant LOW main.tf 7 "The comment at line 7 restates the conditional on the next line." "Remove the comment."
   f coverage.attribute-not-output MEDIUM outputs.tf null "No output exposes the created role's \`unique_id\`, a stable computed attribute of \`aws_iam_role\`." "Add an \`iam_role_unique_id\` output with a \`try()\` fallback."
   f structure.flag-polarity MEDIUM variables.tf 200 "\`create_air_gapped_vault\` is a \`create_*\` boolean that defaults to \`false\`." "Rename it to \`enable_air_gapped_vault\`, since the air-gapped vault is opt in, or default it to \`true\`."
 } | list fixlines > /dev/null

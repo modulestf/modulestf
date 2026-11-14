@@ -229,12 +229,15 @@ From a review of a new module contribution, five of its findings, rendered with 
 
 **MEDIUM**
 
-- `structure.comment-redundant` - `main.tf:7` - The comment at line 7 restates the conditional on the next line.
-  - Fix: Remove the comment.
 - `coverage.attribute-not-output` - `outputs.tf` - No output exposes the created role's `unique_id`, a stable computed attribute of `aws_iam_role`.
   - Fix: Add an `iam_role_unique_id` output with a `try()` fallback.
 - `structure.flag-polarity` - `variables.tf:200` - `create_air_gapped_vault` is a `create_*` boolean that defaults to `false`.
   - Fix: Rename it to `enable_air_gapped_vault`, since the air-gapped vault is opt in, or default it to `true`.
+
+**LOW**
+
+- `structure.comment-redundant` - `main.tf:7` - The comment at line 7 restates the conditional on the next line.
+  - Fix: Remove the comment.
 ```
 
 ## Collapsing Findings

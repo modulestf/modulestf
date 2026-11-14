@@ -285,7 +285,7 @@ Scope is the change. Pre-existing gaps in resources the change does not touch ar
 - MEDIUM when a feature flag's prefix and its default disagree, or the module declares its own aliased provider configuration. Where a second provider configuration also changes what the caller has to pass in, Check A owns that part too.
 - MEDIUM when a comment the change adds asserts a limitation, a defect or an ordering requirement with no source and no date (`structure.comment-unsourced`); LOW when a provider page or fact sheet this review read states the claim, or in an example.
 - MEDIUM when a set element is paired by position (`structure.set-index-by-position`); HIGH when the pair routes traffic or grants access.
-- MEDIUM when a `validation` block reaches past its own variable (`structure.validation-overreaching`), or a copied constant carries no source URL (`structure.copied-content-unattributed`); LOW with a URL but no date or pinned revision.
+- MEDIUM when a `validation` block reaches past its own variable (`structure.validation-overreaching`), or a copied constant carries no source URL (`structure.copied-content-unattributed`); LOW when it names the URL but not the date.
 - LOW when a should-pass convention is missed: grouping, section headers, argument order inside a touched resource block, naming consistency, an error message that tells the consumer neither the bound nor the value received, a comment that restates the code.
 
 ## Check D: Examples
