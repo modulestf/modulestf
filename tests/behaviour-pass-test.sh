@@ -2,8 +2,9 @@
 # shellcheck disable=SC2319 # "$(<test>; echo $?)" passes the test's own status to check
 # Self-check for the behaviour pass of terraform-module-pr-review (references/behaviour-pass.sh),
 # with mtf-facts stubbed: the classify and eval steps, the empty ladder record, each refusal and
-# its fixed reason, the record lines and the run file object, and the replay of a pull request
-# that drops compact() around a list, whose render must be inconclusive. No network.
+# its fixed reason, the record lines and the run file object, the replay of a pull request
+# that drops compact() around a list, whose render must be inconclusive, and the wrapper
+# versions.tf evidence on local repositories, with a negative self-check on mutated copies. No network.
 # Run: tests/behaviour-pass-test.sh
 set -uo pipefail
 
@@ -372,6 +373,251 @@ setup; ln -sf "$TMP/schema.json" "$TMP/schema-link.json"; bash "$BP" classify --
 check "a --schema that is a link is a usage error" "$([ $? = 2 ]; echo $?)"
 setup; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --schema "$TMP/missing.json" --out "$O" > /dev/null 2>&1
 check "a missing --schema is a usage error" "$([ $? = 2 ]; echo $?)"
+
+# --- Wrapper versions: the host's generator result for each wrapper versions.tf the change
+# touches, from the head tree, and the eval that makes a generated wrapper's trigger inert.
+WFX="$SRC/tests/pr-fix-fixture" # recorded upstream: each module's versions.tf and its wrappers/versions.tf
+G() { git -C "$WR" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false "$@"; }
+# pin <rev> [hook]: a .pre-commit-config.yaml with pre-commit-terraform at the rev and its wrapper hook.
+pin() {
+  printf 'repos:\n  - repo: https://github.com/pre-commit/pre-commit-hooks\n    rev: v6.0.0\n    hooks:\n      - id: check-merge-conflict\n  - repo: https://github.com/antonbabenko/pre-commit-terraform\n    rev: %s\n    hooks:\n      - id: terraform_fmt\n      - id: %s\n' "$1" "${2:-terraform_wrapper_module_for_each}"
+}
+# wrepo <setup>: a repository with the vpc module and its wrapper at the root, the cloudfront one
+# as modules/sub, pinned at v1.108.1, then <setup> run in it, committed; sets WR and WH.
+wn=0
+wrepo() {
+  wn=$((wn + 1)); WR="$TMP/wrepo-$wn"; mkdir -p "$WR/wrappers/sub" "$WR/modules/sub"
+  cp "$WFX/terraform-aws-vpc/versions.tf" "$WR/versions.tf"; cp "$WFX/terraform-aws-vpc/wrappers/versions.tf" "$WR/wrappers/versions.tf"
+  cp "$WFX/terraform-aws-cloudfront/versions.tf" "$WR/modules/sub/versions.tf"; cp "$WFX/terraform-aws-cloudfront/wrappers/versions.tf" "$WR/wrappers/sub/versions.tf"
+  pin v1.108.1 > "$WR/.pre-commit-config.yaml"
+  ( cd "$WR" && eval "$1" ) || return 1
+  G init -q && G add -A && G commit -q -m head && WH="$(G rev-parse HEAD)"
+}
+# wrap <files...>, after setup: the wrappers command on the paths as the changed files; prints wrappers.txt.
+wrap() {
+  local f
+  for f in "$@"; do jq -n --arg f "$f" '{filename: $f, status: "modified"}'; done | jq -s . > "$TMP/wfiles.json"
+  bash "$BP" wrappers --clone "$WR" --head "$WH" --diff "$TMP/wfiles.json" ${WPFX:+--prefix "$WPFX"} --out "$O" > /dev/null 2>&1 &&
+    cat "$O/wrappers.txt"
+}
+wis() { # expected lines, files...: the wrappers command prints exactly the lines
+  local want="$1"; shift
+  local got; setup; got="$(wrap "$@")"; [ "$got" = "$want" ] || { echo "got: $got"; return 1; }
+}
+t_wr_derived() { wrepo : && wis "wrappers/versions.tf derived" wrappers/versions.tf main.tf .pre-commit-config.yaml; }
+t_wr_sub() { wrepo : && wis "wrappers/sub/versions.tf derived" wrappers/sub/versions.tf; }
+t_wr_copied() {
+  wrepo 'pin v1.105.0 > .pre-commit-config.yaml; cp versions.tf wrappers/versions.tf' &&
+    wis "wrappers/sub/versions.tf differs
+wrappers/versions.tf copied" wrappers/versions.tf wrappers/sub/versions.tf
+}
+t_wr_differs() {
+  wrepo 'printf "# by hand\n" >> wrappers/versions.tf' && wis "wrappers/versions.tf differs" wrappers/versions.tf &&
+    wrepo 'perl -pi -e "s/>= 6.28/>= 6.30/" wrappers/versions.tf' && wis "wrappers/versions.tf differs" wrappers/versions.tf
+}
+t_wr_links() {
+  wrepo 'rm wrappers/versions.tf; ln -s ../versions.tf wrappers/versions.tf' && wis "wrappers/versions.tf unknown wrapper link" wrappers/versions.tf &&
+    wrepo 'mv modules/sub modules/real; ln -s real modules/sub' && wis "wrappers/sub/versions.tf unknown module link" wrappers/sub/versions.tf &&
+    wrepo 'mv wrappers/sub w2; ln -s ../w2 wrappers/sub' && wis "wrappers/sub/versions.tf unknown wrapper link" wrappers/sub/versions.tf
+}
+t_wr_module() {
+  wrepo 'mkdir wrappers/gone; cp wrappers/versions.tf wrappers/gone/versions.tf' && wis "wrappers/gone/versions.tf unknown module absent" wrappers/gone/versions.tf &&
+    wrepo 'rm wrappers/versions.tf' && wis "wrappers/versions.tf unknown wrapper absent" wrappers/versions.tf
+}
+t_wr_pins() {
+  wrepo 'rm .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown no pin" wrappers/versions.tf &&
+    wrepo 'printf "repos: []\n" > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown no pin" wrappers/versions.tf &&
+    wrepo 'pin master > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin not a release tag" wrappers/versions.tf &&
+    wrepo 'pin 0123456789abcdef0123456789abcdef01234567 > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin not a release tag" wrappers/versions.tf &&
+    wrepo 'pin v1.108.1 terraform_docs > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown hook not listed" wrappers/versions.tf &&
+    wrepo '{ pin v1.108.1; printf "# antonbabenko/pre-commit-terraform v1.100.0\n"; } > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf &&
+    wrepo 'pin "\"v1.106.0\"" > .pre-commit-config.yaml' && wis "wrappers/versions.tf derived" wrappers/versions.tf
+}
+# YAML a line reader would read another way than pre-commit: a second rev key, a spaced key, a
+# mention in another letter case, an anchor. Each is no evidence.
+t_wr_yaml() {
+  wrepo 'pin v1.200.0 | perl -pe "s/^(    rev: v1.200.0)\$/\$1\\n    rev:\\n      v1.100.0/" > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf &&
+    wrepo 'pin v1.200.0 | perl -pe "s/^(    rev: v1.200.0)\$/\$1\\n    \"rev\": v1.100.0/" > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf &&
+    wrepo '{ pin v1.108.1; printf "  - repo: https://github.com/ANTONBABENKO/PRE-COMMIT-TERRAFORM\n    rev: v1.100.0\n"; } > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf &&
+    wrepo 'pin v1.108.1 | perl -pe "s/^(    rev: v1.108.1)\$/\$1\\n    x: \\&a 1/" > .pre-commit-config.yaml' && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf
+}
+# Configurations that steer a line reader away from what a YAML loader reads, each with one form
+# the reader refuses: no evidence. The first two hide a real v1.105.0 entry behind an escape and
+# show a v1.106.0 decoy in a block scalar or under a second repos key; the others each hold one
+# form alone. CFG_BAD lists them as file name and the form.
+CF="$TMP/cfg"; mkdir -p "$CF"
+H='      - id: terraform_wrapper_module_for_each'
+P='  - repo: https://github.com/antonbabenko/pre-commit-terraform'
+printf 'repos:\n  - repo: "https://github.com/\\x61ntonbabenko/pre-commit-terraform"\n    rev: v1.105.0\n    hooks:\n%s\n  - repo: local\n    hooks:\n      - id: x\n        entry: |\n          %s\n            rev: v1.106.0\n            hooks:\n        %s\n' "$H" "${P#  }" "$H" > "$CF/escape-scalar.yaml"
+printf 'repos:\n%s\n    rev: v1.106.0\n    hooks:\n%s\nrepos:\n  - repo: "https://github.com/\\x61ntonbabenko/pre-commit-terraform"\n    rev: v1.105.0\n    hooks:\n%s\n' "$P" "$H" "$H" > "$CF/escape-repos.yaml"
+# One form alone, beside a readable v1.106.0 entry: the reader would read derived without its check.
+pin v1.106.0 > "$CF/base.yaml"
+{ cat "$CF/base.yaml"; printf '        args: ["--args=a\\x2db"]\n'; } > "$CF/backslash.yaml"
+{ printf -- '---\n'; cat "$CF/base.yaml"; } > "$CF/marker.yaml"
+{ cat "$CF/base.yaml"; printf 'repos:\n  - repo: local\n    hooks: []\n'; } > "$CF/repos-twice.yaml"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: x\n        entry: "a\n%s\n    rev: v1.106.0\n    hooks:\n%s\n          - b"\n' "$P" "$H" > "$CF/open-quote.yaml"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: x\n        entry: |\n%s\n    rev: v1.106.0\n    hooks:\n%s\n' "$P" "$H" > "$CF/block-scalar.yaml"
+{ cat "$CF/base.yaml"; printf '  - repo: local\n    hooks:\n      - {id: x, entry: x, language: system}\n'; } > "$CF/flow-map.yaml"
+{ cat "$CF/base.yaml"; printf '        args: [a,\n'; } > "$CF/flow-open.yaml"
+{ cat "$CF/base.yaml"; printf '  - repo: https://example.com/%%61\n    rev: v1\n    hooks:\n      - id: x\n'; } > "$CF/percent.yaml"
+{ cat "$CF/base.yaml"; printf '  - repo: https://github.com/someone/fork\n    rev: v1.105.0\n    hooks:\n%s\n' "$H"; } > "$CF/fork.yaml"
+# A plain scalar continued onto key-like lines with no space after the colon, a continued rev,
+# and a repo key with no space after its colon, which YAML reads as text.
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: x\n        entry: echo\n          - repo:https://github.com/antonbabenko/pre-commit-terraform\n          rev:v1.106.0\n          - id:terraform_wrapper_module_for_each\n' > "$CF/plain-decoy.yaml"
+pin v1.106.0 | sed 's/^    rev: v1.106.0$/&\n      v1.105.0/' > "$CF/rev-continued.yaml"
+pin v1.106.0 | sed 's/^  - repo: https/  - repo:https/' > "$CF/repo-nospace.yaml"
+pin v1.106.0 | sed 's/- id: terraform_wrapper/- id:terraform_wrapper/' > "$CF/id-nospace.yaml"
+CFG_BAD="escape-scalar escape-repos backslash marker repos-twice open-quote block-scalar flow-map flow-open percent fork plain-decoy rev-continued repo-nospace"
+t_wr_steer() { # [names]: each configuration gives unknown pin unreadable
+  local cf # not c: setup counts with it
+  for cf in ${1:-$CFG_BAD}; do
+    wrepo "cp '$CF/$cf.yaml' .pre-commit-config.yaml" && wis "wrappers/versions.tf unknown pin unreadable" wrappers/versions.tf || { echo "$cf"; return 1; }
+  done
+}
+# The family's own configuration, with a one-line flow sequence as some of its repositories carry:
+# derived. A hook option that moves it to another provider, and a module with another provider_meta
+# block than aws, are no evidence.
+printf 'repos:\n%s\n    rev: v1.108.1\n    hooks:\n      - id: terraform_fmt\n%s\n      - id: terraform_docs\n        args:\n          - %s\n      - id: terraform_validate\n  - repo: https://github.com/pre-commit/pre-commit-hooks\n    rev: v6.0.0\n    hooks:\n      - id: check-merge-conflict\n      - id: mixed-line-ending\n        args: [--fix=lf]\n' "$P" "$H" "'--args=--lockfile=false'" > "$CF/family.yaml"
+{ cat "$CF/base.yaml"; printf '        args:\n          - --module-repo-provider=azurerm\n'; } > "$CF/provider-option.yaml"
+t_wr_family() {
+  wrepo "cp '$CF/family.yaml' .pre-commit-config.yaml" && wis "wrappers/versions.tf derived" wrappers/versions.tf &&
+    wrepo "cp '$CF/provider-option.yaml' .pre-commit-config.yaml" && wis "wrappers/versions.tf unknown hook options" wrappers/versions.tf &&
+    wrepo "cp '$CF/id-nospace.yaml' .pre-commit-config.yaml" && wis "wrappers/versions.tf unknown hook not listed" wrappers/versions.tf
+}
+t_wr_provider() {
+  wrepo 'perl -pi -e "s/provider_meta \"aws\"/provider_meta \"awscc\"/" versions.tf wrappers/versions.tf' &&
+    wis "wrappers/versions.tf unknown provider_meta" wrappers/versions.tf &&
+    wrepo 'pin v1.105.0 > .pre-commit-config.yaml; perl -pi -e "s/provider_meta \"aws\"/provider_meta \"awscc\"/" versions.tf; cp versions.tf wrappers/versions.tf' &&
+    wis "wrappers/versions.tf copied" wrappers/versions.tf
+}
+t_wr_partial() { wrepo : && G config extensions.partialClone origin && wis "wrappers/versions.tf unknown partial clone" wrappers/versions.tf; }
+t_wr_long() { # a sub component over 64 characters is no wrapper of the pairing
+  local s; s="$(printf "s%.0s" $(seq 65))"
+  wrepo "mkdir -p wrappers/$s modules/$s; cp versions.tf modules/$s/; cp wrappers/versions.tf wrappers/$s/" && wis "" "wrappers/$s/versions.tf" &&
+    s="${s%s}" && wrepo "mkdir -p wrappers/$s modules/$s; cp versions.tf modules/$s/; cp wrappers/versions.tf wrappers/$s/" && wis "wrappers/$s/versions.tf derived" "wrappers/$s/versions.tf"
+}
+t_wr_size() {
+  wrepo 'perl -e "print qq(#) x 70000, qq(\n)" >> wrappers/versions.tf' && wis "wrappers/versions.tf unknown wrapper over size" wrappers/versions.tf &&
+    wrepo 'printf "x = <<EOT\ny\nEOT\n" >> versions.tf' && wis "wrappers/versions.tf unknown derive undefined" wrappers/versions.tf
+}
+t_wr_prefix() {
+  wrepo 'mkdir mod; mv versions.tf wrappers modules mod/' && WPFX=mod wis "wrappers/sub/versions.tf derived
+wrappers/versions.tf derived" mod/wrappers/versions.tf mod/wrappers/sub/versions.tf wrappers/versions.tf
+}
+t_wr_derived; check "wrappers: a root wrapper at v1.108.1 is derived" $?
+t_wr_sub; check "wrappers: a submodule wrapper is derived from modules/<sub>/versions.tf" $?
+t_wr_copied; check "wrappers: at v1.105.0 a wrapper equal to its module is copied and a derived one differs" $?
+t_wr_differs; check "wrappers: a hand edit differs" $?
+t_wr_links; check "wrappers: a wrapper that is a link, a module under a linked directory and a wrapper under one are unknown" $?
+t_wr_module; check "wrappers: a missing module file and a deleted wrapper are unknown" $?
+t_wr_pins; check "wrappers: no config, no pin, a branch, a commit SHA, no wrapper hook and a second mention are unknown; a quoted tag reads" $?
+t_wr_yaml; check "wrappers: a second rev key, a spaced rev key, a mention in another letter case and an anchor are unreadable" $?
+t_wr_steer; check "wrappers: an escape hiding a real v1.105.0 entry behind a block scalar or second repos decoy, a backslash, a document marker, a second repos key, an open quote, a block scalar, a flow mapping, an open flow sequence, a percent escape, a fork listing the hook, a plain scalar continued onto key-like lines, a continued rev and a repo key with no space are unreadable" 0
+t_wr_family; check "wrappers: the family's own configuration with a one-line flow sequence is derived; a provider option is unknown; a hook id with no space after its colon is not listed" $?
+t_wr_provider; check "wrappers: a module with another provider_meta block is unknown at v1.106.0 and copied before" $?
+t_wr_partial; check "wrappers: a partial clone is unknown" $?
+t_wr_long; check "wrappers: a sub component of 65 characters is left out, one of 64 is read" $?
+t_wr_size; check "wrappers: an over-size wrapper and a module derive cannot read are unknown" $?
+t_wr_prefix; check "wrappers: under a module root prefix the paths are module-relative and outside paths are left out" $?
+wrepo : && setup && wrap main.tf > /dev/null && [ ! -s "$O/wrappers.txt" ]; check "wrappers: no wrapper touched, an empty file" $?
+wrepo : && setup && bash "$BP" wrappers --clone "$WR" --head "$WH" --out "$O" > /dev/null 2>&1; check "wrappers: no --diff is a usage error" "$([ $? = 2 ]; echo $?)"
+
+# eval with the evidence: an unverifiable trigger at a derived or copied wrapper is inert, with
+# no outstanding difference; one at a differing wrapper and a refuted one stay as they were.
+WBEH='{"schema_version":1,"inert":false,
+ "entries":[{"path":"wrappers/versions.tf","trigger_ids":["T-001"]},{"path":"wrappers/sub/versions.tf","trigger_ids":["T-002"]},
+            {"path":"wrappers/x/versions.tf","trigger_ids":["T-003"]},{"path":"main.tf","trigger_ids":["T-004"]}],
+ "triggers":[{"id":"T-001","file":"wrappers/versions.tf","line":11,"category":"unclassified-change"},
+  {"id":"T-002","file":"wrappers/sub/versions.tf","line":11,"category":"unclassified-change"},
+  {"id":"T-003","file":"wrappers/x/versions.tf","line":11,"category":"unclassified-change"},
+  {"id":"T-004","file":"main.tf","line":2,"category":"unclassified-change"}],"capped":0}'
+WEV='{"schema_version":1,"capped":0,"triggers":[
+  {"id":"T-001","state":"unverifiable","complete":true,"outstanding":["T-001|L1|c|value"],"evidence_digest":"'"$(printf 'a%.0s' $(seq 64))"'","changes":[{"level":"L1","case":"c","attribute":"value","explained":false}]},
+  {"id":"T-002","state":"unverifiable"},{"id":"T-003","state":"refuted"},{"id":"T-004","state":"unverifiable"}],
+ "claims":[],"discarded_claims":[]}'
+t_wr_eval() {
+  setup; printf '%s\n' "$WBEH" > "$TMP/behaviour.out"; printf '%s\n' "$WEV" > "$TMP/eval.out"
+  printf '%s\n' "${1:-wrappers/sub/versions.tf differs
+wrappers/versions.tf derived
+wrappers/x/versions.tf copied}" > "$TMP/wrappers.txt"
+  DIFF="$TMP/files-w.json" classify; evalp --wrappers "$TMP/wrappers.txt"
+  [ "$(q '[.triggers[] | {id, state} + with_entries(select(.key | IN("complete", "outstanding", "evidence_digest")))]
+    == [{id: "T-001", state: "inert"}, {id: "T-002", state: "unverifiable"}, {id: "T-003", state: "refuted"}, {id: "T-004", state: "unverifiable"}]')" = 0 ] ||
+    { echo "run object"; return 1; }
+  grep -qxF 'trigger T-001 `wrappers/versions.tf` line 11 unclassified-change: inert, wrapper derived' "$O/record.txt" &&
+    grep -qxF 'trigger T-002 `wrappers/sub/versions.tf` line 11 unclassified-change: unverifiable' "$O/record.txt" &&
+    ! grep -q '^change T-001' "$O/record.txt" || { echo record; return 1; }
+}
+t_wr_eval_malformed() { # a file with one line outside the grammar is no evidence
+  t_wr_eval "wrappers/versions.tf maybe
+wrappers/versions.tf derived" > /dev/null; [ "$(q '.triggers[0].state == "unverifiable" and .triggers[0].outstanding == ["T-001|L1|c|value"]')" = 0 ]
+}
+jq -n '[{filename: "wrappers/versions.tf", status: "modified"}, {filename: "wrappers/sub/versions.tf", status: "modified"},
+  {filename: "wrappers/x/versions.tf", status: "modified"}, {filename: "main.tf", status: "modified"}]' > "$TMP/files-w.json"
+t_wr_eval; check "wrappers eval: a derived wrapper's trigger is inert with its reason, a differing one and a refuted one stay" $?
+t_wr_eval_malformed; check "wrappers eval: a wrappers file with a line outside its grammar is no evidence" $?
+
+# The render of a run whose only trigger is a derived wrapper: no unknown at rule 4 from it.
+t_wr_render() {
+  setup; printf '%s\n' "$WBEH" | jq -c '.entries |= .[:1] | .triggers |= .[:1]' > "$TMP/behaviour.out"
+  printf '%s\n' "$WEV" | jq -c '.triggers |= .[:1]' > "$TMP/eval.out"
+  printf 'wrappers/versions.tf derived\n' > "$TMP/wrappers.txt"
+  jq '.[:1]' "$TMP/files-w.json" > "$TMP/files-w1.json"; DIFF="$TMP/files-w1.json" classify; evalp --wrappers "$TMP/wrappers.txt"
+  jq -n --slurpfile b "$O/run-behaviour.json" '{format: 1, triage: false, plan_ran: false, verify_gaps: [], behaviour: $b[0],
+    coverage: {class: "complete", inert: false, unplanned: []},
+    counts: {"instruction-like-text-from-others": 0, "conversation-claims-unread": 0, "review.quoted-claim-unverifiable": 0}}' > "$TMP/run-w.json"
+  printf '[]\n' > "$TMP/findings-w.json"; mkdir -p "$TMP/render-w$c"
+  local m; m="$(bash "$RCU" --head "$HEAD" --findings "$TMP/findings-w.json" --host "$TMP/host.json" --checks "$TMP/checks" \
+    --run "$TMP/run-w.json" --assessment "$TMP/assess.txt" --run-dir "$TMP/rundir" --out "$TMP/render-w$c" 2>&1)"
+  case "$m" in "rendered approve (ladder rule 8),"*) ;; *) echo "$m"; return 1 ;; esac
+}
+t_wr_render; check "wrappers render: a run whose only trigger is a derived wrapper approves" $?
+
+# The negative self-check: each weakened copy of the script lets a case above through.
+mn=0
+wmutate() { # name, perl substitution, case function [, file mutated, behaviour-pass.sh by default]
+  mn=$((mn + 1)); local d="$TMP/wmut-$mn"; mkdir -p "$d"
+  cp "$REF/behaviour-pass.sh" "$REF/wrapper-derive.pl" "$d/"
+  local f="${4:-behaviour-pass.sh}"; perl -0pi -e "$2" "$d/$f"
+  if cmp -s "$d/$f" "$REF/$f"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
+  local keep="$BP" before="$fails"; BP="$d/behaviour-pass.sh"
+  "$3" > /dev/null 2>&1; local s=$?
+  BP="$keep"; fails="$before"
+  check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
+}
+wmutate "the derive comparison dropped" 's/cmp -s "\$out\/wrap\/e" "\$out\/wrap\/w" && r=derived \|\| r=differs/r=derived/' t_wr_differs
+wmutate "the copy comparison dropped" 's/cmp -s "\$out\/wrap\/m" "\$out\/wrap\/w" && r=copied \|\| r=differs/r=copied/' t_wr_copied
+wmutate "the hook version boundary moved" 's/\$min <=> 106/\$min <=> 105/' t_wr_copied
+wmutate "the release tag check dropped" 's/or exit print "unknown pin not a release tag\\n";/or exit print "derive\\n";/' t_wr_pins
+wmutate "the wrapper hook check dropped" 's/exit print "unknown hook not listed\\n" unless \$e\[0\]\{hook\};//' t_wr_pins
+wmutate "the second mention check dropped" 's/ && \$m == 1 && / && /' t_wr_pins
+wmutate "the link refusal dropped" 's/  \[ "\$\{BASH_REMATCH\[1\]\}" != 120000 \] \|\| \{ echo link; return 1; \}\n  \[ "\$\{BASH_REMATCH\[1\]\}" = 100644 \]/  [ "\${BASH_REMATCH[1]}" = 100644 ] || [ "\${BASH_REMATCH[1]}" = 120000 ]/' t_wr_links
+wmutate "the ancestor walk dropped" 's/  for c in \$\{p%\/\*\}; do/  for c in; do/' t_wr_links
+wmutate "the size cap dropped" 's/\[ "\$\{BASH_REMATCH\[2\]\}" -le "\$WRAP_CAP" \] \|\|/true ||/' t_wr_size
+wmutate "the module pairing to the root for a submodule" 's/else m="modules\/\$\{p#wrappers\/\}"; fi/else m=versions.tf; fi/' t_wr_sub
+wmutate "the prefix not stripped" 's/\| \.\[\(\$p \| length\):\]/| ./' t_wr_prefix
+wmutate "a refuted trigger made inert" 's/if \.state == "unverifiable" and \(\$w/if (.state | IN("unverifiable", "refuted")) and (\$w/' t_wr_eval
+wmutate "a differing wrapper made inert" 's/IN\("derived", "copied"\)\)\n/IN("derived", "copied", "differs"))\n/' t_wr_eval
+wmutate "the repo or rev key check dropped" 's/      exit print "unknown pin unreadable\\n" if \/\^\[ \\t\]\*\(-[^\n]*\n//' t_wr_yaml
+wmutate "the anchor check dropped" 's/ \|\| \$s =~ \/\^\[ \\t\]\*\(-\[ \\t\]\+\)\?\(\\\?\|<<\)\/m;/;/; s/\(\^\|\[\\s\\\[\{,\]\)\[&\*!\]\\S/NEVER/' t_wr_yaml
+wmutate "the mention count in one letter case" 's/m\{pre-commit-terraform\}gi/m{pre-commit-terraform}g/' t_wr_yaml
+wmutate "the backslash check dropped" 's/    exit print "unknown pin unreadable\\n" if \$s =~ \/\\\\\/;\n//' t_wr_steer
+wmutate "the second repos key check dropped" 's/\/gmi\) > 1/\/gmi) > 9/' t_wr_steer
+wmutate "the open quote check dropped" 's/if \$q ne "" \|\| /if /' t_wr_steer
+wmutate "the open flow sequence check dropped" 's/ \|\| \$d != 0//' t_wr_steer
+wmutate "the flow mapping check dropped" 's/if \$c eq "\{" \|\| /if /' t_wr_steer
+wmutate "the block scalar check dropped" 's/\[\|>\]\[-\+0-9\]/[~][-+0-9]/' t_wr_steer
+wmutate "the repo URL form check dropped" 's/if defined \$repo && \$repo !~/if 0 \&\& \$repo !~/' t_wr_steer
+wmutate "the hook mention count dropped" 's/for_each\/gi\) > 1/for_each\/gi) > 9/' t_wr_steer
+wmutate "the provider option check dropped" 's/exit print "unknown hook options\\n" if /exit print "unknown hook options\\n" if 0 \&\& /' t_wr_family
+wmutate "the provider_meta label check dropped" 's/if grep -E .\^\[\[:space:\]\]\*provider_meta. "\$out\/wrap\/m" \| grep -qvE [^\n]*; then/if false; then/' t_wr_provider
+wmutate "the continuation line check dropped" 's/      exit print "unknown pin unreadable\\n" unless \/\^\[ \\t\]\*\(#\|\$\)\/[^\n]*\n//' t_wr_steer
+wmutate "the space after repo: not required" 's/repo:\[ \\t\]\+\(/repo:[ \\t]*(/' t_wr_steer
+wmutate "the space after id: not required" 's/id:\[ \\t\]\+\(/id:[ \\t]*(/' t_wr_family
+wmutate "the partial clone check dropped" 's/    elif safe_git_partial; then all="unknown partial clone"\n//' t_wr_partial
+wmutate "the sub component cap dropped" 's/\{0,63\}/*/g' t_wr_long
+wmutate "the wrappers file grammar not checked" 's/if length <= 256 and all\(\.\[\]; test\(\$re\)\) then/if true then/' t_wr_eval_malformed
+wmutate "derive in the shared file returning its input" 's/  return \$o;\n\}/  return \$s;\n}/' t_wr_derived wrapper-derive.pl
 
 echo
 if [ "$fails" -eq 0 ]; then echo "behaviour pass: all checks hold"; else echo "behaviour pass: $fails failed"; exit 1; fi

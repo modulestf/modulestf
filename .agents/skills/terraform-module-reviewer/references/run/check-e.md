@@ -35,4 +35,5 @@ When any row below applies: [Reads, Fails When and Severity](../check-e-profile.
 
 | Section | Open when |
 |---------|-----------|
+| [Host Wrapper Evidence](../check-e-profile.md#host-wrapper-evidence) | The task carries a `Wrapper versions:` line. |
 | [Suggested Fixes](../check-e-profile.md#suggested-fixes) | Check E reports a finding. |

@@ -44,6 +44,8 @@ path_re='^[A-Za-z0-9._][A-Za-z0-9._/-]*$'
 plain_ok() { [ "${#1}" -le 300 ] && [[ "$1" =~ $path_re ]]; } # a plain path of at most 300 characters
 WRITE_SHORT='Write short: a `summary` of at most 200 characters and a `suggested_fix` of at most 250, or at most 600 for a `needs decision:` fix, one clause per option. The hard caps stay 500 and 600. A finding over the short targets is valid; the COMPACT render refuses it, and the comment renders in STANDARD only with `--standard`.'
 
+# A line of behaviour-pass.sh wrappers (behaviour-pass.md, Wrapper Versions).
+WRAP_LINE_RE='^wrappers/([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/)?versions\.tf (derived|copied|differs|unknown [a-z0-9 .-]{1,60})$'
 # A provenance line of schema-pass.md, Focused Mode: mirror, release tag, schema file SHA-256.
 SOURCE_RE='^schema pass: source [A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100} [a-z0-9][a-z0-9-]{0,63}_[a-z0-9][a-z0-9-]{0,63}-v[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5} [0-9a-f]{64}$'
 
@@ -605,11 +607,16 @@ cmd_ladder() {
   fi
   # The end of Step 5.5: the claims evaluation, at every depth outside a triage run.
   [ -d "$RUN/behaviour" ] || mkdir "$RUN/behaviour"
-  local cl=() ld=()
+  local cl=() ld=() wr=()
   [ ! -f "$RUN/behaviour/claims.json" ] || cl=(--claims "$RUN/behaviour/claims.json")
   [ ! -f "$RUN/behaviour/ladder.json" ] || ld=(--ladder "$RUN/behaviour/ladder.json")
+  # The generator result of each wrapper versions.tf the change touches (behaviour-pass.md,
+  # Wrapper Versions), for eval and the handover; a failed step is no evidence.
+  bash "$HERE/behaviour-pass.sh" wrappers --clone "$RUN/clone" --head "$HEAD_SHA" --diff "$RUN/host/files.json" \
+    --prefix "$PREFIX" --out "$RUN/behaviour" > /dev/null 2>&1 || rm -f "$RUN/behaviour/wrappers.txt"
+  [ ! -f "$RUN/behaviour/wrappers.txt" ] || wr=(--wrappers "$RUN/behaviour/wrappers.txt")
   bash "$HERE/behaviour-pass.sh" eval --facts "$facts" --out "$RUN/behaviour" --head "$HEAD_SHA" \
-    --base-sha "${MB:-$HEAD_SHA}" ${cl[@]+"${cl[@]}"} ${ld[@]+"${ld[@]}"} > /dev/null 2> "$RUN/state/eval.err" ||
+    --base-sha "${MB:-$HEAD_SHA}" ${cl[@]+"${cl[@]}"} ${ld[@]+"${ld[@]}"} ${wr[@]+"${wr[@]}"} > /dev/null 2> "$RUN/state/eval.err" ||
     fail "behaviour-pass.sh eval failed"
   head -n 1 "$RUN/behaviour/record.txt" 2> /dev/null | cut -c1-200
 }
@@ -951,6 +958,12 @@ cmd_handover() {
       printf 'Schema handoff: %s\n' "$RUN/schema-handoff/schema-handoff.json.gz"
     [ "$nm" = true ] || printf 'Diff: %s\n' "$out/change.diff"
     [ -z "$mbl" ] || printf 'Merge base: %s\n' "$mbl"
+    # The host's wrapper evidence as its own fact lines, read as eval reads it: every line in the
+    # grammar of behaviour-pass.sh wrappers and at most 256 of them, or no line at all.
+    if [ "$TRIAGE" = false ] && [ -f "$RUN/behaviour/wrappers.txt" ] && [ "$(wc -l < "$RUN/behaviour/wrappers.txt")" -le 256 ] &&
+        ! grep -qvE "$WRAP_LINE_RE" "$RUN/behaviour/wrappers.txt"; then
+      sed 's/^/Wrapper versions: /' "$RUN/behaviour/wrappers.txt"
+    fi
     jq -r 'if .dir != "" then "profile-dir: \(.dir)" elif .id != "" then "profile: \(.id)" else empty end,
       (select(.tree != "none") | "Profile tree: \(.tree)"),
       (select(.gated != []) | "Gated rules: \(.gated | join(" "))")' "$RUN/state/profile.json"
