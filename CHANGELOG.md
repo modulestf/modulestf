@@ -1,3 +1,12 @@
+# [0.10.0](https://github.com/modulestf/modulestf/compare/v0.9.6...v0.10.0) (2026-11-14)
+
+
+### Features
+
+* **pr-fix:** Add a generated-only mode declared per module family ([#163](https://github.com/modulestf/modulestf/issues/163)) ([c3024de](https://github.com/modulestf/modulestf/commit/c3024de54d7e1cd9bb9049b8a7831a17df5a303e))
+
+
+
 ## [0.9.6](https://github.com/modulestf/modulestf/compare/v0.9.5...v0.9.6) (2026-11-14)
 
 
