@@ -47,6 +47,10 @@
 #   --out         an existing directory holding none of the files written
 #   --standard    render the STANDARD tier even when every COMPACT condition holds
 #                 (comment-format.md, Tiers); nothing forces COMPACT
+#   The rule registry is read from the reviewer skill beside this one,
+#   ../../terraform-module-reviewer/references/rule-facts.md: a finding whose rule_id is no row of
+#   its table is kept and listed, and is an unknown at ladder rule 4, never read at its severity
+#   (verdict.md). A registry that cannot be read, or has no row, is refused.
 #   --links       render each finding location as a link to the file at --head in the
 #                 repository host.json names (comment-format.md, Location links); without it the
 #                 location is a plain code span
@@ -133,6 +137,10 @@ for f in comment.md findings.json result.json result.json.tmp; do
 done
 
 RJ() { jq -L "$HERE" "$@"; }
+RULES="$HERE/../../terraform-module-reviewer/references/rule-facts.md"
+[ -f "$RULES" ] && [ ! -L "$RULES" ] || die "the rule registry, the reviewer's rule-facts.md, is not a regular file"
+registry="$(RJ -c -R -s 'include "render-comment"; registry_ids | select(length > 0)' "$RULES" 2> /dev/null)" \
+  && [ -n "$registry" ] || die "the rule registry, the reviewer's rule-facts.md, holds no rule"
 one() { RJ -e --slurp --arg head "$head" "include \"$2\"; length == 1 and (.[0] | $3)" "$1" > /dev/null 2>&1; }
 RJ -e --slurp 'include "render-comment"; length == 1 and (.[0] | below_floor)' "$findings" > /dev/null 2>&1 \
   && die "a finding that explains differences is rated below LOW, the floor; send it back to the reviewer"
@@ -179,10 +187,10 @@ lits="$(jq -n --arg run "$RUN" --arg home "${HOME-}" --arg pwd "${PWD-}" --arg t
       | {name: "the value of \(.key)", v: .value} ]')" || die "the leak scan set cannot be built"
 
 RJ -n --slurpfile f "$findings" --slurpfile h "$host" --slurpfile r "$run" --rawfile a "$assessment" \
-  --argjson c "$cj" --argjson lits "$lits" --argjson std "$standard" --arg link_base "$link_base" '
+  --argjson c "$cj" --argjson lits "$lits" --argjson std "$standard" --arg link_base "$link_base" --argjson reg "$registry" '
   include "render-comment";
   ($a | sub("\n+$"; "")) as $text
-  | render({findings: $f[0], host: $h[0], checks: $c, run: $r[0], assessment: $text, standard: $std}) as $o
+  | render({findings: $f[0], host: $h[0], checks: $c, run: $r[0], assessment: $text, standard: $std, registry: $reg}) as $o
   | (if $r[0].plan_ran then
        [ "(AKIA|ASIA)[A-Z0-9]{16}", "eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+", "-----BEGIN", "X-Amz-Signature",
          "Authorization:" ] | map({name: ., v: .})

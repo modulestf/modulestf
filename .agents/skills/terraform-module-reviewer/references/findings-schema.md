@@ -106,7 +106,7 @@ When a run finds a defect class the registry has no name for, it may use a new n
 - The finding's `summary` opens with `New rule_id, not in the registry:` and then states the defect as any other summary does.
 - Alongside the findings list, the run states every new `rule_id` it used and the check that produced it. A reader can then tell which names in the list are registry names without opening the registry.
 
-Adding the name to the registry is a separate change, made by a person. Until it is made the name is not a registry name, and a later run that does not produce it again is not a regression.
+Adding the name to the registry is a separate change, made by a person. Until it is made the name is not a registry name, and a later run that does not produce it again is not a regression. A caller that decides from the findings may count a finding under such a name as an unknown rather than at its severity, since no person has yet set what the name means or how severe it is.
 
 ## Recorded Exceptions
 

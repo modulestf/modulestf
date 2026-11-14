@@ -18,6 +18,8 @@ fails=0
 HEAD=0123456789abcdef0123456789abcdef01234567
 BASE=89abcdef0123456789abcdef0123456789abcdef
 RCU="$REF/render-comment.sh" # the script under test; the self-check swaps in mutated copies
+RF="$SRC/.agents/skills/terraform-module-reviewer/references/rule-facts.md" # the rule registry the script reads
+REGISTRY="$(jq -c -R -s -L "$REF" 'include "render-comment"; registry_ids' "$RF")"
 mkdir -p "$TMP/rundir"
 
 check() { # name, status (0 = holds)
@@ -34,6 +36,8 @@ f() { # rule, severity, file, line|null, summary, fix [, extra jq object] -> one
     '{id: $id, rule_id: $r, severity: $s, file: $f, line: (if $l == "null" then null else ($l | tonumber) end),
       summary: $sum, suggested_fix: $fix, source: "llm"} + $x'
 }
+# Three distinct registry rules, for fixtures that need several rule groups.
+rid() { case "$1" in 1) echo structure.wrong-file ;; 2) echo structure.missing-description ;; *) echo structure.variable-untyped ;; esac; }
 # stdin findings -> file, numbered F-001 on in order, since f runs in subshells
 list() {
   jq -s 'to_entries | map(.value + {id: ("F-" + ("00\(.key + 1)" | .[-3:]))})' > "$TMP/$1.json"
@@ -210,12 +214,12 @@ ladder() { # name, expected "verdict EVENT", expected rule, render args...
   check "ladder: $name -> $want, rule $r" "$([ "$ST" = 0 ] && [ "$(verdict)" = "$want" ] && [ "$(rule)" = "$r" ]; echo $?)"
   check "ladder: $name, What to do invariant" "$(invariant; echo $?)"
 }
-ladder "a CRITICAL compat break alone" "hold for the next major COMMENT" 0 "$(pair compat.output-removed CRITICAL structure.grouping MEDIUM)"
-ladder "a CRITICAL compat break and a HIGH non-compat finding" "block REQUEST_CHANGES" 1 "$(pair compat.output-removed CRITICAL structure.docs-contradict-code HIGH)"
+ladder "a CRITICAL compat break alone" "hold for the next major COMMENT" 0 "$(pair compat.type-narrowed CRITICAL structure.grouping MEDIUM)"
+ladder "a CRITICAL compat break and a HIGH non-compat finding" "block REQUEST_CHANGES" 1 "$(pair compat.type-narrowed CRITICAL structure.docs-contradict-code HIGH)"
 ladder "a HIGH compat break alone" "block REQUEST_CHANGES" 2 "$(one compat.variable-removed HIGH a.tf 1 "S." "F.")"
 # compat.claim-contradicts-analysis sits one band below the compat.* code finding that refutes its
 # claim: HIGH only beside a CRITICAL one, which arms rule 0 itself.
-ladder "a CRITICAL compat break and the HIGH description finding it refutes" "hold for the next major COMMENT" 0 "$(pair compat.output-removed CRITICAL compat.claim-contradicts-analysis HIGH)"
+ladder "a CRITICAL compat break and the HIGH description finding it refutes" "hold for the next major COMMENT" 0 "$(pair compat.type-narrowed CRITICAL compat.claim-contradicts-analysis HIGH)"
 ladder "a HIGH compat break and the MEDIUM description finding it refutes" "block REQUEST_CHANGES" 2 "$(pair compat.variable-removed HIGH compat.claim-contradicts-analysis MEDIUM)"
 ladder "a CRITICAL non-compat finding" "block REQUEST_CHANGES" 1 "$(one structure.docs-contradict-code CRITICAL a.tf 1 "S." "F.")"
 ladder "a HIGH finding and a failing check" "block REQUEST_CHANGES" 2 "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")" "" "$(checks fail fail)"
@@ -230,6 +234,29 @@ ladder "reviews unread" "inconclusive COMMENT" 4 "$NONE" "$(host ru '.signals.re
 ladder "mergeability null twice" "inconclusive COMMENT" 4 "$NONE" "$(host mu '.signals.mergeability = "unknown"')"
 ladder "a review.check-not-run finding" "inconclusive COMMENT" 4 "$(one review.check-not-run MEDIUM . null "Check B did not run." "no code change: none.")"
 ladder "a review.no-change-identified finding" "inconclusive COMMENT" 4 "$(one review.no-change-identified MEDIUM . null "The workspace is stale." "no code change: none.")"
+# A rule that is no row of the reviewer's rule-facts.md is an unknown at rule 4 at any severity
+# (verdict.md): kept in section 4 and findings.json, named in section 5, never read at rules 0 to 2, 6 or 7.
+UNREG='- `structure.third-party-promotion` at `a.tf:3`: rule not in the registry, so this MEDIUM finding does not decide the verdict.'
+ladder "an unregistered rule at MEDIUM" "inconclusive COMMENT" 4 "$(one structure.third-party-promotion MEDIUM a.tf 3 "S." "F.")"
+t_unreg_lines() {
+  grep -qxF -- "$UNREG" "$O/comment.md" &&
+    grep -qxF -- "$(jq -nr -L "$REF" 'include "render-comment"; texts["rationale-4-unregistered"]')" "$O/comment.md" &&
+    grep -qxF -- '- `structure.third-party-promotion` - `a.tf:3` - S.' "$O/comment.md" &&
+    jq -e 'map(.rule_id) == ["structure.third-party-promotion"]' "$O/findings.json" > /dev/null
+}
+t_unreg_lines; check "unregistered rule: section 5 names it, the rationale says why, section 4 and findings.json keep it" $?
+ladder "an unregistered rule at HIGH" "inconclusive COMMENT" 4 "$(one structure.third-party-promotion HIGH a.tf 3 "S." "F.")"
+grep -qxF -- "${UNREG/MEDIUM/HIGH}" "$O/comment.md"; check "unregistered rule: the HIGH line names the rule" $?
+ladder "an unregistered compat rule at CRITICAL" "inconclusive COMMENT" 4 "$(one compat.made-up-break CRITICAL a.tf 3 "S." "F.")"
+ladder "a registry HIGH beside an unregistered MEDIUM" "block REQUEST_CHANGES" 2 "$(pair structure.docs-contradict-code HIGH structure.third-party-promotion MEDIUM)"
+ladder "a registry MEDIUM" "block REQUEST_CHANGES" 6 "$(one structure.grouping MEDIUM a.tf 3 "S." "F.")"
+t_no_registry() {
+  local d="$TMP/lone" keep="$RCU"; mkdir -p "$d"
+  cp "$REF/render-comment.sh" "$REF/render-comment.jq" "$REF/host-records.jq" "$REF/host-pass.sh" "$d/"
+  RCU="$d/render-comment.sh"; render "$NONE"; RCU="$keep"
+  [ "$ST" = 2 ] && empty_out && printf '%s' "$MSG" | grep -qF "the rule registry, the reviewer's rule-facts.md"
+}
+t_no_registry; check "unregistered rule: a render with no rule registry beside it is refused" $?
 ladder "a patch unavailable" "inconclusive COMMENT" 4 "$NONE" "$(host pu '.could_not_run = [{kind: "patch-unavailable", path: "main.tf"}]')"
 ladder "an example not verified" "inconclusive COMMENT" 4 "$NONE" "" "" "$(runf gap '.verify_gaps = [{dir: "examples/complete", reason: "not run: environment"}]')"
 grep -qxF -- '- Verification of `examples/complete`: not run: environment.' "$O/comment.md"; check "ladder: the unverified example is listed in section 5" $?
@@ -762,21 +789,21 @@ todo_is "rule 7, LOW only, a null line and one and two findings" '### What to do
 render "$({ f structure.grouping LOW a.tf 4 "S." "F."; f structure.grouping LOW a.tf 4 "T." "G."; } | list wt-r7d)"
 todo_is "rule 7, two findings at one location name it once" '### What to do' '' "$LEAD_7" '' \
   '- Optional: `structure.grouping` (2) at `a.tf:4`.'
-R0="$({ f compat.output-removed CRITICAL a.tf 1 "S." "F. Generated content made stale: the terraform-docs region of README.md."
-  f compat.output-removed CRITICAL b.tf 2 "T." "G."; f compat.variable-removed HIGH c.tf null "U." "H."
+R0="$({ f compat.type-narrowed CRITICAL a.tf 1 "S." "F. Generated content made stale: the terraform-docs region of README.md."
+  f compat.type-narrowed CRITICAL b.tf 2 "T." "G."; f compat.variable-removed HIGH c.tf null "U." "H."
   f structure.grouping LOW d.tf 4 "V." "I."; } | list wt-r0)"
 render "$R0"
 todo_is "rule 0, the groups as plain bullets and item e a bullet" '### What to do' '' "$LEAD_0" '' \
-  '- `compat.output-removed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.' \
+  '- `compat.type-narrowed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.' \
   '- `compat.variable-removed`: the Fix at `c.tf` is one way to restore compatibility; see Findings.' '- Optional: `structure.grouping` at `d.tf:4`.' "- $GEN"
 render "$R0" "" "$(checks wt-r0 fail)"
 todo_is "rule 0 with a failing check, which makes item e a checkbox" '### What to do' '' "$LEAD_0" '' '- [ ] Fix the failing checks.' \
-  '- `compat.output-removed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.' \
+  '- `compat.type-narrowed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.' \
   '- `compat.variable-removed`: the Fix at `c.tf` is one way to restore compatibility; see Findings.' '- Optional: `structure.grouping` at `d.tf:4`.' "- [ ] $GEN"
 R0M="$(jq '. + [{id: "F-900", rule_id: "structure.flag-polarity", severity: "MEDIUM", file: "e.tf", line: 5, summary: "W.", suggested_fix: "J.", source: "llm"}]' "$TMP/wt-r0.json" > "$TMP/wt-r0m.json"; echo "$TMP/wt-r0m.json")"
 render "$R0M"
 todo_is "rule 0, a MEDIUM non-compat group is a checkbox and makes item e one" '### What to do' '' "$LEAD_0" '' \
-  '- `compat.output-removed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.' \
+  '- `compat.type-narrowed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.' \
   '- `compat.variable-removed`: the Fix at `c.tf` is one way to restore compatibility; see Findings.' '- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.' \
   '- Optional: `structure.grouping` at `d.tf:4`.' "- [ ] $GEN"
 render "$NONE"
@@ -791,26 +818,26 @@ todo_is "mixed blocking and LOW groups under block" '### What to do' '' "$LEAD_B
 # A group whose every finding is at the module root, `.`, has no place to apply a Fix at: it
 # takes the fixed todo-fix-root item. A group with a real location keeps its locations.
 t_root_one() {
-  render "$({ f scope.description-only MEDIUM . null "S." "F."; f structure.grouping MEDIUM b.tf 2 "T." "G."; } | list wt-root1)"
+  render "$({ f scope.boundary MEDIUM . null "S." "F."; f structure.grouping MEDIUM b.tf 2 "T." "G."; } | list wt-root1)"
 }
 t_root_one
 todo_is "a blocking finding at the module root takes the fixed item" '### What to do' '' "$LEAD_BLOCK" '' \
-  '- [ ] Resolve `scope.description-only`: see its Fix under Findings.' '- [ ] `structure.grouping`: apply the Fix at `b.tf:2`.'
-render "$({ f scope.description-only HIGH . null "S." "F."; f scope.description-only HIGH . null "T." "G."; } | list wt-root2)"
+  '- [ ] Resolve `scope.boundary`: see its Fix under Findings.' '- [ ] `structure.grouping`: apply the Fix at `b.tf:2`.'
+render "$({ f scope.boundary HIGH . null "S." "F."; f scope.boundary HIGH . null "T." "G."; } | list wt-root2)"
 todo_is "two blocking findings at the module root take the fixed item with the count" '### What to do' '' "$LEAD_BLOCK" '' \
-  '- [ ] Resolve `scope.description-only` (2): see its Fixes under Findings.'
-render "$(f scope.description-only MEDIUM . null "S." "F." | list wt-root3)" "$(host wt-root3 '.prefix = "modules/x"')"
+  '- [ ] Resolve `scope.boundary` (2): see its Fixes under Findings.'
+render "$(f scope.boundary MEDIUM . null "S." "F." | list wt-root3)" "$(host wt-root3 '.prefix = "modules/x"')"
 todo_is "a module root finding under a module root prefix takes the fixed item" '### What to do' '' "$LEAD_BLOCK" '' \
-  '- [ ] Resolve `scope.description-only`: see its Fix under Findings.'
+  '- [ ] Resolve `scope.boundary`: see its Fix under Findings.'
 t_root_rule0() {
-  render "$({ f compat.output-removed CRITICAL a.tf 1 "S." "F."; f compat.claim-contradicts-analysis HIGH . null "T." "no code change: G."; } | list wt-root0)"
+  render "$({ f compat.type-narrowed CRITICAL a.tf 1 "S." "F."; f compat.claim-contradicts-analysis HIGH . null "T." "no code change: G."; } | list wt-root0)"
 }
 t_root_rule0
 todo_is "rule 0, a description finding at the module root takes the fixed item" '### What to do' '' "$LEAD_0" '' \
-  '- `compat.output-removed`: the Fix at `a.tf:1` is one way to restore compatibility; see Findings.' '- [ ] Resolve `compat.claim-contradicts-analysis`: see its Fix under Findings.'
-render "$({ f scope.description-only MEDIUM . null "S." "F."; f scope.description-only MEDIUM a.tf 1 "T." "G."; } | list wt-root4)"
+  '- `compat.type-narrowed`: the Fix at `a.tf:1` is one way to restore compatibility; see Findings.' '- [ ] Resolve `compat.claim-contradicts-analysis`: see its Fix under Findings.'
+render "$({ f scope.boundary MEDIUM . null "S." "F."; f scope.boundary MEDIUM a.tf 1 "T." "G."; } | list wt-root4)"
 todo_is "a group with a real location keeps its locations" '### What to do' '' "$LEAD_BLOCK" '' \
-  '- [ ] `scope.description-only` (2): apply the Fix at `.`, `a.tf:1`.'
+  '- [ ] `scope.boundary` (2): apply the Fix at `.`, `a.tf:1`.'
 
 # Commit and repository targets: the host render takes a pull request only, so the rule that
 # they carry no What to do section is held in comment-format.md, under each target's heading.
@@ -917,9 +944,10 @@ t_newline; check "fix block: a newline in a summary renders unfolded" $?
 t_leak_todo() {
   render "$(f structure.grouping MEDIUM a.tf 1 "S." "F." | list wt-leak)" "$(host wt-leak '.prefix = "x/home/y"')"
   [ "$ST" = 1 ] && empty_out && printf '%s' "$MSG" | grep -qF 'leak scan: /home/ in the host records' &&
-  jq -e -n -L "$REF" --slurpfile f "$TMP/wt-leak.json" --slurpfile h "$TMP/host-wt-leak.json" --slurpfile r "$RUNF" '
+  jq -e -n -L "$REF" --slurpfile f "$TMP/wt-leak.json" --slurpfile h "$TMP/host-wt-leak.json" --slurpfile r "$RUNF" \
+    --argjson reg "$REGISTRY" '
     include "render-comment";
-    render({findings: $f[0], host: $h[0], run: $r[0], assessment: "A.",
+    render({findings: $f[0], host: $h[0], run: $r[0], assessment: "A.", registry: $reg,
             checks: {accepted: true, signal: "pass", own_check: null, own_check_dropped: 0, own_jobs_dropped: 0, own_jobs_unreadable: false}})
     | .parts[-1] | .src == "the host records" and (.text | contains("### What to do\n\n" + texts["todo-lead-block"]))' > /dev/null
 }
@@ -935,7 +963,10 @@ t_mention_todo; check "what to do: at-mentions in the section and the Fix block"
 # --- Negative self-check: each mutation of a temp copy must make its named case fail.
 
 mutate() { # name, perl substitution, case function
-  local d="$TMP/mut-$oc"; mkdir -p "$d"; cp "$REF/render-comment.sh" "$REF/render-comment.jq" "$REF/host-records.jq" "$REF/host-pass.sh" "$d/"
+  # The copies sit as the skill does, with the reviewer's rule registry beside them.
+  local d="$TMP/mut-$oc/terraform-module-pr-review/references" rr="$TMP/mut-$oc/terraform-module-reviewer/references"
+  mkdir -p "$d" "$rr"; cp "$REF/render-comment.sh" "$REF/render-comment.jq" "$REF/host-records.jq" "$REF/host-pass.sh" "$d/"
+  cp "$RF" "$rr/"
   perl -0pi -e "$2" "$d/render-comment.sh" "$d/render-comment.jq"
   if cmp -s "$d/render-comment.sh" "$REF/render-comment.sh" && cmp -s "$d/render-comment.jq" "$REF/render-comment.jq"; then
     check "self-check: $1 (the mutation changed nothing)" 1; return
@@ -947,9 +978,13 @@ mutate() { # name, perl substitution, case function
 }
 t_rule2() { render "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")"; [ "$(rule)" = 2 ]; }
 t_cov_rule() { render "$NONE" "" "" "$TMP/run-cov-none.json"; [ "$(rule)" = 4 ] && grep -qxF -- '  - `examples/a`' "$O/comment.md"; }
+t_unreg() { render "$(one structure.third-party-promotion HIGH a.tf 3 "S." "F.")"; [ "$(rule)" = 4 ] && grep -qxF -- "${UNREG/MEDIUM/HIGH}" "$O/comment.md"; }
+mutate "unregistered rules read by the ladder" 's/\(\$in\.findings \| map\(select\(registered\(\$in\.registry\)\)\)\) as \$known/\$in.findings as \$known/' t_unreg
+mutate "the unregistered line dropped from section 5" 's/\+ \[\$unreg\[\] \| tx\("rule-unregistered"[^\n]*\]/+ []/' t_unreg
+mutate "unregistered rules not counted as gaps" 's/ \+ \(\$unreg \| length\) \+ \(\$in\.run/ + (\$in.run/' t_unreg
 mutate "unplanned examples left out of the ladder" 's/ or \.unplanned_open > 0//' t_cov_rule
 mutate "unplanned example names left out of section 5" 's/\| tx\("unplanned-name"; \{dir\}\)\]/| empty]/' t_cov_rule
-t_rule0() { render "$(pair compat.output-removed CRITICAL structure.docs-contradict-code HIGH)"; [ "$(rule)" = 1 ]; }
+t_rule0() { render "$(pair compat.type-narrowed CRITICAL structure.docs-contradict-code HIGH)"; [ "$(rule)" = 1 ]; }
 t_rule4() { render "$NONE" "$(host tu2 '.signals.threads = "unknown"')"; [ "$(rule)" = 4 ]; }
 t_draft() { render "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "$TMP/host-draft.json"; [ "$(verdict)" = "block COMMENT" ]; }
 t_dup() { render "$TMP/dup.json"; [ "$ST" = 2 ] && empty_out; }
@@ -984,7 +1019,7 @@ mutate "any counts accepted" 's/\(\.counts == null or \(/(true or (/' t_partial_
 t_none_fires() { render "$(f structure.grouping LOW a.tf 1 "S." "Do it. Generated content made stale: None." | list wt-nf)"; todo | grep -qxF -- "- $GEN"; }
 t_rule8_none() { render "$NONE"; [ "$ST" = 0 ] && ! grep -q 'What to do' "$O/comment.md"; }
 t_loc9() { locs_case 9; todo | grep -qxF -- "- Optional: \`structure.argument-order\` (9) at $L8, and 1 more."; }
-t_rule0_plain() { render "$R0"; todo | grep -qxF -- '- `compat.output-removed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.'; }
+t_rule0_plain() { render "$R0"; todo | grep -qxF -- '- `compat.type-narrowed` (2): the Fixes at `a.tf:1`, `b.tf:2` are one way to restore compatibility; see Findings.'; }
 t_unf_fix() {
   render "$({ f structure.grouping LOW a.tf 1 "A." "Fix A."; f structure.grouping LOW b.tf 2 "B." "Fix B."
     f structure.grouping LOW c.tf 3 "C." 'Close the </details> tag.'; } | list wt-unf2)"
@@ -1006,7 +1041,7 @@ mutate "What to do quiet at a rule other than 4" 's/\(\$v\.rule == 4 and all\(\$
 mutate "nine locations listed" 's/\$l\[:8\]/\$l[:9]/' t_loc9
 mutate "rule 0 groups as checkboxes" 's/if \$rule == 0 and/if false and/' t_rule0_plain
 mutate "the compat item says its Fix restores compatibility" 's/the Fixes at \{locations\} are one way to restore compatibility; see Findings\./the Fix at {locations} restores compatibility./' t_rule0_plain
-t_compat_one() { render "$TMP/wt-root0.json"; todo | grep -qxF -- '- `compat.output-removed`: the Fix at `a.tf:1` is one way to restore compatibility; see Findings.'; }
+t_compat_one() { render "$TMP/wt-root0.json"; todo | grep -qxF -- '- `compat.type-narrowed`: the Fix at `a.tf:1` is one way to restore compatibility; see Findings.'; }
 mutate "the single compat item says its Fix restores compatibility" 's/(compat-one": "`\{rule_id\}`: the Fix at \{locations\}) is one way to restore compatibility; see Findings\./$1 restores compatibility./' t_compat_one
 t_rule0_mixed() { render "$R0M"; todo | grep -qxF -- '- [ ] `structure.flag-polarity`: apply the Fix at `e.tf:5`.'; }
 mutate "every rule 0 group a compat bullet" 's/\$rule == 0 and compat_item/$rule == 0/' t_rule0_mixed
@@ -1436,15 +1471,15 @@ rc "$(F556)" "$(R556 uv '.behaviour.triggers += [{id: "T-002", file: "main.tf", 
 rc "$(F556)" "$(R556 nocls '.behaviour = {status: "not-run", reason: "mtf-facts failed", triggers: [], claims: [], capped: 0}')"; std "a classifier that did not run"
 rc "$(F556)" "$(R556 floorcat '.behaviour.triggers += [{id: "T-002", file: "versions.tf", line: 5, category: "provider-version-floor-change", state: "verified"}]')"; std "a provider version floor change"
 four() { n=0; { f compat.expression-behaviour-changed LOW main.tf 156 'S.' 'F.' "$(jq -nc --argjson i "$IDS" --arg d "$DIG" '{explains: $i, evidence_digest: $d}')"
-  for i in 1 2 3; do f "structure.r$i" LOW "x$i.tf" "$i" "S$i." "F$i."; done; } | list "four-$1"; }
+  for i in 1 2 3; do f "$(rid $i)" LOW "x$i.tf" "$i" "S$i." "F$i."; done; } | list "four-$1"; }
 rc "$(four a)" "$(R556 four)"; std "four counted findings"
 rc "$({ n=0; f compat.expression-behaviour-changed LOW main.tf 156 'S.' 'F.' "$(jq -nc --argjson i "$IDS" --arg d "$DIG" '{explains: $i, evidence_digest: $d}')"
-  for i in 1 2; do f structure.r1 LOW "x$i.tf" "$i" "S$i." "F$i."; done; f structure.r1 LOW x3.tf 3 S1. F1.; } | list g3a)" "$(R556 g3)"
+  for i in 1 2; do f structure.wrong-file LOW "x$i.tf" "$i" "S$i." "F$i."; done; f structure.wrong-file LOW x3.tf 3 S1. F1.; } | list g3a)" "$(R556 g3)"
 check "tiers: four findings with a group of three force STANDARD" "$([ "$(tier)" = STANDARD ]; echo $?)"
-rc "$({ n=0; for i in 1 2 3; do f structure.r1 LOW "x$i.tf" "$i" "Same." "Same."; done; } | list g3b)" "$(R556 g3b '.behaviour.triggers[0] |= (.state = "verified" | .outstanding = [] | del(.evidence_digest))')"; std "a group of three"
+rc "$({ n=0; for i in 1 2 3; do f structure.wrong-file LOW "x$i.tf" "$i" "Same." "Same."; done; } | list g3b)" "$(R556 g3b '.behaviour.triggers[0] |= (.state = "verified" | .outstanding = [] | del(.evidence_digest))')"; std "a group of three"
 t_routed() {
   n=0
-  { for i in 1 2 3; do f "structure.r$i" LOW "x$i.tf" "$i" "S$i." "F$i."; done
+  { for i in 1 2 3; do f "$(rid $i)" LOW "x$i.tf" "$i" "S$i." "F$i."; done
     f structure.argument-order LOW main.tf 43 '`tags` is not the last argument.' 'Move `tags` last.' "$PRE"; } | list routed > /dev/null
   rc "$TMP/routed.json" "$(R556 routed '.behaviour.triggers[0] |= (.state = "verified" | .outstanding = [] | del(.evidence_digest))')"
   [ "$(tier)" = COMPACT ] && [ "$(grep -c '^- LOW ' "$O/comment.md")" = 3 ] &&
@@ -1615,7 +1650,7 @@ t_vgap() { rc "$(F556)" "$TMP/run-r556-vgap.json"; [ "$(tier)" = STANDARD ]; }
 t_over() { render "$(F556)" "$H556" "" "$(R556 overm)" "$TMP/a-351.txt"; [ "$ST" = 2 ] && empty_out; }
 t_force() { rc "$(F556)" "$(R556 force)" "" --standard; [ "$(tier)" = STANDARD ]; }
 t_root_rule0_item() { t_root_rule0; [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] Resolve `compat.claim-contradicts-analysis`: see its Fix under Findings.'; }
-t_root_one_item() { t_root_one; [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] Resolve `scope.description-only`: see its Fix under Findings.'; }
+t_root_one_item() { t_root_one; [ "$ST" = 0 ] && todo | grep -qxF -- '- [ ] Resolve `scope.boundary`: see its Fix under Findings.'; }
 
 # Negative self-check for the tier rules.
 mutate "the subset-of-union test dropped" 's/if \(\$t\.outstanding - \[\$e\[\]\.explains\[\]\]\) == \[\] then/if true then/' t_partial
@@ -2077,7 +2112,8 @@ fi
 na() { # render args: the script under test, beside a host-records.jq that takes not-applicable
   # on every state: the host pass refuses it on an open pull request, and the render must still
   # read it as unknown there, so the copy drops that guard (or adds the value to an older grammar).
-  local keep="$RCU" d="$TMP/na-$oc"; mkdir -p "$d"
+  local keep="$RCU" d="$TMP/na-$oc/terraform-module-pr-review/references" rr="$TMP/na-$oc/terraform-module-reviewer/references"
+  mkdir -p "$d" "$rr"; cp "$RF" "$rr/"
   cp "$(dirname "$RCU")/render-comment.sh" "$(dirname "$RCU")/render-comment.jq" "$REF/host-records.jq" "$REF/host-pass.sh" "$d/"
   perl -0pi -e 's/\n[^\n]*\n  and \(\.signals\.mergeability != "not-applicable" or \.state\.state == "closed"\)//;
     s/\(\.mergeability \| IN\(("pass", "fail", "unknown")\)\)/(.mergeability | IN($1, "not-applicable"))/' "$d/host-records.jq"
