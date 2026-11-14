@@ -302,9 +302,10 @@ pin_mode() {
     local $/; my $s = <$h>; $s = "" unless defined $s;
     exit print "unknown pin unreadable\n" if $s =~ /[^\x20-\x7e\t\n]/;
     # The reader fails closed rather than out-parse YAML: a form a loader could read another pin
-    # from is no evidence. A backslash (an escape in a quoted scalar), a document marker, or more
-    # than one top-level repos key; an option that moves the hook to another provider.
-    exit print "unknown pin unreadable\n" if $s =~ /\\/ || $s =~ /^(---|\.\.\.)([ \t]|$)/m;
+    # from is no evidence. A backslash (an escape in a quoted scalar) or more than one top-level
+    # repos key; an option that moves the hook to another provider. The line form below refuses
+    # a document marker.
+    exit print "unknown pin unreadable\n" if $s =~ /\\/;
     exit print "unknown pin unreadable\n" if (() = $s =~ /^["\x27]?repos["\x27]?[ \t]*:/gmi) > 1;
     exit print "unknown hook options\n" if $s =~ /module-repo-provider/i;
     # Per line, outside quoted text and comments: no quote left open (a multi-line scalar), no flow
@@ -327,9 +328,12 @@ pin_mode() {
     my $url = qr{https://github\.com/antonbabenko/pre-commit-terraform(?:\.git)?};
     my ($in, @e) = (0);
     for (split /\n/, $s) {
+      # Each line is a comment, a blank, a list item or a key with a space after its colon, so no
+      # plain scalar continues onto a line the reader would take for a key or a value.
+      exit print "unknown pin unreadable\n" unless /^[ \t]*(#|$)/ || /^[ \t]*-([ \t]|$)/ || /^[ \t]*["\x27]?[A-Za-z_][A-Za-z0-9_.-]*["\x27]?:([ \t]|$)/;
       my ($repo, $rev);
-      $repo = $2 if /^[ \t]*-[ \t]+repo:[ \t]*(["\x27]?)(\S+?)\1[ \t]*(#.*)?$/;
-      $rev = $2 if /^[ \t]+rev:[ \t]*(["\x27]?)([^"\x27\s#]+)\1[ \t]*(#.*)?$/;
+      $repo = $2 if /^[ \t]*-[ \t]+repo:[ \t]+(["\x27]?)(\S+?)\1[ \t]*(#.*)?$/;
+      $rev = $2 if /^[ \t]+rev:[ \t]+(["\x27]?)([^"\x27\s#]+)\1[ \t]*(#.*)?$/;
       # A repo or rev key in any other spelling, a duplicate a YAML loader would keep last included.
       exit print "unknown pin unreadable\n" if /^[ \t]*(-[ \t]+)?["\x27]?(repo|rev)["\x27]?[ \t]*:/i && !defined $repo && !defined $rev;
       # A repo URL outside a plain https form, a percent escape for one, could name the repository
@@ -339,7 +343,7 @@ pin_mode() {
       if (/^\S/) { $in = 0; next }
       next unless $in;
       push @{$e[-1]{rev}}, $rev if defined $rev;
-      $e[-1]{hook} = 1 if /^[ \t]*-[ \t]+id:[ \t]*(["\x27]?)terraform_wrapper_module_for_each\1[ \t]*(#.*)?$/;
+      $e[-1]{hook} = 1 if /^[ \t]*-[ \t]+id:[ \t]+(["\x27]?)terraform_wrapper_module_for_each\1[ \t]*(#.*)?$/;
     }
     # Every mention of the repository name, in any letter case and under any owner or host, is the
     # one entry read, and so is every mention of the hook, so no other entry, a fork included, hides
