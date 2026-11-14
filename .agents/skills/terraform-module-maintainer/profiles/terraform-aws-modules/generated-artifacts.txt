@@ -1,0 +1,5 @@
+# Generators the generated-only mode of terraform-module-pr-fix runs for this family, and where
+# the family's CI pins terraform-docs (profile-format.md, Generated artifacts). One directive per line.
+generator wrapper-versions
+generator terraform-docs
+terraform-docs-pin .github/workflows/pre-commit.yml TERRAFORM_DOCS_VERSION

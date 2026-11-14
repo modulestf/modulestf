@@ -14,6 +14,7 @@
 #   fix-run.sh wrappers <run> --round <n>   the staging check and the wrapper versions.tf files
 #   fix-run.sh docs <run> --round <n>    the staging check and the terraform-docs pass on the work tree
 #   fix-run.sh commit <run> --round <n>  the round's one commit, with the user's identity, judged first
+#   fix-run.sh generate <run>            the generated-only mode: wrappers and docs at the pinned head, one commit
 #   fix-run.sh verify <run> --round <n>  pr-review's verify-pass.sh on the round, and the review task
 #   fix-run.sh compare <run> --round <n> --findings <file>   fingerprints, verdict, loop decision
 #   fix-run.sh gate <run>                the content gate, the push precondition, the gate summary
@@ -96,7 +97,7 @@ ginit() { # dir [--bare]: a new repository with no template and no inherited con
 
 # The files later commands trust, bound by their digests (write-path.md, Trust files). The
 # record lives in the output directory, outside the run; every command but cleanup checks it.
-TRUST_FILES="state.json commit-identity.json out.txt run.json merge-base.json config-keys.txt clone/.git/config items.json round0-findings.json apply.txt prose.txt"
+TRUST_FILES="state.json commit-identity.json out.txt run.json merge-base.json config-keys.txt clone/.git/config items.json round0-findings.json apply.txt prose.txt generate/commit.txt generate/report.txt"
 trust_lines() {
   local f k list="$TRUST_FILES"
   # A compared round adds the files the loop and the gate decide from; its review.json marks it.
@@ -419,6 +420,7 @@ findings_at() { # round: its findings, repository-relative; from round 1 on, the
 }
 
 cmd_round() {
+  [ ! -e "$RUN/generate" ] || fail "this run is generated-only: no round runs"
   [ -f "$RUN/items.json" ] && [ -d "$RUN/clone" ] || fail "round needs the item set and the fix clone"
   [ "$(path_now | jq -r .path)" != render-only ] || fail "the write path is render-only: no round runs"
   local n=1 k last
@@ -807,8 +809,9 @@ wrap_pairs() { # trees...: the mapped wrapper paths that exist in any of them, N
       if [ "$p" = error ]; then printf 'error\0'; elif wmod "$p" > /dev/null; then printf '%s\0' "$p"; fi
     done
 }
-in_scope() { # tree, wrapper, module: either file differs between the pinned head and the tree
-  [ "$(entry_at "$PINNED" "$2")" != "$(entry_at "$1" "$2")" ] || [ "$(entry_at "$PINNED" "$3")" != "$(entry_at "$1" "$3")" ]
+in_scope() { # tree, wrapper, module [, from]: either file differs between the pinned head (or from) and the tree
+  local f="${4:-$PINNED}"
+  [ "$(entry_at "$f" "$2")" != "$(entry_at "$1" "$2")" ] || [ "$(entry_at "$f" "$3")" != "$(entry_at "$1" "$3")" ]
 }
 # The out-of-date check: each pair in scope that passes the convention test and the author-edit guard
 # has its wrapper equal to derive of its module in the tree. Prints each refusal; a pair in scope that
@@ -831,34 +834,44 @@ cmd_wrappers() {
   if ! stage_check pre > "$RUN/stage.out"; then
     head -n 20 "$RUN/stage.out"; restore; fail "the wrappers step refuses; round $ROUND counts as failed"
   fi
+  # A body that refuses after writing the work tree leaves it restored.
+  local why; why="$(wrappers_body "$RD/wrappers.txt" 2>&1)" || { restore; fail "${why#fix-run.sh: }"; }
+  head -n 20 "$RD/wrappers.txt" | sed 's/^/wrappers: /'
+  echo "next: docs $RUN --round $ROUND"
+}
+wrappers_body() { # results file [, scope from]: each mapped pair's result; scope is the pinned head unless given
   local d="$RUN/wrap" base wt p m r
   rm -rf "$d"; mkdir "$d"
   base="$(baseline_tree)" && wt="$(wt_tree)" || fail "the wrappers step cannot read the trees"
-  : > "$RD/wrappers.txt"
+  : > "$1"
   while IFS= read -r -d '' p; do
     [ "$p" != error ] || fail "the wrappers step cannot list the baseline tree"
     m="$(wmod "$p")" || continue
-    if ! in_scope "$wt" "$p" "$m"; then r="skipped $p"
+    if ! in_scope "$wt" "$p" "$m" "${2-}"; then r="skipped $p"
     elif ! blob_at "$base" "$p" "$d/bw" || ! blob_at "$base" "$m" "$d/bm"; then r="stale $p not a blob at the baseline"
     else
       pair_conv_guard "$p" "$m"
       r="$(cd "$RUN/clone" && perl -e "$WRAP_PL" step "$p" "$m" "$d/bw" "$CONV" "$GUARD")" || r="stale $p the step failed"
     fi
-    printf '%s\n' "$r" >> "$RD/wrappers.txt"
+    printf '%s\n' "$r" >> "$1"
   done < <(wrap_pairs "$base")
-  [ -s "$RD/wrappers.txt" ] || echo "no wrapper pair" > "$RD/wrappers.txt"
+  [ -s "$1" ] || echo "no wrapper pair" > "$1"
   # After the step: each pair in scope that passes both tests is up to date, or commit refuses.
-  wt="$(wt_tree)" && wrap_check "$wt" /dev/null >> "$RD/wrappers.txt"
-  head -n 20 "$RD/wrappers.txt" | sed 's/^/wrappers: /'
-  echo "next: docs $RUN --round $ROUND"
+  wt="$(wt_tree)" || fail "the wrappers step cannot read the work tree"
+  wrap_check "$wt" /dev/null >> "$1"
 }
 
 cmd_docs() {
   round_arg "$@"
-  local d="$RUN/docs" why
   if ! stage_check > "$RUN/stage.out"; then
     head -n 20 "$RUN/stage.out"; restore; fail "the docs step refuses; round $ROUND counts as failed"
   fi
+  local why; why="$(docs_body "$RD/docs.txt" 2>&1)" || { restore; fail "${why#fix-run.sh: }"; }
+  head -n 20 "$RD/docs.txt" | sed 's/^/docs: /'
+  echo "next: commit $RUN --round $ROUND"
+}
+docs_body() { # results file [, reason]: the docs pass on the selection; with a reason, each entry is unknown with it and nothing runs
+  local d="$RUN/docs"
   rm -rf "$d"; mkdir "$d"
   # The selection rule on the work tree: the frozen merge base against it, untracked files included.
   { G diff --no-ext-diff --no-textconv --name-only -z --no-renames "$FMB" && G ls-files -z --others; } > "$d/tf" 2> /dev/null ||
@@ -882,10 +895,9 @@ cmd_docs() {
     out="$(jq -c --arg m "$m" --arg s "$stale" '. + [{readme: $m, stale: (if $s == "" then null else $s end)}]' <<< "$out")"
   done < <(jq -r '.[] | [.readme, (.readme | split("/") | .[:-1] | join("/"))] | @tsv' "$d/cand.json")
   jq -c --argjson o "$out" '[.[] | .readme as $r | ($o[] | select(.readme == $r)) as $x | .stale = $x.stale]' "$d/cand.json" > "$d/sel.json"
-  if [ "$(jq length "$d/sel.json")" = 0 ]; then echo "no README selected" > "$RD/docs.txt"
-  else docs_run "$RUN/clone" "$d/sel.json" > "$RD/docs.txt"; fi
-  head -n 20 "$RD/docs.txt" | sed 's/^/docs: /'
-  echo "next: commit $RUN --round $ROUND"
+  if [ "$(jq length "$d/sel.json")" = 0 ]; then echo "no README selected" > "$1"
+  elif [ -n "${2-}" ]; then jq -r --arg r "$2" '.[] | "unknown \(.label) \($r)"' "$d/sel.json" > "$1"
+  else docs_run "$RUN/clone" "$d/sel.json" > "$1"; fi
 }
 
 cmd_commit() {
@@ -916,6 +928,139 @@ cmd_commit() {
   G update-ref --no-deref -m "pr-fix round $ROUND" HEAD "$c" "$par" || fail "git update-ref failed"
   printf '%s\n' "$c" > "$RD/commit.txt"
   echo "commit: $c by $name <$email>"
+}
+
+# --- Generated-only (write-path.md, Generated-Only) ---------------------------------------------
+
+# The run's profile directory, from this skill's checkout: the one the run named, else the default.
+profile_dir() { printf '%s\n' "$MNT/profiles/$(jq -r '.module_profile // "" | if . == "" then "terraform-aws-modules" else . end' "$RUN/run.json")"; }
+profile_file() { printf '%s\n' "$(profile_dir)/PROFILE.md"; }
+# The profile's generated-artifacts.txt (profile-format.md, Generated artifacts) into GENS (the
+# generators, "none" when the file is absent or names none) and PIN (the pin location). 1 when malformed.
+GEN_PIN_RE='^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)* [A-Z][A-Z0-9_]{0,63}$'
+gen_decl() {
+  local f l w=0 t=0 np=0
+  GENS=""; PIN=""
+  f="$(profile_dir)/generated-artifacts.txt"
+  [ -e "$f" ] || [ -L "$f" ] || { GENS=none; return 0; }
+  [ -f "$f" ] && [ ! -L "$f" ] && [ "$(wc -c < "$f")" -le 4096 ] || return 1
+  while IFS= read -r l || [ -n "$l" ]; do
+    case "$l" in
+      '' | '#'*) ;;
+      'generator wrapper-versions') w=$((w + 1)) ;;
+      'generator terraform-docs') t=$((t + 1)) ;;
+      'terraform-docs-pin '*) PIN="${l#terraform-docs-pin }"; np=$((np + 1))
+        [[ "$PIN" =~ $GEN_PIN_RE ]] && [[ "/${PIN% *}/" != */../* ]] || return 1 ;;
+      *) return 1 ;;
+    esac
+  done < "$f"
+  [ "$w" -le 1 ] && [ "$t" -le 1 ] && [ "$np" = "$t" ] || return 1
+  [ "$w" = 0 ] || GENS="wrapper-versions"
+  [ "$t" = 0 ] || GENS="${GENS:+$GENS }terraform-docs"
+  [ -n "$GENS" ] || GENS=none
+}
+# The terraform-docs version a tree pins, read as data from one blob: "v<x.y.z>", or "pin missing"
+# (no file, no line) or "pin unreadable" (not a 100644 blob, over 64 KiB, two lines, another form).
+docs_pin() { # tree
+  local e re=$'^100644 blob ([0-9a-f]{40,64})\t(.*)$' path="${PIN% *}" var="${PIN#* }" n
+  e="$(entry_at "$1" "$path")"
+  [ -n "$e" ] || { echo "pin missing"; return; }
+  [[ "$e" =~ $re ]] && [ "${BASH_REMATCH[2]}" = "$path" ] && n="$(G cat-file -s "${BASH_REMATCH[1]}" 2> /dev/null)" &&
+    [ "$n" -le 65536 ] && G cat-file blob "${BASH_REMATCH[1]}" > "$RUN/generate/pin" 2> /dev/null || { echo "pin unreadable"; return; }
+  # A NUL byte makes grep read the blob as binary; such a file is no pin.
+  [ "$(tr -d '\000' < "$RUN/generate/pin" | wc -c | tr -d ' ')" = "$n" ] || { echo "pin unreadable"; return; }
+  n="$(grep -cE "^ *$var:" "$RUN/generate/pin")"
+  if [ "$n" = 0 ]; then echo "pin missing"
+  elif [ "$n" = 1 ] && grep -E "^ *$var: v[0-9]+\.[0-9]+\.[0-9]+$" "$RUN/generate/pin" > "$RUN/generate/pin.line"; then
+    sed 's/.*: //' "$RUN/generate/pin.line"
+  else echo "pin unreadable"; fi
+}
+# The terraform-docs part runs only when the frozen merge base and the pinned head both pin the
+# profile's version: empty when they do, else the reason every README is unknown with.
+docs_guard() { # file the "terraform-docs pin:" line goes to
+  local v b h
+  v="$(bash "$MNT/references/terraform-docs-pass.sh" --profile "$(profile_file)" --print-constants 2> /dev/null | sed -n 's/^version //p')"
+  [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "the profile's terraform-docs version cannot be read"; return 1; }
+  b="$(docs_pin "$FMB")"; h="$(docs_pin "$PINNED")"
+  echo "terraform-docs pin: merge base $b, head $h, profile $v" >> "$1"
+  case "$b $h" in
+    *unreadable*) echo "pin unreadable" ;;
+    *missing*) echo "pin missing" ;;
+    *) [ "$b" = "$v" ] && [ "$h" = "$v" ] || echo "pin differs" ;;
+  esac
+}
+# A README.md's bytes outside its BEGIN_TF_DOCS interiors equal the parent's: parent file, new file.
+OUTSIDE_PL='local $/; my @s; for my $f (@ARGV) { open(my $h, "<:raw", $f) or exit 2; my $x = <$h>; $x = "" unless defined $x;
+  $x =~ s/(^<!-- BEGIN_TF_DOCS -->\n).*?(^<!-- END_TF_DOCS -->\n)/$1$2/msg; push @s, $x } exit($s[0] eq $s[1] ? 0 : 1);'
+# The generated-only test of one commit against its parent: each changed path is a mapped wrapper
+# versions.tf the clause 3 exception admits, or a modified README.md whose bytes outside the
+# BEGIN_TF_DOCS interiors equal the parent's (clause 6 judges the interiors). Prints each refusal.
+gen_only() { # parent, commit
+  local d="$RUN/gen" st p ex bad=0
+  rm -rf "$d"; mkdir "$d"
+  G diff-tree -r -z --name-only --no-renames "$1" "$2" > "$d/names" 2> /dev/null &&
+    G diff-tree -r -z --name-status --no-renames "$1" "$2" > "$d/st" 2> /dev/null || { echo "not generated-only: $2: git diff-tree failed"; return 1; }
+  ex="$(wrap_except "$2" "$d/names")" || ex='[]'
+  while IFS= read -r -d '' st && IFS= read -r -d '' p; do
+    if [ "$st" = M ] && jq -e --arg p "$p" 'any(.[]; . == $p)' <<< "$ex" > /dev/null; then continue; fi
+    if [ "$st" = M ] && [ "${p##*/}" = README.md ] && G cat-file blob "$1:$p" > "$d/a" 2> /dev/null &&
+      G cat-file blob "$2:$p" > "$d/b" 2> /dev/null && perl -e "$OUTSIDE_PL" "$d/a" "$d/b"; then continue; fi
+    bad=1; echo "not generated-only: $2 $(printf '%s' "$p" | jq -Rr 'if test("^[ -~]{1,255}$") then . else tojson end')"
+  done < "$d/st"
+  [ "$bad" = 0 ]
+}
+# The generated-only checks of gate and push beyond each commit's test: HEAD is the commit generate
+# made, and a README change since the pinned head stands only while the terraform-docs pin is current.
+gen_gate() { # gate scratch directory
+  local why
+  frozen || { echo "$FROZEN_NO"; return; }
+  [ "$(G rev-parse HEAD 2> /dev/null)" = "$(cat "$RUN/generate/commit.txt")" ] || echo "HEAD is not the commit generate made"
+  G diff-tree -r -z --name-only --no-renames "$PINNED" HEAD > "$1/gen-names" 2> /dev/null || { echo "not generated-only: git diff-tree failed"; return; }
+  tr '\0' '\n' < "$1/gen-names" | grep -qE '(^|/)README\.md$' || return 0
+  gen_decl || { echo "the profile's generated-artifacts.txt is malformed"; return; }
+  case " $GENS " in *" terraform-docs "*) ;; *) echo "a README changed, but the profile declares no terraform-docs generator"; return ;; esac
+  why="$(docs_guard /dev/null)" || { echo "$why"; return; }
+  [ -z "$why" ] || echo "a README changed while the terraform-docs pin is not current: $why"
+}
+GEN_MSG='chore: Regenerate generated files'
+cmd_generate() {
+  [ -d "$RUN/clone" ] && frozen || fail "generate needs the fix clone and its frozen merge base: clone $RUN first"
+  [ "$(path_now | jq -r .path)" != render-only ] || fail "the write path is render-only: nothing is generated"
+  jq -e '.commit_identity != null' "$RUN/state.json" > /dev/null || fail "no commit identity: the generated-only mode needs a commit"
+  [ ! -e "$RUN/generate" ] && [ ! -e "$RUN/rounds/1" ] || fail "generate runs once per run, before any round"
+  gen_decl || fail "the profile's generated-artifacts.txt is malformed"
+  [ "$GENS" != none ] || fail "the profile declares no generated artifacts: the generated-only mode refuses"
+  mkdir "$RUN/generate" || fail "no generate directory"
+  local r="$RUN/generate" why t c par name email
+  : > "$r/report.txt"
+  # From here every refusal restores the work tree and records the report as a trust file.
+  gen_fail() { restore; trust_record; fail "$1"; }
+  if ! stage_check pre > "$RUN/stage.out"; then head -n 20 "$RUN/stage.out"; gen_fail "the work tree is not the pinned head's"; fi
+  # Scope: what the mapping and the selection rule take from the merge base against the head.
+  case " $GENS " in
+    *" wrapper-versions "*) why="$(wrappers_body "$r/wrappers.txt" "$FMB" 2>&1)" || gen_fail "${why#fix-run.sh: }"
+      sed 's/^/wrappers: /' "$r/wrappers.txt" >> "$r/report.txt" ;;
+  esac
+  case " $GENS " in
+    *" terraform-docs "*) why="$(docs_guard "$r/report.txt")" || gen_fail "$why"
+      t="$(docs_body "$r/docs.txt" "$why" 2>&1)" || gen_fail "${t#fix-run.sh: }"
+      sed 's/^/terraform-docs: /' "$r/docs.txt" >> "$r/report.txt" ;;
+  esac
+  head -n 24 "$r/report.txt"
+  par="$(G rev-parse -q --verify 'HEAD^{commit}')" && [ "$par" = "$PINNED" ] || gen_fail "HEAD is not the pinned head"
+  G add -A || gen_fail "git add failed"
+  t="$(G write-tree)" || gen_fail "git write-tree failed"
+  if [ "$t" = "$(G rev-parse "$par^{tree}")" ]; then gen_fail "generated-only: nothing regenerated; no commit, no push"; fi
+  name="$(jq -r '.commit_identity.name' "$RUN/state.json")"; email="$(jq -r '.commit_identity.email' "$RUN/state.json")"
+  c="$(printf '%s\n' "$GEN_MSG" | G -c user.name="$name" -c user.email="$email" commit-tree "$t" -p "$par" -F -)" && [[ "$c" =~ $sha_re ]] ||
+    gen_fail "git commit-tree failed"
+  { rule "$par" "$c" && wrap_check "$t" /dev/null && gen_only "$par" "$c"; } > "$RUN/rule.out"
+  if [ "$?" != 0 ] || [ -s "$RUN/rule.out" ]; then head -n 20 "$RUN/rule.out"; gen_fail "generate refused: the commit is not generated-only"; fi
+  G update-ref --no-deref -m "pr-fix generated-only" HEAD "$c" "$par" || gen_fail "git update-ref failed"
+  printf '%s\n' "$c" > "$r/commit.txt"
+  trust_record
+  echo "commit: $c by $name <$email>"
+  echo "next: gate $RUN"
 }
 
 # The round's tree as a commit: HEAD when the work tree is clean, else a throwaway commit object
@@ -1074,12 +1219,14 @@ cmd_compare() {
 # The content gate (write-path.md, Content gate) and the push precondition; prints its refusals.
 gate_check() {
   local r="$RUN/gate"; rm -rf "$r"; mkdir "$r"
-  [ -f "$RUN/reviewed.json" ] || { echo "no round was reviewed"; return 1; }
+  # With no reviewed round, only a generated-only run passes, judged commit by commit below.
+  local gen=""
+  if [ ! -f "$RUN/reviewed.json" ]; then [ -s "$RUN/generate/commit.txt" ] || { echo "no round was reviewed"; return 1; }; gen=1; fi
   local last; last="$(last_reviewed)"
   # The local configuration holds only the keys this run wrote.
   G config --local --list | LC_ALL=C sort | cmp -s - "$RUN/config-keys.txt" || echo "the clone's local config changed"
   G add -A > /dev/null 2>&1
-  [ "$(G write-tree)" = "$(jq -r '.tree' "$RUN/reviewed.json")" ] || echo "the tree is not the last reviewed tree"
+  [ -n "$gen" ] || [ "$(G write-tree)" = "$(jq -r '.tree' "$RUN/reviewed.json")" ] || echo "the tree is not the last reviewed tree"
   local name email ncommits
   name="$(jq -r '.commit_identity.name // ""' "$RUN/state.json")"; email="$(jq -r '.commit_identity.email // ""' "$RUN/state.json")"
   ncommits="$(G rev-list --count "$PINNED..HEAD" 2> /dev/null)" || ncommits=x
@@ -1120,6 +1267,7 @@ gate_check() {
     if G rev-list --reverse --parents "$PINNED..HEAD" > "$r/commits" 2> /dev/null; then
       while read -r c p1 rest <&3; do
         if [ -n "$p1" ]; then rule "$p1" "$c" < /dev/null; else echo "path rule refused: $c has no parent"; fi
+        [ -z "$gen" ] || [ -z "$p1" ] || gen_only "$p1" "$c" < /dev/null
       done 3< "$r/commits"
     else echo "path rule refused: git rev-list failed"; fi
   else
@@ -1130,6 +1278,13 @@ gate_check() {
   : > "$r/info.txt"
   if [ -n "$name" ]; then c="$(G rev-parse -q --verify 'HEAD^{tree}' 2> /dev/null)"; else c="$(G write-tree 2> /dev/null)"; fi
   if [[ "$c" =~ $sha_re ]]; then wrap_check "$c" "$r/info.txt"; else echo "path rule refused: the tree to push cannot be read"; fi
+  # A generated-only run has no review and no item: its information is every line of the generate
+  # report that is not a success, so a skip never looks like one.
+  if [ -n "$gen" ]; then
+    gen_gate "$r"
+    grep -E '^(wrappers|terraform-docs): (unknown|stale|not-convention|skipped) |^terraform-docs pin: ' "$RUN/generate/report.txt" >> "$r/info.txt"
+    return 0
+  fi
   jq -r '.unattributed[] | "unattributed: \(.rule_id) \(.file) \(.severity)"' "$RUN/rounds/$last/review.json" >> "$r/info.txt"
   # The push precondition: at least one item resolved, no MEDIUM or higher introduced.
   local disp='[]' k
@@ -1172,10 +1327,15 @@ cmd_gate() {
     echo "applied: $OUT/applied.json"
   fi
   G diff --cached --stat --no-ext-diff --no-textconv "$PINNED" | tail -n 8
-  jq -r '"verdict: \(.verdict) at round \(.round)"' "$RUN/rounds/$last/review.json"
-  # Information only: the pairs that fail the convention test and the unattributed findings.
+  # Information only: the pairs that fail the convention test and the unattributed findings, or for
+  # a generated-only run each line of its report that is not a success, all of them, so a skip never
+  # hides behind a cap.
   local ni; ni="$(wc -l < "$RUN/gate/info.txt" | tr -d ' ')"
-  if [ "$ni" -le 6 ]; then cat "$RUN/gate/info.txt"; else head -n 5 "$RUN/gate/info.txt"; echo "information: $((ni - 5)) more lines in $RUN/gate/info.txt"; fi
+  if [ "$last" = 0 ]; then echo "verdict: none, a generated-only commit with no review round"; cat "$RUN/gate/info.txt"
+  else
+    jq -r '"verdict: \(.verdict) at round \(.round)"' "$RUN/rounds/$last/review.json"
+    if [ "$ni" -le 6 ]; then cat "$RUN/gate/info.txt"; else head -n 5 "$RUN/gate/info.txt"; echo "information: $((ni - 5)) more lines in $RUN/gate/info.txt"; fi
+  fi
   jq -r '"author: " + (if .commit_identity then "\(.commit_identity.name) <\(.commit_identity.email)>" else "none, patch only" end)' "$RUN/state.json"
   jq -r --arg h "$head" '"write path: \(.path)", (select(.path == "A") |
     "push: \(.dest.url) \($h):refs/heads/\(.dest.ref)", "expected remote SHA: \(.dest.expected_sha)"),
@@ -1247,7 +1407,9 @@ cmd_push() {
   [ "$es" = "$PINNED" ] || fail "--expect-sha is not the pinned head"
   # The confirmation binds the push to what the user saw at the gate: the new SHA and the patch.
   [[ "$ch" =~ $sha_re ]] && [ "$(G rev-parse HEAD)" = "$ch" ] || fail "HEAD is not the head the confirmation names"
-  [ "$(G rev-parse "$ch^{tree}")" = "$(jq -r '.tree // ""' "$RUN/reviewed.json" 2> /dev/null)" ] || fail "the confirmed head's tree is not the reviewed tree"
+  # A generated-only run has no reviewed tree; the gate below judges each of its commits instead.
+  [ ! -f "$RUN/reviewed.json" ] && [ -s "$RUN/generate/commit.txt" ] ||
+    [ "$(G rev-parse "$ch^{tree}")" = "$(jq -r '.tree // ""' "$RUN/reviewed.json" 2> /dev/null)" ] || fail "the confirmed head's tree is not the reviewed tree"
   [[ "$cp" =~ ^[0-9a-f]{64}$ ]] && [ "$(fix_patch "$ch" | shasum -a 256 | cut -d' ' -f1)" = "$cp" ] ||
     fail "the patch differs from the digest the confirmation names"
   local why; why="$(gate_check 2>&1)"
@@ -1296,6 +1458,7 @@ cmd_push() {
   echo "pushed: $sha to $url $ref"
   [ "$remote" = "$sha" ] && echo "remote ref: $sha" || echo "remote ref: does not equal the pushed SHA; stop and report"
   echo "checks: pending right after a push, the run is not finished yet; next: checks $RUN"
+  [ ! -s "$RUN/generate/commit.txt" ] || echo "next: a terraform-module-pr-review run at $sha, the new head"
 }
 
 cmd_checks() {
@@ -1307,8 +1470,10 @@ cmd_checks() {
   get runs "repos/$repo/commits/$sha/check-runs?per_page=100" runs || ok=false
   get statuses "repos/$repo/commits/$sha/statuses?per_page=100" pages || ok=false
   local last; last="$(last_reviewed)"
+  local vf="$RUN/rounds/$last/review.json"
+  [ "$last" != 0 ] || { echo '{"verdict": "generated-only"}' > "$RAW/v.json"; vf="$RAW/v.json"; }
   J -n -r --argjson ok "$ok" --slurpfile r "$RAW/runs.json" --slurpfile s "$RAW/statuses.json" --slurpfile st "$RUN/state.json" \
-    --slurpfile v "$RUN/rounds/$last/review.json" 'include "fix-run"; include "stage-contract";
+    --slurpfile v "$vf" 'include "fix-run"; include "stage-contract";
     ({ok: $ok, runs: ($r[0] // []), statuses: ($s[0] // []), pinned_total: $st[0].checks_pinned.total} | checks_class) as $c |
     "checks: \($c.class), \($c.reason)",
     (if $c.class == "passing" and ($v[0].verdict | IN("clean", "nits")) then "finished: \($v[0].verdict), checks passing"
@@ -1422,10 +1587,10 @@ cmd_cleanup() {
   echo "cleanup: run directory deleted; kept: $OUT"
 }
 
-cmd="${1-}"; CMD="$cmd"; shift || die "usage: fix-run.sh <prepare|clone|path|items|apply|round|wrappers|docs|commit|verify|compare|gate|push|checks|replies|cleanup> ..."
+cmd="${1-}"; CMD="$cmd"; shift || die "usage: fix-run.sh <prepare|clone|path|items|apply|round|wrappers|docs|commit|generate|verify|compare|gate|push|checks|replies|cleanup> ..."
 case "$cmd" in
   prepare) cmd_prepare "$@" ;;
-  clone | path | items | apply | round | wrappers | docs | commit | verify | compare | gate | push | checks | replies | cleanup)
+  clone | path | items | apply | round | wrappers | docs | commit | generate | verify | compare | gate | push | checks | replies | cleanup)
     run_dir="${1-}"; shift || die "$cmd needs the run directory"
     RUN=""; open_run "$run_dir"
     case "$cmd" in
@@ -1437,6 +1602,7 @@ case "$cmd" in
       wrappers) cmd_wrappers "$@" ;;
       docs) cmd_docs "$@" ;;
       commit) cmd_commit "$@" ;;
+      generate) cmd_generate ;;
       verify) cmd_verify "$@" ;;
       compare) cmd_compare "$@" ;;
       gate) cmd_gate ;;

@@ -151,3 +151,15 @@ fix-run.sh cleanup "$RUN"
 ```
 
 on every path, a refused or stopped run included. The output directory is kept.
+
+## Generated-Only
+
+A run of its own, before any review, when the user asks to bring the pull request's generated files up to date ([Generated-Only](write-path.md#generated-only)). After Step 0 and Step 1, with the module root prefix, empty for a module at the repository root:
+
+```
+fix-run.sh clone "$RUN" --prefix <prefix>
+fix-run.sh generate "$RUN"
+fix-run.sh gate "$RUN"
+```
+
+`generate` prints each wrapper pair and each README with its result, the `terraform-docs pin:` line and the commit. It refuses for a profile that declares no generated artifacts, and when nothing was regenerated. Show the gate as Step 11 says, with every `unknown`, `stale`, `not-convention` and `skipped` line it prints; it prints all of them, past the usual 30 lines, so a skip never reads as success. Only the user's confirmation that names the push, the branch and the new SHA confirms it; then `push` as in Step 11, and `cleanup`. The next step is a `terraform-module-pr-review` run at the new head, which this run does not make.
