@@ -373,5 +373,94 @@ check "a --schema that is a link is a usage error" "$([ $? = 2 ]; echo $?)"
 setup; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --schema "$TMP/missing.json" --out "$O" > /dev/null 2>&1
 check "a missing --schema is a usage error" "$([ $? = 2 ]; echo $?)"
 
+# --- The plan coverage in the module root frame. With a module root prefix the triggers are
+# module-relative and the coverage in the ladder record repository-relative, so eval moves each
+# example and module call directory into the module root frame before claims-eval reads it.
+IRSA=modules/iam-role-for-service-accounts
+jq --arg p "$IRSA" '[.[0] + {filename: ($p + "/policies.tf")}]' "$TMP/files.json" > "$TMP/files-irsa.json"
+jq '.entries = [{path: "policies.tf", change_kind: "modified", inert: false, trigger_ids: ["T-001", "T-002"]}]
+  | .triggers |= map(.file = "policies.tf" | .line = 3 | .address = "aws_iam_policy.this" | .attribute = "policy" | .levels = ["L4"])' \
+  "$TMP/behaviour-556.json" > "$TMP/behaviour-irsa.json"
+# A repository root example that calls the submodule, another submodule, a sibling whose name
+# starts with the prefix, the repository root and a path that climbs out; an example inside the
+# module root; an example with no module call.
+jq -n --arg h "$HEAD" --arg b "$BASE" --arg p "$IRSA" '{schema_version: 1, head_sha: $h, base_sha: $b,
+  terraform_version: "1.9.8", pins: [], runs: [], coverage: {class: "complete", examples: [
+   {dir: "examples/iam-role-for-service-accounts", head: "planned", base: null,
+    addresses: ["aws_iam_policy.this", "module.irsa.aws_iam_policy.this", "module.role.aws_iam_policy.this",
+                "module.v2.aws_iam_policy.this", "module.root.aws_iam_policy.this", "module.up.aws_iam_policy.this"],
+    attributes: {"module.irsa.aws_iam_policy.this": ["policy"]},
+    module_calls: {irsa: $p, role: "modules/iam-role", v2: ($p + "-v2"), root: ".", up: ($p + "/../iam-role")}},
+   {dir: ($p + "/examples/inner"), head: "planned", base: null, addresses: ["module.self.aws_iam_policy.this"],
+    module_calls: {self: $p, nested: ($p + "/modules/x")}},
+   {dir: "examples/plain", head: "planned", base: null, addresses: ["aws_iam_policy.this"]}]}}' > "$TMP/ladder-irsa.json"
+jq '.coverage.examples[0] |= (.dir = "/examples/iam-role-for-service-accounts" | .module_calls = {irsa: "."})
+  | .coverage.examples[1] |= (.dir = "examples/inner" | .module_calls = {self: ".", nested: "modules/x"})
+  | .coverage.examples[2].dir = "/examples/plain"' "$TMP/ladder-irsa.json" > "$TMP/want-ladder-irsa.json"
+# matched <example index> <plan address> <trigger address> <trigger directory>: addressMatch of
+# mtf-facts claims-eval on the ladder record it was handed.
+matched() {
+  jq -e --argjson i "$1" --arg a "$2" --arg t "$3" --arg d "$4" '.coverage.examples[$i] as $e
+    | if $e.dir == $d then $a == $t
+      else [$a | capture("^module\\.(?<c>[A-Za-z0-9_-]+)\\.(?<r>.+)$")] as $m
+        | ($m | length) == 1 and ($e.module_calls // {} | .[$m[0].c]) == $d and $m[0].r == $t end' \
+    "$TMP/ladder-seen.json" > /dev/null 2>&1
+}
+frame() { # the module root frame cases, under the BP in force
+  setup; cp "$TMP/behaviour-irsa.json" "$TMP/behaviour.out"
+  DIFF="$TMP/files-irsa.json" PFX="$IRSA" classify; evalp --ladder "$TMP/ladder-irsa.json" --prefix "$IRSA" --claims "$TMP/claims-556.json"
+  check "frame: eval runs claims-eval" "$(q '.status == "ran"')"
+  cmp -s <(jq -S . "$TMP/want-ladder-irsa.json") <(jq -S . "$TMP/ladder-seen.json"); check "frame: the coverage claims-eval gets is in the module root frame" $?
+  matched 0 module.irsa.aws_iam_policy.this aws_iam_policy.this .; check "frame: a submodule trigger is covered through the call whose source is the module root" $?
+  matched 1 module.self.aws_iam_policy.this aws_iam_policy.this .; check "frame: and through a call of an example inside the module root" $?
+  for a in role v2 root up; do
+    ! matched 0 "module.$a.aws_iam_policy.this" aws_iam_policy.this . && ! matched 0 "module.$a.aws_iam_policy.this" aws_iam_policy.this "$IRSA"
+    check "frame: the call $a outside the module root never matches" $?
+  done
+  ! matched 0 aws_iam_policy.this aws_iam_policy.this . && ! matched 2 aws_iam_policy.this aws_iam_policy.this .
+  check "frame: a resource of an example outside the module root never matches a trigger at its root" $?
+  matched 1 module.nested.aws_iam_policy.this aws_iam_policy.this modules/x; check "frame: a call to a directory below the module root keeps its relative path" $?
+  setup; cp "$TMP/behaviour-irsa.json" "$TMP/behaviour.out"
+  DIFF="$TMP/files-irsa.json" PFX="$IRSA" classify; evalp --ladder "$TMP/ladder-irsa.json" --prefix "$IRSA/"
+  cmp -s <(jq -S . "$TMP/want-ladder-irsa.json") <(jq -S . "$TMP/ladder-seen.json"); check "frame: a prefix with a trailing slash is the same frame" $?
+  # The root module, no prefix: the record crosses byte for byte, so the repository-relative
+  # call matches a repository-relative trigger as before.
+  setup; classify; evalp --ladder "$TMP/ladder-irsa.json"
+  cmp -s "$TMP/ladder-irsa.json" "$TMP/ladder-seen.json"; check "frame: with no prefix the record is passed as it is" $?
+  matched 0 module.irsa.aws_iam_policy.this aws_iam_policy.this "$IRSA"; check "frame: with no prefix the repository-relative call still matches" $?
+  setup; classify; evalp --ladder "$TMP/ladder-irsa.json" --prefix ""
+  cmp -s "$TMP/ladder-irsa.json" "$TMP/ladder-seen.json"; check "frame: an empty prefix is no prefix" $?
+  # With no ladder record, the empty one still reaches claims-eval with a prefix.
+  setup; classify; evalp --prefix "$IRSA"
+  jq -e '.coverage == {class: "none", examples: []}' "$TMP/ladder-seen.json" > /dev/null 2>&1; check "frame: the empty record with a prefix" $?
+  setup; classify; jq '.coverage.examples = "x"' "$TMP/ladder-irsa.json" > "$TMP/ladder-bad.json"; evalp --ladder "$TMP/ladder-bad.json" --prefix "$IRSA"
+  notrun "frame: coverage that cannot be rewritten" "ladder refused"
+  for p in ../x /abs . a/../b; do
+    setup; classify; evalp --ladder "$TMP/ladder-irsa.json" --prefix "$p"
+    check "frame: the prefix $p is a usage error" "$([ $? = 2 ] && [ ! -e "$O/record.txt" ]; echo $?)"
+  done
+}
+frame
+
+# --- Negative self-check: each mutation of a temp copy of behaviour-pass.sh must make the frame
+# cases fail.
+mc=0
+mutate() { # name, perl substitution
+  local d="$TMP/mut-$mc"; mc=$((mc + 1)); mkdir -p "$d"
+  cp "$BP" "$d/behaviour-pass.sh"; perl -0pi -e "$2" "$d/behaviour-pass.sh"
+  if cmp -s "$d/behaviour-pass.sh" "$BP"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
+  local keep="$BP" before="$fails"; BP="$d/behaviour-pass.sh"
+  frame > /dev/null 2>&1; local caught=$((fails - before))
+  BP="$keep"; fails="$before"
+  check "self-check: $1 is caught" "$([ "$caught" -gt 0 ]; echo $?)"
+}
+mutate "the coverage not rewritten" 's/  if \[ -n "\$prefix" \]; then\n    jq/  if false; then\n    jq/'
+mutate "the prefix matched without its slash" 's/startswith\(\$p \+ "\/"\)/startswith(\$p)/'
+mutate "a call outside the module root kept" 's/ \| select\(\.value != null\)//'
+mutate "an example outside the module root at the root" 's/\(rel \/\/ \("\/" \+ \.\)\)/(rel \/\/ ".")/'
+mutate "a path that climbs out kept" 's/ and \(split\("\/"\) \| all\(\. != "\.\."\)\)//'
+mutate "the prefix not checked" 's/  case "\$prefix" in [^\n]*\n//'
+mutate "the trailing slash kept" 's/  prefix="\$\{prefix%\/\}"\n//'
+
 echo
 if [ "$fails" -eq 0 ]; then echo "behaviour pass: all checks hold"; else echo "behaviour pass: $fails failed"; exit 1; fi
