@@ -291,7 +291,7 @@ run_rr render "$FV" --findings "$FX/reviewer/findings.json" --assessment "$FX/re
   --summary "$FX/reviewer/summary.txt" --out "$TMP/render-vbump" > "$TMP/r-vbump.out" 2>&1
 check "render: 8 of 9 examples skipped as a version bump only and 3 not planned render, each count stated once" \
   "$([ $? = 0 ] && [ "$(q "$FV/render/run-file.json" '.examples == {count: 9, skipped: 8, validated: 1} and .verify_gaps == []')" = 0 ] &&
-     grep -qF '`validate` passed in 1 of 9 examples; 6 were planned.' "$TMP/render-vbump/comment.md"; echo $?)"
+     grep -qF '`validate` passed in 1 of 9 examples and 8 were skipped as a version bump only; 6 were planned.' "$TMP/render-vbump/comment.md"; echo $?)"
 
 # --- 2. prepare to render on a light change with hostile names, through the real depth.sh ---------
 mkrepo widget; ghfiles open false CHANGES_REQUESTED

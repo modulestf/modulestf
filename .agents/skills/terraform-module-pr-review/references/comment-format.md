@@ -46,7 +46,7 @@ STANDARD is the structure of [Section Order](#section-order) with its caps: the 
 ### COMPACT sections
 
 1. The assessment: effect first, any surprise in one clause, no `validate` or `plan` results.
-2. The verdict line, host text: the bold verdict word; when a profile was named, `compact-validate-all` when every selected example passed `validate`, else `compact-validate-some`; with covered skips, the `compact-covered-one` or `compact-covered-many` sentence; at rule 4, `compact-not-checked` with one cause clause per cause, in table order, joined with `, `.
+2. The verdict line, host text: the bold verdict word; when a profile was named, `compact-validate-skipped` when an example was skipped as a version bump only, else `compact-validate-all` when every selected example passed `validate`, else `compact-validate-some`; with covered skips, the `compact-covered-one` or `compact-covered-many` sentence; at rule 4, `compact-not-checked` with one cause clause per cause, in table order, joined with `, `.
 3. At rule 4 only, the action line: `compact-action` with one action clause per cause, in table order, the last after `, and `.
 4. The findings: one `compact-finding` bullet each, in the order of the STANDARD findings section, with a `compact-fix` line under it. A finding with `source` tool, severity LOW and `predates_change` true, which says its rule fires on the base with the same subject, is routed: it renders as one `evidence-predates` line in the details block and does not count. A finding of any other severity renders here whatever its flag.
 5. One collapsed details block, `evidence-summary`, when it holds a line: `evidence-not-planned` with the examples not planned, or with covered skips, in its place, one line per skipped example, `evidence-covered` or `evidence-covered-downloaded`, then one `evidence-covered-by` line per distinct witness; one line joining an `evidence-reported` sentence per reported trigger and `evidence-claims-one` or `evidence-claims-many`; the `evidence-predates` lines; then the depth lines of the Review depth section, the lines of sections 6 and 8 as list items.
@@ -545,6 +545,7 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `behaviour-evidence-reported` | Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified. |
 | `compact-validate-all` | `validate` passed in all {count} examples; {planned} were planned. |
 | `compact-validate-some` | `validate` passed in {validated} of {count} examples; {planned} were planned. |
+| `compact-validate-skipped` | `validate` passed in {validated} of {count} examples and {skipped} were skipped as a version bump only; {planned} were planned. |
 | `compact-not-checked` | Not checked: {causes}. |
 | `compact-action` | To get a conclusive review: {actions}. |
 | `cause-description` | the description past 8000 bytes ({cut} cut) |

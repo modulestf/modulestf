@@ -1553,7 +1553,7 @@ refused "an unknown argument after --standard" "$G" "" "" "" "" --standard --com
 t_vbump() {
   rc "$(F556)" "$(R556 vbump '.examples = {count: 6, skipped: 5, validated: 1}')"
   [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 4 ] &&
-    cmp -s "$O/comment.md" <(sed -e 's/`validate` passed in all 9 examples; 6 were planned\./`validate` passed in 1 of 6 examples; 3 were planned./' \
+    cmp -s "$O/comment.md" <(sed -e 's/`validate` passed in all 9 examples; 6 were planned\./`validate` passed in 1 of 6 examples and 5 were skipped as a version bump only; 3 were planned./' \
       -e 's/3 of 9 examples not planned/3 of 6 examples not planned/' "$TMP/want-556.md")
 }
 t_vbump; check "examples: 5 of 6 skipped as a version bump only and 3 not planned render, byte for byte" $?
@@ -1701,6 +1701,13 @@ Dropping `compact()` fixes the plan: with an unknown group id the base kept the 
 EOF
 t_cov_gold() { rc "$(F556C)" "$(R556K kgold)" "$H556N"; [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 7 ] && cmp -s "$O/comment.md" "$TMP/want-556k.md"; }
 t_cov_gold; check "covered: pull request 556 with its skips covered renders COMPACT at rule 7, byte for byte" $?
+# Two examples skipped as a version bump only are a decision, no unknown: the skips stay covered.
+t_cov_vbump() {
+  rc "$(F556C)" "$(R556K kvbump '.examples = {count: 9, skipped: 2, validated: 7}')" "$H556N"
+  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 7 ] &&
+    cmp -s "$O/comment.md" <(sed 's/`validate` passed in all 9 examples; 6 were planned\./`validate` passed in 7 of 9 examples and 2 were skipped as a version bump only; 6 were planned./' "$TMP/want-556k.md")
+}
+t_cov_vbump; check "covered: version bump skips keep the covered skips at rule 7, byte for byte" $?
 check "covered: approve with nits proposes COMMENT" "$([ "$(verdict)" = "approve with nits COMMENT" ]; echo $?)"
 check "covered: findings.json lists the routed finding last" "$(jq -e 'map(.id) == ["F-001", "F-002", "F-003"]' "$O/findings.json" > /dev/null; echo $?)"
 
@@ -1910,6 +1917,8 @@ t_cov_one() {
 t_cov_one; check "covered: one skip takes the one form in both tiers, with the same count, and STANDARD names no notes" $?
 
 # Negative self-check for covered skips.
+mutate "version bump skips turn the covered skips off" 's/\$run\.examples\.validated \+ \$run\.examples\.skipped == \$run\.examples\.count/\$run.examples.validated == \$run.examples.count/' t_cov_vbump
+mutate "the version bump skips left out of the COMPACT verdict line" 's/if \$x\.skipped > 0 then "compact-validate-skipped" elif/if false then "" elif/' t_vbump
 mutate "covered skips still counted at rule 4" 's/ or \.unplanned_open > 0/ or .unplanned > 0/' t_cov_gold
 mutate "rule 8 reachable with covered skips" 's/elif has_sev\("LOW"\) or \.covered > 0 then/elif has_sev("LOW") then/' t_cov_rule8
 mutate "all or nothing dropped" 's/and all\(\$u\[\]; \. as \$x \| any\(\$cs\[\];/and all(\$u[]; true or any(\$cs[];/' t_cov_partial
@@ -1922,7 +1931,7 @@ mutate "a skipped example accepted as a witness" 's/and all\(\$cs\[\]\.witnesses
 mutate "trigger states not checked" 's/\n\s+and all\(\$b\.triggers\[\]; \.state \| IN\("verified", "covered", "inert", "reported"\)\)\n/\n/' t_cov_reftrig
 mutate "claim states not checked" 's/\n\s+and all\(\$b\.claims\[\]; \.state == "verified"\)\n/\n/' t_cov_refuted
 mutate "no trigger and no claim accepted" 's/ and \(\$b\.triggers \+ \$b\.claims\) != \[\]//' t_cov_zero
-mutate "validated below count accepted" 's/and \$run\.examples\.validated == \$run\.examples\.count//' t_cov_validated
+mutate "validated below count accepted" 's/and \$run\.examples\.validated \+ \$run\.examples\.skipped == \$run\.examples\.count//' t_cov_validated
 mutate "other gaps not checked" 's/and \$l\.gaps == 0 and/and/' t_cov_cut
 mutate "a triage run accepted" 's/and \(\$l\.triage \| not\)//' t_cov_triage
 mutate "unknown signals not checked" 's/and \(any\(\$l\.signals\[\]; \. == "unknown"\) \| not\)//' t_cov_signal

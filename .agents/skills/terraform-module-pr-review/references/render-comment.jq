@@ -487,6 +487,7 @@ def texts: {
   "behaviour-evidence-reported": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {reported} reported in a finding, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "compact-validate-all": "`validate` passed in all {count} examples; {planned} were planned.",
   "compact-validate-some": "`validate` passed in {validated} of {count} examples; {planned} were planned.",
+  "compact-validate-skipped": "`validate` passed in {validated} of {count} examples and {skipped} were skipped as a version bump only; {planned} were planned.",
   "compact-not-checked": "Not checked: {causes}.",
   "compact-action": "To get a conclusive review: {actions}.",
   "cause-description": "the description past 8000 bytes ({cut} cut)",
@@ -1010,8 +1011,8 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
   | not_planned($run) as $names
   | ($in.findings | ordered) as $o
   | ("**\($v.verdict | verdict_line)**"
-     + (if $run.plan_ran then " " + tx(if $x.validated == $x.count then "compact-validate-all" else "compact-validate-some" end;
-          {validated: $x.validated, count: $x.count, planned: ($x.count - ($names | length))}) else "" end)
+     + (if $run.plan_ran then " " + tx(if $x.skipped > 0 then "compact-validate-skipped" elif $x.validated == $x.count then "compact-validate-all" else "compact-validate-some" end;
+          {validated: $x.validated, count: $x.count, skipped: $x.skipped, planned: ($x.count - ($names | length))}) else "" end)
      + (if $cov != [] then " " + covered_sentence("compact-covered"; $run; $cov) else "" end)
      + (if $v.rule == 4 then " " + tx("compact-not-checked"; {causes: ([$c.admitted[] | tx("cause-" + .key; .)] | join(", "))}) else "" end)) as $verdict
   | (if $v.rule == 4 then action_line($c) else [] end) as $action
@@ -1049,7 +1050,7 @@ def covered_of($in; $l; $b):
        and $b != null and $b.status == "ran" and $b.capped == 0 and ($b.triggers + $b.claims) != []
        and all($b.triggers[]; .state | IN("verified", "covered", "inert", "reported"))
        and all($b.claims[]; .state == "verified")
-       and ($run | has("examples")) and $run.examples.validated == $run.examples.count
+       and ($run | has("examples")) and $run.examples.validated + $run.examples.skipped == $run.examples.count
        and $run.verify_gaps == [] and $l.gaps == 0 and ($l.triage | not)
        and (any($l.signals[]; . == "unknown") | not)
        and (any($l.findings[]; .rule_id | startswith("review.") and . != "review.tool-disputed") | not)
