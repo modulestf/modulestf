@@ -66,7 +66,7 @@ Engine: `tool`
 **Fails when:**
 - The root module creates resources without the creation gate the profile requires, against [Module layout](../../../terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md#module-layout) and its `putin_khuylo` paragraph (`profile.putin-khuylo-missing`). Scope is the root module only, the directory holding the module's root `variables.tf`, because that paragraph requires the gate there and nowhere else. Each root variable a local combines with `var.putin_khuylo` is a creation input - `var.create`, or a `create_<x>` input such as `create_bucket` - and a module may have several; `var.create` is the one creation input when no local combines any. A `resource` or `module` block is judged only when its `count` or `for_each` reads a creation input, directly or through the locals it reads, and it is gated when that same path also reads `var.putin_khuylo`. Which blocks are judged depends on whether the root exists at the base:
   - **A root the change adds**, as when the task reviews a whole module as new: it fails when its `variables.tf` declares no `putin_khuylo`, or when a judged block is not gated. One finding, `file` `variables.tf` and `line` the first creation input's declaration, or null when there is none.
-  - **A root on the base:** only the judged blocks the change adds, those whose `count` or `for_each` it edits, and those whose path to a creation input runs through a local it edits. Each one that is not gated fails: it honours a creation input and skips the gate, by reading the input directly past the gated local, or because the root has no gate at all. One finding per block, at its `count` or `for_each` line, except that blocks whose gate is lost in a local the change edits share one finding at that local's line. A pre-existing block the change does not touch is not this change's finding.
+  - **A root on the base:** silent when the base root's `variables.tf` declares no `putin_khuylo`: the repository has not taken up the gate, and adding it is not this change's work. Otherwise only the judged blocks the change adds, those whose `count` or `for_each` it edits, and those whose path to a creation input runs through a local it edits. Each one that is not gated fails: it honours a creation input and skips the gate, by reading the input directly past the gated local, or because the root has no gate at all. One finding per block, at its `count` or `for_each` line, except that blocks whose gate is lost in a local the change edits share one finding at that local's line. A pre-existing block the change does not touch is not this change's finding.
   - Silent cases. A block whose `count` or `for_each` reads no creation input, or which has neither, is Check C's `structure.create-flag-ignored`. When the base declares `putin_khuylo` and the head does not, Check A owns it as `compat.variable-removed`.
 
 **Severity:**
@@ -76,7 +76,7 @@ Engine: `tool`
 
 - The block is in the root module, and its `count` or `for_each` reads a creation input, directly or through locals.
 - That path does not also read `var.putin_khuylo`, or the root declares no `putin_khuylo`.
-- On a root the base has, the change adds the block, edits its `count` or `for_each`, or edits a local on its path.
+- On a root the base has, the base root declares `putin_khuylo`, and the change adds the block, edits its `count` or `for_each`, or edits a local on its path.
 
 ### Host templates: `profile.putin-khuylo-missing`
 
