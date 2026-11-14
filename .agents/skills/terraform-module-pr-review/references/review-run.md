@@ -41,7 +41,7 @@ With a `non-hcl-dependency` trigger, `tests` joins every depth but triage, besid
 | `skip-coverage <run>` | `coverage.json`, the plan record | `<run>/skip-check.json` ([skip-coverage.md](skip-coverage.md)), only after a laptop pass with gate G1 to G3 skips |
 | `ladder <run>` | `behaviour.json`, `claims.json` | The ladder record at focused and deep ([ladder-pass.md](ladder-pass.md)), then the claims evaluation at every depth: `behaviour/run-behaviour.json` and `behaviour/record.txt` |
 | `handover <run>` | Every output above | `<run>/handover/task.md`, `record.txt`, `change.diff` and the reviewer's [reference bundle](github-io.md#reference-bundle); `<run>/review/` for the reviewer's output. With an empty base the task states the new module shape and has no diff, `Diff:` or `Merge base:` line ([github-io.md](github-io.md#handover)) |
-| `render <run> --assessment <file> --out <dir> [--findings <file>] [--summary <file>] [--standard]` | The reviewer's output, the run's files | The body, `findings.json`, `result.json` and `plan.json` in `--out`, outside the run directory ([render-comment.sh](render-comment.sh)) |
+| `render <run> --assessment <file> --out <dir> [--findings <file>] [--summary <file>] [--standard]` | The reviewer's output, the run's files | The body, `findings.json`, `result.json`, `plan.json` and `fix-plan.md` in `--out`, outside the run directory ([render-comment.sh](render-comment.sh)) |
 | `cleanup <run>` | Nothing | Deletes the run directory |
 
 ## Starting the Reviewer

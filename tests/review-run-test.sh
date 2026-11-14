@@ -19,6 +19,8 @@
 #   - a failed validate at light escalates, a schema escalation at focused escalates;
 #   - a locked pull request: prepare's lock line, the lock in host.json and index.json, and a body
 #     byte for byte the unlocked one, with a negative self-check on the lock line;
+#   - fix-plan.md, the preview render writes from plan.json alone: byte for byte on the fixture,
+#     none without a plan, hostile text kept in fences and code spans, with a negative self-check;
 #   - the pr-review SKILL.md workflow move: the sentence multiset of SKILL.md and
 #     references/workflow.md and references/inputs.md is the pinned one, navigation excluded,
 #     and SKILL.md and the run guide stay within their size targets.
@@ -261,13 +263,83 @@ cp "$GHD/meta" "$TMP/meta-fx"
 jq '.head.sha = "'"$(printf 'c3%.0s' $(seq 20))"'"' "$TMP/meta-fx" > "$GHD/meta"
 run_rr render "$FR" --findings "$FX/reviewer/findings.json" --assessment "$FX/reviewer/assessment.txt" \
   --summary "$FX/reviewer/summary.txt" --out "$TMP/render-moved" > "$TMP/r-moved.out" 2>&1
-check "plan.json: a head that moved at the render-time read exits 0, result.json stays, no plan.json or plan.json.tmp" \
+check "plan.json: a head that moved at the render-time read exits 0, result.json stays, no plan.json, fix-plan.md or temporary" \
   "$([ $? = 0 ] && [ -f "$TMP/render-moved/result.json" ] && [ ! -e "$TMP/render-moved/plan.json" ] && [ ! -e "$TMP/render-moved/plan.json.tmp" ] &&
+     [ ! -e "$TMP/render-moved/fix-plan.md" ] && [ ! -e "$TMP/render-moved/fix-plan.md.tmp" ] && ! grep -q '^fix-plan:' "$TMP/r-moved.out" &&
      grep -qx 'plan: not written, the pull request moved during the review: head_sha' "$TMP/r-moved.out"; echo $?)"
 cp "$TMP/meta-fx" "$GHD/meta"
 check "plan.json: a commit target writes none (render-output.md says so; review-run.sh takes no commit)" \
   "$(awk '/^## plan.json$/{p=1; next} /^## /{p=0} p' "$SKILL/references/render-output.md" | grep -q 'commit target' &&
      ! grep -q -- '--commit' "$SKILL/references/review-run.sh"; echo $?)"
+
+# fix-plan.md (render-output.md): the preview render writes from plan.json alone, beside it.
+FP="$TMP/render1/fix-plan.md"
+fixplan() { jq -j -L "${2:-$SKILL/references}" 'include "fix-plan"; fix_plan' "$1"; }
+check "fix-plan.md: render writes it beside plan.json, byte for byte the fixture's, and names it" \
+  "$(cmp -s "$FP" "$FX/expected/fix-plan.md" && [ ! -e "$FP.tmp" ] && grep -qx "fix-plan: $FP" "$TMP/r.out"; echo $?)"
+check "fix-plan.md: it is built from plan.json alone: a copy elsewhere gives the same bytes" \
+  "$(mkdir "$TMP/fp-alone" && cp "$PJ" "$TMP/fp-alone/" && fixplan "$TMP/fp-alone/plan.json" | cmp -s - "$FP"; echo $?)"
+mkdir "$TMP/render-held" && : > "$TMP/render-held/fix-plan.md"
+run_rr render "$FR" --findings "$FX/reviewer/findings.json" --assessment "$FX/reviewer/assessment.txt" \
+  --summary "$FX/reviewer/summary.txt" --out "$TMP/render-held" > "$TMP/r-held.out" 2>&1
+check "fix-plan.md: an output directory that holds fix-plan.md is refused before any file is written" \
+  "$([ $? = 1 ] && [ ! -e "$TMP/render-held/comment.md" ] && grep -q 'already holds fix-plan.md$' "$TMP/r-held.out"; echo $?)"
+# A plan with hostile text from the pull request and the reviewer, each case of the preview.
+S12=0123456789ab
+long="$(printf 'b%.0s' $(seq 400))"
+jq --arg s "$S12" --arg long "$long" '
+  .findings = [
+    {id: "F-1", rule_id: "compat.x", severity: "MEDIUM", file: "a.tf\n# owned-4", line: 3,
+     summary: "s1\n```\n# owned-1", suggested_fix: "Move it.\n``````\n## owned-5\nGenerated content made stale: the terraform-docs region of README.md, wrappers/main.tf."},
+    {id: "F`2", rule_id: "docs.y", severity: "LOW", file: ".", line: null, summary: "s2", suggested_fix: "no code change: say so in the description."},
+    {id: "F-3", rule_id: "compat.z", severity: "HIGH", file: "b.tf", line: 9, summary: "s3", suggested_fix: "needs decision: (a) keep it; (b) drop it."}]
+  | .handover_block = ("UNTRUSTED-\($s) BEGIN\nITEM-\($s) kind=title origin=change-author\n# owned-2\n"
+      + "ITEM-\($s) kind=body origin=change-author\n````\n## owned-3\n````\n\($long)\n[truncated-\($s): 77 bytes omitted]\n"
+      + "ITEM-\($s) kind=thread origin=other\n<!-- owned-6 -->\nITEM-\($s) kind=conversation origin=other\n"
+      + "RECORD-\($s)\nverify: ok\nUNTRUSTED-\($s) END")' "$PJ" > "$TMP/hostile-plan.json"
+# The lines outside fenced blocks, closing a fence as CommonMark does: a line of at least as many backticks.
+outside() { perl -ne 'if (!defined $f) { if (/^(`{3,})text$/) { $f = length $1; next } print }
+  elsif (/^ {0,3}(`+) *$/ && length($1) >= $f) { undef $f }' "$1"; }
+# The markers outside fences, but for the one a code span holds on its line.
+leaks() { outside "$1" | grep 'owned' | grep -vxF -- '- Location: `a.tf # owned-4` line 3'; }
+fixplan "$TMP/hostile-plan.json" > "$TMP/hostile.md"
+H="$TMP/hostile.md"
+check "fix-plan.md: hostile text stays in fences or code spans: no marker outside, every heading fixed" \
+  "$(! leaks "$H" > /dev/null && [ "$(grep -c 'owned-[12356]' "$H")" = 5 ] &&
+     ! outside "$H" | grep '^#' | grep -vqxE '# Fix plan preview|## Finding [0-9]+ of [0-9]+|## Feedback items|### Item [0-9]+ of [0-9]+|## No proposed code change|## Apply' &&
+     grep -qxF -- '- Location: `a.tf # owned-4` line 3' "$H" && grep -qxF -- '- ID: `` F`2 ``' "$H"; echo $?)"
+check "fix-plan.md: the label near the top, then the pin: target, full head SHA, base ref and base SHA" \
+  "$([ "$(sed -n 3p "$H")" = '**Proposed fixes - not applied and not verified.**' ] &&
+     jq -r '.pin | "- Target: `\(.target)`", "- Head SHA: `\(.head_sha)`", "- Base ref: `\(.base_ref)`", "- Base SHA: `\(.base_sha)`"' "$PJ" |
+     cmp -s - <(grep -E '^- (Target|Head SHA|Base ref|Base SHA): ' "$H") && grep -qE '^- Head SHA: `[0-9a-f]{40}`$' "$H"; echo $?)"
+check "fix-plan.md: each suggested_fix verbatim, the needs decision and no code change ones flagged, the stale sentence repeated" \
+  "$(perl -0ne 'exit !(index($_, "Suggested fix, verbatim:\n\n```````text\nMove it.\n``````\n## owned-5\nGenerated content made stale: the terraform-docs region of README.md, wrappers/main.tf.\n```````\n") >= 0)' "$H" &&
+     grep -qxF 'Generated content made stale, repeated from the fix:' "$H" &&
+     [ "$(grep -cxF 'Generated content made stale: the terraform-docs region of README.md, wrappers/main.tf.' "$H")" = 2 ] &&
+     [ "$(grep -E '^- Fix: ' "$H")" = "$(printf '%s\n' '- Fix: a proposed code change' '- Fix: not directly applicable, it opens with `no code change:`' '- Fix: not directly applicable, it opens with `needs decision:`')" ]; echo $?)"
+check "fix-plan.md: the scope per severity and the linked items line per finding" \
+  "$([ "$(grep -c '^- In scope for pr-fix: a reviewer finding, applied by default; MEDIUM or higher' "$H")" = 2 ] &&
+     [ "$(grep -c '^- In scope for pr-fix: a reviewer finding, applied by default; below MEDIUM' "$H")" = 1 ] &&
+     [ "$(grep -cxF -- '- Linked feedback items: none, plan.json links no finding to an item' "$H")" = 3 ] &&
+     grep -q 'against its own token user' "$H"; echo $?)"
+check "fix-plan.md: the items with kind, origin, the excerpt cut to 300 bytes at a line end and the handover's cut; the record left out" \
+  "$([ "$(grep -E '^- (Kind|Origin|Excerpt): ' "$H" | tr '\n' '|')" = '- Kind: title|- Origin: change-author|- Excerpt: the whole text, 9 bytes|- Kind: body|- Origin: change-author|- Excerpt: the first 20 of 421 bytes; the handover had already cut 77 bytes|- Kind: thread|- Origin: other|- Excerpt: the whole text, 16 bytes|- Kind: conversation|- Origin: other|- Excerpt: none, the item has no text|' ] &&
+     ! grep -q 'verify: ok' "$H"; echo $?)"
+check "fix-plan.md: the list of findings and items with no proposed code change, and the apply line" \
+  "$([ "$(sed -n '/^## No proposed code change$/,/^## Apply$/p' "$H" | grep '^- ')" = "$(printf '%s\n' '- Finding 2, `` F`2 ``: its fix opens with `no code change:`' '- Finding 3, `F-3`: its fix opens with `needs decision:`' '- Item 1, title: a feedback item, for which plan.json carries no fix' '- Item 2, body: a feedback item, for which plan.json carries no fix' '- Item 3, thread: a feedback item, for which plan.json carries no fix' '- Item 4, conversation: a feedback item, for which plan.json carries no fix')" ] &&
+     [ "$(tail -n 1 "$H")" = 'Nothing was applied. pr-fix would apply this plan with `fix-run.sh prepare --repo example-org/terraform-aws-widget --pr 12`, then `fix-run.sh clone <run>`, then `fix-run.sh items <run> --plan <dir>`, `<dir>` being this directory.' ]; echo $?)"
+check "fix-plan.md: a handover block not in the block form builds no preview" \
+  "$(jq '.handover_block = "no block"' "$PJ" > "$TMP/bad-plan.json"; ! fixplan "$TMP/bad-plan.json" > /dev/null 2>&1; echo $?)"
+# Negative self-check: each weakened copy of fix-plan.jq lets hostile text out.
+fp_mut() { # name, perl expression
+  local d="$TMP/fp-mut-$1"; mkdir "$d"; cp "$SKILL/references/fix-plan.jq" "$SKILL/references/host-records.jq" "$d/"
+  perl -0pi -e "$2" "$d/fix-plan.jq"
+  if cmp -s "$d/fix-plan.jq" "$SKILL/references/fix-plan.jq"; then check "self-check: fix-plan mutation $1 changes the file" 1; return; fi
+  fixplan "$TMP/hostile-plan.json" "$d" > "$d/out.md" 2> /dev/null
+  check "self-check: fix-plan mutation $1 is caught" "$(leaks "$d/out.md" > /dev/null; echo $?)"
+}
+fp_mut fixed-fence 's/\("`" \* \(\[3, longest_ticks \+ 1\] \| max\)\)/"```"/'
+fp_mut no-control 's/map\(if \. < 32 or \. == 127 then 32 else \. end\)/map(.)/'
 check "acceptance: the run file carries the counts of the summary line" \
   "$(q "$FR/render/run-file.json" '.counts == {"instruction-like-text-from-others": 0, "conversation-claims-unread": 0, "review.quoted-claim-unverifiable": 1} and (has("depth") | not)')"
 printf '%s\n' '- F-001 ...' 'summary: critical:0 high:0 medium:0 low:3 mode:full checks:A,C,D,E,F,G instruction-like-text-from-others:2 conversation-claims-unread:0 review.quoted-claim-unverifiable:1' 'Facts comparison: ...' > "$TMP/summary2.txt"
