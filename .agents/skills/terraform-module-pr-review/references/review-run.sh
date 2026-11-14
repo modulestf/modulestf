@@ -609,7 +609,7 @@ cmd_ladder() {
   [ ! -f "$RUN/behaviour/claims.json" ] || cl=(--claims "$RUN/behaviour/claims.json")
   [ ! -f "$RUN/behaviour/ladder.json" ] || ld=(--ladder "$RUN/behaviour/ladder.json")
   bash "$HERE/behaviour-pass.sh" eval --facts "$facts" --out "$RUN/behaviour" --head "$HEAD_SHA" \
-    --base-sha "${MB:-$HEAD_SHA}" ${cl[@]+"${cl[@]}"} ${ld[@]+"${ld[@]}"} > /dev/null 2> "$RUN/state/eval.err" ||
+    --base-sha "${MB:-$HEAD_SHA}" --prefix "$PREFIX" ${cl[@]+"${cl[@]}"} ${ld[@]+"${ld[@]}"} > /dev/null 2> "$RUN/state/eval.err" ||
     fail "behaviour-pass.sh eval failed"
   head -n 1 "$RUN/behaviour/record.txt" 2> /dev/null | cut -c1-200
 }
