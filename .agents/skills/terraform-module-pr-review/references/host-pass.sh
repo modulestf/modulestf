@@ -1019,9 +1019,12 @@ cmd_accept() {
   head="$(jq -r '.head_sha' "$result" 2> /dev/null)"
   # A subshell: check_prior defines its own reject, which returns where this one exits.
   ( check_prior "$prior" "$head" ) > /dev/null || reject "the prior directory did not pass its check"
-  local verdict
+  local verdict reg
   verdict="$(jq -r '.verdict' "$result")"
-  IJ -e --arg v "$verdict" 'include "incremental"; host_verdict($v) == $v' "$findings" > /dev/null 2>&1 ||
+  # The registry as render-comment.sh reads it, from the same rule-facts.md (verdict.md).
+  reg="$(jq -c -R -s -L "$HERE" 'include "render-comment"; registry_ids | select(length > 0)' "$rules" 2> /dev/null)" &&
+    [ -n "$reg" ] || reject "the rule facts file holds no rule"
+  IJ -e --arg v "$verdict" --argjson reg "$reg" 'include "incremental"; host_verdict($v; $reg) == $v' "$findings" > /dev/null 2>&1 ||
     reject "the verdict does not follow from the findings"
   if [ "$(jq -r '.mode' "$prior/meta.json")" = full ]; then echo "findings accepted: full"; return 0; fi
   local carry
