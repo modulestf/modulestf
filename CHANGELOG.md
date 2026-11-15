@@ -1,3 +1,12 @@
+## [0.12.6](https://github.com/modulestf/modulestf/compare/v0.12.5...v0.12.6) (2026-11-15)
+
+
+### Bug Fixes
+
+* **pr-review:** Allow public AWS parameters in the plan session and record the environment reason ([#144](https://github.com/modulestf/modulestf/issues/144)) ([c71957e](https://github.com/modulestf/modulestf/commit/c71957e3dbaa7eba556d686db8f8ebd42f430076))
+
+
+
 ## [0.12.5](https://github.com/modulestf/modulestf/compare/v0.12.4...v0.12.5) (2026-11-15)
 
 
