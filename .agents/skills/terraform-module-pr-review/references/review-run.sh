@@ -27,7 +27,8 @@
 #                                        and the README evidence (readme-regions.sh)
 #   review-run.sh render <run> --findings <file> --assessment <file> --out <dir>
 #       [--summary <file>] [--standard]
-#                                        the run file, depth.sh verify, render-comment.sh, plan.json
+#                                        the run file, depth.sh verify, render-comment.sh, plan.json,
+#                                        fix-plan.md
 #   review-run.sh cleanup <run>         deletes the run directory
 #
 # Every subcommand prints at most 30 lines. Host strings never reach a command line or an
@@ -1031,7 +1032,9 @@ cmd_render() {
     stop "depth.json changed after the handover"
   case "$out" in /?*) ;; *) die "--out must be an absolute path" ;; esac
   [ -d "$out" ] || mkdir -p -- "$out" || die "--out cannot be made"
-  [ ! -e "$out/plan.json" ] && [ ! -e "$out/plan.json.tmp" ] || fail "the output directory already holds plan.json"
+  local f; for f in plan.json plan.json.tmp fix-plan.md fix-plan.md.tmp; do
+    [ ! -e "$out/$f" ] || fail "the output directory already holds $f"
+  done
   if [ -f "$RUN/depth.json" ]; then
     bash "$HERE/depth.sh" verify "$RUN/depth.json" --clone "$RUN/clone" > /dev/null 2>&1 ||
       fail "depth.sh verify: the depth binding does not match the clone; nothing is rendered"
@@ -1110,6 +1113,11 @@ write_plan() { # out directory
     jq -e -L "$HERE" 'include "stage-contract"; stage_ok("review-plan")' "$o/plan.json.tmp" > /dev/null 2>&1 &&
     mv -- "$o/plan.json.tmp" "$o/plan.json" || { skip "the plan could not be built"; return 0; }
   echo "plan: $o/plan.json"
+  # fix-plan.md (render-output.md): the readable preview, from plan.json alone, whenever it exists.
+  jq -j -L "$HERE" 'include "fix-plan"; fix_plan' "$o/plan.json" > "$o/fix-plan.md.tmp" 2> /dev/null &&
+    mv -- "$o/fix-plan.md.tmp" "$o/fix-plan.md" ||
+    { rm -f "$o/fix-plan.md.tmp"; echo "fix-plan: not written, the preview could not be built"; return 0; }
+  echo "fix-plan: $o/fix-plan.md"
 }
 
 # The provider floors the schema pass read (verdict.md, Provider floor changes): one entry per

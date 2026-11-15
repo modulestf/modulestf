@@ -16,7 +16,7 @@ All of these hold, or nothing is written:
 - The output directory is not the run directory or any path under it, which covers the clone and the base worktree. The check compares canonical paths: `OUT="$(cd -- "$OUT" && pwd -P)"`, with `RUN` canonicalized the same way, then refuse when `OUT` equals `"$RUN"` or starts with `"$RUN/"`. A `cd` that fails fails this condition.
 - The body passed the [leak scan](comment-format.md#leak-scan). A match blocks the body from being shown, so it blocks every file too.
 
-If the task names a directory and any other condition fails, the run writes nothing there, says which condition failed beside the body, and still ends complete. The skill never creates the directory, never deletes anything in it, and writes no file there other than the three below, [plan.json](#planjson) and the temporary `result.json.tmp` that becomes `result.json`.
+If the task names a directory and any other condition fails, the run writes nothing there, says which condition failed beside the body, and still ends complete. The skill never creates the directory, never deletes anything in it, and writes no file there other than the three below, [plan.json](#planjson), [fix-plan.md](#fix-planmd) and the temporary `result.json.tmp` that becomes `result.json`.
 
 The files are written once, at the end of Step 11: after the body file is written and the body is shown, and before [Cleanup](github-io.md#cleanup). `comment.md` is written first, then `findings.json`. `result.json` appears last, by a rename of a checked temporary file, so a present `result.json` means every file is complete.
 
@@ -75,7 +75,7 @@ The temporary file sits in the output directory itself, so the `mv` is a rename 
 
 ## plan.json
 
-The first stage file of the [stage contract](stage-contract.md), kind `review-plan`: the review's result, bound to the pull request it read, for the stage that acts on it. It has its own condition, not the list above: it is written whenever the task names an output directory and the target is a pull request, interactive or render-only. A commit target and a repository target write none, because the pin has no value for them. [review-run.sh](review-run.sh) writes it at the end of `render`, after `result.json`, so a present `plan.json` also means the three files above are complete. The directory holds neither `plan.json` nor `plan.json.tmp`, and the run refuses before it renders when it does.
+The first stage file of the [stage contract](stage-contract.md), kind `review-plan`: the review's result, bound to the pull request it read, for the stage that acts on it. It has its own condition, not the list above: it is written whenever the task names an output directory and the target is a pull request, interactive or render-only. A commit target and a repository target write none, because the pin has no value for them. [review-run.sh](review-run.sh) writes it at the end of `render`, after `result.json`, so a present `plan.json` also means the three files above are complete. The directory holds none of `plan.json`, `plan.json.tmp`, `fix-plan.md` and `fix-plan.md.tmp`, and the run refuses before it renders when it does.
 
 Exactly these keys, and no others:
 
@@ -92,6 +92,22 @@ Exactly these keys, and no others:
 | `reviewer_id` | The numeric id of the token user from the run's identity read, or null when that read failed |
 
 Before it builds the file, `render` reads `repos/{owner}/{repo}/pulls/{number}` once more, builds the live pin with `live_pin` and compares it with the saved pin by `pin_diff`. A difference writes no plan: `render` prints `plan: not written, the pull request moved during the review: <field>` and exits 0; the body and `result.json` stay, and no `plan.json` or `plan.json.tmp` exists, so a plain review no stage reads stays green and a stage that needs the plan refuses on its own. The pin `prepare` records is the pull request read at the head and base SHAs the host read; a pull request whose pin `prepare` could not record, such as a head branch outside the pin grammar or a base that moved between those reads, also writes no plan, as does a failed second read or a failed build: `render` prints `plan: not written, <reason>` and still exits 0, since the body and the three files are complete. The file is built by `jq` from files, never by interpolation, written to `plan.json.tmp`, checked with `stage_ok("review-plan")` and renamed.
+
+## fix-plan.md
+
+A preview of the plan for a person to read, written by `render` right after `plan.json` and only when `plan.json` was written. It is built from `plan.json` alone by [fix-plan.jq](fix-plan.jq), with no model and no read of the host, into `fix-plan.md.tmp`, then renamed. It applies nothing and changes no other file. A build that fails prints `fix-plan: not written, the preview could not be built`, leaves no `fix-plan.md` or `fix-plan.md.tmp`, and the render still exits 0.
+
+It holds, in this order:
+
+- The label `Proposed fixes - not applied and not verified.`
+- The pin's target, full head SHA, base ref and base SHA, then the verdict, the proposed event and the two counts.
+- One line that says pr-fix decides which comment items it edits against its own token user, which this preview does not.
+- One section per finding, in the order of `plan.json`: its id, rule, severity, file and line; whether pr-fix takes it, from its severity alone: every finding is applied by default, and one of MEDIUM or higher stays in the loop's open set ([write-path.md](../../terraform-module-pr-fix/references/write-path.md#loop)); a line that says `plan.json` links no finding to a feedback item; the summary; the `suggested_fix` verbatim; a fix that opens with `needs decision:` or `no code change:` marked not directly applicable; and each `Generated content made stale:` sentence of the fix repeated, from the phrase to its first period followed by white space, or to the next such phrase or the end of the fix.
+- The feedback items of the handover block, in block order: number, kind, origin and an excerpt of at most 300 bytes, cut at a line end where one fits, with the bytes the handover cut already. The record is left out. The block carries no comment ids.
+- The findings whose fix is not directly applicable and every feedback item, as the list with no proposed code change.
+- The commands pr-fix would apply it with: `fix-run.sh prepare`, `fix-run.sh clone <run>`, then `fix-run.sh items <run> --plan <dir>`, and that nothing was applied.
+
+Every value from the pull request or the reviewer is data. A one-line value sits in a code span, its control characters shown as spaces; a summary, a fix and an item's text sit verbatim in a fenced block whose fence is longer than any backtick run in the text. No heading holds such a value, and no pull request text appears outside a fenced block. The preview holds the hard caps of the [findings schema](../../terraform-module-reviewer/references/findings-schema.md) itself: a finding whose `summary` is over 500 characters or whose `suggested_fix` is over 600 builds no preview.
 
 ## Judgment Variant
 
