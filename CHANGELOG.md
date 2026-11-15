@@ -1,3 +1,12 @@
+## [0.12.1](https://github.com/modulestf/modulestf/compare/v0.12.0...v0.12.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* Name item ids in the plan edit refusal and refuse a run file with no login ([#139](https://github.com/modulestf/modulestf/issues/139)) ([0a80b15](https://github.com/modulestf/modulestf/commit/0a80b1552ed9fc9fe470cff5788b1a9a47526398))
+
+
+
 # [0.12.0](https://github.com/modulestf/modulestf/compare/v0.11.4...v0.12.0) (2026-11-15)
 
 
