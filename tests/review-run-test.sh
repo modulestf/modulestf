@@ -728,7 +728,7 @@ SI="$TMP/si"; mkdir -p "$SI/state" "$SI/clone/a"
   ln -s a/main.tf link.tf && head -c 1048577 /dev/zero > big.tf && head -c 1048576 /dev/zero > max.tf &&
   printf 'z\n' > notes.md && git add . && git -c user.name=t -c user.email=t@t commit -qm i)
 SIC="$(git -C "$SI/clone" rev-parse HEAD)"
-si_fn() { sed -n '/^clone_git() {/,/^}/p; /^schema_inputs() {/,/^}/p' "${1:-$RR}"; }
+si_fn() { sed -n '/^if command -v sha256sum /p; /^clone_git() {/,/^}/p; /^schema_inputs() {/,/^}/p' "${1:-$RR}"; }
 si() { # [script] commit...: the tokens, then "status <n>"
   local f="$RR"; [ -f "${1-}" ] && { f="$1"; shift; }
   bash -c "set -uo pipefail; set -f; $(si_fn "$f")"'; RUN="$1"; shift; schema_inputs "$@"; echo "status $?"' _ "$SI" "$@"
