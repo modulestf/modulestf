@@ -170,7 +170,7 @@ derive(F) is defined only when F is at most 64 KiB, ends with LF, holds only pri
 - a single-line attribute `<ident> = <value>` whose value holds no `{`, and no `[` unless it is a `user_agent` or `module_name` value whose `[` closes with `]` on the same line;
 - the opening line of a bracket attribute: `user_agent` or `module_name`, `=`, then `[` and optional trailing whitespace. Its lines run up to and including the first line whose first non-blank character is `]`.
 
-Any other interior line makes derive undefined: a near-miss (a line whose first token is `user_agent` or `module_name` and that matches neither attribute form), a line with a brace, comments and bracket lines included, and an unclosed bracket. derive(F) is F with each `user_agent` or `module_name` attribute deleted as whole lines with their LF: its single line, or its bracket lines. An undefined derive is never equal to anything and is never written.
+Any other interior line makes derive undefined: a near-miss (a line whose first token is `user_agent` or `module_name` and that matches neither attribute form), a line with a brace, comments and bracket lines included, and an unclosed bracket. derive(F) is F with each `user_agent` or `module_name` attribute deleted as whole lines with their LF: its single line, or its bracket lines. An undefined derive is never equal to anything and is never written. The one implementation is the pull request review skill's [wrapper-derive.pl](../../terraform-module-pr-review/references/wrapper-derive.pl), which `fix-run.sh` runs and which that skill also uses to check a pull request's wrappers ([behaviour-pass.md](../../terraform-module-pr-review/references/behaviour-pass.md#wrapper-versions)).
 
 | Term | Definition |
 |---|---|
