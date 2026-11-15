@@ -750,20 +750,29 @@ post_init() { # example key, absolute example directory
     my ($ex, $root, $j, $mr, $gm) = @ARGV;
     my $gh = qr{\A(?:github\.com/|git\@github\.com:|git::https://github\.com/|git::ssh://git\@github\.com/)};
     my $reg = qr{\A(?:registry\.terraform\.io/)?terraform-aws-modules/[a-z0-9-]+/aws(?://modules/[a-z0-9-]+)?\z};
+    (my $ml = $j) =~ s{/[^/]*\z}{};
+    sub lex { my @p; for (split m{/}, $_[0]) { next if $_ eq "" || $_ eq "."; if ($_ eq "..") { pop @p } else { push @p, $_ } } "/" . join("/", @p) }
     open(my $fh, "<", $j) or do { print "G2 $j:0\n"; exit };
-    my @m = @{ decode_json(do { local $/; <$fh> })->{Modules} }; my %d;
-    for (@m) { my $p = $_->{Dir}; $p = "$ex/$p" unless $p =~ m{\A/}; $d{$_->{Key}} = realpath($p) }
+    my @m = @{ decode_json(do { local $/; <$fh> })->{Modules} }; my (%d, %l); $ml = lex($ml);
+    for (@m) { my $p = $_->{Dir}; $p = "$ex/$p" unless $p =~ m{\A/}; $d{$_->{Key}} = realpath($p); $l{$_->{Key}} = lex($p) }
     for (@m) {
       next if $_->{Key} eq "";
-      my ($s, $r) = ($_->{Source}, $d{$_->{Key}});
-      unless (defined $r && -d $r) { print "G2 $j:$_->{Key}\n"; next }
+      my ($k, $s, $r, $lp) = ($_->{Key}, $_->{Source}, $d{$_->{Key}}, $l{$_->{Key}});
+      unless (defined $r && -d $r) { print "G2 $j:$k\n"; next }
+      # Below the modules directory, written as given or as its real path, no path component may be a symbolic link.
+      my $in; for my $pre ($ml, $mr) { if ($lp ne $pre && index("$lp/", "$pre/") == 0) { $in = $mr . substr($lp, length $pre); last } }
+      if (defined $in && $r ne $in) { print "G2 $j:$k\n"; next }
+      if (($s =~ $reg || ($gm eq "runner" && $s =~ $gh)) && !defined $in) { print "G2 $j:$k\n"; next }
       print "dir $r\n" if index("$r/", "$mr/") == 0;
-      if ($s =~ $reg) { print "version $_->{Key} $s $_->{Version}\n"; next }
-      if ($gm eq "runner" && $s =~ $gh) { print "version $_->{Key} $s -\n"; next }
-      (my $pk = $_->{Key}) =~ s/\.?[^.]*\z//;
-      my $pd = $d{$pk};
-      my $lim = defined $pd && index("$pd/", "$root/") == 0 ? $root : $pd;
-      print "G2 $j:$_->{Key}\n" unless $s =~ m{\A\.\.?/} && defined $lim && index("$r/", "$lim/") == 0;
+      if ($s =~ $reg) { print "version $k $s $_->{Version}\n"; next }
+      if ($gm eq "runner" && $s =~ $gh) { print "version $k $s -\n"; next }
+      (my $pk = $k) =~ s/\.?[^.]*\z//;
+      my $pd = $d{$pk}; my ($lim, $want);
+      if (defined $pd && index("$pd/", "$mr/") == 0) {
+        # A downloaded parent, even with the data directory in the clone: its whole package, reached with no symbolic link on the way.
+        ($lim, $want) = ("$mr/$1", lex("$pd/$s")) if substr($pd, length($mr) + 1) =~ m{\A([^/]+)};
+      } elsif (defined $pd && index("$pd/", "$root/") == 0) { $lim = $root }
+      print "G2 $j:$k\n" unless $s =~ m{\A\.\.?/} && defined $lim && index("$r/", "$lim/") == 0 && (!defined $want || $r eq $want);
     }
   ' "$2" "$CROOT" "$M/modules.json" "$MR" "$GMODE" > "$PLAN/out/$1-modules.txt"
   grep -v '^dir ' "$PLAN/out/$1-modules.txt"
