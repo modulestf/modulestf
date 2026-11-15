@@ -56,7 +56,10 @@ done
 # gate, and what it writes on a base: line.
 # shellcheck disable=SC2016 # a jq program
 REDUCE='
-def classes: ["planned", "planned-no-changes", "code-error", "environment", "needs input",
+# plan-pass.sh ENV_REASONS, each as its class
+def env_classes: ["credentials", "access-denied", "throttling", "registry", "plugin", "sandbox", "network",
+  "timeout", "output-cap"] | map("environment (\(.))");
+def classes: ["planned", "planned-no-changes", "code-error"] + env_classes + ["needs input",
   "output unrecognised", "budget", "plan pass ended: credentials", "plan gate G0", "plan gate G1",
   "plan gate G2", "plan gate G3", "exception: example assumes a role in another account",
   "exception: needs a Docker daemon"];
