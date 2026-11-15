@@ -61,11 +61,13 @@ Engine: `candidate`
 
 **Severity:**
 - MEDIUM when the disabled call is missing.
+- LOW for a missing disabled call (`examples.disabled-call-missing`) when the base's complete example lacked it too and the change adds neither that example nor the module's `create` input: the gap predates the change.
 
 ### Confirm when: `examples.disabled-call-missing`
 
 - The example is the complete example.
 - None of its `module` blocks is named `disabled` and sets `create = false`.
+- Severity: MEDIUM; LOW when the base's complete example lacked the call too and the change adds neither that example nor the module's `create` input.
 
 ### Host templates: `examples.disabled-call-missing`
 

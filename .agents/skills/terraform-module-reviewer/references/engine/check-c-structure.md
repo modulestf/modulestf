@@ -15,7 +15,7 @@ Engine: `candidate`
 - An output added by the change has no `try()` fallback, or uses a fallback that changes the output type.
 
 **Severity:**
-- HIGH when conditional creation is broken, an output will error instead of returning null, or a nested input does not match the schema shape. HIGH too when documentation promises behaviour no code path implements (`structure.docs-contradict-code`); an input the code reads nowhere is the other rule, `structure.input-ignored-in-branch`.
+- HIGH when conditional creation is broken, an output will error instead of returning null, or a nested input does not match the schema shape.
 
 ### Confirm when: `structure.output-no-try`
 
