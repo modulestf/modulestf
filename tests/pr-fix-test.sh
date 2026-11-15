@@ -690,15 +690,15 @@ t_plan_pin() { # a plan of another head or another base ref is refused naming th
 }
 t_plan_pin; check "items --plan: a plan for another head_sha, base_ref or merge_base is refused naming the key" $?
 
-t_plan_edited() { # a kept comment edited after read_at refuses, naming its id
+t_plan_edited() { # a kept comment edited after read_at refuses, naming its item id
   fx_default; stamp_all
   local f="$FX/api/repos/o/r/pulls/7/comments.json"
   jq -c 'map(map(if .id == 601 then .updated_at = "2026-11-10T11:00:00Z" else . end))' "$f" > "$f.t" && mv "$f.t" "$f"
   plan_run && return 1
-  grep -qx 'fix-run.sh: a comment changed after the review: 601; review again' "$TMP/pi.out" && [ ! -e "$RUN/items.json" ] || { cat "$TMP/pi.out"; return 1; }
+  grep -qx 'fix-run.sh: a comment changed after the review: T-601; review again' "$TMP/pi.out" && [ ! -e "$RUN/items.json" ] || { cat "$TMP/pi.out"; return 1; }
   fr cleanup "$RUN" > /dev/null
 }
-t_plan_edited; check "items --plan: a comment edited after the review refuses naming its id" $?
+t_plan_edited; check "items --plan: a comment edited after the review refuses naming its item id" $?
 
 t_plan_args() { # --plan excludes --review; an unknown field, kind or schema of the plan is refused; the profile and prefix come from the plan
   fx_default; stamp_all
