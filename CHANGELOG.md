@@ -1,3 +1,12 @@
+## [0.11.2](https://github.com/modulestf/modulestf/compare/v0.11.1...v0.11.2) (2026-11-15)
+
+
+### Bug Fixes
+
+* **reviewer:** Judge new-input defaults by effect and calibrate doc and gating rules ([#155](https://github.com/modulestf/modulestf/issues/155)) ([19d74e3](https://github.com/modulestf/modulestf/commit/19d74e317b5721d14d384bc01699fa97379f21e3)), closes [modulestf/facts#40](https://github.com/modulestf/facts/issues/40) [#150](https://github.com/modulestf/modulestf/issues/150)
+
+
+
 ## [0.11.1](https://github.com/modulestf/modulestf/compare/v0.11.0...v0.11.1) (2026-11-15)
 
 
