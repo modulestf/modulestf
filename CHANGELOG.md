@@ -1,3 +1,12 @@
+## [0.11.4](https://github.com/modulestf/modulestf/compare/v0.11.3...v0.11.4) (2026-11-15)
+
+
+### Bug Fixes
+
+* **pr-review:** Check generated wrapper versions.tf files against their module ([#153](https://github.com/modulestf/modulestf/issues/153)) ([fba5b1b](https://github.com/modulestf/modulestf/commit/fba5b1bdd5e3ad0b35f007198518fa2545340906))
+
+
+
 ## [0.11.3](https://github.com/modulestf/modulestf/compare/v0.11.2...v0.11.3) (2026-11-15)
 
 
