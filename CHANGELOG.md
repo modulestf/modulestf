@@ -1,3 +1,12 @@
+## [0.12.2](https://github.com/modulestf/modulestf/compare/v0.12.1...v0.12.2) (2026-11-15)
+
+
+### Bug Fixes
+
+* **pr-review:** count every selected example in the run file ([#140](https://github.com/modulestf/modulestf/issues/140)) ([a403d0a](https://github.com/modulestf/modulestf/commit/a403d0a58a8023451c985b45babe7ffd25b7cefe))
+
+
+
 ## [0.12.1](https://github.com/modulestf/modulestf/compare/v0.12.0...v0.12.1) (2026-11-15)
 
 
