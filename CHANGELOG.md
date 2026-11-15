@@ -1,3 +1,12 @@
+## [0.12.4](https://github.com/modulestf/modulestf/compare/v0.12.3...v0.12.4) (2026-11-15)
+
+
+### Bug Fixes
+
+* **reviewer:** Accept time_sleep as a scope adjunct of terraform-aws-modules ([#142](https://github.com/modulestf/modulestf/issues/142)) ([d729fb2](https://github.com/modulestf/modulestf/commit/d729fb258096719c93b20471122c2e5c5892a3fd))
+
+
+
 ## [0.12.3](https://github.com/modulestf/modulestf/compare/v0.12.2...v0.12.3) (2026-11-15)
 
 
