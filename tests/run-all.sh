@@ -6,7 +6,9 @@
 #        bash tests/run-all.sh --list    the jobs as a JSON array, the CI matrix
 # JOBS defaults to the CPU count; DIR to a new directory under TMPDIR. Works under bash 3.2.
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 2
+SELF="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")" || exit 2
+CWD="$(pwd -P)"
+cd "$(dirname "$SELF")/.." || exit 2
 PR_FIX_SHARDS=2 # the CI matrix takes the same number from --list
 
 jobs_of() { # the job lines, "suite shard", for the named suites or every tests/*.sh
@@ -48,17 +50,24 @@ while [ "$#" -gt 0 ]; do
 done
 case "$J" in '' | *[!0-9]* | 0) echo "run-all: -j needs a positive number" >&2; exit 2 ;; esac
 if [ -z "$OUT" ]; then OUT="$(mktemp -d "${TMPDIR:-/tmp}/run-all.XXXXXX")" || exit 2; fi
+case "$OUT" in /*) ;; *) OUT="$CWD/$OUT" ;; esac
 mkdir -p "$OUT" && OUT="$(cd "$OUT" && pwd -P)" || exit 2
+rm -f "$OUT"/*.rc # a reused directory's old results never count
 list="$(jobs_of "$@")" || exit 2
 echo "run-all: $(printf '%s\n' "$list" | wc -l | tr -d ' ') jobs, $J at a time, logs in $OUT"
 t0="$(date +%s)"
 # pr-fix-test first: its shards are the longest jobs.
 { printf '%s\n' "$list" | grep '^pr-fix-test\.sh '; printf '%s\n' "$list" | grep -v '^pr-fix-test\.sh '; } |
   while read -r s shard; do printf '%s\0%s\0%s\0' "$s" "$shard" "$OUT"; done |
-  xargs -0 -n 3 -P "$J" bash "$0" --one
-bad=0
-for f in "$OUT"/*.rc; do grep -q ' exit   0 ' "$f" || bad=$((bad + 1)); done
-n="$(printf '%s\n' "$list" | wc -l | tr -d ' ')"; got="$(ls "$OUT"/*.rc 2> /dev/null | wc -l | tr -d ' ')"
-[ "$got" = "$n" ] || { echo "run-all: $((n - got)) jobs did not report"; bad=$((bad + n - got)); }
+  xargs -0 -n 3 -P "$J" bash "$SELF" --one
+bad=0; n=0
+while read -r s shard; do # each started job's own result; a missing one fails
+  shard="${shard#-}"; tag="${s%.sh}${shard:+-${shard%/*}}"; n=$((n + 1))
+  if [ ! -f "$OUT/$tag.rc" ]; then echo "run-all: $tag did not report"; bad=$((bad + 1))
+  elif ! grep -q ' exit   0 ' "$OUT/$tag.rc"; then
+    bad=$((bad + 1)); echo "run-all: $tag failed, from $OUT/$tag.log:"
+    { grep '^FAIL' "$OUT/$tag.log" || tail -n 20 "$OUT/$tag.log"; } | head -n 20 | sed 's/^/  /'
+  fi
+done <<< "$list"
 echo "run-all: $((n - bad)) of $n jobs passed in $(($(date +%s) - t0))s; logs in $OUT"
 [ "$bad" = 0 ]

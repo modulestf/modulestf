@@ -20,7 +20,7 @@
 # whose index modulo N is i, so N runs with i = 0 to N-1 cover the whole self-check)
 set -uo pipefail
 MS="${PR_FIX_TEST_SHARD-}"
-case "$MS" in "") ;; *[!0-9/]* | /* | */ | */*/* | */0*) echo "FAIL PR_FIX_TEST_SHARD must be i/N"; exit 1 ;; *) [ "${MS%/*}" -lt "${MS#*/}" ] || { echo "FAIL PR_FIX_TEST_SHARD must be i/N with i < N"; exit 1; } ;; esac
+case "$MS" in "") ;; *[!0-9/]* | /* | */ | */*/* | */0* | 0[0-9]*/*) echo "FAIL PR_FIX_TEST_SHARD must be i/N"; exit 1 ;; *) [ "${MS%/*}" -lt "${MS#*/}" ] || { echo "FAIL PR_FIX_TEST_SHARD must be i/N with i < N"; exit 1; } ;; esac
 
 SRC="$(cd "$(dirname "$0")/.." && pwd -P)"
 SKILLS="$SRC/.agents/skills"
