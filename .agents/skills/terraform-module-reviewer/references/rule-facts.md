@@ -55,7 +55,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `examples.docs-incomplete` | none | - | - | never | llm | path | any-file-in-area | no | example | file-index | LOW | - | - |
 | `examples.example-broken` | schema | allowed values, one-ofs | An example the change adds or edits, or one of the version bump only examples, has a block of the type. | never | llm | config-semantic | any-file-in-area | yes | example | schema-coverage, interface-diff | HIGH | - | - |
 | `examples.example-broken-at-base` | none | - | - | never | llm | config-semantic | any-file-in-area | no | example | none | LOW | - | - |
-| `examples.feature-undemonstrated` | none | - | - | never | llm | config-semantic | newly-introduced | yes | root, submodule | interface-diff | MEDIUM | - | - |
+| `examples.feature-undemonstrated` | none | - | - | never | llm | config-semantic | newly-introduced | yes | root, submodule | interface-diff | LOW | - | - |
 | `examples.real-domain-zone` | none | - | - | never | llm | config-semantic | touched-expression | no | example | none | LOW | - | - |
 | `examples.stale-reference` | none | - | - | never | candidate | config-semantic | any-file-in-area | yes | example | candidates, interface-diff | HIGH | lead | small |
 | `examples.submodule-missing` | none | - | - | never | candidate | path | newly-introduced | yes | submodule | candidates, file-index | HIGH | lead | lead |
@@ -100,7 +100,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `structure.arn-partition-hardcoded` | none | - | - | file | candidate | config-semantic | newly-introduced | no | root, submodule | candidates | HIGH | lead | small |
 | `structure.comment-redundant` | none | - | - | file | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
 | `structure.comment-unsourced` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM, LOW | - | - |
-| `structure.copied-content-unattributed` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
+| `structure.copied-content-unattributed` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule, example | none | MEDIUM, LOW | - | - |
 | `structure.create-flag-ignored` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | interface-diff | HIGH | - | - |
 | `structure.docs-contradict-code` | page | data source behaviour | A changed block, output, local or documentation line depends on what a data source of the type does with its inputs. | never | llm | config-semantic | touched-block | no | root, submodule, example | interface-diff | HIGH | - | - |
 | `structure.embedded-code-defect` | none | - | - | never | llm | path | touched-block | no | root, submodule | none | CRITICAL, HIGH, LOW | - | - |
@@ -153,7 +153,7 @@ The evidence each `file` rule reads, all of it in the target file:
 - `structure.argument-order`: `count`, `for_each`, `tags` and `labels` positions inside a resource block of the target, and whether the change touched that block, read from the target at the base and the head.
 - `structure.arn-partition-hardcoded`: An ARN literal the change adds in the target; `local.partition` can always be added, so no other file decides it.
 - `structure.comment-redundant`: A comment the change adds in the target, read against the code beside it in the same file.
-- `structure.flag-polarity`: A new flag variable's name and default, both in its own block of the target.
+- `structure.flag-polarity`: A new flag variable's name and default, both in its own block of the target, and the defaults of the flags of the same prefix the target declares at the base.
 - `structure.missing-description`: A new variable or output block of the target without a `description`.
 - `structure.multi-provider`: A `provider` block with an `alias`, or a `provider` or `providers` argument, in the target, and whether the target's path is under `examples/`.
 - `structure.suppression-unexplained`: A suppression comment the change adds in the target, and the comment lines next to it.

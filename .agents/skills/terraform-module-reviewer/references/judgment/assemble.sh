@@ -101,11 +101,12 @@ copy() {
 }
 
 # Each check keeps its Reads, Fails when and Severity text. Its other sections are the
-# on-demand reads workflow.md names; Check B's Fails when sits in its Rules section. The
+# on-demand reads workflow.md names, and so is Check A's Reverts paragraph with its list;
+# Check B's Fails when sits in its Rules section. The
 # heading that opens that text is an anchor for the run summaries, so it is unwrapped.
 drops_of() {
   case "$1" in
-    a-compatibility) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:No base" ;;
+    a-compatibility) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:No base|l:^[*][*]Reverts:[*][*] |l:^1[.] A commit in the change carries git.s own revert line|l:^2[.] .git merge-base --is-ancestor|l:^3[.] .git describe --tags|l:^4[.] Each line the finding would rest on|l:^Condition 3 reads tags|l:^If any of the four cannot be established" ;;
     b-coverage) echo "u:Reads|h:Which blocks|h:Documented omissions|h:Suggested Fixes" ;;
     c-structure) echo "u:Reads, Fails When and Severity|h:Embedded Code|h:Suggested Fixes" ;;
     e-profile) echo "u:Reads, Fails When and Severity|h:Suggested Fixes" ;;

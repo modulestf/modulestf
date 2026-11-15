@@ -10,7 +10,7 @@
 
 **Fails when:**
 - `examples.stale-reference`: moved to [engine/check-d-examples.md](engine/check-d-examples.md#examplesstale-reference).
-- A feature added by the change appears in no example. A feature is a new resource, a new nested or dynamic block, a new submodule feature, or a new argument inside a block that no example sets.
+- A feature added by the change appears in no example. A feature is a new resource, a new nested or dynamic block, a new submodule feature, or a new argument inside a block that no example sets. A `tests/` fixture root that sets it demonstrates it.
 - A new argument is added inside a block that at least one example already sets, and no example sets the new argument.
 - `examples.submodule-missing`: moved to [engine/check-d-examples.md](engine/check-d-examples.md#examplessubmodule-missing).
 - `examples.disabled-call-missing`: moved to [engine/check-d-examples.md](engine/check-d-examples.md#examplesdisabled-call-missing).
@@ -27,9 +27,9 @@ If a missing custom input also causes a plan failure, report only `examples.cust
 - HIGH when an example is broken by the change before or during apply (`examples.example-broken`), requires custom Terraform inputs or edits (`examples.custom-input-required`), or a submodule added by the change has no example. A verification record showing a failed plan is evidence for that HIGH, and its decisive error line is quoted in the `summary`. Only a failure new under this change reaches HIGH; one the record marks as reproducing at the base is the LOW above.
 - No record, or one saying the run did not happen, leaves the severity the read alone supports untouched, and the summary says the conclusion was not verified by execution. Never `review.check-not-run` for a missing or unrun record: that takes the whole review to inconclusive through the verdict ladder's unknown rung and masks a real HIGH behind a softer verdict.
 - **Provider facts:** `examples.example-broken` read from the files, with no failed record behind it, rests on a provider fact: a Required marker, a one-of, a value set the page documents. When that page is unavailable (Rule 2), the read cannot establish the failure, and a passing `validate` in the record does not settle it the other way, as the Reads paragraph says. Then emit `review.check-not-run` for the example's directory under [Rule 4](../SKILL.md#rule-4-a-check-that-cannot-run-is-a-finding), naming `examples.example-broken`, the block or argument in question, and the type and version the page could not be read at. This is required, not a softer verdict chosen over a HIGH: without the page there is no HIGH to report, and silence would read as a pass. A failed record still establishes the finding on its own, page or no page.
-- MEDIUM when a feature added by the change is demonstrated nowhere (`examples.feature-undemonstrated`), or the disabled call is missing.
+- MEDIUM when the disabled call is missing.
 - `examples.versions-missing`: moved to [engine/check-d-examples.md](engine/check-d-examples.md#examplesversions-missing).
-- LOW when a new argument sits in a block an example already sets and no example sets the argument (`examples.argument-undemonstrated`).
+- LOW when a feature added by the change is demonstrated nowhere (`examples.feature-undemonstrated`), or a new argument sits in a block an example already sets and no example sets the argument (`examples.argument-undemonstrated`).
 - LOW when example documentation is incomplete: missing README, missing markers, thin outputs.
 - LOW when a changed example uses a public DNS name outside the two allowed domain families as an endpoint or zone value (`examples.real-domain-zone`).
 

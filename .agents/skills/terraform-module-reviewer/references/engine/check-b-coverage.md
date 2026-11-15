@@ -85,14 +85,14 @@ Engine: `candidate`
 ### Rule text: `coverage.optional-argument-unexposed`
 
 **Fails when:**
-- An optional argument of a resource introduced by the change is neither an exposed input nor an omission documented with a reason, as [Documented omissions](../check-b-coverage.md#documented-omissions) reads one.
+- An optional argument of a resource introduced by the change is neither an exposed input nor an omission documented with a reason, as [Documented omissions](../check-b-coverage.md#documented-omissions) reads one. It is silent when a block of the same type that exists at the base in the same module omits the same argument with no documented omission either: the change follows the module's own precedent.
 
 **Severity:**
 - MEDIUM when an optional argument is neither exposed nor documented as an omission, or a stable computed attribute is simply not exposed by any output.
 
 ### Confirm when: `coverage.optional-argument-unexposed`
 
-- The `resource` block is new in the change, the argument is Optional in the schema, nothing sets it from an input, and no documented omission covers it.
+- The `resource` block is new in the change, the argument is Optional in the schema, nothing sets it from an input, no documented omission covers it, and no block of the type that exists at the base in the module omits it too.
 - Severity: always MEDIUM.
 
 ### Host templates: `coverage.optional-argument-unexposed`
