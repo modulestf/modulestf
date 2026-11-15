@@ -819,9 +819,26 @@ my ($i) = grep { $l[$_] =~ /Error: / } 0 .. $#l;
 exit 4 unless defined $i;
 for my $j ($i .. $#l) { last if $j > $i && $l[$j] !~ /\S/; print $l[$j] }
 '
-ENV_RE='no valid credential sources|NoCredentialProviders|failed to (retrieve|refresh cached) credentials|InvalidClientTokenId|SignatureDoesNotMatch|AccessDenied|UnauthorizedOperation|ExpiredToken|Throttling|RequestLimitExceeded|i/o timeout|context deadline exceeded|timed out|dial tcp|no such host|Error accessing remote module registry|Failed to query available provider packages|Failed to retrieve available versions|connection refused|connection reset|TLS handshake|failed to instantiate provider|Unrecognized remote plugin message|plugin exited before we could connect|operation not permitted'
+# The environment pattern by reason, one "<token> <phrases>" line each, the first match winning:
+# the class is "environment (<token>)", a fixed token, never the matched text.
+ENV_REASONS='credentials no valid credential sources|NoCredentialProviders|failed to (retrieve|refresh cached) credentials|InvalidClientTokenId|SignatureDoesNotMatch|ExpiredToken
+access-denied AccessDenied|UnauthorizedOperation
+throttling Throttling|RequestLimitExceeded
+registry Error accessing remote module registry|Failed to query available provider packages|Failed to retrieve available versions
+plugin failed to instantiate provider|Unrecognized remote plugin message|plugin exited before we could connect
+sandbox operation not permitted
+network dial tcp|no such host|connection refused|connection reset|TLS handshake
+timeout i/o timeout|context deadline exceeded|timed out'
+env_reason() { # diagnostic block file: the token of the first reason whose phrases it holds
+  printf '%s\n' "$ENV_REASONS" | while read -r tok re; do
+    grep -Eiq "$re" "$1" && { echo "$tok"; break; }
+  done
+}
 class_of() { # exit status, output file, init or plan
-  [ "$1" -eq 124 ] && { echo environment; return; }
+  if [ "$1" -eq 124 ]; then
+    if [ -e "$2.cap" ]; then echo 'environment (output-cap)'; else echo 'environment (timeout)'; fi
+    return
+  fi
   if [ "$1" -eq 0 ]; then
     [ "$3" = init ] && { echo ok; return; }
     grep -Eq '^Plan: .* to destroy\.$' "$2" && { echo planned; return; }
@@ -829,7 +846,7 @@ class_of() { # exit status, output file, init or plan
     echo 'output unrecognised'; return
   fi
   perl -e "$DIAG_PL" < "$2" > "$2.block" || { echo 'output unrecognised'; return; }
-  grep -Eiq "$ENV_RE" "$2.block" && { echo environment; return; }
+  r="$(env_reason "$2.block")"; [ -n "$r" ] && { echo "environment ($r)"; return; }
   grep -q 'No value for required variable' "$2.block" && { echo 'needs input'; return; }
   echo code-error
 }

@@ -83,9 +83,11 @@ echo "schema pass: escalate overflow"; exit 3
 EOF
 cat > "$SK/plan-pass.sh" <<'EOF'
 #!/bin/bash
-# stub: g0 passes; plan leaves no record and exits PLAN_STUB_RC
+# stub: g0 passes; plan prints the file PLAN_STUB_REC as its record when set, and otherwise
+# leaves no record and exits PLAN_STUB_RC
 echo "plan-pass $*" >> "${STUB_LOG:?}"
 [ "$1" = g0 ] && exit 0
+[ -z "${PLAN_STUB_REC:-}" ] || { cat "$PLAN_STUB_REC"; exit 0; }
 exit "${PLAN_STUB_RC:-1}"
 EOF
 cat > "$SK/ladder-pass.sh" <<'EOF'
@@ -924,6 +926,17 @@ jq '.dirs = [{dir: "examples/one"}, {dir: "examples/two"}, {dir: "examples/three
 check "plan: at focused a repository root example outside the module root is planned, one out of scope is not" \
   "$(grep '^plan-pass plan ' "$STUB_LOG" | grep -qE ' examples/one examples/three$'; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
+# The environment class reaches the coverage with its fixed reason token; a bare or free-text
+# environment class is no class and reads as output unrecognised.
+for c in 'environment (access-denied)|environment (access-denied)' 'environment|output unrecognised' \
+  'environment (AccessDenied on arn:aws:ssm:us-east-1:000000000000:parameter/x)|output unrecognised'; do
+  printf '%s\n' 'plan pass mode: laptop' 'example: examples/one' "plan: ${c%%|*}" 'plan summary: 1 examples, 0 planned, 0 exceptions, 1 other' > "$TMP/plan-rec.txt"
+  DEPTH_STUB=deep prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review
+  run_rr verify "$RUN" > /dev/null; PLAN_STUB_REC="$TMP/plan-rec.txt" run_rr plan "$RUN" > "$TMP/pl.out"
+  check "plan: the record's class '${c%%|*}' reaches the coverage as '${c#*|}'" \
+    "$(jq -e --arg r "${c#*|}" '[.unplanned[] | select(.dir == "examples/one") | .reason] == [$r]' "$RUN/coverage.json" > /dev/null; echo $?)"
+  run_rr cleanup "$RUN" > /dev/null
+done
 
 # --- 3b. evidence: the depth's commands in one, side by side at deep; no .tf change skips schema ---------
 prep
@@ -1455,6 +1468,8 @@ ghfiles open false APPROVED
 # text over a STANDARD cap is refused and goes back to the reviewer.
 # Updated for the verdict ladder where a known MEDIUM blocker outranks unknowns (the rule 4 sentences
 # of SKILL.md and Step 5.5) and skip-coverage covering runner-mode recorded exceptions (Step 5.5).
+# Updated for Rule 5's plan pass ending in an environment class with its reason token, with the
+# relayed quote's "in quotation marks" shortened to keep SKILL.md under 16384 bytes.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1463,7 +1478,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=3aeea32be525
+want=98a09322ca85
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"

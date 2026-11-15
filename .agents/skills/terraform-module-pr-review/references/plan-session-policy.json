@@ -11,12 +11,12 @@
         "s3:GetBucket*", "s3:GetEncryptionConfiguration", "s3:GetLifecycleConfiguration",
         "s3:GetReplicationConfiguration", "s3:GetAccelerateConfiguration",
         "s3:ListAllMyBuckets", "s3:ListBucket",
-        "kms:Describe*", "kms:List*", "kms:GetKeyPolicy", "kms:GetKeyRotationStatus",
+        "kms:Describe*", "kms:List*", "kms:GetKey*",
         "logs:Describe*", "logs:ListTagsForResource",
-        "ssm:Describe*", "ssm:ListTagsForResource",
+        "ssm:Describe*", "ssm:ListTagsForResource", "ssm:GetParameter", "ssm:GetParameters",
         "lambda:GetPolicy", "lambda:List*",
         "dynamodb:Describe*", "dynamodb:ListTables", "dynamodb:ListTagsOfResource",
-        "sqs:GetQueueAttributes", "sqs:GetQueueUrl", "sqs:ListQueues", "sqs:ListQueueTags",
+        "sqs:GetQueue*", "sqs:ListQueue*",
         "sns:GetTopicAttributes", "sns:ListTopics", "sns:ListTagsForResource",
         "elasticloadbalancing:Describe*", "autoscaling:Describe*",
         "rds:Describe*", "rds:ListTagsForResource",
@@ -39,17 +39,23 @@
       "Sid": "NoDataReads",
       "Effect": "Deny",
       "Action": [
-        "s3:GetObject*", "secretsmanager:GetSecretValue", "ssm:GetParameter*",
-        "kms:Decrypt", "kms:GenerateDataKey*", "lambda:GetFunction",
+        "s3:GetObject*", "secretsmanager:GetSecretValue",
+        "ssm:GetParametersByPath", "ssm:GetParameterHistory",
+        "kms:Decrypt", "kms:GenerateDataKey*", "lambda:GetFunction*",
         "logs:GetLogEvents", "logs:FilterLogEvents", "kinesis:GetRecords",
         "dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan", "sqs:ReceiveMessage",
-        "ecr:GetAuthorizationToken", "ecr:GetDownloadUrlForLayer",
-        "lambda:GetFunctionConfiguration", "ecs:DescribeTaskDefinition",
+        "ecr:Get*", "ecs:DescribeTaskDefinition",
         "ec2:DescribeLaunchTemplateVersions", "ec2:DescribeInstanceAttribute",
         "cloudfront:GetFunction", "iam:GetAccountAuthorizationDetails",
         "lambda:ListFunctions", "lambda:ListVersionsByFunction"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "PublicParametersOnly",
+      "Effect": "Deny",
+      "Action": ["ssm:GetParameter*"],
+      "NotResource": "arn:aws:ssm:*::parameter/aws/service/*"
     }
   ]
 }

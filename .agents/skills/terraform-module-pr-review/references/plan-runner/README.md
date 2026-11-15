@@ -24,7 +24,10 @@ a third proxy configuration that passes the Python package index alone
   downscoped by the pinned session policy and checked there with a write probe
   ([plan-pass.md](../plan-pass.md#credentials)), never the profile's own credentials. The
   policy's allow list is provisional until a CloudTrail trial run measures it, and what it
-  allows, configuration reads across the listed services, the head's code can use. `run-pass.sh` mounts them read-only as a
+  allows, configuration reads across the listed services, the head's code can use. It
+  also allows reads of the public AWS parameters under `/aws/service/` and of no account
+  parameter ([plan-pass.md](../plan-pass.md#credentials)); the SSM endpoint they need is
+  already in `allowlist-plan`. `run-pass.sh` mounts them read-only as a
   file and never passes them with `--env` or `--env-file`, so `docker inspect` shows only
   the file's path. `run-plan.sh`, the bare runner for the smoke test, still passes the
   profile's own credentials with `--env-file`, where `docker inspect` shows them until its
