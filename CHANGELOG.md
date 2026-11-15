@@ -1,3 +1,12 @@
+## [0.12.8](https://github.com/modulestf/modulestf/compare/v0.12.7...v0.12.8) (2026-11-15)
+
+
+### Bug Fixes
+
+* **pr-review:** Read the ladder lease owner's start time in the C locale and UTC ([#146](https://github.com/modulestf/modulestf/issues/146)) ([4a0e291](https://github.com/modulestf/modulestf/commit/4a0e291801b7ebf3476dc276c53d89361db5c4ee))
+
+
+
 ## [0.12.7](https://github.com/modulestf/modulestf/compare/v0.12.6...v0.12.7) (2026-11-15)
 
 
