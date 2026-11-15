@@ -1,3 +1,12 @@
+## [0.12.7](https://github.com/modulestf/modulestf/compare/v0.12.6...v0.12.7) (2026-11-15)
+
+
+### Bug Fixes
+
+* **pr-review:** Let a downloaded module's relative child stay anywhere in its package ([#145](https://github.com/modulestf/modulestf/issues/145)) ([b4d20b9](https://github.com/modulestf/modulestf/commit/b4d20b9493d2007db39c59a65a3a94b912c4e252))
+
+
+
 ## [0.12.6](https://github.com/modulestf/modulestf/compare/v0.12.5...v0.12.6) (2026-11-15)
 
 
