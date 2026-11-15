@@ -1,3 +1,12 @@
+# [0.12.0](https://github.com/modulestf/modulestf/compare/v0.11.4...v0.12.0) (2026-11-15)
+
+
+### Features
+
+* **pr-review:** Write a fix plan preview beside plan.json ([#138](https://github.com/modulestf/modulestf/issues/138)) ([8a9b469](https://github.com/modulestf/modulestf/commit/8a9b469ab093e678c3c13af6582813be6326b863))
+
+
+
 ## [0.11.4](https://github.com/modulestf/modulestf/compare/v0.11.3...v0.11.4) (2026-11-15)
 
 
