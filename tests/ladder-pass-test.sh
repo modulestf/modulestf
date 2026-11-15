@@ -369,7 +369,7 @@ check "the guard refuses a JSON test file, a mock file, a tests directory and no
 now=$(date +%s)
 for x in dead1x alive1 reuse1 noown1 noown2; do mkdir -p "$TMP/runs/pr-review.$x/ladder"; done
 dead=99999; while ps -p "$dead" > /dev/null 2>&1; do dead=$((dead - 1)); done
-me="$(ps -o lstart= -p $$ | tr -s ' \t' '__' | sed 's/^_//; s/_$//')"
+me="$(LC_ALL=C TZ=UTC ps -o lstart= -p $$ | tr -s ' \t' '__' | sed 's/^_//; s/_$//')"
 echo "$dead Mon_Jan_1_00:00:00_2024 $((now + 999)) aa" > "$TMP/runs/pr-review.dead1x/ladder/lease"
 echo "$$ $me $((now - 999)) aa" > "$TMP/runs/pr-review.alive1/ladder/lease"
 echo "$$ Mon_Jan_1_00:00:00_2024 $((now + 999)) aa" > "$TMP/runs/pr-review.reuse1/ladder/lease"
@@ -380,6 +380,47 @@ check "the sweep removes a run whose owner is gone, even before expiry" "$([ ! -
 check "the sweep keeps a run whose owner runs, even past expiry" "$([ -d "$TMP/runs/pr-review.alive1/ladder" ]; echo $?)"
 check "the sweep removes a run whose owner pid now names another process" "$([ ! -e "$TMP/runs/pr-review.reuse1/ladder" ]; echo $?)"
 check "an ownerless lease goes only after its day" "$([ ! -e "$TMP/runs/pr-review.noown1/ladder" ] && [ -d "$TMP/runs/pr-review.noown2/ladder" ]; echo $?)"
+# The start time is the same text in any zone or locale: a lease the script wrote for a live
+# owner (this shell) under one environment survives a sweep under another; dropping the
+# normalization is caught. The leases come from real runs, not from hand-made text.
+trig 'x' 'y' '[]' wrapper-change '["L3"]'
+lease_env() { # name, env...: a run of the script that writes this shell's lease under that environment
+  mkdir -p "$TMP/runs/pr-review.$1/clone"
+  env "${@:2}" bash "$LP" run "$TMP/runs/pr-review.$1" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l0.json" --owner-pid "$$" > /dev/null 2>&1
+}
+lease_env tzutc1 TZ=UTC LC_ALL=C
+lease_env tzoth1 TZ=Pacific/Auckland LC_ALL=C
+DELOC=de_DE.UTF-8; locale -a 2> /dev/null | grep -Eix 'de_DE\.utf-?8' > /dev/null || { echo "skip the non-C locale checks: $DELOC is not installed"; DELOC=; }
+[ -z "$DELOC" ] || lease_env loc1xx TZ=UTC LC_ALL="$DELOC"
+mkdir -p "$TMP/runs/pr-review.deadtz/ladder"; echo "$dead Mon_Jan_1_00:00:00_2024 $((now + 999)) aa" > "$TMP/runs/pr-review.deadtz/ladder/lease"
+mkdir -p "$TMP/mut"; cp -R "$REF"/. "$TMP/mut/"
+perl -pi -e 's/LC_ALL=C TZ=UTC ps/ps/' "$TMP/mut/ladder-pass.sh"
+reset; TZ=Asia/Tokyo LC_ALL=C run > /dev/null
+check "a lease written under TZ=UTC survives a sweep under another zone" "$([ -d "$TMP/runs/pr-review.tzutc1/ladder" ]; echo $?)"
+check "a lease written under another zone survives a sweep under TZ=UTC" "$([ -d "$TMP/runs/pr-review.tzoth1/ladder" ]; echo $?)"
+[ -z "$DELOC" ] || check "a lease written under a non-C locale survives a sweep under LC_ALL=C" "$([ -d "$TMP/runs/pr-review.loc1xx/ladder" ]; echo $?)"
+check "a lease whose owner is gone is still swept" "$([ ! -e "$TMP/runs/pr-review.deadtz/ladder" ]; echo $?)"
+reset; TZ=Asia/Tokyo bash "$TMP/mut/ladder-pass.sh" run "$RUND" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" > /dev/null 2>&1
+check "a sweep without the normalization deletes a live owner's run (mutation caught)" "$([ ! -e "$TMP/runs/pr-review.tzutc1/ladder" ]; echo $?)"
+# An empty ps answer for a live pid is not dead: a stub ps answers nothing for lstart.
+mkdir -p "$TMP/psstub" "$TMP/runs/pr-review.psempt/ladder"
+printf '#!/bin/sh\ncase "$*" in *lstart=*) exit 0 ;; esac\nexec /bin/ps "$@"\n' > "$TMP/psstub/ps"; chmod 755 "$TMP/psstub/ps"
+echo "$$ Mon_Jan_1_00:00:00_2024 $((now + 999)) aa" > "$TMP/runs/pr-review.psempt/ladder/lease"
+reset; PATH="$TMP/psstub:$PATH" run > /dev/null
+check "an empty ps answer for a live owner pid does not sweep its run" "$([ -d "$TMP/runs/pr-review.psempt/ladder" ]; echo $?)"
+# A live owner the caller may not signal (kill -0 fails with EPERM) still runs: pid 1, when this
+# test is not root, with its real start time, keeps its run; a copy that takes any kill -0
+# failure as dead is caught.
+if [ "$(id -u)" != 0 ] && [ "$(ps -o uid= -p 1 2> /dev/null | tr -d " ")" != "$(id -u)" ] && p1="$(LC_ALL=C TZ=UTC ps -o lstart= -p 1 2> /dev/null | tr -s ' \t' '__' | sed 's/^_//; s/_$//')" && [ -n "$p1" ]; then
+  for x in eperm1 eperm2; do mkdir -p "$TMP/runs/pr-review.$x/ladder"; echo "1 $p1 $((now + 999)) aa" > "$TMP/runs/pr-review.$x/ladder/lease"; done
+  reset; run > /dev/null
+  check "a live owner pid the caller may not signal does not sweep its run" "$([ -d "$TMP/runs/pr-review.eperm1/ladder" ]; echo $?)"
+  mkdir -p "$TMP/mut2"; cp -R "$REF"/. "$TMP/mut2/"
+  perl -pi -e 's/^  perl -e .exit\(\(kill\(0.*$/  kill -0 "\$1" 2> \/dev\/null || return 0/' "$TMP/mut2/ladder-pass.sh"
+  check "the EPERM mutation applies" "$(grep -q '^  kill -0 "\$1"' "$TMP/mut2/ladder-pass.sh"; echo $?)"
+  reset; bash "$TMP/mut2/ladder-pass.sh" run "$RUND" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" > /dev/null 2>&1
+  check "a sweep that takes EPERM as dead deletes that run (mutation caught)" "$([ ! -e "$TMP/runs/pr-review.eperm2/ladder" ]; echo $?)"
+else echo "skip the EPERM owner checks: running as root, pid 1 is ours or has no start time"; fi
 
 # --- the budget, taken from the script: each timeout is clipped to what is left
 eval "$(sed -n '/^left() {/,/^}/p' "$LP")"
