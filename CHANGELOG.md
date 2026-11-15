@@ -1,3 +1,12 @@
+## [0.12.5](https://github.com/modulestf/modulestf/compare/v0.12.4...v0.12.5) (2026-11-15)
+
+
+### Bug Fixes
+
+* **reviewer:** Calibrate four rules that raised weak MEDIUM findings ([#143](https://github.com/modulestf/modulestf/issues/143)) ([9fa26dd](https://github.com/modulestf/modulestf/commit/9fa26dde0f7b7b6b0ea269f3c0cb4a2c222d196f))
+
+
+
 ## [0.12.4](https://github.com/modulestf/modulestf/compare/v0.12.3...v0.12.4) (2026-11-15)
 
 
