@@ -804,8 +804,8 @@ run_capped() { # seconds, output file, then the command
   perl -e "$CAP_PL" "$out" "$@" < /dev/null &
   pid=$!; PGIDS="$PGIDS $pid"; n=0; killed=
   while kill -0 "$pid" 2>/dev/null; do
-    if [ "$n" -ge "$lim" ]; then kill -KILL -- "-$pid" 2>/dev/null; killed=1; break; fi
-    sleep 1; n=$((n + 1))
+    if [ "$n" -ge "$((lim * 10))" ]; then kill -KILL -- "-$pid" 2>/dev/null; killed=1; break; fi
+    sleep 0.1; n=$((n + 1)) # tenths of a second, so a command that exits at once does not wait a whole second
   done
   wait "$pid"; rc=$?
   if [ -n "$killed" ] || [ -e "$out.cap" ]; then return 124; fi

@@ -242,6 +242,7 @@ for raw in "$@"; do
 done
 
 RUN=
+RUN_BASE=
 RUN_REAL=
 TPID=
 WPID=
@@ -259,7 +260,7 @@ cleanup() {
   [ -n "$TPID" ] && signal_group KILL "$TPID"
   [ -n "$WPID" ] && child_of "$WPID" "$MYPID" && kill -TERM "$WPID" 2>/dev/null
   [ -n "$PENDING" ] && rm -f -- "$PENDING"
-  if [ -n "$RUN" ] && [[ $RUN == /tmp/tfdocs-pass.* ]] && [ -d "$RUN" ] && [ ! -L "$RUN" ]; then
+  if [ -n "$RUN" ] && [[ $RUN == "$RUN_BASE"/tfdocs-pass.* ]] && [ -d "$RUN" ] && [ ! -L "$RUN" ]; then
     rm -rf -- "$RUN"
   fi
 }
@@ -273,7 +274,8 @@ inside_or_above() { # true when real path $1 is the workspace, inside it, or abo
 
 # Step 4: the run directory.
 make_run() {
-  RUN=$(mktemp -d /tmp/tfdocs-pass.XXXXXXXX) || { RUN=; return 1; }
+  RUN_BASE=$(cd -P -- "${TMPDIR:-/tmp}" && pwd -P) || return 1
+  RUN=$(mktemp -d "$RUN_BASE/tfdocs-pass.XXXXXXXX") || { RUN=; return 1; }
   chmod 700 "$RUN" || return 1
   RUN_REAL=$(cd -P -- "$RUN" && pwd -P) || return 1
   inside_or_above "$RUN_REAL" && return 1

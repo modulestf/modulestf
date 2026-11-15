@@ -36,6 +36,8 @@
 # skill's confirmed step (SKILL.md, Rule 1).
 set -uo pipefail
 set -f
+# SHA-256 with GNU coreutils or macOS sha256sum, else the slower Perl shasum.
+if command -v sha256sum > /dev/null 2>&1; then sha256() { sha256sum "$@"; }; else sha256() { shasum -a 256 "$@"; }; fi
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 sha_re='^[0-9a-f]{40}$'
@@ -420,7 +422,7 @@ schema_inputs() {
       [[ "$m" =~ ^100(644|755)$ && "$p" == *.tf && "$s" =~ ^[0-9]+$ ]] && [ "$s" -le 1048576 ] || continue
       if [ -n "$r" ]; then [[ "$p" == "$r"* ]] || continue; p="${p#"$r"}"; fi
       [[ "$p" =~ ^[A-Za-z0-9._/-]+$ && "$o" =~ ^[0-9a-f]{40}$ ]] || return 1
-      h="$(clone_git cat-file blob "$o" | shasum -a 256)" || return 1
+      h="$(clone_git cat-file blob "$o" | sha256)" || return 1
       out+="$c:${h%% *}:$p"$'\n'; n=$((n + 1))
       [ "$n" -le 600 ] && [ "${#out}" -le 96000 ] || return 1
     done < "$RUN/state/schema-tree"

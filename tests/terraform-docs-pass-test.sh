@@ -103,7 +103,7 @@ stale_case() { # name, workspace prepared, expected line, entries...
   check "$name: workspace unchanged" "$(unchanged)"
 }
 
-before_runs=$(ls -d /tmp/tfdocs-pass.* 2>/dev/null | wc -l)
+before_runs=$(ls -d "${TMPDIR:-/tmp}"/tfdocs-pass.* 2>/dev/null | wc -l)
 
 # Constants from the real profile.
 "$TP" --profile "$PROFILE_SRC" --print-constants >"$TMP/const"
@@ -294,7 +294,7 @@ check "watchdog killed: run ends at once" "$([ $((SECONDS - t0)) -lt 15 ]; echo 
 # Clean up on INT and TERM while the tool runs.
 for sig in INT TERM; do
   newws; printf '# STUB:sleep:%s\n' "$TMP/stub.pid" >>"$W/main.tf"; rm -f "$TMP/stub.pid"; snap
-  n_before=$(ls -d /tmp/tfdocs-pass.* 2>/dev/null | wc -l)
+  n_before=$(ls -d "${TMPDIR:-/tmp}"/tfdocs-pass.* 2>/dev/null | wc -l)
   set -m
   TFDOCS_PASS_TOOL_SECONDS=59 "$TP" --profile "$TMP/PROFILE.md" --workspace "$W" README.md >"$TMP/out" 2>&1 &
   pid=$!
@@ -304,7 +304,7 @@ for sig in INT TERM; do
   wait "$pid" 2>/dev/null
   sleep 0.5
   check "signal $sig: tool stopped" "$(! kill -0 "$(cat "$TMP/stub.pid" 2>/dev/null || echo 0)" 2>/dev/null; echo $?)"
-  check "signal $sig: run directory removed" "$([ "$(ls -d /tmp/tfdocs-pass.* 2>/dev/null | wc -l)" -le "$n_before" ]; echo $?)"
+  check "signal $sig: run directory removed" "$([ "$(ls -d "${TMPDIR:-/tmp}"/tfdocs-pass.* 2>/dev/null | wc -l)" -le "$n_before" ]; echo $?)"
   check "signal $sig: workspace unchanged" "$(unchanged)"
 done
 
@@ -485,7 +485,7 @@ check "readme regions: the profile's hook settings still give differs" "$(grep -
 # Last, as it writes the clone: a copy that runs the pass on the clone itself.
 rr_mut "the pass run on the clone" 's/--workspace "\$WS"/--workspace "\$clone"/'
 
-after_runs=$(ls -d /tmp/tfdocs-pass.* 2>/dev/null | wc -l)
+after_runs=$(ls -d "${TMPDIR:-/tmp}"/tfdocs-pass.* 2>/dev/null | wc -l)
 check "clean up: no run directory left" "$([ "$after_runs" -le "$before_runs" ]; echo $?)"
 
 if [ "$fails" -gt 0 ]; then echo "$fails failed"; exit 1; fi

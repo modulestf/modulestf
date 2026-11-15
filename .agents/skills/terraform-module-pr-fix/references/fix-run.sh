@@ -29,6 +29,8 @@
 set -uo pipefail
 set -f
 umask 077
+# SHA-256 with GNU coreutils or macOS sha256sum, else the slower Perl shasum.
+if command -v sha256sum > /dev/null 2>&1; then sha256() { sha256sum "$@"; }; else sha256() { shasum -a 256 "$@"; }; fi
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 PRR="$(cd "$HERE/../../terraform-module-pr-review/references" 2> /dev/null && pwd -P)" || PRR=/nonexistent
@@ -55,7 +57,7 @@ delete_vtree() { # the verification tree of a verify that is running, under the 
   VTREE=""
 }
 delete_xtree() { # the extract of write-path.md, Allowed Paths: only the verified path
-  case "${XTREE-}" in /tmp/pr-fix-extract.??????) chmod -R u+w "$XTREE" 2> /dev/null; rm -rf -- "$XTREE" ;; esac
+  case "${XTREE-}" in "${ROOT-}"/pr-fix-extract.??????) chmod -R u+w "$XTREE" 2> /dev/null; rm -rf -- "$XTREE" ;; esac
   XTREE=""
 }
 abort() { echo "fix-run.sh: abort: $1"; delete_xtree; delete_vtree; delete_run && echo "run directory deleted"; exit 1; }
@@ -106,7 +108,7 @@ trust_lines() {
     [ ! -f "$RUN/rounds/$k/review.json" ] || list="$list rounds/$k/review.json rounds/$k/findings-repo.json rounds/$k/dispositions.json"
   done
   for f in $list; do
-    if [ -f "$RUN/$f" ]; then printf '%s %s\n' "$(shasum -a 256 < "$RUN/$f" | cut -d' ' -f1)" "$f"
+    if [ -f "$RUN/$f" ]; then printf '%s %s\n' "$(sha256 < "$RUN/$f" | cut -d' ' -f1)" "$f"
     else printf 'absent %s\n' "$f"; fi
   done
 }
@@ -529,14 +531,14 @@ my @out = eval {
 if (!@out) { my $e = $@; chomp $e; @out = ("refuse", $e, "none", "none") }
 print join("\t", @out), "\n";'
 
-# The extract of write-path.md: mktemp -d under /tmp, TMPDIR ignored, mode 700, verified outside the
+# The extract of write-path.md: mktemp -d under the TMPDIR root, beside the run directory, mode 700, verified outside the
 # clone and the run directory before use, removed by the traps on every exit. Then the docs pass on
 # the selection rule over the frozen merge base and the given tree. Sets XTREE; the pass's report is
 # $RUN/rule/docs.out and its workspace $XTREE/tree.
 docs_extract() { # tree-ish, its ls-tree listing
   local real
   trap delete_xtree EXIT; trap on_int INT TERM
-  XTREE="$(mktemp -d /tmp/pr-fix-extract.XXXXXX)" || { XTREE=""; return 1; }
+  XTREE="$(mktemp -d "$ROOT/pr-fix-extract.XXXXXX")" || { XTREE=""; return 1; }
   real="$(cd -P -- "$XTREE" && pwd -P)" || return 1
   case "$real" in "$RUN" | "$RUN"/* | "$ROOT"/pr-fix.*) XTREE=""; return 1 ;; esac
   chmod 700 "$XTREE" && mkdir "$XTREE/tree" && export_tree "$1" "$XTREE/tree" "$XTREE/index" nolinks || return 1
@@ -968,7 +970,7 @@ OUTSIDE_PL='local $/; my @s; for my $f (@ARGV) { open(my $h, "<:raw", $f) or exi
 # versions.tf the clause 3 exception admits, or a modified README.md whose bytes outside the
 # BEGIN_TF_DOCS interiors equal the parent's (clause 6 judges the interiors). Prints each refusal.
 gen_only() { # parent, commit
-  local d="$RUN/gen" st p ex bad=0
+  local d="$RUN/gen" st p q ex bad=0
   rm -rf "$d"; mkdir "$d"
   G diff-tree -r -z --name-only --no-renames "$1" "$2" > "$d/names" 2> /dev/null &&
     G diff-tree -r -z --name-status --no-renames "$1" "$2" > "$d/st" 2> /dev/null || { echo "not generated-only: $2: git diff-tree failed"; return 1; }
@@ -977,7 +979,8 @@ gen_only() { # parent, commit
     if [ "$st" = M ] && jq -e --arg p "$p" 'any(.[]; . == $p)' <<< "$ex" > /dev/null; then continue; fi
     if [ "$st" = M ] && [ "${p##*/}" = README.md ] && G cat-file blob "$1:$p" > "$d/a" 2> /dev/null &&
       G cat-file blob "$2:$p" > "$d/b" 2> /dev/null && perl -e "$OUTSIDE_PL" "$d/a" "$d/b"; then continue; fi
-    bad=1; echo "not generated-only: $2 $(printf '%s' "$p" | jq -Rr 'if test("^[ -~]{1,255}$") then . else tojson end')"
+    # An assignment, not a word of echo: bash 3.2 brace-expands {1,255} in a quoted command substitution.
+    bad=1; q="$(printf '%s' "$p" | jq -Rr 'if test("^[ -~]{1,255}$") then . else tojson end')"; echo "not generated-only: $2 $q"
   done < "$d/st"
   [ "$bad" = 0 ]
 }

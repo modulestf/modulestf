@@ -16,8 +16,11 @@
 # A negative self-check mutates temp copies of fix-run.sh and fix-run.jq and confirms each named
 # case fails. Needs bash, git, jq and perl.
 # Run: tests/pr-fix-test.sh (KEEP=1 keeps the temporary directory; PR_FIX_TEST_SHELL=/bin/bash
-# runs the script under that shell)
+# runs the script under that shell; PR_FIX_TEST_SHARD=i/N runs every case but only the mutations
+# whose index modulo N is i, so N runs with i = 0 to N-1 cover the whole self-check)
 set -uo pipefail
+MS="${PR_FIX_TEST_SHARD-}"
+case "$MS" in "") ;; *[!0-9/]* | /* | */ | */*/* | */0*) echo "FAIL PR_FIX_TEST_SHARD must be i/N"; exit 1 ;; *) [ "${MS%/*}" -lt "${MS#*/}" ] || { echo "FAIL PR_FIX_TEST_SHARD must be i/N with i < N"; exit 1; } ;; esac
 
 SRC="$(cd "$(dirname "$0")/.." && pwd -P)"
 SKILLS="$SRC/.agents/skills"
@@ -55,7 +58,7 @@ printf '%s\n' "\$*" >> "$TMP/git-argv.log"
 env | grep -iE 'token|secret|canary' >> "$TMP/git-env.log"
 # The clause 6 extract: after its checkout, record every symbolic link in it.
 case " \$* " in
-  *" checkout-index "*" --work-tree=/tmp/pr-fix-extract."* | *" --work-tree=/tmp/pr-fix-extract."*" checkout-index "*)
+  *" checkout-index "*" --work-tree=$TMP/tmp/pr-fix-extract."* | *" --work-tree=$TMP/tmp/pr-fix-extract."*" checkout-index "*)
     wt=""; for a in "\$@"; do case "\$a" in --work-tree=*) wt="\${a#--work-tree=}" ;; esac; done
     "$REALGIT" -c "url.file://$REM/.insteadOf=https://github.com/" "\$@"; rc=\$?
     printf 'extract %s\n' "\$wt" >> "$TMP/extract-links.log"; find "\$wt" -type l >> "$TMP/extract-links.log"; exit \$rc ;;
@@ -1387,7 +1390,7 @@ size_fix() {
 }
 clean_tree() { [ -z "$(CG status --porcelain --untracked-files=all --ignored)" ]; }
 interior() { awk -v b="$B1" -v e="$E1" '$0 == e { f = 0 } f { print } $0 == b { f = 1 }' "$1"; }
-nx() { find /tmp/ -maxdepth 1 -name 'pr-fix-extract.*' 2> /dev/null | LC_ALL=C sort; } # the extracts that exist
+nx() { find "$TMP/tmp/" -maxdepth 1 -name 'pr-fix-extract.*' 2> /dev/null | LC_ALL=C sort; } # the extracts that exist
 CGI() { env -i PATH="$PATH" HOME="$HOME" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_INDEX_FILE="$TMP/craft.idx" "$REALGIT" -C "$RUN/clone" "$@"; }
 craft() { # parent, then "add <mode> <path> <content>" or "rm <path>": a commit by the gate identity
   local par="$1" op kw mode path content blob; shift
@@ -1583,7 +1586,7 @@ t_extract_links_() { # the clause 6 extract holds no symbolic link; an author's 
   pilot_run "$PS" || return 1
   size_fix; : > "$TMP/extract-links.log"
   fr docs "$RUN" --round 1 > /dev/null 2>&1 && fr commit "$RUN" --round 1 > "$TMP/c.out" 2>&1 || { cat "$TMP/c.out"; return 1; }
-  grep -q '^extract /tmp/pr-fix-extract\.' "$TMP/extract-links.log" && [ "$(grep -vc '^extract ' "$TMP/extract-links.log")" = 0 ] ||
+  grep -q "^extract $TMP/tmp/pr-fix-extract\\." "$TMP/extract-links.log" && [ "$(grep -vc '^extract ' "$TMP/extract-links.log")" = 0 ] ||
     { cat "$TMP/extract-links.log"; return 1; }
   grep -qx 'stale examples/complete the README is not a regular file' "$RUN/rule/docs.out" &&
     grep -qx 'stale modules/a a .tf in its directory is a symbolic link' "$RUN/rule/docs.out" && grep -qx 'regenerated .' "$RUN/rule/docs.out" ||
@@ -2166,6 +2169,7 @@ t_gen_refuse; check "generated-only: a commit that edits README prose beside the
 
 oc=0
 mutate() { # name, perl substitution, case function
+  if [ -n "$MS" ] && [ "$((oc % ${MS#*/}))" != "${MS%/*}" ]; then oc=$((oc + 1)); return 0; fi # another shard runs it
   local d="$TMP/mut-$oc/skills"; oc=$((oc + 1)); mkdir -p "$d/terraform-module-pr-fix/references"
   ln -s "$SKILLS/terraform-module-pr-review" "$d/terraform-module-pr-review"
   ln -s "$SKILLS/terraform-module-maintainer" "$d/terraform-module-maintainer"
@@ -2247,7 +2251,7 @@ mutate "the staging check dropped at the commit" 's/  if ! stage_check > "\$RUN\
 mutate "no restoration after a refusal" 's/restore; fail "the docs step refuses/fail "the docs step refuses/' t_stage
 mutate "a linked README not stale" 's/\|\| stale="the README is not a regular file"/|| true/' t_docs_links
 mutate "a linked .tf not stale" 's/\] \|\| stale="a \.tf in its directory is a symbolic link"/] || true/' t_docs_links
-mutate "the extract kept" 's/case "\$\{XTREE-\}" in \/tmp\/pr-fix-extract\.\?\?\?\?\?\?\)/case "\${XTREE-}" in \/nonexistent)/' t_pilot
+mutate "the extract kept" 's/case "\$\{XTREE-\}" in "\$\{ROOT-\}"\/pr-fix-extract\.\?\?\?\?\?\?\)/case "\${XTREE-}" in \/nonexistent)/' t_pilot
 mutate "the outside findings flag dropped" 's/"outside findings: \\\(if test/"flag: \\(if test/' t_pilot
 mutate "the docs results not in the review task" 's/    \[ ! -f "\$RD\/docs\.txt" \] \|\| sed [^\n]*\n//' t_pilot
 mutate "the patch-only restore to the pinned head" 's/  if jq -e \x27\.commit_identity == null\x27 "\$RUN\/state\.json" > \/dev\/null && \[ -f "\$RUN\/reviewed\.json" \]; then/  if false; then/' t_noident_restore
@@ -2290,7 +2294,7 @@ mutate "an empty regeneration committed" 's/if \[ "\$t" = "\$\(G rev-parse "\$pa
 mutate "a profile that declares none accepted" 's/\[ "\$GENS" != none \] \|\| fail/true || fail/' t_gen_none
 mutate "README bytes outside the region not compared" 's/exit\(\$s\[0\] eq \$s\[1\] \? 0 : 1\)/exit(0)/' t_gen_refuse
 mutate "the generated-only test not run at the gate" 's/\[ -z "\$gen" \] \|\| \[ -z "\$p1" \] \|\| gen_only "\$p1" "\$c" < \/dev\/null/true/' t_gen_refuse
-mutate "any path taken as generated" 's/    bad=1; echo "not generated-only: \$2 /    continue; echo "not generated-only: \$2 /' t_gen_refuse
+mutate "any path taken as generated" 's/    bad=1; q=/    continue; q=/' t_gen_refuse
 mutate "an absent generated-artifacts.txt read as both generators" 's/\{ GENS=none; return 0; \}/{ GENS="wrapper-versions terraform-docs"; PIN=".github\/workflows\/pre-commit.yml TERRAFORM_DOCS_VERSION"; return 0; }/' t_gen_none
 mutate "an unknown line of generated-artifacts.txt skipped" 's/      \*\) return 1 ;;\n    esac\n  done < "\$f"/      *) ;;\n    esac\n  done < "\$f"/' t_gen_file
 mutate "terraform-docs accepted without exactly one pin" 's/ && \[ "\$np" = "\$t" \] \|\| return 1/ || return 1/' t_gen_file
@@ -2309,4 +2313,4 @@ mutate "two pin lines accepted" 's/elif \[ "\$n" = 1 \] && grep -E/elif grep -E/
 mutate "a pin that is a link or a tree read" 's/re=\$\x27\^100644 blob (\(\[0-9a-f\]\{40,64\}\)\\t\(\.\*\)\$\x27 path=)/re=\$\x27^[0-9]{6} [a-z]+ $1/' t_gen_pin
 
 echo
-if [ "$fails" -eq 0 ]; then echo "pr-fix: all checks hold"; else echo "pr-fix: $fails failed"; exit 1; fi
+if [ "$fails" -eq 0 ]; then echo "pr-fix: all checks hold${MS:+ (mutation shard $MS)}"; else echo "pr-fix: $fails failed"; exit 1; fi

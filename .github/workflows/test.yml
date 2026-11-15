@@ -13,9 +13,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  list:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 5
+    outputs:
+      jobs: ${{ steps.list.outputs.jobs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: list
+        name: List the suites
+        run: echo "jobs=$(bash tests/run-all.sh --list)" >> "$GITHUB_OUTPUT"
+
+  suite:
+    needs: list
+    name: ${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.list.outputs.jobs) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -23,12 +42,23 @@ jobs:
           fetch-depth: 0 # reviewer-index-test.sh compares sentences with a recorded base commit
       - name: Install test tools
         run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep zsh
-      - name: Run tests
+      - name: Run the suite
+        env:
+          SUITE: ${{ matrix.suite }}
+          PR_FIX_TEST_SHARD: ${{ matrix.shard }}
+        run: bash "tests/$SUITE"
+
+  # One stable check name over the whole matrix.
+  test:
+    needs: [list, suite]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every suite passed
+        env:
+          LIST: ${{ needs.list.result }}
+          SUITES: ${{ needs.suite.result }}
         run: |
-          rc=0
-          for t in tests/*.sh; do
-            echo "::group::$t"
-            bash "$t" || { echo "::error::$t failed"; rc=1; }
-            echo "::endgroup::"
-          done
-          exit "$rc"
+          echo "list: $LIST, suites: $SUITES"
+          [ "$LIST" = success ] && [ "$SUITES" = success ]
