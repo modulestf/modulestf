@@ -66,7 +66,13 @@ S="$L/scratch"
 pathok() { printf '%s\n' "$1" | grep -Eqx -- "$PATH_RE" && case "$1" in *..*) false ;; esac; }
 realp() { perl -MCwd=realpath -e 'my $r = realpath(shift); print $r if defined $r' "$1"; }
 owner_start() { # pid: its start time as one word, empty when it is not running
-  ps -o lstart= -p "$1" 2> /dev/null | tr -s ' \t' '__' | sed 's/^_//; s/_$//'
+  # C locale and UTC, so the text is the same whatever TZ and LC_TIME the caller has
+  LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2> /dev/null | tr -s ' \t' '__' | sed 's/^_//; s/_$//'
+}
+owner_dead() { # pid, recorded start: true when the pid is not running or runs from another start
+  kill -0 "$1" 2> /dev/null || return 0
+  local now; now="$(owner_start "$1")"
+  [ -n "$now" ] && [ "$now" != "$2" ] # an empty answer for a live pid is not dead
 }
 sha256() { perl -MDigest::SHA -e 'print Digest::SHA->new(256)->addfile(shift)->hexdigest' "$1"; }
 firstline() { # file: the decisive error line, plain and bounded
@@ -292,7 +298,7 @@ setup() {
     case "$pid" in ''|*[!0-9]*) continue ;; esac
     case "$exp" in ''|*[!0-9]*) continue ;; esac
     if [ "$pid" = 0 ]; then [ "$now" -gt "$exp" ] || continue
-    else [ "$(owner_start "$pid")" != "$start" ] || continue; fi
+    else owner_dead "$pid" "$start" || continue; fi
     chmod -R u+w "$d" 2> /dev/null; rm -rf -- "$d"
   done
   # Renewed on every call: the owning review process, its start time, a day ahead.
