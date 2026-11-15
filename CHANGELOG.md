@@ -1,3 +1,12 @@
+## [0.11.3](https://github.com/modulestf/modulestf/compare/v0.11.2...v0.11.3) (2026-11-15)
+
+
+### Bug Fixes
+
+* **pr-fix:** Surface a round finding late only for a local text rule on an unchanged span and count a closed item as progress ([#147](https://github.com/modulestf/modulestf/issues/147)) ([370b3b8](https://github.com/modulestf/modulestf/commit/370b3b80623f7566549ff716cbfdbac71967aad0))
+
+
+
 ## [0.11.2](https://github.com/modulestf/modulestf/compare/v0.11.1...v0.11.2) (2026-11-15)
 
 
