@@ -64,8 +64,9 @@
 #   The Checks signal reads as jobless when the accepted checks file's only unknown is workflows
 #   that ended action_required or failure without starting a job: approve with nits at best
 #   (verdict.md, Host Signals).
-#   The run file may carry two keys more: "examples": {"count": n, "validated": n}, the selected
-#   examples verified and how many passed `validate`, which COMPACT needs, and "plan_mode",
+#   The run file may carry two keys more: "examples": {"count": n, "skipped": n, "validated": n},
+#   the selected examples, those skipped as a version bump only and those that passed
+#   `validate`, which COMPACT needs, and "plan_mode",
 #   "laptop" or "runner", the plan pass mode of the plan record; a gate hit is a cause COMPACT
 #   admits only after a laptop-mode pass. coverage may carry three keys more, all or none:
 #   "covered_skips", the "covered" list skip-coverage.sh prints, [{"dir", "gate": "G1|G2|G3|role|docker",
