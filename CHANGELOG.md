@@ -1,3 +1,12 @@
+## [0.11.1](https://github.com/modulestf/modulestf/compare/v0.11.0...v0.11.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **reviewer:** Calibrate rule severities and scope to the module family's release practice ([#150](https://github.com/modulestf/modulestf/issues/150)) ([d60d2a8](https://github.com/modulestf/modulestf/commit/d60d2a834ce01aa00056fef89df81ea5f2d4923c)), closes [modulestf/facts#38](https://github.com/modulestf/facts/issues/38) [modulestf/facts#38](https://github.com/modulestf/facts/issues/38)
+
+
+
 # [0.11.0](https://github.com/modulestf/modulestf/compare/v0.10.0...v0.11.0) (2026-11-14)
 
 
