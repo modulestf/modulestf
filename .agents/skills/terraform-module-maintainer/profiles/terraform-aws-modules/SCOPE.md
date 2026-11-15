@@ -34,11 +34,21 @@ Any module may add these resource types in any boundary directory. The list is c
 | `aws_vpc_security_group_ingress_rule` | Network access |
 | `aws_vpc_security_group_egress_rule` | Network access |
 | `aws_security_group_rule` | Network access, in the older single-rule form |
+| `time_sleep` | A wait out of eventual consistency, as [Waiting Out Provider Eventual Consistency](../../references/module-structure.md#waiting-out-provider-eventual-consistency) describes |
 
 Most services need identity, logs and network access, and the family already creates them
 beside its services: `terraform-aws-efs`, `terraform-aws-rds-aurora` and
 `terraform-aws-elasticache` declare security groups of their own. An adjunct is exempt from
 the boundary, not from the edge rule: an IAM role that nothing uses is a maintainer decision.
+
+`time_sleep` is the wait resource that
+[module-structure.md](../../references/module-structure.md#waiting-out-provider-eventual-consistency)
+calls the accepted remedy, and the family already uses it: `terraform-aws-ecs` waits for its
+capacity providers in `modules/cluster`. Its provider is `hashicorp/time`, so a module whose
+base has no `hashicorp/time` provider still takes the provider rule for it: the first wait
+lands after an `Allowed providers` entry for `hashicorp/time` in the base `docs/SCOPE.md`. A
+wait ordered only by `depends_on` has no edge: its `triggers` name the block it waits for. The
+scope rules do not read the comment the guide asks the wait to carry.
 
 `aws_kms_key` is deliberately not an adjunct. A key is a service of its own, with its own
 policy, rotation and deletion window, and a module takes its ARN as an input: composition
@@ -208,6 +218,8 @@ Each case names the rule and the outcome. Destinations are from
 | An S3 bucket module adds `aws_db_instance` | Ban (C1), outside the boundary. Destination: the caller, which composes the family's RDS module and passes the identifier in |
 | A module whose base manages no `aws_s3_access_point` adds one at the root | Ban (C1). The stem `aws_s3_bucket` does not prefix it and it is not an adjunct. This is the stated cost of strict growth. Destination: the base first, with an `Allowed types` entry |
 | The change adds `docs/SCOPE.md` allowing `aws_db_instance`, and adds an `aws_db_instance` | Ban (C1) still. The head's `docs/SCOPE.md` is never read. The new file itself passes the layout rule |
+| `terraform-aws-ecs` pull request 433 adds `time_sleep.infrastructure_iam_role` to `modules/service`, whose `triggers` read `aws_iam_role.infrastructure_iam_role`, a base block there | No finding. `time_sleep` is an adjunct, the reference is an edge, and `hashicorp/time` is a base provider because `modules/cluster` already uses it. With only `depends_on` it is a maintainer decision (C2) |
+| A module with no `hashicorp/time` provider on its base adds a `time_sleep` | Ban (A1) for `hashicorp/time`. Destination: the base first, with an `Allowed providers` entry |
 | `helm` is added to `required_providers` | Ban (A1): `hashicorp/helm` is not a base provider |
 | A root `module` block with source `terraform-aws-modules/iam/aws` | Ban (A2): not a local source |
 | The change adds `.checkov.yaml` and a checkov hook | Two bans: [No new scanners or linters](#no-new-scanners-or-linters) on `.checkov.yaml`, [Pre-commit hooks](#pre-commit-hooks) on `.pre-commit-config.yaml` |
