@@ -158,6 +158,14 @@ def behaviour_gaps: if . == null then 0 elif .status == "not-run" then 1
   else ([(.triggers[] | select((ci_gated or floor_ok) | not)), .claims[] | select(.state == "unverifiable")] | length) + .capped end;
 def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select(.state == "refuted")] | length end;
 
+# A change whose behaviour triggers all ended inert is an inert change for plan coverage (verdict.md,
+# rule 4), whatever the classifier's own call. The caller also skips it beside any other rule 4
+# unknown (has_unknown), which already covers a cap and an unverified claim; the clauses here stay
+# as a second lock, held by their own mutations. Fail closed: the step ran, no trigger is over the cap,
+# there is at least one trigger, every trigger is inert and every claim is verified.
+def triggers_inert: . != null and .status == "ran" and .capped == 0 and (.triggers | length) > 0
+  and all(.triggers[]; .state == "inert") and all(.claims[]; .state == "verified");
+
 # A claim.* finding words a refuted state; one with no refuted state in the behaviour object is
 # refused.
 def claims_consistent($findings; $run):
@@ -425,6 +433,11 @@ def gap_rules: ["review.check-not-run", "review.no-change-identified", "review.v
 # unregistered MEDIUM is a gap of rule 4, never a known blocker.
 def known_medium: any(.[]; .severity == "MEDIUM" and (.rule_id | startswith("review.") | not));
 
+# Rule 4's unknowns other than plan coverage.
+def has_unknown:
+  (.findings | map(select(.rule_id != "review.tool-disputed"))) as $f | .signals as $g
+  | .triage or any($g[]; . == "unknown") or any($f[]; .rule_id | IN(gap_rules[])) or .gaps > 0;
+
 def ladder:
   (.findings | map(select(.rule_id != "review.tool-disputed"))) as $f
   | .signals as $g
@@ -436,8 +449,7 @@ def ladder:
   elif has_sev("CRITICAL") then {rule: 1, verdict: "block"}
   elif has_sev("HIGH") or .refuted > 0 then {rule: 2, verdict: "block"}
   elif any($g.checks, $g.review_decision, $g.mergeability; . == "fail") then {rule: 3, verdict: "block"}
-  elif ($m | not) and (.triage or any($g[]; . == "unknown")
-       or any($f[]; .rule_id | IN(gap_rules[])) or .gaps > 0 or .unplanned_open > 0)
+  elif ($m | not) and (has_unknown or .unplanned_open > 0)
     then {rule: 4, verdict: "inconclusive"}
   elif ($m | not) and .unresolved > 0 then {rule: 5, verdict: "changes suggested"}
   elif has_sev("MEDIUM") then {rule: 6, verdict: "block"}
@@ -518,6 +530,7 @@ def texts: {
   "unplanned-more": "- {count} more examples that were not planned are not listed.",
   "unplanned-no-examples": "- The module has no example directory, so no example could be planned.",
   "unplanned-inert": "- The change reaches no Terraform configuration, so the examples below that were not planned leave nothing unknown.",
+  "unplanned-triggers-inert": "- Every behaviour change is inert, so the examples below that were not planned leave nothing unknown.",
   "unplanned-covered": "- Not planned: {dir} ({gate} hit in {path}, same at base {base}).",
   "unplanned-covered-downloaded": "- Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it).",
   "unplanned-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
@@ -590,6 +603,7 @@ def texts: {
   "compact-fix": "  - Fix: {fix}",
   "evidence-summary": "Evidence and notes",
   "evidence-not-planned": "- Not planned: {names}.",
+  "evidence-not-planned-triggers-inert": "- Not planned: {names} ({reasons}). Every behaviour change is inert, so no plan was needed.",
   "compact-covered-one": "1 of {total} examples was not planned because of the review safety checks; the changed code was planned {where} (see notes).",
   "compact-covered-many": "{count} of {total} examples were not planned because of the review safety checks; the changed code was planned {where} (see notes).",
   "rationale-covered-one": "1 of {total} examples was not planned because of the review safety checks; the changed code was planned {where}, as listed below.",
@@ -872,14 +886,14 @@ def gap_lines($h; $run; $b; $p; $cov):
   + [ $run.verify_gaps[:100][]
       | tx("verification"; {dir, reason: (if .reason == "init failed" then "`init` failed" else .reason end)}) ]
   + ($run.verify_gaps | length - 100 | if . > 0 then [tx("verification-more"; {count: .})] else [] end)
-  + (if $run.coverage.inert and $run.coverage.unplanned != [] then [tx("unplanned-inert")] else [] end)
+  + (if $run.coverage.inert and any($run.coverage.unplanned[]; .reason != "no example directory") then [tx(if $run.coverage.by_triggers then "unplanned-triggers-inert" else "unplanned-inert" end)] else [] end)
   # Covered skips, information and no gap, take the place of the reason clauses.
   + (if $cov != [] then covered_lines("unplanned-covered"; $cov; $run) else
   # One clause per reason, in the reason list's order, with its full count; under it the names of
   # the first 100 examples overall.
      ($run.coverage.unplanned[:100] as $shown
       | [ unplanned_reasons[] as $r | [$run.coverage.unplanned[] | select(.reason == $r)] as $all | select($all != [])
-          | if $r == "no example directory" then tx("unplanned-no-examples")
+          | if $r == "no example directory" then (if $run.coverage.by_triggers then empty else tx("unplanned-no-examples") end)
             else ([tx(if ($all | length) == 1 then "unplanned-group-one" else "unplanned-group-many" end; {count: ($all | length), reason: $r})]
                   + [$shown[] | select(.reason == $r) | tx("unplanned-name"; {dir})] | join("\n")) end ])
      + ($run.coverage.unplanned | length - 100 | if . > 0 then [tx("unplanned-more"; {count: .})] else [] end) end)
@@ -1126,7 +1140,11 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
   | [$o[] | select(routed | not) | tx("compact-finding"; {severity, rule_id, location: loc($p), summary})
        + "\n" + tx("compact-fix"; {fix: .suggested_fix})] as $bullets
   | ((if $cov != [] then covered_lines("evidence-covered"; $cov; $run)
-      elif $names == [] then [] else [tx("evidence-not-planned"; {names: ($names | name_list)})] end)
+      elif $names == [] then []
+      elif $run.coverage.by_triggers then
+        [tx("evidence-not-planned-triggers-inert"; {names: ($names | name_list),
+           reasons: ([$run.coverage.unplanned[] | select(.reason != "no example directory") | .reason] | unique | join(", "))})]
+      else [tx("evidence-not-planned"; {names: ($names | name_list)})] end)
      + ([($b.triggers[] | select(.state == "reported")
           | tx("evidence-reported"; {location: safe_loc($p), findings: (.judged_by | and_join), count: (.outstanding | length)})),
          ($b.claims | length | select(. > 0) | if . == 1 then tx("evidence-claims-one") else tx("evidence-claims-many"; {count: .}) end)]
@@ -1177,14 +1195,20 @@ def render($in):
   | ($in.findings | map(select(registered($in.registry) | not))) as $unreg_all
   | (behaviour_of($in.run) | with_reported($known) | mark_tests($in.run.tests) | mark_ci($in.checks)
      | mark_floors($known; $in.run; $in.host)) as $b
-  | {findings: $known, unregistered: $unreg, unregistered_all: $unreg_all, signals: (signals_of($h) + {checks: checks_signal($in.checks)}),
+  | def ledger($in): {findings: $known, unregistered: $unreg, unregistered_all: $unreg_all, signals: (signals_of($h) + {checks: checks_signal($in.checks)}),
      unresolved: ($h.unresolved_threads | length), triage: $in.run.triage, refuted: ($b | behaviour_refuted),
      jobless: (if $in.checks.accepted then $in.checks.jobless // [] else [] end),
      # A refuted trigger no blocking claim.* finding words is its own checklist item.
      refuted_todo: (if any($known[]; (.rule_id | startswith("claim.")) and (.severity | IN("CRITICAL", "HIGH"))) then []
                     else [($b // {triggers: []}).triggers[] | select(.state == "refuted")] end),
      gaps: (($h.could_not_run | cnr_count) + ($unreg | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
-     unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end)} as $l
+     unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end)};
+  # Triggers that are all inert make the change inert for plan coverage (triggers_inert), unless
+  # another rule 4 unknown is present: then the coverage stays required.
+  ledger($in) as $l0
+  | (if $in.run.coverage.inert or ($b | triggers_inert | not) or ($l0 | has_unknown) then $in
+     else $in | .run.coverage |= . + {inert: true, by_triggers: true} end) as $in
+  | ledger($in) as $l
   | covered_of($in; $l; $b) as $cov
   | ($l + {covered: ($cov | length)} | .unplanned_open = .unplanned - .covered) as $l
   | ($l | ladder) as $v

@@ -1179,6 +1179,96 @@ t_one_change() { render "$LOWF" "" "" "$(brun one-uv "[$(bt T-001 wrapper-change
 t_one_change; check "behaviour: one unverified claim beside passing triggers keeps the evidence line, 1 change in the one form" $?
 ladder "an inert change" "approve APPROVE" 8 "$NONE" "" "" "$(brun inert '[]' '[]')"
 ! grep -q 'Behaviour evidence' "$O/comment.md"; check "behaviour: nothing classified renders no evidence line" $?
+# Triggers that all ended inert (a derived wrapper's among them) make the change inert for plan
+# coverage (verdict.md, rule 4); any trigger or claim that is not, a cap, or a step that did not run
+# keeps the coverage unknown. The one example here was not planned.
+ci_run() { # name, triggers json, claims json [, capped] -> run file with one example not planned
+  runf "ci-$1" ".plan_ran = true | .behaviour = {status: \"ran\", reason: null, triggers: $2, claims: $3, capped: ${4:-0}}
+    | .coverage = {class: \"partial\", inert: false, unplanned: [{dir: \"examples/complete\", reason: \"environment (timeout)\"}]}"
+}
+CI_LINE='- 1 example was not planned: environment (timeout).'
+TI2="[$(bt T-001 unclassified-change inert), $(bt T-002 unclassified-change inert)]"
+t_ti_ok() {
+  render "$NONE" "" "" "$(ci_run ok "$TI2" '[]')"
+  [ "$ST" = 0 ] && [ "$(verdict)" = "approve APPROVE" ] && [ "$(rule)" = 8 ] &&
+    awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" |
+    cmp -s - <(printf '%s\n' '' "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["unplanned-triggers-inert"]')" "$CI_LINE" '  - `examples/complete`')
+}
+t_ti_ok; check "inert triggers: every trigger inert leaves the unplanned example information, approve at rule 8" $?
+t_ti_stays() { # name, triggers, claims, capped, expected rule
+  render "$NONE" "" "" "$(ci_run "$1" "$2" "$3" "$4")"
+  [ "$ST" = 0 ] && [ "$(rule)" = "$5" ] && grep -qxF -- "$CI_LINE" "$O/comment.md" && ! grep -qF 'Every behaviour change is inert' "$O/comment.md"
+}
+t_ti_mixed() { t_ti_stays mixed "[$(bt T-001 unclassified-change inert), $(bt T-002 wrapper-change verified)]" '[]' 0 4; }
+t_ti_unver() { t_ti_stays unver "[$(bt T-001 unclassified-change inert), $(bt T-002 wrapper-change unverifiable)]" '[]' 0 4; }
+t_ti_capped() { t_ti_stays capped "$TI2" '[]' 1 4; }
+t_ti_claim() { t_ti_stays claim "$TI2" '[{claim_id: "C-1", state: "unverifiable"}]' 0 4; }
+t_ti_none() { t_ti_stays none '[]' '[]' 0 4; }
+t_ti_notrun() {
+  render "$NONE" "" "" "$(runf ci-notrun '.plan_ran = true | .behaviour = {status: "not-run", reason: "mtf-facts failed", triggers: [], claims: [], capped: 0}
+    | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/complete", reason: "environment (timeout)"}]}')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qxF -- "$CI_LINE" "$O/comment.md" && ! grep -qF 'Every behaviour change is inert' "$O/comment.md"
+}
+t_ti_nobeh() {
+  render "$NONE" "" "" "$(runf ci-nobeh '.plan_ran = true | del(.behaviour)
+    | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/complete", reason: "environment (timeout)"}]}')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qxF -- "$CI_LINE" "$O/comment.md" && ! grep -qF 'Every behaviour change is inert' "$O/comment.md"
+}
+t_ti_refuted() { render "$NONE" "" "" "$(ci_run refuted "[$(bt T-001 unclassified-change inert), $(bt T-002 wrapper-change refuted)]" '[]')"; [ "$ST" = 0 ] && [ "$(rule)" = 2 ]; }
+t_ti_gap() { # another unknown keeps the coverage required: the example is listed as any unplanned example
+  render "$NONE" "$(host tigap '.could_not_run = [{kind: "patch-unavailable", path: "main.tf"}]')" "" "$(ci_run gap "$TI2" '[]')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qxF -- "$CI_LINE" "$O/comment.md" && ! grep -qF 'Every behaviour change is inert' "$O/comment.md"
+}
+t_ti_vgap() {
+  local r; r="$(ci_run vgap "$TI2" '[]')"; jq '.verify_gaps = [{dir: "examples/other", reason: "init failed"}]' "$r" > "$r.2"
+  render "$NONE" "" "" "$r.2"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qxF -- "$CI_LINE" "$O/comment.md" && ! grep -qF 'Every behaviour change is inert' "$O/comment.md"
+}
+t_ti_signal() {
+  render "$NONE" "$(host tisig '.signals.mergeability = "unknown"')" "" "$(ci_run sig "$TI2" '[]')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qxF -- "$CI_LINE" "$O/comment.md" && ! grep -qF 'Every behaviour change is inert' "$O/comment.md"
+}
+t_ti_precedence() { # a change the classifier calls inert keeps its own line
+  render "$NONE" "" "" "$(runf ci-prec ".plan_ran = true | .behaviour = {status: \"ran\", reason: null, triggers: $TI2, claims: [], capped: 0}
+    | .coverage = {class: \"none\", inert: true, unplanned: [{dir: \"examples/complete\", reason: \"no AWS profile named\"}]}")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 8 ] && grep -qF 'reaches no Terraform configuration' "$O/comment.md" && ! grep -qF 'Every behaviour change is inert' "$O/comment.md"
+}
+t_ti_compact() { # COMPACT: the evidence line names the example, its reason and the inert reading
+  render "$NONE" "" "" "$(ci_run cmp "$TI2" '[]' | xargs -I{} jq '.plan_mode = "laptop" | .examples = {count: 3, skipped: 0, validated: 3}' {} > "$TMP/run-ci-cmp2.json"; echo "$TMP/run-ci-cmp2.json")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 8 ] && [ "$(printf '%s' "$MSG" | sed -n 's/^rendered .*, tier \([A-Z]*\)$/\1/p')" = COMPACT ] &&
+    cmp -s "$O/comment.md" <(printf '%s\n' 'The change looks right.' '' '**Good to merge.** `validate` passed in all 3 examples; 2 were planned.' '' \
+      '<details><summary>Evidence and notes</summary>' '' '- Not planned: `examples/complete` (environment (timeout)). Every behaviour change is inert, so no plan was needed.' '</details>')
+}
+t_ti_covered() { # a gate skip covered by a witness is not needed beside inert triggers: rule 8, no covered line
+  local r; r="$(ci_run cov "$TI2" '[]')"
+  jq --arg h "$HEAD" --arg b "$BASE" '.plan_mode = "laptop" | .examples = {count: 3, skipped: 0, validated: 3}
+    | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/mysql", reason: "plan gate G3"}],
+        covered_skips: [{dir: "examples/mysql", gate: "G3", path: "main.tf",
+          witnesses: [{attribute: "x", example: "examples/autoscaling", address: "aws_x.this"}]}], skip_head_sha: $h, skip_base_sha: $b}' "$r" > "$r.2"
+  render "$NONE" "" "" "$r.2"
+  [ "$ST" = 0 ] && [ "$(rule)" = 8 ] && [ "$(verdict)" = "approve APPROVE" ] && ! grep -qF 'Covered by' "$O/comment.md" && ! grep -qF 'plan gate G3 hit' "$O/comment.md"
+}
+t_ti_noexdir() { # no example directory: no line saying the examples below leave nothing unknown
+  render "$NONE" "" "" "$(runf ci-noex ".plan_ran = true | .behaviour = {status: \"ran\", reason: null, triggers: $TI2, claims: [], capped: 0}
+    | .coverage = {class: \"none\", inert: false, unplanned: [{dir: \"examples\", reason: \"no example directory\"}]}")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 8 ] && ! grep -qF 'Every behaviour change is inert' "$O/comment.md" &&
+    ! grep -qF 'no example directory' "$O/comment.md" && ! grep -qF 'Checks that could not run' "$O/comment.md"
+}
+t_ti_mixed; check "inert triggers: one verified trigger beside an inert one keeps the coverage unknown" $?
+t_ti_unver; check "inert triggers: one unverifiable trigger keeps the coverage unknown" $?
+t_ti_capped; check "inert triggers: a trigger over the cap keeps the coverage unknown" $?
+t_ti_claim; check "inert triggers: an unverifiable claim keeps the coverage unknown" $?
+t_ti_none; check "inert triggers: no trigger keeps the coverage unknown" $?
+t_ti_notrun; check "inert triggers: a behaviour step that did not run keeps the coverage unknown" $?
+t_ti_nobeh; check "inert triggers: no behaviour object keeps the coverage unknown" $?
+t_ti_refuted; check "inert triggers: a refuted trigger still blocks at rule 2" $?
+t_ti_gap; check "inert triggers: another unknown (a patch unavailable) keeps the coverage required, no inert line" $?
+t_ti_vgap; check "inert triggers: a verification gap keeps the coverage required, no inert line" $?
+t_ti_signal; check "inert triggers: an unknown host signal keeps the coverage required, no inert line" $?
+t_ti_precedence; check "inert triggers: a classifier-inert change keeps its own line" $?
+t_ti_noexdir; check "inert triggers: no example directory renders no inert line" $?
+t_ti_compact; check "inert triggers: COMPACT names the example, its reason and the inert reading, byte for byte" $?
+t_ti_covered; check "inert triggers: a covered safety-gate skip beside inert triggers reaches rule 8 with no covered line" $?
 ladder "an unverified trigger with a LOW finding" "inconclusive COMMENT" 4 "$LOWF" "" "" "$BUV"
 grep -qxF 'A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).' "$O/comment.md"
 check "behaviour: rule 4 names the listed checks" $?
@@ -2146,6 +2236,15 @@ mutate "What to do with no item rendered" 's/ or \(\$cov != \[\] and \$items == 
 mutate "the rule 7 rationale for covered skips alone dropped" 's/elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.covered > 0 then tx\("rationale-7-covered"\)\n//' t_cov_rule8_std
 mutate "the base not checked" 's/ and \$cv\.skip_base_sha == \$in\.host\.merge_base//' t_cov_base
 mutate "a plan pass that did not run accepted" 's/and \$run\.plan_ran and \(\$cv\.inert/and (\$cv.inert/' t_cov_noplan
+mutate "inert triggers: one inert trigger enough" 's/all\(\.triggers\[\]; \.state == "inert"\)/any(.triggers[]; .state == "inert")/' t_ti_mixed
+mutate "inert triggers: no trigger counts" 's/ and \(\.triggers \| length\) > 0\n//' t_ti_none
+mutate "inert triggers: a cap with no other unknown ignored" 's/ or \(\$l0 \| has_unknown\)//; s/\.status == "ran" and \.capped == 0 and \(\.triggers/.status == "ran" and (.triggers/' t_ti_capped
+mutate "inert triggers: an unverified claim with no other unknown ignored" 's/ or \(\$l0 \| has_unknown\)//; s/\n  and all\(\.triggers\[\]; \.state == "inert"\) and all\(\.claims\[\]; \.state == "verified"\);/\n  and all(.triggers[]; .state == "inert");/' t_ti_claim
+mutate "inert triggers: the no example directory line shown" 's/\(if \$run\.coverage\.by_triggers then empty else tx\("unplanned-no-examples"\) end\)/tx("unplanned-no-examples")/' t_ti_noexdir
+mutate "inert triggers: another unknown ignored" 's/ or \(\$l0 \| has_unknown\)//' t_ti_gap
+mutate "inert triggers: the inert line shown for no example directory" 's/any\(\$run\.coverage\.unplanned\[\]; \.reason != "no example directory"\)/(\$run.coverage.unplanned != [])/' t_ti_noexdir
+mutate "inert triggers: the COMPACT line without the inert reading" 's/elif \$run\.coverage\.by_triggers then/elif false then/' t_ti_compact
+mutate "inert triggers: the coverage never read as inert" 's/if \$in\.run\.coverage\.inert or \(\$b \| triggers_inert \| not\)/if true/' t_ti_ok
 mutate "every example skipped accepted" 's/ and \(\$u \| length\) < \(\$run\.examples\.count \/\/ 0\)//' t_cov_allskip
 mutate "the witness cap dropped" 's/and \(witnesses\(\$cs\) \| length\) <= 100/and true/' t_cov_w101
 mutate "non-canonical paths accepted" 's/def canon_path: plain_path and [^\n]*/def canon_path: plain_path;/' t_cov_canon
@@ -2365,7 +2464,7 @@ mutate "not-applicable trusted on an open pull request" 's/if \.mergeability == 
 mutate "the no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\)\n//' t_merged
 mutate "the COMPACT no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\) \+ reopen_line/+ reopen_line/' t_nacompact
 mutate "the plan pass in scope at light" 's/\| if \.depth\.depth == "light" then \.coverage\.unplanned = \[\] else \. end//' t_dlight_noplan
-mutate "triage approves at a depth" 's/\(\.triage or any/(any/' t_dtriage
+mutate "triage approves at a depth" 's/\| \.triage or any\(\$g/| any(\$g/' t_dtriage
 
 # --- A profile was named and the plan pass gave no record: its own reason, never "no AWS profile
 # named", an unknown at rule 4 in STANDARD with no advice to name a profile.
@@ -2581,7 +2680,7 @@ t_km_gap; check "known MEDIUM: a MEDIUM review.check-not-run stays an unknown at
 t_bvi; check "known MEDIUM: a MEDIUM review.verification-incomplete stays an unknown at rule 4" $?
 t_km_gap_and() { render "$(pair review.verification-incomplete MEDIUM structure.grouping MEDIUM)" "$HKM"; [ "$(rule)" = 6 ]; }
 t_km_gap_and; check "known MEDIUM: a gap MEDIUM beside a known one blocks at rule 6" $?
-mutate "rule 4 above the known MEDIUM" 's/elif \(\$m \| not\) and \(\.triage/elif (.triage/' t_km
+mutate "rule 4 above the known MEDIUM" 's/elif \(\$m \| not\) and \(has_unknown or/elif (has_unknown or/' t_km
 mutate "rule 5 above the known MEDIUM" 's/elif \(\$m \| not\) and \.unresolved > 0/elif .unresolved > 0/' t_km_threads
 mutate "a gap MEDIUM counted as a known blocker" 's/and \(\.rule_id \| startswith\("review\."\) \| not\)\);/);/' t_km_gap
 

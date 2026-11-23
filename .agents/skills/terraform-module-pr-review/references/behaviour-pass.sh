@@ -61,7 +61,8 @@ def cats: ["wrapper-change", "default-change", "count-for_each-conditional-chang
 def preds: ["expression-output-unknown", "expression-output-length-known", "expression-output-equals-for-inputs",
   "plan-attribute-unknown", "plan-attribute-unchanged-vs-prior", "plan-action", "input-filtered"];
 def valid_behaviour:
-  type == "object" and .schema_version == 1 and (.inert | type == "boolean") and (.capped | nat)
+  (.capped // 0) as $cap
+  | type == "object" and .schema_version == 1 and (.inert | type == "boolean") and (.capped | nat)
   and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object" and (.id | tid)
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0)) and (.category | IN(cats[]))
         # Contract 2: the categories of the triggers merged into this one, each a category once.
@@ -74,7 +75,12 @@ def valid_behaviour:
               and (map(.id) | length == (unique | length)))))
         and (map(.id) | length == (unique | length)))
   and (.entries | type == "array" and all(.[]; type == "object" and (.path | plain_path)
-        and (.trigger_ids | type == "array" and all(.[]; tid))))
+        and (.trigger_ids | type == "array" and all(.[]; tid))
+        # An entry that names no trigger must be inert: the render reads a change whose triggers all
+        # ended inert as inert for plan coverage, which holds only if no other entry is left unjudged.
+        # Past the cap the tool lists the file with the triggers it cut, so an entry may name none then;
+        # a capped run is a rule 4 unknown whatever its entries say.
+        and ((.trigger_ids | length) > 0 or .inert == true or $cap > 0)))
   and ([.entries[].trigger_ids[]] - [.triggers[].id] == []);
 def attrs: ["known", "wholly_unknown", "unknown_mask", "length", "value", "sensitive", "redacted", "unknown_inputs",
   "action", "unchanged_vs_prior", "error"];
