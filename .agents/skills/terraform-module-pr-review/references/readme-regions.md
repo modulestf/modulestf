@@ -12,7 +12,7 @@ A pull request that regenerates a README table, often after a terraform-docs ver
 1. Take each path of the files list under the module root prefix that is a `README.md`, at most 256, in path order.
 2. Read the head's entry of each from the clone's git objects, in the form of the reviewer's [git-safety.md](../../terraform-module-reviewer/references/git-safety.md), with `ls-tree` and `cat-file` only. A file the head deletes, or one with no marker of the profile's two terraform-docs pairs, gets no line.
 3. Copy the head's entries of that directory into a work directory outside the clone: each regular `.tf` file and the `README.md` with their bytes, every other entry by name and type only, and the names of each directory above it up to the module root. The pass then refuses what it would refuse in a checkout, such as a link, an OpenTofu file or a terraform-docs configuration. An entry name that is not one plain path segment of letters, digits, `.`, `_`, `+` and `-` (no leading `-`, never `.` or `..`) is refused as `entry name`, and two names that differ only in letter case as `case collision`, since a case-insensitive file system would keep one of them. A copy directory that does not resolve to its own place under the work directory is refused, and no file is written through a link.
-4. Run the pass once on the work directory, with every such `README.md` as an entry. The pass runs only its pinned, hash-checked binary. Nothing from the clone runs, and the clone is never written.
+4. Run the pass on the work directory with every such `README.md` as an entry, 10 entries a run, since the pass takes 10 directories a run, so a repository with a root, 15 submodules and 25 examples is checked whole. Each run keeps the pass's own deadline. The runs share a budget of 600 seconds, and a run that would start after it is not made: its directories are `unknown deadline`. The pass runs only its pinned, hash-checked binary. Nothing from the clone runs, and the clone is never written.
 5. Give each `README.md` its result.
 
 ## Results
@@ -25,7 +25,7 @@ A pull request that regenerates a README table, often after a terraform-docs ver
 | `unknown version mismatch` | As `differs`, but that workflow pins another version: the difference may be that version's output, which the host does not run. |
 | `unknown no version pin` | As `differs`, but the head has no such workflow or it pins no version: the host cannot tell which version wrote the region. |
 | `unknown version unreadable` | As `differs`, but the workflow's pin is not a plain version. |
-| `unknown <reason>` | Any other refusal: the pass's own stale reason in lower case, or the host's (`link`, `not a regular file`, `file over 1 mib`, `entry name`, `case collision`, `not a documentation region`, `partial clone`, `read failed`, `pass failed`). |
+| `unknown <reason>` | Any other refusal: the pass's own stale reason in lower case, or the host's (`link`, `not a regular file`, `file over 1 mib`, `entry name`, `case collision`, `not a documentation region`, `partial clone`, `read failed`, `deadline`, `pass failed`). |
 
 A judgment run's prefix leaves out the reviewer's Host README Evidence for its size cap, so such a run keeps today's rules for these lines: at worst it ends inconclusive, never with a wrong approval.
 

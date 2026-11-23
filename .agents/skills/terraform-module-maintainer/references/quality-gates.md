@@ -191,8 +191,8 @@ What the workspace controls is the tool's input text and, through that, the text
    - The invoking user and the home directory come from the password entry of `id -u`, never from `HOME`, which `env -i` removes.
    - One deadline of 120 seconds starts before the first check and covers every external step: each helper, the download, the copies and every run.
 1. **Scope.** Only the directories the fix's "Generated content made stale" sentence names, in the fix's order, each named once: a repeat is dropped before the cap. The sentence names regions as files, such as `the terraform-docs region of modules/file-system/README.md`; such a region names the directory that holds that `README.md`, and the root `README.md` names `.`. An entry of any other form, a wrapper file aside, is reported stale with the reason "not a documentation region".
-   - The first 10 are processed. The rest are reported stale, with the reason "over the cap".
-   - Each is exactly `.`, `modules/<name>` or `examples/<name>`, with `<name>` matching `^[a-z0-9-]+$`: no `..`, no absolute path.
+   - The first 10 are processed. The rest are reported stale, with the reason "over the cap". A caller with more regions, such as the host's README evidence, runs the pass again for each further 10; each run has its own cap and deadline.
+   - Each is exactly `.`, `modules/<name>` or `examples/<name>`, with `<name>` matching `^[a-z0-9_-]+$` (a submodule such as `db_instance` has an underscore): no `..`, no absolute path.
    - The directory's real path equals the workspace's real path or begins with it and a separator, and no component of the path is a symbolic link.
 2. **Gates by name and `lstat`, before any file is opened.** Any of these sends the whole directory to the fallback; no file is skipped.
    - A terraform-docs configuration name in the directory or in any directory above it up to the workspace root, as any file type: `.terraform-docs.yml`, `.terraform-docs.yaml`, either one under `.config/`, or `.tfdocs.d`. The workspace's own gate reads those files, so a run without them cannot reproduce its output, and they are never opened.
