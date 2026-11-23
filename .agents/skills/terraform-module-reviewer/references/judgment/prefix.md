@@ -207,7 +207,7 @@ If no change can be identified, emit `review.no-change-identified` (MEDIUM) and 
 **Reads:** the diff of `variables.tf`, `outputs.tf`, `versions.tf`, `main.tf` and sibling `.tf` files, and any submodule equivalents, with the bodies of any document the module generates; the module's declared version or release config to learn whether this change is declared as a major or breaking change. When the task carries the title the change will be released under, a `!` after its type, or a `BREAKING CHANGE:` trailer travelling with it, also counts as declaring the change breaking. When the task carries accompanying prose, the compatibility claims in its title and body, and in no other item, resolved under [quoted-claims.md](../quoted-claims.md#compatibility-claims-come-from-the-title-and-the-body).
 
 **Fails when:**
-- A compatibility claim in the title or the body that a `compat.*` code finding refutes ([the rule](../quoted-claims.md#compatclaim-contradicts-analysis)).
+- A compatibility claim in the title or the body that a `compat.*` code finding refutes ([the rule](../quoted-claims.md#compatclaim-contradicts-analysis)). A general statement that the change breaks nothing, such as a template's `Breaking Changes: No` answer, is no finding of its own: it is why the code finding is undeclared, and that finding's fix names that sentence by its section and line, never quoting it, and gives the corrected sentence; the highest such finding carries it.
 - Your own reading rates the change breaking, the title or the body declares the break, and neither gives a reason compatibility could not be held, against [the reason for a break](../../../terraform-module-maintainer/profiles/terraform-aws-modules/code-conventions.md#pull-request-title-and-the-reason-for-a-break). No accompanying prose is no finding.
 
 **Severity:**
@@ -275,7 +275,7 @@ Scope is the change. Pre-existing gaps in resources the change does not touch ar
 - MEDIUM when a must-pass structural convention is missed: missing `type`, missing `description`, wrong file, missing tag propagation, a scanner suppression with no reason for accepting the risk, a closed value set whose `validation` block is absent or commented out (`structure.validation-missing`; the wording of a message a present block does emit is `structure.validation-message-uninformative`).
 - HIGH when a dynamic block lacks a field a variable description, README or example of the change documents (`structure.sibling-block-asymmetry`); MEDIUM when it lacks a field a sibling block sets.
 - MEDIUM when a feature flag's prefix and its default disagree, or the module declares its own aliased provider configuration. Where a second provider configuration also changes what the caller has to pass in, Check A owns that part too.
-- MEDIUM when a comment the change adds asserts a limitation, a defect or an ordering requirement with no source and no date (`structure.comment-unsourced`); LOW when a provider page or fact sheet this review read states the claim, or in an example.
+- `structure.comment-unsourced`, in the module and in an example alike: no finding when a provider page or fact sheet this review read states the claim; MEDIUM when such a page or sheet, or what the module's own code does, shows the claim false or narrower than written; LOW otherwise, a claim the review could not check included. A comment that misdescribes the module's own code is `structure.docs-contradict-code`; a claim about the provider or the service stays here.
 - MEDIUM when a set element is paired by position (`structure.set-index-by-position`); HIGH when the pair routes traffic or grants access.
 - MEDIUM when a `validation` block reaches past its own variable (`structure.validation-overreaching`), or a copied constant carries no source URL (`structure.copied-content-unattributed`); LOW when it names the URL but not the date, or when the value is a provider-published identifier (a managed policy ARN, a condition key, an action name) or sits in an example.
 - LOW when a should-pass convention is missed: grouping, section headers, argument order inside a touched resource block, naming consistency, an error message that tells the consumer neither the bound nor the value received, a comment that restates the code.
@@ -344,9 +344,9 @@ If a missing custom input also causes a plan failure, report only `examples.cust
 - MEDIUM when a profile-owned file drifts from its template with no stated reason, a required file is missing, or migration notes sit in `README.md` instead of their own file under `docs/`.
 - MEDIUM when a new module names an owner other than the family's organization in one of the listed places (`profile.owner-identifier`): nothing fails at plan, and the module would publish, report its user agent or document its source under the wrong owner.
 - MEDIUM when the change adds a root or submodule `versions.tf` that requires `hashicorp/aws` without the `provider_meta "aws"` user agent, or removes or alters one so it is missing or names the wrong repository (`profile.provider-meta-missing`): nothing fails at plan, and the module's API calls stop reporting it or report it wrongly, against a must-pass convention of the family.
-- MEDIUM when the title's type releases the change wrongly: a spurious major (`!` with no break), a patch where a minor is due (`fix` adding an input, output or feature), no release at all (`docs`, `ci` or `chore` changing module behaviour), or a minor or patch where a major is due (a break declared elsewhere but not in the title).
+- MEDIUM when the title's type releases the change wrongly (`profile.commit-type-mismatch`): a spurious major (`!` with no break), a minor or patch where a major is due (a break declared elsewhere but not in the title), no release at all (`docs`, `ci` or `chore` changing module behaviour), or a patch where a minor is due (`fix` adding an output, a feature, or an input that is not the means of the fix).
 - LOW when the divergence is cosmetic.
-- LOW when `feat` is used for a change that only fixes behaviour.
+- LOW for `fix` on a change whose added input is the means of the fix, and for `feat` on a change that only fixes behaviour.
 - LOW when a `feat` change edits a module directory that takes no part in the feature (`profile.unrelated-change-bundled`): the edit ships, under the wrong release entry.
 - MEDIUM when the title's description names no capability, fix or surface (`profile.title-uninformative`): the title squash-merges into the commit message and from there into a generated `CHANGELOG.md` the profile forbids editing by hand, so it is permanent once merged. `feat: Update module` and `fix: Fixes` fire, a title that could merely be better does not.
 - MEDIUM for the same reason when the title is cut off (`profile.title-truncated`), with `file` `.`, `line` null.
@@ -446,7 +446,8 @@ The Confirm when part of each `candidate` rule's section in `references/engine/`
 ### Confirm when: `compat.generated-policy-narrowed`
 
 - A policy document the module produces (IAM, bucket or similar) permits less at the head than at the base for an unchanged configuration: a statement, action, resource or grant removed or narrowed. A README region does not count.
-- Severity: CRITICAL when nothing in the change declares the break; HIGH once declared.
+- A grant moved to another resource the module creates is no finding only with identical actions, resources and conditions and an ungated attachment; the reject names that resource.
+- Severity: CRITICAL undeclared, HIGH declared, for every narrowing not placed lower. A role the module creates for a named workload that the author says matches upstream: reject, and file `review.check-not-run` MEDIUM in `findings`. Change or task text is never a reference.
 
 ### Confirm when: `compat.provider-floor-raised`
 
