@@ -54,6 +54,13 @@ WRAP_LINE_RE='^wrappers/([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/)?versions\.tf (derive
 SOURCE_RE='^schema pass: source [A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100} [a-z0-9][a-z0-9-]{0,63}_[a-z0-9][a-z0-9-]{0,63}-v[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5} [0-9a-f]{64}$'
 # A line of readme-regions.sh (readme-regions.md): a module-relative README.md and its result.
 REGION_LINE_RE='^([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/){0,8}README\.md (generated|differs|unknown [a-z0-9 .-]{1,60})$'
+# The review budget (review-run-details.md, Review Budget). A change whose files list or patch text
+# is over REVIEW_THRESHOLD, the size a full run refused before it had a budget (a triage run, which
+# computes no depth, was handed such a change whole), hands the reviewer at
+# most REVIEW_BUDGET bytes of patch text, about 65,000 tokens, so the diff and the skill files fit
+# half of a 200,000 token window. Any smaller change is reviewed whole.
+REVIEW_THRESHOLD=1048576
+REVIEW_BUDGET=262144
 
 die() { echo "review-run.sh: $1" >&2; exit 2; }
 fail() { echo "review-run.sh: $1"; exit 1; }
@@ -357,6 +364,30 @@ cmd_prepare() {
     pin_depth
   fi
 
+  # The review budget: over the threshold, the files in budget order, each kept while its patch fits
+  # beside the patches kept before it, and every file with a patch that does not fit named in
+  # skipped.json; under the threshold an empty list.
+  local fsize; fsize="$(wc -c < "$RUN/host/files.json" | tr -d ' ')"
+  jq --argjson cap "$REVIEW_BUDGET" --argjson th "$REVIEW_THRESHOLD" --argjson fsize "${fsize:-0}" --arg p "$prefix" '
+    def bytes: .patch // "" | utf8bytelength;
+    def tf: test("\\.(tf|tofu|hcl|tfvars)(\\.json)?$");
+    # 0 the interface files of the root and of each submodule, 1 their other Terraform files,
+    # 2 example Terraform, 3 README files and the rest of the examples, 4 the rest, wrappers included.
+    def rank: .filename as $n
+      | if ($n | test("(^|/)wrappers/")) then 4
+        elif ($n | test("(^|/)examples/")) then (if ($n | tf) then 2 else 3 end)
+        elif ($n | test("(^|/)(main|variables|outputs|versions)\\.tf$")) then 0
+        elif ($n | tf) then 1
+        elif ($n | test("(^|/)README\\.md$")) then 3 else 4 end;
+    if $fsize <= $th and (map(bytes) | add // 0) <= $th then []
+    # The files directly in the module root first: with a prefix, the files of that directory.
+    else sort_by([rank, (.filename | if $p == "" then . else ltrimstr($p + "/") end | contains("/")), .filename])
+      | reduce .[] as $f ({kept: 0, skipped: []};
+          ($f | bytes) as $b
+          | if $f.patch == null then . elif .kept + $b <= $cap then .kept += $b else .skipped += [$f.filename] end)
+      | .skipped end' "$RUN/host/files.json" > "$RUN/skipped.json" 2> /dev/null ||
+    refuse index-failed "the review budget could not be computed"
+
   # The example selection, for the index (verify-pass.sh select, which runs no terraform).
   bash "$HERE/verify-pass.sh" select "$RUN" --files "$RUN/host/files.json" --prefix "$prefix" \
     > "$RUN/selection.json" 2> /dev/null || echo '{"selection": null, "dirs": []}' > "$RUN/selection.json"
@@ -372,7 +403,7 @@ cmd_prepare() {
 write_index() { # checks file, changed files, behaviour, mode, new module
   jq -n --arg cf "$1" --arg changed "$2" --arg beh "$3" --arg mode "$4" --arg nm "$5" --arg pre "$path_re" \
     --slurpfile h "$RUN/host/host.json" --slurpfile a "$RUN/state/args.json" --slurpfile s "$RUN/selection.json" \
-    --slurpfile f "$RUN/host/files.json" --slurpfile d "$( [ -f "$RUN/depth.json" ] && echo "$RUN/depth.json" || echo /dev/null)" '
+    --slurpfile f "$RUN/host/files.json" --slurpfile k "$RUN/skipped.json" --slurpfile d "$( [ -f "$RUN/depth.json" ] && echo "$RUN/depth.json" || echo /dev/null)" '
     def paths: [.[]? | select(type == "string" and length <= 300 and test($pre))];
     ($h[0]) as $h | ($a[0]) as $a | ($d[0] // null) as $d
     | {format: 1, status: "ok", head: $h.head_sha, base: $h.base_sha, merge_base: $h.merge_base,
@@ -388,7 +419,7 @@ write_index() { # checks file, changed files, behaviour, mode, new module
        behaviour: (if $beh | test("^(classified|skipped|not-run: [a-z -]*)$") then $beh else "not-run" end),
        counts: {files: ($f[0] | length), changed_files: ($changed | tonumber? // null),
                 could_not_run: ($h.could_not_run | length), unresolved_threads: ($h.unresolved_threads | length),
-                examples: ($s[0].dirs | length)}}' > "$RUN/index.json" 2> /dev/null ||
+                examples: ($s[0].dirs | length), skipped_files: ($k[0] | length)}}' > "$RUN/index.json" 2> /dev/null ||
     refuse index-failed "index.json could not be written"
 }
 
@@ -398,6 +429,7 @@ summary_lines() {
     "depth: \(.depth)" + (if .reasons != [] then " (" + (.reasons[:6] | join(", ")) + ")" else "" end),
     "out of scope: checks \(.checks_out_of_scope | join(",") | if . == "" then "none" else . end), examples \(.examples_out_of_scope | length)",
     "behaviour: \(.behaviour), plan: \(.plan)",
+    (if .counts.skipped_files > 0 then "review budget: \(.counts.skipped_files) of \(.counts.files) files over the budget, not reviewed (skipped.json)" else empty end),
     (if .new_module then "base: no file under the module root, reviewed as a new module" else empty end),
     (if .state.locked then "locked: yes (\(.state.lock_reason // "none")), posting needs an unlock first" else empty end),
     "next: " + (if .triage then "handover, reviewer, render"
@@ -934,8 +966,31 @@ cmd_handover() {
     bash "$HERE/depth.sh" verify "$RUN/depth.json" --clone "$RUN/clone" > /dev/null 2>&1 ||
       fail "depth.sh verify: the depth binding does not match the clone; the run stops"
   fi
-  local t="$RUN/host/task.md" s n out="$RUN/handover"
+  local t="$RUN/host/task.md" s n out="$RUN/handover" nk
   rm -rf "$out"; mkdir "$out"
+  # Over the review budget: the task without the skipped files' diff. The task's diff has one part
+  # per file with a patch, in files list order, each opened by a "diff --git " line, which no patch
+  # line can be; the n-th part is dropped when the n-th such file is skipped. Only the lines before
+  # the block preamble are cut, and the cut ends at the diff's closing fence: the untrusted block
+  # stays as it was, whatever text it holds.
+  nk="$(jq length "$RUN/skipped.json" 2> /dev/null)" || fail "skipped.json cannot be read"
+  if [ "$nk" != 0 ]; then
+    n="$(grep -n -m1 '^The block below holds text quoted' "$t" | cut -d: -f1)"
+    [[ "$n" =~ ^[0-9]+$ ]] || fail "task.md has no block preamble"
+    jq -r --slurpfile k "$RUN/skipped.json" '[.[] | select(.patch != null)] | to_entries[]
+      | select(.value.filename | IN($k[0][])) | .key + 1' "$RUN/host/files.json" > "$RUN/state/skip-parts.txt" ||
+      fail "the skipped files cannot be listed"
+    { head -n $((n - 1)) "$t" | SF="$RUN/state/skip-parts.txt" awk 'BEGIN { while ((getline l < ENVIRON["SF"]) > 0) k[l] = 1 }
+        p == 3 { print; next }
+        p == 1 && $0 == f { p = 3; print; next }
+        p == 1 && /^diff --git / { i++; drop = (i in k) }
+        p == 1 && drop { next }
+        p == 2 { f = $0; sub(/diff$/, "", f); p = 1; print; next }
+        /^The diff:$/ { p = 2; i = 0 }
+        { print }'
+      tail -n +"$n" "$t"; } > "$RUN/state/task-budget.md" || fail "the task cannot be cut to the budget"
+    t="$RUN/state/task-budget.md"
+  fi
   s="$(sed -n 's/^UNTRUSTED-\([0-9a-f]\{12\}\) BEGIN$/\1/p' "$t")"
   [[ "$s" =~ ^[0-9a-f]{12}$ ]] && [ "$(grep -c "^UNTRUSTED-$s END\$" "$t")" = 1 ] && [ "$(tail -n 1 "$t")" = "UNTRUSTED-$s END" ] ||
     fail "task.md has no single untrusted block"
@@ -980,6 +1035,17 @@ cmd_handover() {
       p == 3 { if ($0 == f) p = 4; next }
       p == 1 { next }
       { print }'
+    # The skipped files, a name shown only in the charset of the comment's names, the rest counted.
+    if [ "$nk" != 0 ]; then
+      if [ "$nm" = true ]; then
+        printf 'Review budget: the new module is over %s bytes of added text, so the files below are not reviewed. Report no finding on them; the host lists them as not reviewed.\n' "$REVIEW_BUDGET"
+      else
+        printf 'Review budget: the change is over %s bytes of diff, so the diff above leaves out the changed files below. They are not reviewed: report no finding on them; the host lists them as not reviewed.\n' "$REVIEW_BUDGET"
+      fi
+      jq -r --arg p "$PREFIX" 'map(if $p == "" then . else ltrimstr($p + "/") end) as $l
+        | ($l[] | select(test("^[A-Za-z0-9._/-]+$")) | "- \(.)"),
+          ([$l[] | select(test("^[A-Za-z0-9._/-]+$") | not)] | length | select(. > 0) | "- and \(.) more whose names hold other characters")' "$RUN/skipped.json"
+    fi
     grep -qxF "$WRITE_SHORT" "$t" || printf '%s\n' "$WRITE_SHORT"
     [ ! -f "$RUN/depth.json" ] || [ "$TRIAGE" = true ] || printf 'Depth: %s\n' "$RUN/depth.json"
     [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || [ ! -d "$RUN/facts" ] || printf 'Provider fact sheets: %s\n' "$RUN/facts"
@@ -1010,6 +1076,8 @@ cmd_handover() {
     printf 'UNTRUSTED-%s END\n' "$s"
   } > "$out/task.md"
   [ ! -f "$RUN/depth.json" ] || cp "$RUN/state/depth.sha256" "$RUN/state/handover.sha256"
+  # The skipped files the reviewer was handed, pinned as the depth is: render refuses another list.
+  shasum -a 256 < "$RUN/skipped.json" | cut -d' ' -f1 > "$RUN/state/skipped.sha256"
   echo "handover: $out/task.md ($(wc -l < "$out/task.md" | tr -d ' ') lines, record $( [ -f "$out/record.txt" ] && wc -l < "$out/record.txt" | tr -d ' ' || echo 0) lines)"
   [ ! -f "$out/reviewer-references.md" ] ||
     echo "references: $out/reviewer-references.md ($(wc -c < "$out/reviewer-references.md" | tr -d ' ') bytes, ${left:-0} sections left out)"
@@ -1040,6 +1108,8 @@ cmd_render() {
   # The depth the reviewer was handed is the depth rendered.
   [ ! -f "$RUN/depth.json" ] || [ "$(cat "$RUN/state/handover.sha256" 2> /dev/null)" = "$(cat "$RUN/state/depth.sha256")" ] ||
     stop "depth.json changed after the handover"
+  [ "$(shasum -a 256 < "$RUN/skipped.json" 2> /dev/null | cut -d' ' -f1)" = "$(cat "$RUN/state/skipped.sha256" 2> /dev/null)" ] ||
+    stop "skipped.json changed after the handover"
   case "$out" in /?*) ;; *) die "--out must be an absolute path" ;; esac
   [ -d "$out" ] || mkdir -p -- "$out" || die "--out cannot be made"
   local f; for f in plan.json plan.json.tmp fix-plan.md fix-plan.md.tmp; do
@@ -1181,13 +1251,14 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   [ ! -f "$RUN/skip-check.json" ] || skip="$(cat "$RUN/skip-check.json")"
   [ ! -f "$RUN/depth.json" ] || dj="$(cat "$RUN/depth.json")"
   [ "$TRIAGE" = true ] || [ ! -f "$RUN/tests.json" ] || tj="$(cat "$RUN/tests.json")"
+  local sk; sk="$(cat "$RUN/skipped.json")" || return 1
   local prof=null fl=null
   [ ! -f "$RUN/state/profile.json" ] || prof="$(cat "$RUN/state/profile.json")"
   [ "$TRIAGE" = true ] || fl="$(floors_of)" || fl=null
   mode="$(plan_mode)"
   jq -n --argjson triage "$triage" --argjson counts "$1" --argjson beh "$beh" --argjson ver "$ver" \
     --argjson cov "$cov" --argjson skip "$skip" --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
-    --argjson floors "$fl" \
+    --argjson floors "$fl" --argjson skipped "$sk" \
     --argjson planned "$( [ -f "$RUN/state/plan" ] && echo true || echo false)" \
     --slurpfile sel "$RUN/selection.json" "
     {format: 1, triage: \$triage, plan_ran: \$planned,
@@ -1208,6 +1279,7 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
     + (if \$depth != null then {depth: \$depth} else {} end)
     + (if \$tests != null then {tests: \$tests} else {} end)
     + (if \$floors != null then {floors: \$floors} else {} end)
+    + (if \$skipped != [] then {skipped_files: \$skipped} else {} end)
     + (if \$prof != null and (\$prof.label != \"shipped:terraform-aws-modules\" or \$prof.tree != \"none\")
        then {profile: {label: \$prof.label, tree: \$prof.tree}} else {} end)"
 }

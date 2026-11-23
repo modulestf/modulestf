@@ -335,7 +335,7 @@ def depth_bound($h): .binding.head_sha == $h.head_sha and $h.merge_base != null 
 
 def valid_run:
   type == "object"
-  and ((keys - ["behaviour", "depth", "examples", "floors", "plan_mode", "profile", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((keys - ["behaviour", "depth", "examples", "floors", "plan_mode", "profile", "skipped_files", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
   # The reviewer's profile line, as the run checked it against its handover.
   and ((has("profile") | not) or (.profile | type == "object" and keys == ["label", "tree"]
         and (.label | type == "string" and test("^(shipped:[a-z0-9-]{1,64}|custom)$"))
@@ -343,6 +343,10 @@ def valid_run:
   and ((has("tests") | not) or (.tests | valid_tests))
   and ((has("behaviour") | not) or (.behaviour | valid_behaviour))
   and ((has("floors") | not) or (.floors | valid_floors))
+  # The changed files over the review budget, repository-relative, which the reviewer was not handed.
+  and ((has("skipped_files") | not) or (.skipped_files | type == "array" and length > 0 and length <= 3000
+        and all(.[]; type == "string" and length > 0 and length <= 1024 and (test("[\\x00-\\x1f\\x7f`]") | not))
+        and length == (unique | length)))
   and ((has("depth") | not) or (.depth | valid_depth))
   # The host writes "plan pass skipped at light depth" at light only, where the plan pass is out of scope.
   and ((any(.coverage.unplanned[]?; .reason == "plan pass skipped at light depth") | not) or .depth.depth? == "light")
@@ -427,6 +431,8 @@ def trigger_at($p): {category, location: loc_at(.file | repo_path($p))};
 
 # The findings that are themselves verification gaps: rule 4 reads them as unknowns.
 def gap_rules: ["review.check-not-run", "review.no-change-identified", "review.verification-incomplete"];
+# Changed files over the review budget were not reviewed: one gap of rule 4, however many.
+def skipped_gap: if (.skipped_files // []) == [] then 0 else 1 end;
 # A known MEDIUM blocker: a MEDIUM finding outside review.*, which says how far the review reached
 # and is no defect of the change. It outranks every unknown, so rules 4 and 5 apply only without
 # one and rule 6 blocks on it (verdict.md, The Ladder). The ladder reads registry rules only, so an
@@ -493,6 +499,7 @@ def texts: {
   "rationale-4-check-not-run": "A check did not run, so a defect it covers may be open. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-verification-incomplete": "The behaviour evidence handed to the review was incomplete, so a behaviour change may be unchecked. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-unregistered": "A finding names a rule that is not in the rule registry, so its severity cannot decide the verdict. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-skipped": "The change is over the review budget, so some changed files were not reviewed, as listed below. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-listed":"A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-5": "Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5).",
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
@@ -528,6 +535,10 @@ def texts: {
   "unplanned-group-many": "- {count} examples were not planned: {reason}.",
   "unplanned-name": "  - `{dir}`",
   "unplanned-more": "- {count} more examples that were not planned are not listed.",
+  "skipped-files-one": "- 1 changed file was over the review budget and was not reviewed:",
+  "skipped-files-many": "- {count} changed files were over the review budget and were not reviewed:",
+  "skipped-name": "  - {path}",
+  "skipped-more": "  - and {count} more.",
   "unplanned-no-examples": "- The module has no example directory, so no example could be planned.",
   "unplanned-inert": "- The change reaches no Terraform configuration, so the examples below that were not planned leave nothing unknown.",
   "unplanned-triggers-inert": "- Every behaviour change is inert, so the examples below that were not planned leave nothing unknown.",
@@ -674,6 +685,7 @@ def rationale($in):
          elif any($f[]; .rule_id == "review.check-not-run") then "rationale-4-check-not-run"
          elif any($f[]; .rule_id == "review.verification-incomplete") then "rationale-4-verification-incomplete"
          elif $in.unregistered != [] then "rationale-4-unregistered"
+         elif $in.skipped > 0 then "rationale-4-skipped"
          else "rationale-4-listed" end)
     # Rule 7 with no LOW finding: covered skips alone keep the verdict off rule 8.
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.covered > 0 then tx("rationale-7-covered")
@@ -858,6 +870,14 @@ def scoped_run: if has("depth") | not then . else .depth.examples_out_of_scope a
   | .coverage.unplanned |= map(select(.dir | IN($o[]) | not))
   | if .depth.depth == "light" then .coverage.unplanned = [] else . end
   | if .coverage.unplanned == [] then .coverage.class = "complete" else . end end;
+
+# The files over the review budget: the count, then the first 100 names, in a code span when every
+# character is allowlisted, else withheld, then the count of the rest.
+def skipped_lines($run): ($run.skipped_files // []) as $s
+  | if $s == [] then [] else
+      [tx(if ($s | length) == 1 then "skipped-files-one" else "skipped-files-many" end; {count: ($s | length)})]
+      + [$s[:100][] | tx("skipped-name"; {path: nm(allowed)})]
+      + (($s | length) - 100 | if . > 0 then [tx("skipped-more"; {count: .})] else [] end) end;
 
 def covered_lines($key; $cov; $run):
   [ ($cov[] as $c
@@ -1082,7 +1102,7 @@ def causes($l; $h; $run; $b):
        or $run.verify_gaps != [] or any($u[]; (.reason | plan_class) == null)
        # A gate hit is advice only after a laptop-mode plan pass: runner mode refuses what is left.
        or ($run.plan_mode != "laptop" and any($u[]; .reason | plan_class | IN("safety-gate", "file-gate")))
-       or ($b | behaviour_gaps) > 0 or $l.unregistered_all != [])};
+       or ($b | behaviour_gaps) > 0 or $l.unregistered_all != [] or $l.skipped > 0)};
 
 def compact_ok($l; $v; $c; $run; $b):
   ($l.findings | map(select(routed | not))) as $counted
@@ -1201,7 +1221,8 @@ def render($in):
      # A refuted trigger no blocking claim.* finding words is its own checklist item.
      refuted_todo: (if any($known[]; (.rule_id | startswith("claim.")) and (.severity | IN("CRITICAL", "HIGH"))) then []
                     else [($b // {triggers: []}).triggers[] | select(.state == "refuted")] end),
-     gaps: (($h.could_not_run | cnr_count) + ($unreg | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
+     skipped: ($in.run | skipped_gap),
+     gaps: (($in.run | skipped_gap) + ($h.could_not_run | cnr_count) + ($unreg | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
      unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end)};
   # Triggers that are all inert make the change inert for plan coverage (triggers_inert), unless
   # another rule 4 unknown is present: then the coverage stays required.
@@ -1217,7 +1238,7 @@ def render($in):
   | causes($l; $h; $in.run; $b) as $c
   | (if $v.rule == 8 then [] else todo_items($l; $v.rule; $p;
        ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | cnr_count) + ($in.run.verify_gaps | length)
-       + $l.unplanned_open + ($b | behaviour_gaps) + ($unreg | length)) end) as $items
+       + $l.unplanned_open + ($b | behaviour_gaps) + ($unreg | length) + $l.skipped) end) as $items
   # At rule 4 a list of quiet items alone, which section 5 already holds, gives way to the action line.
   | ($v.rule == 4 and all($items[]; .quiet)) as $quiet
   | ([$in.assessment, "**\($v.verdict | verdict_line)**"]
@@ -1235,7 +1256,8 @@ def render($in):
      # check that could not run describes.
      + section(if $cov != [] then "Examples not planned" else "Checks that could not run" end; gap_lines($h; $in.run; $b; $p; $cov)
        + [$unreg_all[] | tx(if .severity == "LOW" then "rule-unregistered-low" else "rule-unregistered" end;
-                            {rule_id, severity, location: loc($p)})]; "\n")
+                            {rule_id, severity, location: loc($p)})]
+       + skipped_lines($in.run); "\n")
      + section("Review depth"; depth_lines($in.run); "\n\n")
      + section("Profile"; profile_lines($in.run); "\n\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")
