@@ -1212,7 +1212,12 @@ check "plan-session: a session prints the three values only" "$(printf '%s\n' "$
 # The session policy: valid JSON within the 2,048 characters AssumeRole accepts, allowing no
 # write and denying the data reads by name.
 POL="${PP%/*}/plan-session-policy.json"
-check "session policy: parses and fits AssumeRole's 2,048 characters" "$(n="$(jq -c . "$POL" | wc -c)" && [ "$n" -le 2049 ] && echo 0 || echo 1)"
+# Measured as plan-session.sh measures what it sends: the compact form, no trailing newline.
+fits() { local p; p="$(jq -c . "$1" 2> /dev/null)" && [ -n "$p" ] && [ "${#p}" -le 2048 ]; }
+check "session policy: parses and fits AssumeRole's 2,048 characters" "$(fits "$POL" && echo 0 || echo 1)"
+jq '.Statement[0].Sid += (" " * (2049 - (tojson | length)))' "$POL" > "$TMP/policy-over.json"
+check "session policy: mutation one character over the limit is caught by the size check" \
+  "$(p="$(jq -c . "$TMP/policy-over.json")" && [ "${#p}" -eq 2049 ] && ! fits "$TMP/policy-over.json" && echo 0 || echo 1)"
 check "session policy: allows only Describe, List and Get actions and GetCallerIdentity" \
   "$(jq -e '[.Statement[] | select(.Effect == "Allow") | .Action[] | test("^[a-z0-9-]+:(Describe|List|Get)[A-Za-z]*[*]?$")] | all' "$POL" > /dev/null && echo 0 || echo 1)"
 for a in s3:GetObject secretsmanager:GetSecretValue ssm:GetParametersByPath ssm:GetParameterHistory kms:Decrypt \
@@ -1261,6 +1266,52 @@ pev deny secretsmanager:GetSecretValue 'arn:aws:secretsmanager:us-east-1:1234567
 pev allow ec2:DescribeImages '*'
 pev allow ssm:DescribeParameters '*'
 pev 'implicit deny' ssm:PutParameter 'arn:aws:ssm:us-east-1::parameter/aws/service/x'
+# OpenSearch: the provider reads the service's control plane during a plan; without it the
+# plan retries the call until the plan's time limit. The data plane (es:ES*) is denied by name,
+# as the other services' data reads are: an explicit deny also limits a grant a domain's access
+# policy makes to the session, which an implicit deny does not.
+pev allow es:DescribeDomain '*'
+pev allow es:ListVersions '*'
+for a in es:ESHttpGet es:ESHttpPost es:ESHttpHead es:ESCrossClusterGet; do pev deny "$a" '*'; done
+for a in es:GetUpgradeStatus es:CreateDomain; do pev 'implicit deny' "$a" '*'; done
+# DynamoDB: the two list actions the plan needs, and no other list, read or write action.
+pev allow dynamodb:ListTables '*'
+pev allow dynamodb:ListTagsOfResource '*'
+pev deny dynamodb:Scan '*'
+for a in dynamodb:ListStreams dynamodb:ListBackups dynamodb:BatchGetItem dynamodb:PartiQLSelect dynamodb:PutItem; do
+  pev 'implicit deny' "$a" '*'
+done
+POL_REAL=$POL
+mutate_policy() { # name, sed expression, witness action that the mutation allows
+  POL="$TMP/policy-$1.json"; sed "$2" "$POL_REAL" > "$POL"
+  check "session policy: mutation $1 changes the policy" "$(cmp -s "$POL_REAL" "$POL"; test $? -eq 1; echo $?)"
+  check "session policy: mutation $1 is caught by the $3 case" "$([ "$(pe "$3" '*')" = allow ] && echo 0 || echo 1)"
+  POL=$POL_REAL
+}
+mutate_policy es-wildcard 's/"es:Describe\*"/"es:*"/' es:CreateDomain
+mutate_policy dynamodb-wildcard 's/"dynamodb:ListTa\*"/"dynamodb:*"/' dynamodb:BatchGetItem
+mutate_policy dynamodb-list 's/"dynamodb:ListTa\*"/"dynamodb:List*"/' dynamodb:ListStreams
+POL=$POL_REAL
+
+# The plan proxy's allowlist, matched as tinyproxy matches a CONNECT target: each line an
+# extended regular expression over "host:port", without case. A service endpoint passes in its
+# global and regional forms; a host under a service domain that a customer names, such as an
+# OpenSearch domain endpoint, does not.
+AL="${PP%/*}/plan-runner/allowlist-plan"
+alw() { if printf '%s\n' "$2" | grep -Eiqf "$1"; then echo allow; else echo refuse; fi; }
+for h in sts.amazonaws.com:443 iam.amazonaws.com:443 es.eu-west-1.amazonaws.com:443 ES.US-EAST-1.AMAZONAWS.COM:443 \
+  es.us-gov-west-1.amazonaws.com:443 kinesis.us-east-1.amazonaws.com:443; do
+  check "plan allowlist: $h passes" "$([ "$(alw "$AL" "$h")" = allow ] && echo 0 || echo 1)"
+done
+for h in search-demo-abc123.eu-west-1.es.amazonaws.com:443 vpc-demo-abc123.eu-west-1.es.amazonaws.com:443 \
+  es.eu-west-1.amazonaws.com:80 es.eu-west-1.amazonaws.com.example.com:443 xes.eu-west-1.amazonaws.com:443 \
+  aoss.eu-west-1.amazonaws.com:443 registry.terraform.io:443; do
+  check "plan allowlist: $h is refused" "$([ "$(alw "$AL" "$h")" = refuse ] && echo 0 || echo 1)"
+done
+sed 's/^\^//' "$AL" > "$TMP/allowlist-mutated"
+check "plan allowlist: mutation no-anchor changes the allowlist" "$(cmp -s "$AL" "$TMP/allowlist-mutated"; test $? -eq 1; echo $?)"
+check "plan allowlist: mutation no-anchor is caught by the domain endpoint case" \
+  "$([ "$(alw "$TMP/allowlist-mutated" search-demo-abc123.eu-west-1.es.amazonaws.com:443)" = allow ] && echo 0 || echo 1)"
 # The evaluator itself: a deny wins over an allow of the same action
 check "session policy: the evaluator lets a deny win" \
   "$([ "$(jq -r --arg a s3:GetObject --arg r x "$EVAL" <<< '{"Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":"*"},{"Effect":"Deny","Action":["s3:Get*"],"Resource":"*"}]}')" = deny ] && echo 0 || echo 1)"
