@@ -1,3 +1,12 @@
+## [0.12.10](https://github.com/modulestf/modulestf/compare/v0.12.9...v0.12.10) (2026-11-23)
+
+
+### Bug Fixes
+
+* **pr-review:** Let the runner's plan reach the OpenSearch control plane ([#182](https://github.com/modulestf/modulestf/issues/182)) ([51c3e9e](https://github.com/modulestf/modulestf/commit/51c3e9e48b5e3c8208b3fd23653ec5db86082bf8))
+
+
+
 ## [0.12.9](https://github.com/modulestf/modulestf/compare/v0.12.8...v0.12.9) (2026-11-23)
 
 
