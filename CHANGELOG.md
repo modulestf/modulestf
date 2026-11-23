@@ -1,3 +1,12 @@
+## [0.12.9](https://github.com/modulestf/modulestf/compare/v0.12.8...v0.12.9) (2026-11-23)
+
+
+### Bug Fixes
+
+* Check every README region of a family repository, submodules with underscores included ([#183](https://github.com/modulestf/modulestf/issues/183)) ([0b3fe68](https://github.com/modulestf/modulestf/commit/0b3fe68be65d24e28ddf94a5ff564cd54c1be058))
+
+
+
 ## [0.12.8](https://github.com/modulestf/modulestf/compare/v0.12.7...v0.12.8) (2026-11-15)
 
 
