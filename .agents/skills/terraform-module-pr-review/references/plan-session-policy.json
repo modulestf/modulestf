@@ -15,7 +15,7 @@
         "logs:Describe*", "logs:ListTagsForResource",
         "ssm:Describe*", "ssm:ListTagsForResource", "ssm:GetParameter", "ssm:GetParameters",
         "lambda:GetPolicy", "lambda:List*",
-        "dynamodb:Describe*", "dynamodb:ListTables", "dynamodb:ListTagsOfResource",
+        "dynamodb:Describe*", "dynamodb:ListTa*",
         "sqs:GetQueue*", "sqs:ListQueue*",
         "sns:GetTopicAttributes", "sns:ListTopics", "sns:ListTagsForResource",
         "elasticloadbalancing:Describe*", "autoscaling:Describe*",
@@ -31,7 +31,8 @@
         "elasticfilesystem:Describe*",
         "backup:Describe*", "backup:List*",
         "organizations:Describe*", "organizations:List*",
-        "kinesis:Describe*", "kinesis:List*"
+        "kinesis:Describe*", "kinesis:List*",
+        "es:Describe*", "es:List*"
       ],
       "Resource": "*"
     },
@@ -42,7 +43,7 @@
         "s3:GetObject*", "secretsmanager:GetSecretValue",
         "ssm:GetParametersByPath", "ssm:GetParameterHistory",
         "kms:Decrypt", "kms:GenerateDataKey*", "lambda:GetFunction*",
-        "logs:GetLogEvents", "logs:FilterLogEvents", "kinesis:GetRecords",
+        "logs:GetLogEvents", "logs:FilterLogEvents", "kinesis:GetRecords", "es:ES*",
         "dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan", "sqs:ReceiveMessage",
         "ecr:Get*", "ecs:DescribeTaskDefinition",
         "ec2:DescribeLaunchTemplateVersions", "ec2:DescribeInstanceAttribute",

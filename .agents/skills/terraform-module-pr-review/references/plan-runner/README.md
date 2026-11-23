@@ -140,7 +140,7 @@ a third proxy configuration that passes the Python package index alone
 | `tinyproxy.conf` | Proxy configuration: default deny, filter on the whole request target, `CONNECT` to port 443 only, every connection and refusal logged |
 | `allowlist-init` | Init phase: `registry.terraform.io`, `releases.hashicorp.com`, `github.com`, `codeload.github.com`, `objects.githubusercontent.com`. No AWS |
 | `allowlist-test` | Test pass: `pypi.org` and `files.pythonhosted.org`, nothing else |
-| `allowlist-plan` | Plan phase: named AWS service endpoints, in their global and regional forms, and nothing else. A host a legitimate example needs shows in `plan-refused-hosts.txt`, and its service is added here; `kinesis` came from the lambda event source mapping example. EC2 public DNS names, load balancer and API Gateway hosts, S3 website hosts and S3 bucket virtual hosts do not match |
+| `allowlist-plan` | Plan phase: named AWS service endpoints, in their global and regional forms, and nothing else. A host a legitimate example needs shows in `plan-refused-hosts.txt`, and its service is added here; `kinesis` came from the lambda event source mapping example, and `es` from the OpenSearch complete example, whose plan retried the refused endpoint until its 300 second limit and ended `environment (timeout)`. EC2 public DNS names, load balancer and API Gateway hosts, S3 website hosts and S3 bucket virtual hosts do not match |
 | `entry.sh` | Runner entrypoint, one phase per container: `init` copies the read-only clone to `/work` and runs `init` with no credentials; `plan` runs `plan` in the same copy |
 | `egress-probe.sh` | Probe run inside the runner on the internal network. `init` and `plan`, for the smoke test after a phase: direct connections, name resolution, plain HTTP, and one line per host through the proxy, always exiting 0. `check`, for `run-pass.sh` behind each proxy before its first session: fails closed, exiting 1 on any open path or fault, from two positive controls, the interfaces and routes, name resolution, refused `CONNECT`s and direct connections to the host addresses it is passed |
 | `run-pass.sh` | Host side of the plan pass: checks the run networks with `egress-probe.sh check`, copies the clone into the work volume, runs the init phase in one container and the plan phase in one container per example, each behind its own proxy, issues each plan container its session, and writes the record |
@@ -343,7 +343,10 @@ names a service endpoint, `<service>.<region>.amazonaws.com:443`, add that servi
 the alternation in `allowlist-plan`, rebuild the proxy image with `--build`, and plan the
 example again. Add a service only when an example needed it, and only its service name:
 the region form stays the fixed pattern, so no host a customer controls under
-`amazonaws.com` becomes reachable.
+`amazonaws.com` becomes reachable. A service the plan reads also needs its read actions in
+[plan-session-policy.json](../plan-session-policy.json), and a data read it offers denied there by
+name. That policy must stay within the 2,048 characters `AssumeRole` accepts and is close to
+the limit, so check its compact length (`jq -c`) before you add to it.
 
 ## The bare runner
 
