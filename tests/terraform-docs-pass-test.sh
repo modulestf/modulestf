@@ -444,6 +444,37 @@ t_slash "$RRS"; check "readme regions: an entry name that climbs out is refused,
 t_case "$RRS"; check "readme regions: two names that fold to one are a case collision" $?
 t_cap "$RRS"; check "readme regions: the 256 cap counts README files, not the files list" $?
 
+# A typical family repository: the root, 15 submodules (names with underscores) and 25 examples, 41
+# README files, all generated. The pass takes 10 directories a run, so the host runs it in batches.
+BC=$TMP/rr-bclone
+git init -q "$BC"
+bg() { git -C "$BC" -c core.fsmonitor=false -c user.name=t -c user.email=t@example.com "$@"; }
+bdirs=(.); for i in $(seq 1 15); do bdirs+=("modules/db_m$i"); done; for i in $(seq 1 25); do bdirs+=("examples/ex-$i"); done
+for d in "${bdirs[@]}"; do
+  mkdir -p "$BC/$d"
+  printf 'variable "x" {\n  type = string\n}\n' >"$BC/$d/main.tf"
+  printf 'Intro\n\n%s\ngenerated\n%s\n\nOutro\n' "$B" "$E" >"$BC/$d/README.md"
+done
+bg add -A && bg commit -qm big; BH=$(bg rev-parse HEAD)
+printf '# STUB:sleep\n' >>"$BC/main.tf"
+bg add -A && bg commit -qm slow-root; BHS=$(bg rev-parse HEAD)
+for d in "${bdirs[@]}"; do [ "$d" = . ] && echo README.md || echo "$d/README.md"; done | LC_ALL=C sort >"$TMP/rr-bpaths"
+jq -R '{filename: .}' "$TMP/rr-bpaths" | jq -s . >"$TMP/rr-bfiles.json"
+sed 's/$/ generated/' "$TMP/rr-bpaths" >"$TMP/rr-bwant"
+t_big() { rr_x "$1" "$BC" "$BH" "$TMP/rr-bfiles.json"; cmp -s "$TMP/rr-bwant" "$RO/regions.txt"; }
+# A first batch that outlasts the budget leaves the later batches unrun: their READMEs are unknown.
+t_budget() { README_REGIONS_BUDGET_SECONDS=1 rr_x "$1" "$BC" "$BHS" "$TMP/rr-bfiles.json"
+  [ "$(sed -n 1p "$RO/regions.txt")" = "README.md unknown tool failed or timed out" ] &&
+    [ "$(sed -n 10p "$RO/regions.txt" | cut -d' ' -f2)" = generated ] &&
+    [ "$(sed -n '11,41p' "$RO/regions.txt" | cut -d' ' -f2- | sort -u)" = "unknown deadline" ] &&
+    [ "$(wc -l <"$RO/regions.txt" | tr -d ' ')" = 41 ]; }
+t_big "$RRS"; check "readme regions: 41 README files (15 submodules with underscores, 25 examples) are all generated" $?
+t_budget "$RRS"; check "readme regions: batches past the budget are unknown deadline" $?
+# Directly on the pass: a submodule name with an underscore is a documentation region.
+newws; mkdir -p "$W/modules/db_x"; cp "$W/modules/a/main.tf" "$W/modules/a/README.md" "$W/modules/db_x/"; snap
+run "$W" "$TMP/PROFILE.md" "$TMP/out" modules/db_x/README.md
+check "scope: a submodule name with an underscore is regenerated" "$(has "$TMP/out" "regenerated modules/db_x")"
+
 # Negative self-check: each weakened copy, beside a copy of the pass, must fail the first case.
 MUT=$TMP/rr-mut
 mkdir -p "$MUT/terraform-module-pr-review/references" "$MUT/terraform-module-maintainer/references"
@@ -472,6 +503,9 @@ xmut() { # name, perl substitution, test function: a weakened copy must fail tha
 xmut "the entry name test dropped" 's/\[\[ "\$n" =~ \$NAME_RE \]\] && \[ "\$n" != \. \] && \[ "\$n" != \.\. \] \|\| \{ WHY="entry name"; return 1; \}/:/' t_slash
 xmut "the case collision test dropped" 's/\| uniq -d\)/| uniq -d | grep -v .)/' t_case
 xmut "the cap applied before the README filter" 's/\n  \| select\(\. == "README\.md" or endswith\("\/README\.md"\)\)//' t_cap
+xmut "the underscore dropped from the submodule shape" 's/\(modules\|examples\)\/\[a-z0-9_-\]\+/(modules|examples)\/[a-z0-9-]+/' t_big
+xmut "the batches dropped, one pass for every entry" 's/\$\{entries\[\@\]:b:10\}/\${entries[\@]}/' t_big
+xmut "the budget dropped" 's/SECONDS - start\)\) -lt "\$BUDGET"/SECONDS - start)) -lt 999999/' t_budget
 # The version rule is held by its own case: a copy that ignores the pin is caught there.
 m=$MUT/terraform-module-pr-review/references/readme-regions.sh
 perl -0pe 's/mismatch\) r="unknown version mismatch" ;; //' "$RRS" >"$m"

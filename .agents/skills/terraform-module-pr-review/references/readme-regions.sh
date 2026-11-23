@@ -220,7 +220,7 @@ for p in ${paths[@]+"${paths[@]}"}; do
     continue
   fi
   grep -qF "${mk[@]}" "$RR/orig-$i" || { res[i]=skip; continue; }
-  [[ "$p" =~ ^(README\.md|(modules|examples)/[a-z0-9-]+/README\.md)$ ]] || { res[i]="unknown not a documentation region"; continue; }
+  [[ "$p" =~ ^(README\.md|(modules|examples)/[a-z0-9_-]+/README\.md)$ ]] || { res[i]="unknown not a documentation region"; continue; }
   # The directory with its inputs, and each directory above it up to the module root by name.
   d="$(dirname "$p")" WHY=""
   if [ "$d" = . ]; then copy_dir . 1; else copy_dir . 0 && copy_dir "${d%%/*}" 0 && copy_dir "$d" 1; fi ||
@@ -228,9 +228,22 @@ for p in ${paths[@]+"${paths[@]}"}; do
   entries+=("$p")
 done
 
-# One pass over every copied directory; its line for the directory decides the result.
+# The pass takes 10 directories a run, under a deadline of its own, so it runs once per 10 entries.
+# The batches share a wall-clock budget; a batch that would start after it is not run, and its
+# directories are reported as the pass reports a missed deadline. Its line for a directory decides
+# the result.
+BUDGET=600
+case "${README_REGIONS_BUDGET_SECONDS-}" in '' | *[!0-9]*) ;; *) [ "$README_REGIONS_BUDGET_SECONDS" -gt 0 ] && [ "$README_REGIONS_BUDGET_SECONDS" -lt "$BUDGET" ] && BUDGET=$README_REGIONS_BUDGET_SECONDS ;; esac
 : > "$RR/pass.out"
-[ ${#entries[@]} = 0 ] || bash "$PASS" ${pa[@]+"${pa[@]}"} --workspace "$WS" "${entries[@]}" > "$RR/pass.out" 2> /dev/null
+start=$SECONDS
+for ((b = 0; b < ${#entries[@]}; b += 10)); do
+  batch=("${entries[@]:b:10}")
+  if [ $((SECONDS - start)) -lt "$BUDGET" ]; then
+    bash "$PASS" ${pa[@]+"${pa[@]}"} --workspace "$WS" "${batch[@]}" >> "$RR/pass.out" 2> /dev/null
+  else
+    for p in "${batch[@]}"; do printf 'stale %s deadline\n' "$(dirname "$p")" >> "$RR/pass.out"; done
+  fi
+done
 wf="" hk="" i=0
 for p in ${paths[@]+"${paths[@]}"}; do
   i=$((i + 1)); r="${res[i]}"

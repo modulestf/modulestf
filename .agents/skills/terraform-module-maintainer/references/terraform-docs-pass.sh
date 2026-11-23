@@ -224,7 +224,7 @@ for raw in "$@"; do
   e=${raw#the terraform-docs region of }
   if [[ $e == README.md ]]; then
     d=.
-  elif [[ $e =~ ^(modules|examples)/[a-z0-9-]+/README\.md$ ]]; then
+  elif [[ $e =~ ^(modules|examples)/[a-z0-9_-]+/README\.md$ ]]; then
     d=${e%/README.md}
   elif [[ $e == wrappers/* ]]; then
     if [[ $e =~ ^wrappers/[A-Za-z0-9._/-]+$ && $e != *..* ]]; then label=$e; else label="entry $n"; fi
