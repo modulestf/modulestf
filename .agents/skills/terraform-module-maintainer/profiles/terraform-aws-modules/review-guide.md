@@ -211,7 +211,7 @@ Whether a profile file matches the family's template byte for byte needs the tem
 IDs: `scope.profile-file`, `scope.pre-commit-hook`, `scope.tooling`, `scope.tests`, `scope.layout`, `scope.readme-banner`.
 
 Source: [SCOPE.md#repository-files-and-tooling](SCOPE.md#repository-files-and-tooling) `275a68cec155`
-Source: [templates-map.md#static-files-copy-verbatim](templates-map.md#static-files-copy-verbatim) `b69982babe9c`
+Source: [templates-map.md#static-files-copy-verbatim](templates-map.md#static-files-copy-verbatim) `6f6b577fed23`
 Source: [templates-map.md#pre-commit-config-copy-then-update](templates-map.md#pre-commit-config-copy-then-update) `a58a407924a1`
 
 ## Not covered

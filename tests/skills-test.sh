@@ -640,29 +640,43 @@ grep -qxF "profile constants" "$TMP/failed" ||
 
 # Template sources: a `Source of `<template>`:` line of the terraform-aws-modules
 # templates-map.md that ends in `git blob `<sha>`` records the family file the verbatim
-# template was copied from, and the template must still be those bytes. At least one such
-# line must exist. A negative self-check changes a temp copy of the template, and drops the
-# record from a temp copy of the map, and requires each to be reported.
+# template was copied from, and the template must still be those bytes. Every line that
+# starts `Source of `<name>.template`` is such a record and must parse; at least one must
+# exist. A negative self-check runs each case below on temp copies and requires its own
+# message: a changed template, a missing one, a record that does not parse and a map with
+# no record.
 template_sources() { # templates-map file, templates dir: one line per problem
-  local t b n=0
-  while read -r t b; do
+  local line t b n=0
+  while IFS= read -r line; do
     n=$((n + 1))
-    if [ ! -f "$2/$t" ] || [ -L "$2/$t" ]; then echo "$t: no such template file"
-    elif [ "$(git hash-object "$2/$t")" != "$b" ]; then echo "$t: is not the recorded git blob $b"; fi
-  done < <(LC_ALL=C sed -n 's/^Source of `\([^`/]*\)`: .* git blob `\([0-9a-f]\{40\}\)`\.$/\1 \2/p' "$1")
+    t="$(printf '%s\n' "$line" | LC_ALL=C sed -n 's/^Source of `\([^`/]*\)`: .* git blob `\([0-9a-f]\{40\}\)`\.$/\1/p')"
+    b="$(printf '%s\n' "$line" | LC_ALL=C sed -n 's/^Source of `\([^`/]*\)`: .* git blob `\([0-9a-f]\{40\}\)`\.$/\2/p')"
+    if [ -z "$t" ]; then echo "a Source of record does not parse: ${line:0:80}"
+    elif [ ! -f "$2/$t" ] || [ -L "$2/$t" ]; then echo "$t: no such template file"
+    elif [ "$(git hash-object --no-filters "$2/$t")" != "$b" ]; then echo "$t: is not the recorded git blob $b"; fi
+  done < <(LC_ALL=C grep '^Source of `[^`]*\.template`' "$1")
   [ "$n" -gt 0 ] || echo "no template source is recorded"
 }
 while IFS= read -r hit; do fail "template sources" "$GDIR/templates-map.md" "$hit"; done \
   < <(template_sources "$GDIR/templates-map.md" "$GDIR/templates")
-mkdir -p "$TMP/tsrc"; cp "$GDIR"/templates/.gitignore.template "$TMP/tsrc/"
+ntsrc=0
+tsrc_case() { # name, map, templates dir, the message it must report
+  ntsrc=$((ntsrc + 1))
+  template_sources "$2" "$3" | grep -qF -- "$4" ||
+    fail "template sources" "$2" "self-check: $1 is not reported as: $4"
+}
+mkdir -p "$TMP/tsrc" "$TMP/tsrc-none"; cp "$GDIR"/templates/.gitignore.template "$TMP/tsrc/"
 printf '*.bak\n' >> "$TMP/tsrc/.gitignore.template"
-[ -n "$(template_sources "$GDIR/templates-map.md" "$TMP/tsrc")" ] ||
-  fail "template sources" "$TMP/tsrc" "self-check: a changed .gitignore.template is not reported"
-grep -v '^Source of `\.gitignore\.template`' "$GDIR/templates-map.md" > "$TMP/tsrc-map.md"
-[ -n "$(template_sources "$TMP/tsrc-map.md" "$GDIR/templates")" ] ||
-  fail "template sources" "$TMP/tsrc-map.md" "self-check: a map with no recorded source is not reported"
+tsrc_case "a changed .gitignore.template" "$GDIR/templates-map.md" "$TMP/tsrc" ".gitignore.template: is not the recorded git blob"
+tsrc_case "a missing .gitignore.template" "$GDIR/templates-map.md" "$TMP/tsrc-none" ".gitignore.template: no such template file"
+{ cat "$GDIR/templates-map.md"; printf '\nSource of `.editorconfig.template`: a family file, git blob `%s`\n' 0e938f888775086aa885726544cee79369ab6aa9; } > "$TMP/tsrc-map1.md"
+tsrc_case "a second record with no full stop" "$TMP/tsrc-map1.md" "$GDIR/templates" "a Source of record does not parse"
+{ cat "$GDIR/templates-map.md"; printf '\nSource of `.editorconfig.template`: a family file, git blob `%s`.\n' 0E938F888775086AA885726544CEE79369AB6AA9; } > "$TMP/tsrc-map2.md"
+tsrc_case "a second record with an upper-case blob" "$TMP/tsrc-map2.md" "$GDIR/templates" "a Source of record does not parse"
+grep -v '^Source of `\.gitignore\.template`' "$GDIR/templates-map.md" > "$TMP/tsrc-map3.md"
+tsrc_case "a map with no record" "$TMP/tsrc-map3.md" "$GDIR/templates" "no template source is recorded"
 grep -qxF "template sources" "$TMP/failed" ||
-  echo "ok   template sources (2 mutations caught)"
+  echo "ok   template sources ($ntsrc mutations caught)"
 
 # The rule to provider fact table: one row for every rule_id the reviewer skill names in
 # SKILL.md and its references (the fixtures excepted, which also record rejected names),

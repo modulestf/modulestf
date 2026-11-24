@@ -37,7 +37,7 @@ Engine: `candidate`
 - A new variable has no explicit `type`, uses `any` without a stated reason, or has no `description`; a new output has no `description`.
 
 **Severity:**
-- MEDIUM when a must-pass structural convention is missed: missing `type`, missing `description`, wrong file, missing tag propagation, a scanner suppression with no reason for accepting the risk, a closed value set whose `validation` block is absent or commented out (`structure.validation-missing`; the wording of a message a present block does emit is `structure.validation-message-uninformative`).
+- MEDIUM when a must-pass structural convention is missed: missing `type`, missing `description`, wrong file, missing tag propagation, a scanner suppression with no reason for accepting the risk, a closed value set the module branches on with no `validation` block, or one commented out (`structure.validation-missing`; the wording of a message a present block does emit is `structure.validation-message-uninformative`).
 
 ### Confirm when: `structure.variable-untyped`
 
@@ -59,7 +59,7 @@ Engine: `tool`
 - A new variable has no explicit `type`, uses `any` without a stated reason, or has no `description`; a new output has no `description`.
 
 **Severity:**
-- MEDIUM when a must-pass structural convention is missed: missing `type`, missing `description`, wrong file, missing tag propagation, a scanner suppression with no reason for accepting the risk, a closed value set whose `validation` block is absent or commented out (`structure.validation-missing`; the wording of a message a present block does emit is `structure.validation-message-uninformative`).
+- MEDIUM when a must-pass structural convention is missed: missing `type`, missing `description`, wrong file, missing tag propagation, a scanner suppression with no reason for accepting the risk, a closed value set the module branches on with no `validation` block, or one commented out (`structure.validation-missing`; the wording of a message a present block does emit is `structure.validation-message-uninformative`).
 
 ### Confirm when: `structure.missing-description`
 
@@ -81,7 +81,7 @@ Engine: `candidate`
 - Code lands in the wrong file for the module's archetype, for example identity resources inline in `main.tf` where the archetype calls for a separate file (`structure.wrong-file`). The archetype's extra files are optional in the profile, whose [Module layout](../../../terraform-module-maintainer/profiles/terraform-aws-modules/PROFILE.md#module-layout) says the absence of one is not a defect. So this fires only when the directory at the head already has the file the archetype names for that group, such as `iam.tf`, and the change adds blocks of that group to another file. A directory with no such file, new or existing, gets no finding for keeping the group in `main.tf`.
 
 **Severity:**
-- MEDIUM when a must-pass structural convention is missed: missing `type`, missing `description`, wrong file, missing tag propagation, a scanner suppression with no reason for accepting the risk, a closed value set whose `validation` block is absent or commented out (`structure.validation-missing`; the wording of a message a present block does emit is `structure.validation-message-uninformative`).
+- MEDIUM when a must-pass structural convention is missed: missing `type`, missing `description`, wrong file, missing tag propagation, a scanner suppression with no reason for accepting the risk, a closed value set the module branches on with no `validation` block, or one commented out (`structure.validation-missing`; the wording of a message a present block does emit is `structure.validation-message-uninformative`).
 
 ### Confirm when: `structure.wrong-file`
 
@@ -242,7 +242,7 @@ Engine: `candidate`
 ### Rule text: `structure.version-floor-understated`
 
 **Fails when:**
-- A `versions.tf` the change touches declares a lower floor than the thing it calls - the root against a submodule under `modules/` it calls, or an example against the module it calls - against [Version floors](../../../terraform-module-maintainer/profiles/terraform-aws-modules/code-conventions.md#version-floors). Scope is those files and their counterparts; a caller declaring more than its callee is silent. A module called from a registry is no callee here: a pinned registry module whose provider floor is above its caller's is `compat.provider-floor-raised`, LOW.
+- A `versions.tf` the change touches declares a lower floor than the thing it calls - the root against a submodule under `modules/` it calls, or an example against the module it calls - against [Version floors](../../../terraform-module-maintainer/profiles/terraform-aws-modules/code-conventions.md#version-floors). Scope is those files and their counterparts; a caller declaring more than its callee is silent. A module called from a registry is no callee here: a pinned registry module whose provider floor is above its caller's, within the same provider major version, is `compat.provider-floor-raised`, LOW, as that rule's text says, which also names the rule for the other cases.
 
 **Severity:**
 - MEDIUM when a caller declares a lower floor than the thing it calls but the two constraint sets still intersect (`structure.version-floor-understated`): the configuration still initializes, and only a must-pass convention of the family is violated. CRITICAL when the two sets do not intersect at all - an upper bound excluding the callee's floor - because no version satisfies both and the configuration cannot initialize.

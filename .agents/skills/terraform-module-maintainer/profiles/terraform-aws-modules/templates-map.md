@@ -24,6 +24,8 @@ These files are copied as-is with no modification. After copying, run `pre-commi
 
 Source of `.gitignore.template`: the `.gitignore` of `terraform-aws-modules/terraform-aws-vpc` at commit `577ad620abe00da27a3a0f1e5acee041959fb3be` on `master`, read on 2026-11-24, which is byte for byte the `.gitignore` on the default branch of each of the 16 family repositories sampled that day, git blob `0e938f888775086aa885726544cee79369ab6aa9`.
 
+The family file ignores neither `crash.*.log` nor `*.tfvars.json`, which the earlier template did. The template follows the family; a later sample decides whether to propose those two patterns upstream.
+
 `.editorconfig.template` and `.releaserc.json.template` differ from the files the family repositories share. They stay as they are until a wider sample of the family shows its common file. The workflow templates have not been compared with the family.
 
 Typography exception: `templates/github-workflows-lock.yml.template` keeps two hourglass emoji (U+23F3). It is upstream terraform-aws-modules text copied verbatim, so removing them would make every generated module diverge from the family. Do not convert them to ASCII.

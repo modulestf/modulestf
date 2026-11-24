@@ -68,9 +68,9 @@ Three rows change `scope` after the facts engine review found them:
 - `examples.stale-reference`: HIGH. The Check D block names no level for it; an example that "can no longer initialize" is broken by the change before apply, the HIGH bullet.
 - `profile.layout-divergence`: MEDIUM for a `LICENSE` that is not Apache 2.0 ("at the severity of a missing required file") and LOW when cosmetic.
 - `profile.commit-type-mismatch`: MEDIUM for a type that releases the change wrongly, LOW for `fix` on an added input that is the means of the fix and for `feat` on a fix.
-- `profile.template-drift`: MEDIUM, and LOW when the divergence is cosmetic or in `.gitignore`.
+- `profile.template-drift`: MEDIUM, and LOW when the divergence is cosmetic or in `.gitignore`, save a removed or weakened pattern that keeps state, variable files, `.terraform` or credentials out, which stays MEDIUM.
 - `compat.expression-behaviour-changed`: CRITICAL, HIGH and LOW, as Check G gives them. Its documented-intent case where only calls that write the base default change is filed as `review.check-not-run` MEDIUM, so no MEDIUM joins the row.
-- `compat.provider-floor-raised`: LOW, also for a pinned registry module whose provider floor is above its caller's, which raises the floor callers resolve. That case takes this name and no new one.
+- `compat.provider-floor-raised`: LOW, also for a pinned registry module whose provider floor is above its caller's within the same provider major version and was read in the review, which raises the floor callers resolve. That case takes this name and no new one; an unread floor is `review.check-not-run` and a higher major is `compat.version-constraint-raised`.
 - `review.quoted-claim-unverifiable`: `none`. An unconfirmed claim "produces no finding" and is only counted in the summary line, so the registry name never carries a severity.
 
 ## Open values

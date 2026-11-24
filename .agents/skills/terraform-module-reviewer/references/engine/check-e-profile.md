@@ -19,14 +19,14 @@ Note: the generated-content bullet below is the **Fails when:** bullet in [check
 **Severity** (copied from the check file, shared with `llm` rules):
 - MEDIUM when a profile-owned file drifts from its template with no stated reason, a required file is missing, or migration notes sit in `README.md` instead of their own file under `docs/`.
 - LOW when the divergence is cosmetic.
-- LOW, outside that copy, for any drift in `.gitignore`: an ignore pattern changes no module behaviour, release or check.
+- LOW, outside that copy, for drift in `.gitignore`: an added pattern, or a changed comment or order, changes no module behaviour, release or check. Removing or weakening a pattern of the template that keeps state files, variable files, `.terraform` directories or CLI configuration with its credentials out of the repository stays MEDIUM.
 
 ### Confirm when: `profile.template-drift`
 
 - The file is in the Static Files table of the templates map, and the change adds or edits it. `.pre-commit-config.yaml` is not.
 - At least one line differs from the template after version pins are set aside.
 - The change states no reason for the divergence. A stated reason is the lead's to read: escalate when any prose accompanies the change.
-- Severity: MEDIUM when the divergence changes or adds behaviour; LOW when it is cosmetic, such as whitespace, order or comments, or in `.gitignore`.
+- Severity: MEDIUM when the divergence changes or adds behaviour; LOW when it is cosmetic (whitespace, order, comments) or in `.gitignore`, save a dropped state, variable or credential pattern.
 
 ### Host templates: `profile.template-drift`
 
