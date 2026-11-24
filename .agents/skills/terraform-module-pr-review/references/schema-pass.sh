@@ -384,6 +384,7 @@ get_schema() { # provider, version, directory
 # 4. Each provider version: download, check, render, all in its own staging directory.
 : > "$WORK/pvok"
 : > "$WORK/status"
+: > "$WORK/nim"
 if [[ -n "$MODULESTF_SCHEMA_MIRROR" && ! "$MODULESTF_SCHEMA_MIRROR" =~ $mirror_re ]]; then
   echo "schema pass: MODULESTF_SCHEMA_MIRROR is not owner/name; no mirror"
   MODULESTF_SCHEMA_MIRROR=""
@@ -429,6 +430,7 @@ while read -r -u 3 prov ver; do
   fi
   if [ -n "$bad" ]; then
     note "$bad"
+    [ "$bad" != not_in_mirror ] || echo "$prov $ver" >> "$WORK/nim"
     rm -rf "$st"
   else
     echo "$prov $ver" >> "$WORK/pvok"
@@ -437,14 +439,31 @@ while read -r -u 3 prov ver; do
 done 3< "$WORK/pv"
 rm -rf "$WORK/dl"
 
+# The mirror publishes once a day, so the registry's newest release can be missing from it for
+# hours. At deep, a directory whose latest version is the one the mirror lacks, and that is
+# not its declared minimum, its old floor or a head lock version, is recorded as latest_not_mirrored: "dir provider version". The latest
+# stays not_in_mirror, noted as any other; only the versions the pass can read are decoupled
+# from it, as step 5 and missing.json say. Any other missing version stays whole.
+: > "$WORK/lnm"
+if [ "$MODE" = deep ]; then
+  while read -r dir prov st latest min floor _; do
+    [ "$st" = ok ] && grep -qxF "$prov $latest" "$WORK/nim" || continue
+    [ "$latest" != "$min" ] && [ "$latest" != "$floor" ] || continue
+    ! awk -v p="$prov" -v v="$latest" '$1 == p && $2 == v { f = 1 } END { exit !f }' "$WORK/locks" || continue
+    echo "$dir $prov $latest" >> "$WORK/lnm"
+  done < "$WORK/resolved"
+fi
+
 # 5. Same source per type: a type is read from sheets only when every version it is
 # needed at is a sheet or absent, the lock versions included; otherwise it is page at
-# every version.
+# every version. The latest of a latest_not_mirrored directory is left out of that rule: its
+# types are page at that version alone, and the versions that were read keep their sheets.
 awk 'FILENAME == ARGV[1] { st[$1 " " $2 " " $3 " " $4] = $5; next }
   FILENAME == ARGV[2] { res[$1 " " $2] = $3 " " $4 " " $5 " " $6; next }
   FILENAME == ARGV[3] { keep[$0] = 1; next }
   FILENAME == ARGV[4] { use[$2 " " $3 " " $4] = use[$2 " " $3 " " $4] " " $1; next }
   FILENAME == ARGV[5] { lk[$1] = lk[$1] " " $2; next }
+  FILENAME == ARGV[6] { ln[$1 " " $2] = 1; next }
   { k = $1 " " $2 " " $3; page = !(k in keep)
     m = split(lk[$1], lv, " ")
     for (i = 1; i <= m && !page; i++) {
@@ -456,12 +475,12 @@ awk 'FILENAME == ARGV[1] { st[$1 " " $2 " " $3 " " $4] = $5; next }
       split(res[ds[i] " " $1], r, " ")
       if (r[1] != "ok") { page = 1; break }
       for (j = 2; j <= 4; j++) {
-        if (r[j] == "-") continue
+        if (r[j] == "-" || (j == 2 && (ds[i] " " $1) in ln)) continue
         s = st[$1 " " r[j] " " $2 " " $3]
         if (s != "sheet" && s != "absent") { page = 1; break }
       }
     }
-    if (page) print k }' "$WORK/status" "$WORK/resolved" "$WORK/tkeep" "$WORK/types" "$WORK/locks" "$WORK/tall" > "$WORK/pagetypes"
+    if (page) print k }' "$WORK/status" "$WORK/resolved" "$WORK/tkeep" "$WORK/types" "$WORK/locks" "$WORK/lnm" "$WORK/tall" > "$WORK/pagetypes"
 while read -r -u 3 prov ver; do
   ns="${prov%%/*}" name="${prov#*/}" st="$WORK/stage/$ns/$name/$ver"
   keys="$(awk -v p="$prov" '$1 == p { print $2 ":" $3 }' "$WORK/pagetypes" | jq -R -s -c 'split("\n") | map(select(. != ""))')"
@@ -614,13 +633,17 @@ if [ -n "$MODE" ]; then
     done < "$WORK/over"
     [ -s "$WORK/reasons" ] || [ ! -s "$WORK/pagetypes" ] || note page
     # Every type with no sheet, with the versions it was needed at: the reviewer fetches
-    # these and only these through its fetch helper.
+    # these and only these through its fetch helper. A type of a latest_not_mirrored
+    # directory lists that latest alone, unless another rule made it page.
     awk 'FILENAME == ARGV[1] { if ($3 == "ok") res[$1 " " $2] = $4 " " $5 " " $6; next }
       FILENAME == ARGV[2] { lk[$1] = lk[$1] " " $2; next }
       FILENAME == ARGV[3] { pg[$1 " " $2 " " $3] = 1; next }
-      ($2 " " $3 " " $4) in pg { k = $2 " " $3 " " $4; print k, "-"
+      FILENAME == ARGV[4] { ln[$1 " " $2] = $3; next }
+      { k = $2 " " $3 " " $4 }
+      ($1 " " $2) in ln { print k, ln[$1 " " $2] }
+      k in pg { print k, "-"
         n = split(res[$1 " " $2] " " lk[$2], a, " "); for (i = 1; i <= n; i++) if (a[i] != "-") print k, a[i] }' \
-      "$WORK/resolved" "$WORK/locks" "$WORK/pagetypes" "$WORK/types" | sort -u |
+      "$WORK/resolved" "$WORK/locks" "$WORK/pagetypes" "$WORK/lnm" "$WORK/types" | sort -u |
       jq -R -s -c --arg r "$(awk '!s[$0]++' "$WORK/reasons" | tr '_' '-' | tr '\n' ' ')" '
         split("\n") | map(select(. != "") | split(" ")) | group_by(.[0:3])
         | map({provider: .[0][0], type: (.[0][1] + ":" + .[0][2]), versions: (map(.[3] | select(. != "-")) | unique)})
@@ -764,6 +787,11 @@ done < "$WORK/pvok"
              then {old_floor_none: (if $r[7] == "null" then "no_entry" else "no_lower_bound" end)} else {} end)
         else {unresolved: $r[3]} end))
   | {format: 1, directories: .}' > "$OUT/versions.json" || exit 1
+# A latest the mirror lacks, with the versions that were read still published.
+if [ -s "$WORK/lnm" ]; then
+  jq -c --rawfile f "$WORK/lnm" 'reduce ($f | split("\n")[] | select(. != "") | split(" ")) as $r (.; .directories[$r[0]][$r[1]].latest_not_mirrored = $r[2])' \
+    "$OUT/versions.json" > "$WORK/versions.n" && mv "$WORK/versions.n" "$OUT/versions.json" || exit 1
+fi
 [ "$MODE" != deep ] || cp "$WORK/missing.json" "$OUT/missing.json" || exit 1
 (cd "$OUT" && files_under . ! -path ./files.sha256 | while IFS= read -r f; do sha256 "$f"; done) > "$WORK/files.sha256" &&
   mv "$WORK/files.sha256" "$OUT/files.sha256" || exit 1
@@ -821,6 +849,7 @@ if [ -n "$HANDOFF" ] && [ -z "$hwhy" ]; then
 fi
 [ -z "$HANDOFF" ] || [ -z "$hwhy" ] || echo "schema pass: no handoff, $hwhy"
 
+awk '{ print $2, $3 }' "$WORK/lnm" | LC_ALL=C sort -u | while read -r p v; do echo "schema pass: latest_not_mirrored $p $v"; done
 echo "schema pass: $(( $(wc -l < "$WORK/pvok") )) of $(( $(wc -l < "$WORK/pv") )) provider versions read, $(grep -c . "$WORK/pagetypes") page types"
 sort "$WORK/reasons" | uniq -c | awk '{ print "schema pass reason: " $2 " " $1 }'
 exit 0

@@ -379,6 +379,87 @@ D="$(mk hist_thing "$HP" "$HT" "")" run since-404
   grep -qx 'schema pass: introduced 4 paths, 3 unresolved, 4 bisect downloads' "$R.out"
 check "introduced: a version the mirror lacks mid-search leaves the paths that need it unresolved not_in_mirror, the run goes on" "$?"
 mv "$TMP/hist-1.6.0" "$SITE/mirror/example_hist-v1.6.0"
+
+# --- The newest release is not in the mirror yet (it runs once a day). At deep the latest stays
+# not_in_mirror, so every rule on the latest schema is an unknown as before, but the minimum, the
+# old floor and the lock versions are still read and published, so the floors can be read; the
+# directory is recorded as latest_not_mirrored. A pinned, minimum, old floor or lock version the
+# mirror lacks, and a latest that failed for another reason, stay whole.
+mirror_away() { for v in "$@"; do mv "$SITE/mirror/example_hist-v$v" "$TMP/hist-away-$v"; done; }
+mirror_back() { for v in "$@"; do mv "$TMP/hist-away-$v" "$SITE/mirror/example_hist-v$v"; done; }
+HPF="head:.:hist=example/hist:>=1.2 base:.:hist=example/hist:>=1.0"
+dv() { jq -c --arg d "${1:-.}" '.directories[$d]["example/hist"] | del(.old_floor_none)' "$R/facts/versions.json"; } # directory
+hmissing() { jq -c '[.missing[] | "\(.type)@\(.versions | join(","))"]' "$R/facts/missing.json"; }
+mirror_away 1.8.0
+DEPTH=deep D="$(DEPTH=deep mk "" "$HPF" "$HT" ".:example/hist=1.7.0")" run lag
+[ "$RC" = 0 ] && grep -q '^schema pass: deep partial not-in-mirror, ' "$R.out" && [ ! -e "$R/facts/example/hist/1.8.0" ] &&
+  [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.2.0","old_floor":"1.0.0","latest_not_mirrored":"1.8.0"}' ] &&
+  grep -qx 'schema pass: latest_not_mirrored example/hist 1.8.0' "$R.out" && [ "$(jq -c .reasons "$R/facts/missing.json")" = '["not-in-mirror"]' ]
+check "lag: a latest the mirror lacks is recorded, stays not_in_mirror and makes a deep partial run" "$?"
+hsheets() { # versions: each a sheet in index.json, in its own file or in the one its same_as names
+  for v in "$@"; do [ "$(jq -r '.types["resource:hist_thing"]' "$R/facts/example/hist/$v/index.json")" = sheet ] &&
+    [ -f "$R/facts/example/hist/$(jq -r '.same_as["resource:hist_thing"] // "'"$v"'"' "$R/facts/example/hist/$v/index.json")/resources/hist_thing.facts" ] || return 1; done; }
+[ "$(hmissing)" = '["resource:hist_thing@1.8.0"]' ] && hsheets 1.0.0 1.2.0 1.7.0
+check "lag: the type is missing at the latest alone, a sheet at the old floor, the minimum and the lock version" "$?"
+[ "$(grep -c '^schema pass: source ' "$R.out")" = 3 ] && ! grep -q 'example_hist-v1.8.0' "$R.out" && (cd "$R/facts" && sha256 --strict -c files.sha256 > /dev/null)
+check "lag: a source line for each version read and none for the missing one, files.sha256 holds" "$?"
+[ "$(dv | jq -c 'del(.latest_not_mirrored)')" = '{"latest":"1.8.0","minimum":"1.2.0","old_floor":"1.0.0"}' ]
+check "lag: the latest, the minimum and the old floor keep their places in versions.json" "$?"
+D="$(mk hist_thing "$HP" "$HT" "")" run lag-focused; esc "focused, a latest the mirror lacks" not-in-mirror
+DEPTH=deep D="$(DEPTH=deep mk "" "$HP" ".:resource:hist_thing:example/hist modules/m:resource:hist_thing:example/hist" "")" run lag-dirs
+[ "$RC" = 0 ] && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.0.0","latest_not_mirrored":"1.8.0"}' ] && [ "$(hmissing)" = '["resource:hist_thing@1.8.0"]' ]
+check "lag: another directory of the provider with the same constraints is recorded the same" "$?"
+DEPTH=deep D="$(DEPTH=deep mk "" "$HP head:modules/m:hist=example/hist:<=1.7.0" ".:resource:hist_thing:example/hist modules/m:resource:hist_thing:example/hist" "")" run lag-two
+[ "$RC" = 0 ] && [ "$(dv .)" = '{"latest":"1.8.0","minimum":"1.0.0","latest_not_mirrored":"1.8.0"}' ] &&
+  [ "$(dv modules/m | jq -c 'has("latest_not_mirrored")')" = false ] &&
+  [ "$(hmissing)" = '["resource:hist_thing@1.8.0"]' ] && [ -f "$R/facts/example/hist/1.7.0/resources/hist_thing.facts" ]
+check "lag: a directory whose latest is mirrored is not recorded and keeps its sheets beside one that is" "$?"
+DEPTH=deep D="$(DEPTH=deep mk "" "head:.:hist=example/hist:=1.8.0" "$HT" "")" run lag-pin
+[ "$RC" = 0 ] && grep -q '^schema pass: deep partial not-in-mirror, ' "$R.out" && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.8.0"}' ] &&
+  ! grep -q '^schema pass: latest_not_mirrored ' "$R.out"
+check "lag: a version pinned with = that the mirror lacks is not recorded, nothing read in its place" "$?"
+DEPTH=deep D="$(DEPTH=deep mk "" "head:.:hist=example/hist:>=1.8.0" "$HT" "")" run lag-min
+[ "$RC" = 0 ] && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.8.0"}' ] && ! grep -q '^schema pass: latest_not_mirrored ' "$R.out"
+check "lag: a declared minimum that the mirror lacks is not recorded" "$?"
+DEPTH=deep D="$(DEPTH=deep mk "" "$HP base:.:hist=example/hist:>=1.8.0" "$HT" "")" run lag-floor
+[ "$RC" = 0 ] && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.0.0","old_floor":"1.8.0"}' ] && ! grep -q '^schema pass: latest_not_mirrored ' "$R.out" &&
+  [ "$(hmissing)" = '["resource:hist_thing@1.0.0,1.8.0"]' ]
+check "lag: an old floor equal to the missing latest is not recorded, the type is missing at every version" "$?"
+DEPTH=deep D="$(DEPTH=deep mk "" "$HP" "$HT" ".:example/hist=1.8.0")" run lag-lock
+[ "$RC" = 0 ] && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.0.0"}' ] && ! grep -q '^schema pass: latest_not_mirrored ' "$R.out" &&
+  [ "$(hmissing)" = '["resource:hist_thing@1.0.0,1.8.0"]' ]
+check "lag: a lock version that the mirror lacks is not recorded" "$?"
+mirror_away 1.2.0
+DEPTH=deep D="$(DEPTH=deep mk "" "$HPF" "$HT" "")" run lag-two-min
+[ "$RC" = 0 ] && [ "$(hmissing)" = '["resource:hist_thing@1.0.0,1.2.0,1.8.0"]' ] && [ "$(jq -r '.types["resource:hist_thing"]' "$R/facts/example/hist/1.0.0/index.json")" = page ] &&
+  [ ! -e "$R/facts/example/hist/1.0.0/resources/hist_thing.facts" ] && [ "$(dv | jq -c 'has("latest_not_mirrored")')" = true ]
+check "lag: a minimum the mirror lacks beside the latest leaves the type page at every version, none kept" "$?"
+mirror_back 1.2.0
+mirror_away 1.1.0
+DEPTH=deep D="$(DEPTH=deep mk "" "head:.:hist=example/hist:>=1.0 base:.:hist=example/hist:>=1.1" "$HT" "")" run lag-two-floor
+[ "$RC" = 0 ] && [ "$(hmissing)" = '["resource:hist_thing@1.0.0,1.1.0,1.8.0"]' ] && [ "$(jq -r '.types["resource:hist_thing"]' "$R/facts/example/hist/1.0.0/index.json")" = page ] &&
+  [ "$(dv | jq -c 'has("latest_not_mirrored")')" = true ]
+check "lag: an old floor the mirror lacks beside the latest leaves the type page at every version" "$?"
+mirror_back 1.1.0
+# The handoff of a recorded run: the registry's latest, and no schema of it.
+HS="$(printf 'ab%.0s' $(seq 20))" DEPTH=deep D="$(DEPTH=deep mk "" "$HPF" "$HT" "")" run lag-handoff
+h="$(gzip -dc "$R/handoff/schema-handoff.json.gz" 2> /dev/null)"
+[ "$RC" = 0 ] && grep -q '^schema pass: handoff written, ' "$R.out" &&
+  [ "$(jq -c '.directories[0].providers[0].versions' <<< "$h")" = '{"latest":"1.8.0","declared_minimum":"1.2.0","old_floor":"1.0.0"}' ] &&
+  [ "$(jq -c '[.provider_schemas[] | select(.version == "1.8.0")] | length' <<< "$h")" = 0 ] && [ "$(jq -c '.provider_schemas | length' <<< "$h")" -gt 0 ]
+check "lag: the handoff of a recorded run keeps the registry's latest and holds no provider schema of it" "$?"
+unset HS
+HDEMO="$SITE/mirror/example_hist-v1.8.0"
+mkdir -p "$HDEMO" && cp -R "$TMP/hist-away-1.8.0/." "$HDEMO/" && sed 's/^[0-9a-f]/0/' "$TMP/hist-away-1.8.0/SHA256SUMS" > "$HDEMO/SHA256SUMS"
+DEPTH=deep D="$(DEPTH=deep mk "" "$HP" "$HT" "")" run lag-checksum
+[ "$RC" = 0 ] && grep -q '^schema pass: deep partial checksum, ' "$R.out" && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.0.0"}' ] &&
+  ! grep -q '^schema pass: latest_not_mirrored ' "$R.out"
+check "lag: a latest the mirror has but that fails its checksum is not recorded" "$?"
+rm -rf "$HDEMO"
+mirror_back 1.8.0
+DEPTH=deep D="$(DEPTH=deep mk "" "$HP" "$HT" "")" run lag-none
+[ "$RC" = 0 ] && ! grep -q 'latest_not_mirrored' "$R.out" && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.0.0"}' ]
+check "lag: a latest the mirror has is not recorded" "$?"
 capped() { # name, sed expression -> a copy of the script in its own directory
   mkdir -p "$TMP/$1" && cp "$REF/schema-facts.jq" "$REF/schema-handoff.jq" "$TMP/$1/" && sed "$2" "$SP" > "$TMP/$1/schema-pass.sh"
 }
@@ -569,6 +650,28 @@ mutant root-unchecked 's/ || hwhy=inputs$//' c_rootbad k_rootbad
 mutant no-floor-none 's/(if \$mode == "deep" and/(if false and/' c_none k_none
 mutant floor-none-one-kind 's/IN("null", "no_lower_bound")/IN("null")/' c_nolow k_nolow
 mutant focused-floor-sheet 's/ || \[ "\$MODE" = focused \] || floor="\$f"; fi$/ || floor="$f"; fi/' c_hfloor k_hfloor
+c_lag() { mirror_away 1.8.0; DEPTH=deep D="$(DEPTH=deep mk "" "$HPF" "$HT" ".:example/hist=1.7.0")" run m-lag; mirror_back 1.8.0; }
+k_lag() { [ "$RC" = 0 ] && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.2.0","old_floor":"1.0.0","latest_not_mirrored":"1.8.0"}' ] &&
+  [ "$(hmissing)" = '["resource:hist_thing@1.8.0"]' ] && hsheets 1.0.0 1.2.0 1.7.0 && grep -qx 'schema pass: latest_not_mirrored example/hist 1.8.0' "$R.out"; }
+c_lagmin() { mirror_away 1.8.0; DEPTH=deep D="$(DEPTH=deep mk "" "head:.:hist=example/hist:>=1.8.0" "$HT" "")" run m-lagmin; mirror_back 1.8.0; }
+k_lagmin() { [ "$RC" = 0 ] && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.8.0"}' ] && ! grep -q '^schema pass: latest_not_mirrored ' "$R.out"; }
+c_lagfloor() { mirror_away 1.8.0; DEPTH=deep D="$(DEPTH=deep mk "" "$HP base:.:hist=example/hist:>=1.8.0" "$HT" "")" run m-lagfloor; mirror_back 1.8.0; }
+k_lagfloor() { [ "$RC" = 0 ] && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.0.0","old_floor":"1.8.0"}' ] && [ "$(hmissing)" = '["resource:hist_thing@1.0.0,1.8.0"]' ]; }
+c_laglock() { mirror_away 1.8.0; DEPTH=deep D="$(DEPTH=deep mk "" "$HP" "$HT" ".:example/hist=1.8.0")" run m-laglock; mirror_back 1.8.0; }
+k_laglock() { [ "$RC" = 0 ] && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.0.0"}' ] && [ "$(hmissing)" = '["resource:hist_thing@1.0.0,1.8.0"]' ]; }
+c_lagsum() { mirror_away 1.8.0; mkdir -p "$HDEMO" && cp -R "$TMP/hist-away-1.8.0/." "$HDEMO/" && sed 's/^[0-9a-f]/0/' "$TMP/hist-away-1.8.0/SHA256SUMS" > "$HDEMO/SHA256SUMS"
+  DEPTH=deep D="$(DEPTH=deep mk "" "$HP" "$HT" "")" run m-lagsum; rm -rf "$HDEMO"; mirror_back 1.8.0; }
+k_lagsum() { [ "$RC" = 0 ] && [ "$(dv)" = '{"latest":"1.8.0","minimum":"1.0.0"}' ] && ! grep -q '^schema pass: latest_not_mirrored ' "$R.out"; }
+mutant lag-unrecorded 's/\.directories\[\$r\[0\]\]\[\$r\[1\]\]\.latest_not_mirrored = \$r\[2\]/.directories[$r[0]][$r[1]].x = $r[2]/' c_lag k_lag
+mutant lag-all-versions-page 's/ || (j == 2 \&\& (ds\[i\] " " \$1) in ln)//' c_lag k_lag
+c_lagtwo() { mirror_away 1.8.0 1.2.0; DEPTH=deep D="$(DEPTH=deep mk "" "$HPF" "$HT" "")" run m-lagtwo; mirror_back 1.8.0 1.2.0; }
+k_lagtwo() { [ "$RC" = 0 ] && [ "$(hmissing)" = '["resource:hist_thing@1.0.0,1.2.0,1.8.0"]' ] && [ "$(jq -r '.types["resource:hist_thing"]' "$R/facts/example/hist/1.0.0/index.json")" = page ]; }
+mutant lag-widened 's/ || (j == 2 \&\& (ds\[i\] " " \$1) in ln)/ || ((ds[i] " " $1) in ln)/' c_lagtwo k_lagtwo
+mutant lag-missing-dropped 's/^      (\$1 " " \$2) in ln { print k, ln\[\$1 " " \$2\] }$//' c_lag k_lag
+mutant lag-for-minimum 's/    \[ "\$latest" != "\$min" \] \&\& \[ "\$latest" != "\$floor" \] || continue/    [ "$latest" != "$floor" ] || continue/' c_lagmin k_lagmin
+mutant lag-for-floor 's/    \[ "\$latest" != "\$min" \] \&\& \[ "\$latest" != "\$floor" \] || continue/    [ "$latest" != "$min" ] || continue/' c_lagfloor k_lagfloor
+mutant lag-for-lock 's/^    ! awk -v p="\$prov" -v v="\$latest" .*|| continue$/    :/' c_laglock k_laglock
+mutant lag-for-any-reason 's/\[ "\$st" = ok \] \&\& grep -qxF "\$prov \$latest" "\$WORK\/nim" || continue/[ "$st" = ok ] || continue/' c_lagsum k_lagsum
 c_since() { D="$(mk hist_thing "$HP" "$HT" "")" run m-since; }
 k_since() { [ "$RC" = 0 ] && [ "$(intro)" = 'introduced:|since: alpha 1.5.0|since: beta unresolved non_monotone|since: gamma 1.6.0|since: gamma.x 1.6.0|' ]; }
 k_sover() { [ "$RC" = 0 ] && [ "$(grep -c ' unresolved overflow$' "$R/facts/example/hist/1.8.0/resources/hist_thing.facts")" = 4 ]; }
