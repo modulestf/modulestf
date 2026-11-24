@@ -1,3 +1,12 @@
+## [0.12.14](https://github.com/modulestf/modulestf/compare/v0.12.13...v0.12.14) (2026-11-24)
+
+
+### Bug Fixes
+
+* **pr-review:** Review a large pull request over a budget instead of refusing it ([#184](https://github.com/modulestf/modulestf/issues/184)) ([964be79](https://github.com/modulestf/modulestf/commit/964be79840d18e72a963c6f329994ea04c900629))
+
+
+
 ## [0.12.13](https://github.com/modulestf/modulestf/compare/v0.12.12...v0.12.13) (2026-11-24)
 
 
