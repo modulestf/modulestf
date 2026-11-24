@@ -348,6 +348,21 @@ the region form stays the fixed pattern, so no host a customer controls under
 name. That policy must stay within the 2,048 characters `AssumeRole` accepts and is close to
 the limit, so check its compact length (`jq -c`) before you add to it.
 
+## Refused hosts
+
+A provider that keeps retrying a host the plan proxy refuses would hold its plan until the
+plan's time limit. While a plan container runs, `run-pass.sh` reads the plan proxy's log from
+the line the container started at. Once one host has been refused 3 times and the container is
+still running 60 seconds later, it kills the container. The example is then recorded
+`plan: environment (network)`, or `base: environment (network)` at the merge base, whatever
+the container printed, and the host stays in `plan-refused-hosts.txt`. A plan that ends by
+itself in that time keeps its own result, and a check that cannot read the log leaves the
+plan's time limit in place. Some data sources need what no allowlist entry should give: the
+eks module's `eks-capabilities` example reads the account's Identity Center directory
+(`aws_ssoadmin_instances`, `aws_identitystore_group`), and its `karpenter` example reads a
+public registry token (`aws_ecrpublic_authorization_token`), which is a credential. Those
+examples end this way.
+
 ## The bare runner
 
 ```bash

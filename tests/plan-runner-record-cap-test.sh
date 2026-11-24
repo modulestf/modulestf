@@ -11,7 +11,7 @@ source = Path('.agents/skills/terraform-module-pr-review/references/plan-runner/
 helpers = source[source.index('check_record_size() {'):source.index('# The pre-session')]
 cleanup = source[source.index('save_proxy_log() {'):source.index('trap cleanup EXIT')]
 filters = source[source.index("host_only='"):source.index('\n# Plan phase')]
-assembly = source[source.index('n=0\nfor ex in "$@"; do\n  n=$((n + 1))\n  check_record_size'):source.index('\n{\n  grep -o', source.index('assemble_record() {'))]
+assembly = source[source.index('n=0\nfor ex in "$@"; do\n  n=$((n + 1))\n  check_record_size'):source.index('\nrefused_targets < ', source.index('assemble_record() {'))]
 with tempfile.TemporaryDirectory(prefix='plan-record-cap.', dir='/tmp') as directory:
     script = Path(directory) / 'probe.sh'
     script.write_text('''#!/usr/bin/env bash

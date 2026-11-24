@@ -158,7 +158,7 @@ required, and Terratest is never used.
 - **Registry namespace for test helpers.** A helper may call a module of this family from the
   public Terraform Registry, such as `terraform-aws-modules/vpc/aws`, to build its fixtures.
   The whole `source` string must match
-  `^(registry\.terraform\.io/)?terraform-aws-modules/[a-z0-9-]+/aws(//modules/[a-z0-9-]+)?$`:
+  `^(registry\.terraform\.io/)?terraform-aws-modules/[a-z0-9-]+/aws(//modules/[a-z0-9_-]+)?$`:
   the host omitted or `registry.terraform.io`, the namespace `terraform-aws-modules`, and the
   provider segment `aws`, with an optional submodule path. Any other host, such as
   `app.terraform.io` or a private registry, and any other namespace fail.

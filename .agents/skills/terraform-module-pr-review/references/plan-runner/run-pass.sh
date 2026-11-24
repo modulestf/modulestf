@@ -123,6 +123,7 @@ save_proxy_log() { # container, record file; a proxy may run twice, so the log i
   docker rm -f "$1" > /dev/null 2>&1 || true
 }
 cleanup() {
+  [ -z "${wpid:-}" ] || kill "$wpid" 2> /dev/null || true
   docker rm -f "$runner" > /dev/null 2>&1 || true
   for p in "$proxy_init:proxy-init.log" "$proxy_plan:proxy-plan.log"; do
     if docker container inspect "${p%%:*}" > /dev/null 2>&1; then
@@ -298,16 +299,45 @@ save_proxy_log "$proxy_init" proxy-init.log
 SEED="/seed/pr-review.$sfx"
 base_args=()
 [ -z "$base" ] || base_args=(--base "$base")
+# Refused hosts (README.md, Refused hosts). tinyproxy logs a filter refusal, but refuses a
+# CONNECT to a port other than 443 with no refusal line, so those come from the request lines.
+refused_targets() { # tinyproxy log on stdin -> one line per refused CONNECT target
+  awk 'match($0, /refused on filtered url "[^"]*"/) { print substr($0, RSTART + 25, RLENGTH - 26); next }
+    match($0, /Request \([^)]*\): CONNECT [^ ]+/) { t = substr($0, RSTART, RLENGTH); sub(/.*CONNECT /, "", t); if (t !~ /:443$/) print t }'
+}
+# A plan whose provider keeps retrying a host the plan proxy refuses would wait for the plan's
+# time limit. While a plan container runs, stall_watch reads the plan proxy's log from the line
+# the container started at: once one host has been refused stall_tries times and the container
+# is still running stall_grace seconds later, it kills the container and writes that host to the
+# flag file. The flag is written only when the kill found the container running, so a plan that
+# ended on its own keeps its result.
+stall_tries=3 stall_grace=60 stall_poll=5 wpid=
+stall_watch() { # proxy log lines before this container, flag file
+  local since="" h
+  while sleep "$stall_poll"; do
+    h="$(docker logs "$proxy_plan" 2>&1 | tail -n +"$(($1 + 1))" | refused_targets | sort | uniq -c |
+      awk -v n="$stall_tries" '$1 >= n { print $2; exit }')" || h=""
+    [ -n "$h" ] || continue
+    [ -n "$since" ] || since=$SECONDS
+    [ $((SECONDS - since)) -ge "$stall_grace" ] || continue
+    if docker kill "$runner" > /dev/null 2>&1; then printf '%s\n' "$h" > "$2"; fi
+    return 0
+  done
+}
 plan_container() { # output file, phase, index, example, budget left: the work volume read-only, the credentials in
   # The volume stays read-only; the example's own plan may write into its directory, as the
   # lambda module's packaging does, so the clone (and the base worktree) are private
   # writable copies on tmpfs, seeded from the volume at start and gone with the container.
-  local base_tmpfs=() seed_base=:
+  local base_tmpfs=() seed_base=: lines
   if [ "$2" = base-plan ]; then
     base_tmpfs=(--tmpfs "$RUN/base:rw,size=1g,mode=1777")
     seed_base="{ [ ! -d '$SEED/base' ] || cp -dR '$SEED/base/.' '$RUN/base/'; }"
   fi
   issue_session
+  rm -f "$TMPRUN/stalled"
+  lines="$(docker logs "$proxy_plan" 2>&1 | wc -l | tr -d ' ')" || lines=0
+  stall_watch "${lines:-0}" "$TMPRUN/stalled" &
+  wpid=$!
   in_runner "$1" --network "$net_int" "${common[@]}" "${proxy_env[@]}" \
     -v "$volume":/work:ro -v "$volume":/seed:ro \
     --tmpfs "$RUN/clone:rw,size=1g,mode=1777" ${base_tmpfs[@]+"${base_tmpfs[@]}"} -v "$saved":"$RUN/plan/saved" \
@@ -316,6 +346,9 @@ plan_container() { # output file, phase, index, example, budget left: the work v
     --entrypoint /bin/bash "$runner_image" -c \
     "$load_creds && cp -dR '$SEED/clone/.' '$RUN/clone/' && $seed_base && exec bash /opt/plan-pass/plan-pass.sh plan '$RUN' '$pname' --mode runner --budget '$5' --phase '$2' --index '$3' \"\$@\"" \
     plan-pass ${base_args[@]+"${base_args[@]}"} "$4"
+  kill "$wpid" 2> /dev/null || true
+  wait "$wpid" 2> /dev/null || true
+  wpid=
 }
 # Lines only the host may write; the container's output is untrusted and may not forge them
 host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example |not reached:)'
@@ -338,6 +371,8 @@ for ex in "$@"; do
   : > "$TMPRUN/example.out"
   plan_container "$TMPRUN/example.out" plan "$n" "$ex" "$rem"
   untrusted "$TMPRUN/example.out" > "$blk"
+  # Ended by stall_watch: the plan did not finish, whatever the container printed
+  [ ! -s "$TMPRUN/stalled" ] || printf 'example: %s\nplan: environment (network)\n' "$ex" > "$blk"
   line="$(grep -m 1 '^plan: ' "$blk" || true)"
   case "$line" in
     'plan: planned'*) planned=$((planned + 1)) ;; # planned and planned-no-changes
@@ -413,6 +448,7 @@ if [ "${#deferred[@]}" -gt 0 ]; then
     plan_container "$TMPRUN/example.out" base-plan "$n" "$ex" "$rem"
     { grep -E '^base: ' "$TMPRUN/example.out" | head -n 1
       untrusted "$TMPRUN/example.out" | grep '^credentials: ' | head -n 1; } > "$TMPRUN/base.$n" || true
+    [ ! -s "$TMPRUN/stalled" ] || echo 'base: environment (network)' > "$TMPRUN/base.$n"
     [ -s "$TMPRUN/base.$n" ] || echo 'base: not available' > "$TMPRUN/base.$n"
   done
   save_proxy_log "$proxy_plan" proxy-plan.log
@@ -453,10 +489,7 @@ check_record_size "$TMPRUN/assembled.txt"
 out="$record/plan-pass.txt"
 mv "$TMPRUN/assembled.txt" "$out"
 
-{
-  grep -o 'refused on filtered url "[^"]*"' "$record/proxy-plan.log" | sed -E 's/.*"([^"]*)"/\1/'
-  grep -o 'Request ([^)]*): CONNECT [^ ]*' "$record/proxy-plan.log" | sed -E 's/.*CONNECT //' | grep -v ':443$'
-} | sort -u > "$record/plan-refused-hosts.txt" || true
+refused_targets < "$record/proxy-plan.log" | sort -u > "$record/plan-refused-hosts.txt" || true
 
 for record_file in "$record"/*; do
   check_record_size "$record_file"
