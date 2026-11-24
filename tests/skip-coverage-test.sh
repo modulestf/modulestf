@@ -752,6 +752,8 @@ t_refs_other() { refs_dir name; printf 'locals {\n  t = aws_lb.this.tags_all\n  
 t_refs_other; check "attribute scan: other attributes are no read" $?
 t_refs_link() { refs_dir subnets; printf 'nothing\n' > "$TMP/refs/notes.txt"; ln -s notes.txt "$TMP/refs/l.tf"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this subnets' ]; }
 t_refs_link; check "attribute scan: a .tf file that is a link counts as a read of every pair" $?
+t_refs_json() { refs_dir subnets; printf '{"locals": {"x": "1"}}\n' > "$TMP/refs/extra.tf.json"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this subnets' ]; }
+t_refs_json; check "attribute scan: any .tf.json file counts as a read of every pair" $?
 t_refs_big() { # 40,000 unclosed indexes on one line: seconds when bounded, minutes when not
   refs_dir name; perl -e 'print "locals {\n  x = \"", "aws_lb.this[" x 40000, "\"\n}\n"' > "$TMP/refs/big.tf"
   [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this name' ]
@@ -862,6 +864,7 @@ mutate "a missing head gate record taken for a design skip" 's/elif \$x\.h == nu
 mutate "a negated read missed" 's/\(\?<!\[A-Za-z0-9_\.\]\)/(?<![A-Za-z0-9_.-])/' t_refs_minus
 mutate "tags_all not read as tags" 's/ \|\| \(\$at eq "tags" && \$3 eq "tags_all"\)//' t_refs_tags
 mutate "a linked .tf file skipped" 's/\{ \$link = 1; return \}/{ return }/' t_refs_link
+mutate "a .tf.json file not counted" 's/tf\\\.json/tf\\.nothing/' t_refs_json
 mutate "the index group unbounded" 's/\{0,255\}/*/' t_refs_big
 mutate "the base denied set not compared" 's/ or \$x\.blk\.base_denied != \$x\.blk\.denied//' t_v_baseother
 

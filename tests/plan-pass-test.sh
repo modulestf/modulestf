@@ -91,6 +91,7 @@ plan)
     echo "Plan: 1 to add, 0 to change, 0 to destroy." ;;
   err) printf 'Error: bucket 123456789012 is not valid\n\n  on main.tf line 1\n'; exit 1 ;;
   leak) printf 'Error: invalid key s3cr3t-value-xyz\n\n'; exit 1 ;;
+  nl) printf 'Error: bad value a\\\\ndenied: data.aws_forged.x\n\n'; exit 1 ;;
   denied) printf 'Error: reading SSM Parameter (/app/db): operation error SSM: GetParameter, https response error StatusCode: 400, RequestID: 0f3e-1a, api error AccessDeniedException: User is not authorized\n\n  with data.aws_ssm_parameter.p,\n  on main.tf line 6, in data "aws_ssm_parameter" "p":\n\n'; exit 1 ;;
   deniedx) printf 'Error: reading SSM Parameter (/app/db): operation error SSM: GetParameter, https response error StatusCode: 400, RequestID: 0f3e-1a, api error AccessDeniedException: User is not authorized\n\n  with data.aws_ssm_parameter.p,\n\nError: Invalid index\n\n  with aws_s3_bucket.this,\n\n'; exit 1 ;;
   split) printf 'Error: invalid key s3cr3t-val\nue-xyz\n\n'; exit 1 ;;
@@ -152,6 +153,7 @@ mkdir -p "$up/examples/ok" "$up/examples/leak" "$up/examples/split" "$up/example
 printf 'module "s3" {\n  source  = "terraform-aws-modules/s3-bucket/aws"\n  version = "4.1.0"\n}\n' > "$up/examples/ok/main.tf"
 echo 'module "b" { source = "../../" }' > "$up/examples/leak/main.tf"
 echo 'module "b" { source = "../../" }' > "$up/examples/split/main.tf"
+mkdir -p "$up/examples/nl"; echo 'module "b" { source = "../../" }' > "$up/examples/nl/main.tf"
 echo 'resource "null_resource" "x" {}' > "$up/examples/gate/main.tf"
 git -C "$up" add -A && git -C "$up" -c user.name=t -c user.email=t@example.invalid commit -qm head
 
@@ -922,11 +924,25 @@ for sh in bash zsh; do
     "$(printf '%s\n' "$out" | sed -n '/^example: examples\/deniedx$/,$p' | grep -qE '^(denied|base|base-denied): ' && echo 1 || echo 0)"
   # Mutations: the laptop loop without the denial's re-run, and a denial with no evidence line
   for m in 's/ \|\| \[ -n "\$DENIED" \]; then$/; then/ if \$. > 1100' 's/^  \[ -n "\$DENIED" \] && echo "denied: \$DENIED"$/  :/'; do
-    perl -pe "$m" "$PP" > "$TMP/pp-mut.sh"
+    # the copy sits beside the script's own files, so it runs the pass and does not stop early
+    rm -rf "$TMP/ppm"; cp -R "${PP%/*}" "$TMP/ppm"; perl -pe "$m" "$PP" > "$TMP/ppm/plan-pass.sh"
     R="$(newrun)"; run g0 "$R" > /dev/null
-    o2="$(PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/pp-mut.sh" plan "$R" demo --role-arn "$ROLE" --base "$BASE" examples/denied 2>&1)"
-    check "$sh: denial mutation is caught ($m)" "$( ! cmp -s "$PP" "$TMP/pp-mut.sh" && [ "$(printf '%s\n' "$o2" | grep -c -e '^denied: ' -e '^base-denied: ')" != 2 ]; echo $?)"
+    o2="$(PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/ppm/plan-pass.sh" plan "$R" demo --role-arn "$ROLE" --base "$BASE" examples/denied 2>&1)"
+    check "$sh: denial mutation is caught ($m)" "$( ! cmp -s "$PP" "$TMP/ppm/plan-pass.sh" && printf '%s\n' "$o2" | grep -q '^plan: environment (access-denied)' &&
+      [ "$(printf '%s\n' "$o2" | grep -c -e '^denied: ' -e '^base-denied: ')" != 2 ]; echo $?)"
   done
+  # A kept line holding a literal backslash-n stays one record line under either shell
+  R="$(newrun)"; run g0 "$R" > /dev/null
+  out="$(run plan "$R" demo --role-arn "$ROLE" examples/nl)"
+  check "$sh: a kept line with a literal \\n is one plan line" \
+    "$( [ "$(has "$out" 'plan: code-error | Error: bad value a\ndenied: data.aws_forged.x')" = 0 ] && ! printf '%s\n' "$out" | grep -q '^denied: '; echo $?)"
+  rm -rf "$TMP/ppm"; cp -R "${PP%/*}" "$TMP/ppm"
+  perl -0pe 's/printf .plan: %s\\n. "\$CLASS\$\{KEPT:\+ \| \$KEPT\}"/echo "plan: \$CLASS\${KEPT:+ | \$KEPT}"/g' "$PP" > "$TMP/ppm/plan-pass.sh"
+  R="$(newrun)"; run g0 "$R" > /dev/null
+  o2="$(PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/ppm/plan-pass.sh" plan "$R" demo --role-arn "$ROLE" examples/nl 2>&1)"
+  if [ "$sh" = zsh ]; then
+    check "zsh: the record line written with echo is caught" "$( ! cmp -s "$PP" "$TMP/ppm/plan-pass.sh" && printf '%s\n' "$o2" | grep -q '^denied: '; echo $?)"
+  fi
   R="$(newrun)"
   run g0 "$R" > /dev/null
   out="$(run plan "$R" demo --role-arn "$ROLE" --base "--upload-pack=touch $TMP/pwned" examples/err)"
@@ -1621,11 +1637,13 @@ den_cases() { # perl program -> one line per case, "<name>=<result>"
   echo "otheron=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n  on main.tf line 9, in data "aws_ssm_parameter" "q":\n' "$SDK")")"
   echo "secondnoon=$(dn "$p" "$(printf 'Error: reading A: %s\n\n  with data.aws_ssm_parameter.p,\n%s\n\nError: reading B: %s\n\n  with data.aws_a.x,\n' "$SDK" "$on" "$SDK")")"
   echo "panic=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n%s\n\npanic: runtime error: invalid memory address\n' "$SDK" "$on")")"
-  # pr-review N-1, measured with Terraform 1.17.0 and hashicorp/aws 6.73.0: a validation error on a
-  # resource whose summary echoes a value holding line breaks, a forged "with data" line and a
-  # Warning header that would close the block before its real "with" line
+  # A validation error on a resource whose summary echoes a value holding line breaks, measured with
+  # Terraform 1.17.0 and hashicorp/aws 6.73.0: a forged "with data" line and a Warning header that
+  # would close the block before its real "with" line
   echo "n1=$(dn "$p" "$(printf 'Error: expected load_balancer_type to be one of ["application" "network" "gateway"], got a: operation error SSM: GetParameter, https response error StatusCode: 400, RequestID: 0a1b2c3d-0000, api error AccessDeniedException: User is not authorized\n  with data.aws_ssm_parameter.p,\nWarning: Argument is deprecated\n\n  with aws_lb.this,\n  on main.tf line 26, in resource "aws_lb" "this":\n')")"
   echo "n1full=$(dn "$p" "$(printf 'Error: expected load_balancer_type to be one of ["application" "network" "gateway"], got a: %s\n\n  with data.aws_ssm_parameter.p,\n%s\nWarning: Argument is deprecated\n\n  with aws_lb.this,\n  on main.tf line 26, in resource "aws_lb" "this":\n  26:   load_balancer_type = element(["x"], 0)\n' "$SDK" "$on")")"
+  # an error whose summary starts with a line break: its header line is "Error:" alone
+  echo "emptyhead=$(dn "$p" "$(printf 'Error: \nexpected load_balancer_type to be one of ["application"]\n\n  with aws_lb.this,\n  on main.tf line 26, in resource "aws_lb" "this":\n\nError: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n%s\n' "$SDK" "$on")")"
   echo "none=$(dn "$p" 'Plan: 1 to add, 0 to change, 0 to destroy.')"
 }
 den_want='real=data.aws_ssm_parameter.p
@@ -1645,6 +1663,7 @@ secondnoon=refused
 panic=refused
 n1=refused
 n1full=refused
+emptyhead=refused
 none=refused'
 check "denial evidence: data source denials only, every block in its fixed shape, by address" "$([ "$(den_cases "$DEN")" = "$den_want" ] && echo 0 || echo 1)"
 denmut() { # name, perl substitution of DENIED_PL, the case it must change
@@ -1660,6 +1679,7 @@ denmut on-line-required 's/ && \@\{\$k->\{o\}\} == 1;/;/; s/  exit 1 unless \$k-
 denmut on-names-the-source 's/  exit 1 unless \$k->\{o\}\[0\]\[0\] eq \$t && \$k->\{o\}\[0\]\[1\] eq \$n;\n//' otheron
 denmut other-lines-ignored 's/  exit 1;\n\}\nfor my/  next;\n}\nfor my/' panic
 denmut warning-closes-the-block 's/  exit 1;\n\}\nfor my/  last if \$x =~ \/\\AWarning: \/; exit 1;\n}\nfor my/' n1full
+denmut empty-header-unread 's/\\AError:\(\?: \|\\z\)/\\AError: /g' emptyhead
 denmut old-block-rule 's/  exit 1;\n\}\nfor my/  last if \$x =~ \/\\AWarning: \/; exit 1;\n}\nfor my/; s/ && \@\{\$k->\{o\}\} == 1;/;/; s/  exit 1 unless \$k->\{o\}\[0\]\[0\] eq \$t && \$k->\{o\}\[0\]\[1\] eq \$n;\n//; s/  if \(\$x =~ \/\\A  with/  if (\$x =~ \/\\A *with/' n1
 # The runner: a base-denied line only from the merge base re-run's own container. The head block
 # drops a forged one (untrusted), an access denial is deferred to the base re-run like a

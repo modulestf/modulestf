@@ -869,13 +869,13 @@ class_of() { # exit status, output file, init or plan
 # substring of the first block, and Terraform prints a summary raw, line breaks included.
 DENIED_PL='
 my @l = map { s/\A[^\x00-\x7f]+ ?//r =~ s/\s+\z//r } <STDIN>;
-my ($i) = grep { $l[$_] =~ /\AError: / } 0 .. $#l;
+my ($i) = grep { $l[$_] =~ /\AError:(?: |\z)/ } 0 .. $#l;
 exit 1 unless defined $i;
 my $ix = q{(?:\[(?:[0-9]+|"[A-Za-z0-9_.\/-]*")\])?};
 my $mod = qr{(?:module\.[A-Za-z0-9_-]+$ix\.)*};
 my (@b, %a);
 for my $x (@l[$i .. $#l]) {
-  if ($x =~ /\AError: /) {
+  if ($x =~ /\AError:(?: |\z)/) {
     $x =~ /\AError: [^\n]*: operation error [A-Za-z0-9 .-]+: [A-Za-z0-9]+, https response error StatusCode: 4[0-9][0-9], RequestID: [A-Za-z0-9-]+, (?:HostID: [A-Za-z0-9+\/=]+, )?api error (?:AccessDenied|AccessDeniedException|UnauthorizedOperation): / or exit 1;
     push @b, {w => [], o => []}; next;
   }
@@ -1079,7 +1079,7 @@ if [ "$PHASE" = plan ]; then
   load_state "$key" || { echo "plan: plan gate G0 not evaluated"; exit 0; }
   if [ "$CLASS" = ready ]; then cd "$HROOT/$rel_ex" || CLASS='plan gate G0 unreadable'; fi
   [ "$CLASS" = ready ] && pe_plan "$key"
-  echo "plan: $CLASS${KEPT:+ | $KEPT}"
+  printf 'plan: %s\n' "$CLASS${KEPT:+ | $KEPT}" # never echo: zsh's echo turns a \n in the kept text into a line
   [ "$CLASS" = 'plan pass ended: credentials' ] && echo "credentials: $CREDWHY"
   [ -n "$SCOPE" ] && echo "scope: ${SCOPE% }"
   [ -n "$VERSIONS" ] && echo "modules: ${VERSIONS%;}"
@@ -1129,7 +1129,7 @@ for rel_ex in "$@"; do
   SHOWTO=; PEX=; [ "$GMODE" = laptop ] && SHOWTO="$RUN/plan-addresses/addresses-$EXN.json" && PEX=$rel_ex
   plan_example "$HROOT/$rel_ex" "$key" "$HROOT" "$RUN/g0.txt"
   SHOWTO=; PEX=
-  echo "plan: $CLASS${KEPT:+ | $KEPT}"
+  printf 'plan: %s\n' "$CLASS${KEPT:+ | $KEPT}" # never echo: zsh's echo turns a \n in the kept text into a line
   case "$CLASS" in planned|planned-no-changes) NPLAN=$((NPLAN + 1)) ;; exception:*) NEXC=$((NEXC + 1)) ;; esac
   [ -n "$SCOPE" ] && echo "scope: ${SCOPE% }"
   [ -n "$VERSIONS" ] && echo "modules: ${VERSIONS%;}"
