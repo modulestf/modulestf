@@ -1,3 +1,12 @@
+## [0.12.17](https://github.com/modulestf/modulestf/compare/v0.12.16...v0.12.17) (2026-11-24)
+
+
+### Bug Fixes
+
+* **pr-review:** Count a thread its opener approved after the author's reply as no open objection, raise the closing issue cap to 8000 bytes ([#192](https://github.com/modulestf/modulestf/issues/192)) ([5405478](https://github.com/modulestf/modulestf/commit/5405478cc3d8369dffe36eb66a1375f0bf1b8b46))
+
+
+
 ## [0.12.16](https://github.com/modulestf/modulestf/compare/v0.12.15...v0.12.16) (2026-11-24)
 
 
