@@ -1,3 +1,12 @@
+## [0.12.21](https://github.com/modulestf/modulestf/compare/v0.12.20...v0.12.21) (2026-11-24)
+
+
+### Bug Fixes
+
+* **reviewer:** Rate three structure rules by effect and clear workflows equal to their template ([#205](https://github.com/modulestf/modulestf/issues/205)) ([63e7856](https://github.com/modulestf/modulestf/commit/63e78566fdf0f5530137227555a7456d0cc03020))
+
+
+
 ## [0.12.20](https://github.com/modulestf/modulestf/compare/v0.12.19...v0.12.20) (2026-11-24)
 
 
