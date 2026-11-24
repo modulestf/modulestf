@@ -57,7 +57,7 @@ Three rows change `scope` after the facts engine review found them:
 ## Severities that needed a reading
 
 - `compat.variable-removed`, `compat.variable-now-required`, `compat.type-narrowed`, `compat.resource-address-changed`, `compat.version-constraint-raised`, `compat.generated-policy-narrowed`: CRITICAL undeclared, HIGH declared with no migration path. Check A gives the declared break with a migration path no level, so it is not a finding of these rules. The LOW band of `compat.generated-policy-narrowed` is in its rule text, inactive; LOW joins the registry with the host step that supplies its reference.
-- `compat.default-changed` adds MEDIUM, the Check A band "a default whose effect is cosmetic", and LOW, its bands for a default moved from a rejected value to null and for a new input's default that a service announced.
+- `compat.default-changed` adds MEDIUM, the Check A band "a default whose effect is cosmetic", and LOW, its bands for a default moved from a rejected value to null and for a new input's default that a service announced or that a cite shows the service already applies to a stated part of the existing resources; a default that turns off a security control stays MEDIUM.
 - `coverage.attribute-not-output`: HIGH for an output wrong in a supported mode, MEDIUM for a computed attribute with no output.
 - `structure.input-ignored-in-branch`: CRITICAL, HIGH, MEDIUM and LOW, all four named in its Check C bullets.
 - `structure.docs-contradict-code`: HIGH, MEDIUM and LOW, by what a caller who follows the text gets, all three named in its Check C bullet.
@@ -68,7 +68,9 @@ Three rows change `scope` after the facts engine review found them:
 - `examples.stale-reference`: HIGH. The Check D block names no level for it; an example that "can no longer initialize" is broken by the change before apply, the HIGH bullet.
 - `profile.layout-divergence`: MEDIUM for a `LICENSE` that is not Apache 2.0 ("at the severity of a missing required file") and LOW when cosmetic.
 - `profile.commit-type-mismatch`: MEDIUM for a type that releases the change wrongly, LOW for `fix` on an added input that is the means of the fix and for `feat` on a fix.
-- `profile.template-drift`: MEDIUM, and LOW when the divergence is cosmetic.
+- `profile.template-drift`: MEDIUM, and LOW when the divergence is cosmetic or in `.gitignore`, save a removed or weakened pattern that keeps state, variable files, `.terraform` or credentials out, which stays MEDIUM.
+- `compat.expression-behaviour-changed`: CRITICAL, HIGH and LOW, as Check G gives them. Its documented-intent case where only calls that write the base default change is filed as `review.check-not-run` MEDIUM, so no MEDIUM joins the row.
+- `compat.provider-floor-raised`: LOW, also for a pinned registry module whose provider floor is above its caller's within the same provider major version and was read in the review, which raises the floor callers resolve. That case takes this name and no new one; an unread floor is `review.check-not-run` and a higher major is `compat.version-constraint-raised`.
 - `review.quoted-claim-unverifiable`: `none`. An unconfirmed claim "produces no finding" and is only counted in the summary line, so the registry name never carries a severity.
 
 ## Open values
