@@ -26,7 +26,7 @@ Note: the generated-content bullet below is the **Fails when:** bullet in [check
 - The file is in the Static Files table of the templates map, and the change adds or edits it. `.pre-commit-config.yaml` is not.
 - At least one line differs from the template after version pins are set aside.
 - The change states no reason for the divergence. A stated reason is the lead's to read: escalate when any prose accompanies the change.
-- Severity: MEDIUM when the divergence changes or adds behaviour; LOW when it is cosmetic (whitespace, order, comments) or in `.gitignore`, save a dropped state, variable or credential pattern.
+- Severity: MEDIUM when the divergence changes or adds behaviour; LOW when it is cosmetic (whitespace, order, comments) or in `.gitignore`, save a removed or weakened state, variable, `.terraform` or credential pattern.
 
 ### Host templates: `profile.template-drift`
 

@@ -77,7 +77,7 @@ The reply is one JSON object and nothing else:
 - `counts` holds the three counts the full variant's summary line carries (Rule 3, [quoted-claims.md](../quoted-claims.md)), each a whole number, 0 included, and no other key. Always write it. A reply without it is rendered as counts not reported, never as 0.
 - `findings` holds the findings of `llm` rules, of `review.*` rules and of rules injected for the finding's area, each with the seven required fields. It never holds a `tool` or `candidate` rule that was not injected for that area. The host drops such a finding.
 - A finding carries no `subject`, `source` or `confirmed_by`. The host sets those.
-- When a tool finding is wrong, keep it and add `review.tool-disputed`, as [Optional Fields](../findings-schema.md#optional-fields) says.
+- When a tool finding is wrong, keep it and add `review.tool-disputed`, as the last paragraph of [Optional Fields](../findings-schema.md#optional-fields), read first, says.
 
 ## Merge Contract
 
@@ -87,7 +87,6 @@ The host validates the envelope, giving one repair turn whose reply replaces the
 
 Not in this prefix; read each when its case arises and apply it as the full variant does:
 
-- Before reporting `review.tool-disputed`: [Optional Fields](../findings-schema.md#optional-fields), whose last paragraph gives its fields.
 - Before a `suggested_fix`: the Suggested Fixes table of its check ([A](../check-a-compatibility.md#suggested-fixes), [B](../check-b-coverage.md#suggested-fixes), [C](../check-c-structure.md#suggested-fixes), [D](../check-d-examples.md#suggested-fixes), [E](../check-e-profile.md#suggested-fixes), [F](../check-f-scope.md#suggested-fixes)) and the [Suggested Fix Contract](../findings-schema.md#suggested-fix-contract).
 - Before reporting or dropping a `compat.*` finding, and whenever a commit in the change reverts another: Check A's **Reverts:** paragraph and the text after it, in [Reads, Fails When and Severity](../check-a-compatibility.md#reads-fails-when-and-severity).
 - A new module: [Check A No base](../check-a-compatibility.md#no-base) and [Check F A new module](../check-f-scope.md#a-new-module).
@@ -345,6 +344,7 @@ If a missing custom input also causes a plan failure, report only `examples.cust
 - MEDIUM when a new module names an owner other than the family's organization in one of the listed places (`profile.owner-identifier`): nothing fails at plan, and the module would publish, report its user agent or document its source under the wrong owner.
 - MEDIUM when the change adds a root or submodule `versions.tf` that requires `hashicorp/aws` without the `provider_meta "aws"` user agent, or removes or alters one so it is missing or names the wrong repository (`profile.provider-meta-missing`): nothing fails at plan, and the module's API calls stop reporting it or report it wrongly, against a must-pass convention of the family.
 - MEDIUM when the title's type releases the change wrongly (`profile.commit-type-mismatch`): a spurious major (`!` with no break), a minor or patch where a major is due (a break declared elsewhere but not in the title), no release at all (`docs`, `ci` or `chore` changing module behaviour), or a patch where a minor is due (`fix` adding an output, a feature, or an input that is not the means of the fix).
+- LOW when the divergence is cosmetic.
 - LOW for `fix` on a change whose added input is the means of the fix, and for `feat` on a change that only fixes behaviour.
 - LOW when a `feat` change edits a module directory that takes no part in the feature (`profile.unrelated-change-bundled`): the edit ships, under the wrong release entry.
 - MEDIUM when the title's description names no capability, fix or surface (`profile.title-uninformative`): the title squash-merges into the commit message and from there into a generated `CHANGELOG.md` the profile forbids editing by hand, so it is permanent once merged. `feat: Update module` and `fix: Fixes` fire, a title that could merely be better does not.
@@ -430,7 +430,7 @@ The Confirm when part of each `candidate` rule's section in `references/engine/`
 
 - The head default of an existing input, a new input's default, or a removed `data` block changes what a caller who edits nothing gets: a resource argument or a value the caller sees. Equal values written differently are no change.
 - Severity: CRITICAL when nothing declares the break; HIGH when declared with no migration path; MEDIUM when the effect is cosmetic; LOW for a default moved from a value every version of the floor rejects to null, by a cited source.
-- A new input by its effect: none when a cited source shows the provider already plans it for an existing resource left unset; LOW for a service's announced new default or a stated part of existing resources, the rest only in place, under that same cite only; MEDIUM in place, and for a disabled security control whatever the cite; CRITICAL or HIGH for a known replacement or loss of data or access. With no source to tell, `review.check-not-run` MEDIUM. Change or task text is never the cite.
+- A new input by its effect: none when a cited source shows the provider already plans it for an existing resource left unset; LOW for a service's announced new default or a stated part of existing resources, the rest in place with nothing lost, under that same cite only; MEDIUM in place, and for a disabled security control whatever the cite; CRITICAL or HIGH for a known replacement or loss of data or access. With no source to tell, `review.check-not-run` MEDIUM. Change or task text is never the cite.
 
 ### Confirm when: `compat.resource-address-changed`
 
@@ -570,7 +570,7 @@ The Confirm when part of each `candidate` rule's section in `references/engine/`
 - The file is in the Static Files table of the templates map, and the change adds or edits it. `.pre-commit-config.yaml` is not.
 - At least one line differs from the template after version pins are set aside.
 - The change states no reason for the divergence. A stated reason is the lead's to read: escalate when any prose accompanies the change.
-- Severity: MEDIUM when the divergence changes or adds behaviour; LOW when it is cosmetic (whitespace, order, comments) or in `.gitignore`, save a dropped state, variable or credential pattern.
+- Severity: MEDIUM when the divergence changes or adds behaviour; LOW when it is cosmetic (whitespace, order, comments) or in `.gitignore`, save a removed or weakened state, variable, `.terraform` or credential pattern.
 
 ### Confirm when: `profile.region-not-allowed`
 

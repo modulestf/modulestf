@@ -641,20 +641,22 @@ grep -qxF "profile constants" "$TMP/failed" ||
 # Template sources: a `Source of `<template>`:` line of the terraform-aws-modules
 # templates-map.md that ends in `git blob `<sha>`` records the family file the verbatim
 # template was copied from, and the template must still be those bytes. Every line that
-# starts `Source of `<name>.template`` is such a record and must parse; at least one must
-# exist. A negative self-check runs each case below on temp copies and requires its own
-# message: a changed template, a missing one, a record that does not parse and a map with
-# no record.
+# holds `Source of `` anywhere, or holds both `Source of` and `git blob`, is read as such a
+# record and must parse at the start of its line; at least one must exist. A negative
+# self-check runs each case below on temp copies and requires its own message: a changed
+# template, a missing one, a link in its place, records that do not parse (no full stop, an
+# upper-case blob, an indented record, one that opens `Source of the`, one naming no
+# `.template` file) and a map with no record.
 template_sources() { # templates-map file, templates dir: one line per problem
   local line t b n=0
   while IFS= read -r line; do
     n=$((n + 1))
-    t="$(printf '%s\n' "$line" | LC_ALL=C sed -n 's/^Source of `\([^`/]*\)`: .* git blob `\([0-9a-f]\{40\}\)`\.$/\1/p')"
-    b="$(printf '%s\n' "$line" | LC_ALL=C sed -n 's/^Source of `\([^`/]*\)`: .* git blob `\([0-9a-f]\{40\}\)`\.$/\2/p')"
+    t="$(printf '%s\n' "$line" | LC_ALL=C sed -n 's/^Source of `\([^`/]*\.template\)`: .* git blob `\([0-9a-f]\{40\}\)`\.$/\1/p')"
+    b="$(printf '%s\n' "$line" | LC_ALL=C sed -n 's/^Source of `\([^`/]*\.template\)`: .* git blob `\([0-9a-f]\{40\}\)`\.$/\2/p')"
     if [ -z "$t" ]; then echo "a Source of record does not parse: ${line:0:80}"
     elif [ ! -f "$2/$t" ] || [ -L "$2/$t" ]; then echo "$t: no such template file"
     elif [ "$(git hash-object --no-filters "$2/$t")" != "$b" ]; then echo "$t: is not the recorded git blob $b"; fi
-  done < <(LC_ALL=C grep '^Source of `[^`]*\.template`' "$1")
+  done < <(LC_ALL=C grep -e 'Source of `' -e 'Source of .*git blob' "$1")
   [ "$n" -gt 0 ] || echo "no template source is recorded"
 }
 while IFS= read -r hit; do fail "template sources" "$GDIR/templates-map.md" "$hit"; done \
@@ -673,6 +675,15 @@ tsrc_case "a missing .gitignore.template" "$GDIR/templates-map.md" "$TMP/tsrc-no
 tsrc_case "a second record with no full stop" "$TMP/tsrc-map1.md" "$GDIR/templates" "a Source of record does not parse"
 { cat "$GDIR/templates-map.md"; printf '\nSource of `.editorconfig.template`: a family file, git blob `%s`.\n' 0E938F888775086AA885726544CEE79369AB6AA9; } > "$TMP/tsrc-map2.md"
 tsrc_case "a second record with an upper-case blob" "$TMP/tsrc-map2.md" "$GDIR/templates" "a Source of record does not parse"
+B0=0e938f888775086aa885726544cee79369ab6aa9
+for c in "an indented record|  Source of \`.editorconfig.template\`: a family file, git blob \`$B0\`." \
+  "a record opening Source of the|Source of the \`.editorconfig.template\`: a family file, git blob \`$B0\`." \
+  "a record naming no template file|Source of \`.editorconfig\`: a family file, git blob \`$B0\`."; do
+  { cat "$GDIR/templates-map.md"; printf '\n%s\n' "${c#*|}"; } > "$TMP/tsrc-map4.md"
+  tsrc_case "${c%%|*}" "$TMP/tsrc-map4.md" "$GDIR/templates" "a Source of record does not parse"
+done
+mkdir -p "$TMP/tsrc-link"; ln -s "$PWD/$GDIR/templates/.gitignore.template" "$TMP/tsrc-link/.gitignore.template"
+tsrc_case "a link in place of .gitignore.template" "$GDIR/templates-map.md" "$TMP/tsrc-link" ".gitignore.template: no such template file"
 grep -v '^Source of `\.gitignore\.template`' "$GDIR/templates-map.md" > "$TMP/tsrc-map3.md"
 tsrc_case "a map with no record" "$TMP/tsrc-map3.md" "$GDIR/templates" "no template source is recorded"
 grep -qxF "template sources" "$TMP/failed" ||

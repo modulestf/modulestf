@@ -80,7 +80,7 @@ The reply is one JSON object and nothing else:
 - `counts` holds the three counts the full variant's summary line carries (Rule 3, [quoted-claims.md](../quoted-claims.md)), each a whole number, 0 included, and no other key. Always write it. A reply without it is rendered as counts not reported, never as 0.
 - `findings` holds the findings of `llm` rules, of `review.*` rules and of rules injected for the finding's area, each with the seven required fields. It never holds a `tool` or `candidate` rule that was not injected for that area. The host drops such a finding.
 - A finding carries no `subject`, `source` or `confirmed_by`. The host sets those.
-- When a tool finding is wrong, keep it and add `review.tool-disputed`, as [Optional Fields](../findings-schema.md#optional-fields) says.
+- When a tool finding is wrong, keep it and add `review.tool-disputed`, as the last paragraph of [Optional Fields](../findings-schema.md#optional-fields), read first, says.
 
 ## Merge Contract
 
@@ -90,7 +90,6 @@ The host validates the envelope, giving one repair turn whose reply replaces the
 
 Not in this prefix; read each when its case arises and apply it as the full variant does:
 
-- Before reporting `review.tool-disputed`: [Optional Fields](../findings-schema.md#optional-fields), whose last paragraph gives its fields.
 - Before a `suggested_fix`: the Suggested Fixes table of its check ([A](../check-a-compatibility.md#suggested-fixes), [B](../check-b-coverage.md#suggested-fixes), [C](../check-c-structure.md#suggested-fixes), [D](../check-d-examples.md#suggested-fixes), [E](../check-e-profile.md#suggested-fixes), [F](../check-f-scope.md#suggested-fixes)) and the [Suggested Fix Contract](../findings-schema.md#suggested-fix-contract).
 - Before reporting or dropping a `compat.*` finding, and whenever a commit in the change reverts another: Check A's **Reverts:** paragraph and the text after it, in [Reads, Fails When and Severity](../check-a-compatibility.md#reads-fails-when-and-severity).
 - A new module: [Check A No base](../check-a-compatibility.md#no-base) and [Check F A new module](../check-f-scope.md#a-new-module).

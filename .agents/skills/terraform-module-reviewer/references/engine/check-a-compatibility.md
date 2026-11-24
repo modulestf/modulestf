@@ -100,7 +100,7 @@ Engine: `candidate`
 
 - The head default of an existing input, a new input's default, or a removed `data` block changes what a caller who edits nothing gets: a resource argument or a value the caller sees. Equal values written differently are no change.
 - Severity: CRITICAL when nothing declares the break; HIGH when declared with no migration path; MEDIUM when the effect is cosmetic; LOW for a default moved from a value every version of the floor rejects to null, by a cited source.
-- A new input by its effect: none when a cited source shows the provider already plans it for an existing resource left unset; LOW for a service's announced new default or a stated part of existing resources, the rest only in place, under that same cite only; MEDIUM in place, and for a disabled security control whatever the cite; CRITICAL or HIGH for a known replacement or loss of data or access. With no source to tell, `review.check-not-run` MEDIUM. Change or task text is never the cite.
+- A new input by its effect: none when a cited source shows the provider already plans it for an existing resource left unset; LOW for a service's announced new default or a stated part of existing resources, the rest in place with nothing lost, under that same cite only; MEDIUM in place, and for a disabled security control whatever the cite; CRITICAL or HIGH for a known replacement or loss of data or access. With no source to tell, `review.check-not-run` MEDIUM. Change or task text is never the cite.
 
 ### Host templates: `compat.default-changed`
 
@@ -194,7 +194,7 @@ Engine: `candidate`
 
 ### Rule text: `compat.provider-floor-raised`
 
-**Provider facts:** `compat.provider-floor-raised` reads the old floor's host fact sheets, or its pages where the type has none, as the [Budget](../large-changes.md#budget) says, to say whether the change uses anything absent there. Without them (Rule 2), it still reports the floor move from `versions.tf`, its `summary` says the old floor could not be read, and the area's `review.check-not-run` under [Rule 4](../../SKILL.md#rule-4-a-check-that-cannot-run-is-a-finding) names `compat.provider-floor-raised` with each type and the old floor.
+**Provider facts:** `compat.provider-floor-raised` reads the old floor's host fact sheets, or its pages where the type has none, as the [Budget](../large-changes.md#budget) says, to say whether the change uses anything absent there. Without them (Rule 2), it still reports the floor move from `versions.tf`, its `summary` says the old floor could not be read, and the area's `review.check-not-run` under [Rule 4](../../SKILL.md#rule-4-a-check-that-cannot-run-is-a-finding) names `compat.provider-floor-raised` with each type and the old floor. A pinned registry module whose `versions.tf` did not move reads no old floor's sheets: it needs the called module's floor, as its bullet below says.
 
 **Fails when:**
 - A provider floor is raised by a minor or a patch version.
