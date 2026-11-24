@@ -231,7 +231,8 @@ the skill's plan pass whenever a container runtime is available.
   that container's tmpfs and goes with it; nothing written there reaches the record, which
   is the container's output, capped and scanned on the host. Each runs
   `plan-pass.sh plan --mode runner --phase plan --index <n> <example>`, which prints that
-  example's record lines. A `code-error` with `--base` given ends in `base: deferred`. The
+  example's record lines. A `code-error`, or an access denial with a `denied:` line, with
+  `--base` given ends in `base: deferred`. The
   phase stops at a credentials failure, as the plan pass does, and at the budget.
 - **Show phase:** every plan is saved with `-out` into a second volume, the saved plans'
   volume, made writable for the containers' user by a capability-free root container that
@@ -243,8 +244,8 @@ the skill's plan pass whenever a container runtime is available.
   match their patterns, drops a malformed sensitive entry whole, and writes them to
   the record as `addresses-<n>.json` ([plan-pass.md](../plan-pass.md#saved-plans-and-addresses)).
   It counts against the same budget.
-- **Merge base re-run:** only for the examples whose plan block holds `plan: code-error` and
-  `base: deferred`, after the last head plan, so an example that planned costs the budget
+- **Merge base re-run:** only for the examples whose plan block holds `plan: code-error`, or
+  `plan: environment (access-denied)`, and `base: deferred`, after the last head plan, so an example that planned costs the budget
   nothing at the base. The plan proxy is removed and the init proxy started again, since
   both answer to the name `proxy`. One container per such example, with no credentials and
   the volume writable, runs `--phase base-init`: the first adds the base worktree, fetching

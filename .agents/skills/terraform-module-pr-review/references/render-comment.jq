@@ -251,11 +251,18 @@ def skip_reason: {"G1": "plan gate G1", "G2": "plan gate G2", "G3": "plan gate G
   "role": "exception: example assumes a role in another account", "docker": "exception: needs a Docker daemon"}[.];
 def skip_gates: ["G1", "G2", "G3", "role", "docker"];
 def skip_mode: if IN("role", "docker") then "runner" else "laptop" end;
+# A design skip (skip-coverage.md, Design skips): an example that cannot plan by design, gate
+# "design" with the reason token of its environment class, in either mode. The closed list.
+def design_reasons: ["access-denied"];
+# The unplanned reason a covered entry stands for.
+def entry_reason: if .gate == "design" then "environment (\(.reason))" else .gate | skip_reason end;
 def valid_covered:
   type == "array" and (map(.dir?) | length == (unique | length))
-  and all(.[]; type == "object" and (keys - ["downloaded"]) == ["dir", "gate", "path", "witnesses"]
-    and ((has("downloaded") | not) or .downloaded == true)
-    and (.dir | canon_path) and (.path | canon_path) and (.gate | IN(skip_gates[]))
+  and all(.[]; type == "object"
+    and (if .gate == "design" then keys == ["dir", "gate", "reason", "witnesses"] and (.reason | IN(design_reasons[]))
+         else (keys - ["downloaded"]) == ["dir", "gate", "path", "witnesses"]
+           and ((has("downloaded") | not) or .downloaded == true) and (.path | canon_path) and (.gate | IN(skip_gates[])) end)
+    and (.dir | canon_path)
     and (.witnesses | type == "array" and length > 0 and all(.[]; type == "object"
           and keys == ["address", "attribute", "example"]
           and (.attribute | type == "string" and test("^[a-z0-9_]{1,128}$")) and (.example | canon_path)
@@ -553,6 +560,7 @@ def texts: {
   "unplanned-covered-downloaded": "- Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it).",
   "unplanned-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
   "unplanned-covered-exception": "- Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}).",
+  "unplanned-covered-design": "- Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}).",
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
   "behaviour-trigger": "- Behaviour change at {location} ({category}): not verified.",
   "behaviour-trigger-groups": "- {count} behaviour changes not verified: {categories}.",
@@ -633,10 +641,17 @@ def texts: {
   "compact-covered-exception-many": "{count} of {total} examples were not planned because of a recorded exception of the plan pass; the changed code was planned {where} (see notes).",
   "rationale-covered-exception-one": "1 of {total} examples was not planned because of a recorded exception of the plan pass; the changed code was planned {where}, as listed below.",
   "rationale-covered-exception-many": "{count} of {total} examples were not planned because of a recorded exception of the plan pass; the changed code was planned {where}, as listed below.",
+  "compact-covered-design-one": "1 of {total} examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where} (see notes).",
+  "compact-covered-design-many": "{count} of {total} examples were not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where} (see notes).",
+  "rationale-covered-design-one": "1 of {total} examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where}, as listed below.",
+  "rationale-covered-design-many": "{count} of {total} examples were not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where}, as listed below.",
+  "compact-covered-mixed-many": "{count} of {total} examples were not planned, for the reasons in the notes; the changed code was planned {where} (see notes).",
+  "rationale-covered-mixed-many": "{count} of {total} examples were not planned, for the reasons listed below; the changed code was planned {where}.",
   "evidence-covered": "- Not planned: {dir} ({gate} hit in {path}, same at base {base}).",
   "evidence-covered-downloaded": "- Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it).",
   "evidence-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
   "evidence-covered-exception": "- Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}).",
+  "evidence-covered-design": "- Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}).",
   "evidence-reported": "Behaviour change at {location} reported: judged in {findings} ({count} differences).",
   "evidence-claims-one": "1 claim verified.",
   "evidence-claims-many": "{count} claims verified.",
@@ -912,8 +927,8 @@ def skipped_lines($run; $p): ($run.skipped_files // []) as $s
 
 def covered_lines($key; $cov; $run):
   [ ($cov[] as $c
-     | tx($key + (if $c.downloaded then "-downloaded" elif ($c.gate | skip_mode) == "runner" then "-exception" else "" end);
-         {dir: ($c.dir | nm(allowed)), gate: $c.gate, path: ($c.path | nm(allowed)), base: $run.coverage.skip_base_sha[:7],
+     | tx($key + (if $c.gate == "design" then "-design" elif $c.downloaded then "-downloaded" elif ($c.gate | skip_mode) == "runner" then "-exception" else "" end);
+         {dir: ($c.dir | nm(allowed)), gate: $c.gate, path: (($c.path // "") | nm(allowed)), base: $run.coverage.skip_base_sha[:7], head: $run.coverage.skip_head_sha[:7], reason: $c.reason,
           exception: ({"role": "a role in another account", "docker": "a Docker daemon"}[$c.gate] // "")})),
     (witnesses($cov)[]
      | tx($key + "-by"; {attribute, example: (.example | nm(allowed)),
@@ -925,7 +940,9 @@ def covered_lines($key; $cov; $run):
 def not_planned($run): [$run.coverage.unplanned[] | select(.reason != "no example directory") | .dir];
 def covered_sentence($k; $run; $cov): (not_planned($run) | length) as $n
   | ([witnesses($cov)[].example] | unique) as $e
-  | tx($k + (if ($cov[0].gate | skip_mode) == "runner" then "-exception" else "" end)
+  # one sentence per kind of skip: gate skips, recorded exceptions or design skips; several kinds, the mixed one
+  | ([$cov[] | if .gate == "design" then "-design" elif (.gate | skip_mode) == "runner" then "-exception" else "" end] | unique) as $kinds
+  | tx($k + (if ($kinds | length) > 1 then "-mixed" else $kinds[0] end)
        + (if $n == 1 then "-one" else "-many" end); {count: $n, total: $run.examples.count,
       where: (if ($e | length) == 1 and ($e[0] | allowed) then "in `\($e[0])`" else "in other examples" end)});
 
@@ -1216,14 +1233,16 @@ def covered_of($in; $l; $b):
   $in.run as $run | $run.coverage as $cv | ($cv.covered_skips // []) as $cs | $cv.unplanned as $u
   | if $cs != [] and $cv.skip_head_sha == $in.host.head_sha and $cv.skip_base_sha == $in.host.merge_base
        and $run.plan_ran and ($cv.inert | not)
-       # one mode for the whole run: laptop gate skips, or runner-mode recorded exceptions
-       and all($cs[]; .gate | skip_mode == $run.plan_mode)
+       # one mode for the whole run: laptop gate skips, or runner-mode recorded exceptions; a design
+       # skip stands beside either, and needs a mode too
+       and ($run.plan_mode | IN("laptop", "runner"))
+       and all($cs[]; .gate == "design" or (.gate | skip_mode == $run.plan_mode))
        # the witness lines stay bounded, and at least one example was planned
        and (witnesses($cs) | length) <= 100 and ($u | length) < ($run.examples.count // 0)
        and ($u | map(.dir) | length == (unique | length))
        # all or nothing: every skip covered, and every covered entry a skip of its own gate
-       and all($u[]; . as $x | any($cs[]; .dir == $x.dir and (.gate | skip_reason) == $x.reason))
-       and all($cs[]; . as $x | any($u[]; .dir == $x.dir and .reason == ($x.gate | skip_reason)))
+       and all($u[]; . as $x | any($cs[]; .dir == $x.dir and entry_reason == $x.reason))
+       and all($cs[]; . as $x | any($u[]; .dir == $x.dir and .reason == ($x | entry_reason)))
        # a witness is a planned example, never one of the skipped ones
        and all($cs[].witnesses[]; .example as $e | all($u[]; .dir != $e))
        and $b != null and $b.status == "ran" and $b.capped == 0 and ($b.triggers + $b.claims) != []

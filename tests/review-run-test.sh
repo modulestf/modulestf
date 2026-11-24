@@ -963,6 +963,34 @@ for c in 'environment (access-denied)|environment (access-denied)' 'environment|
   run_rr cleanup "$RUN" > /dev/null
 done
 
+# skip-coverage runs for a design skip alone (skip-coverage.md, Design skips) in either mode, and
+# finds nothing to check for a transient environment class.
+skip_gate() { # mode, class -> the skip-coverage status line
+  if [ "$1" = runner ]; then
+    printf '%s\n' 'plan pass mode: runner' 'host example 1: examples/one' 'example: examples/one' "plan: $2" 'plan summary: 1 examples, 0 planned, 0 exceptions, 1 other'
+  else
+    printf '%s\n' 'plan pass mode: laptop' 'example: examples/one' "plan: $2" 'plan summary: 1 examples, 0 planned, 0 exceptions, 1 other'
+  fi > "$TMP/plan-rec.txt"
+  DEPTH_STUB=deep prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review
+  run_rr verify "$RUN" > /dev/null; PLAN_STUB_REC="$TMP/plan-rec.txt" run_rr plan "$RUN" > /dev/null
+  run_rr skip-coverage "$RUN" 2>&1 | grep '^skip-coverage: '
+  run_rr cleanup "$RUN" > /dev/null
+}
+t_skip_gate() { # 0 when both modes check a design skip and neither checks a timeout
+  local m
+  for m in laptop runner; do
+    skip_gate "$m" 'environment (access-denied)' | grep -qE '^skip-coverage: [0-9]+ covered, [0-9]+ not covered' || return 1
+    skip_gate "$m" 'environment (timeout)' | grep -qE '^skip-coverage: nothing to check' || return 1
+  done
+}
+t_skip_gate; check "skip-coverage: a design skip alone is checked in both modes, a timeout is not" $?
+for m in 's/, "environment \(access-denied\)"\)\)/))/' 's/ or \. == "environment \(access-denied\)"\)/)/'; do
+  perl -pe "$m" "$SK/review-run.sh" > "$SK/review-run-smut.sh"
+  keep="$RR"; RR="$SK/review-run-smut.sh"; t_skip_gate > /dev/null 2>&1; s=$?; RR="$keep"
+  check "skip-coverage: the mutation $m is caught" "$( ! cmp -s "$SK/review-run.sh" "$SK/review-run-smut.sh" && [ "$s" != 0 ]; echo $?)"
+done
+rm -f "$SK/review-run-smut.sh"
+
 # --- 3b. evidence: the depth's commands in one, side by side at deep; no .tf change skips schema ---------
 prep
 run_rr evidence "$RUN" > "$TMP/e.out"
@@ -1811,6 +1839,8 @@ mkrepo widget; ghfiles open false APPROVED
 # of SKILL.md and Step 5.5) and skip-coverage covering runner-mode recorded exceptions (Step 5.5).
 # Updated for Rule 5's plan pass ending in an environment class with its reason token, with the
 # relayed quote's "in quotation marks" shortened to keep SKILL.md under 16384 bytes.
+# Updated for Step 5.5: skip-coverage.sh also decides the design skips, examples denied a data
+# source read at the head and at the base.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1819,7 +1849,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=98a09322ca85
+want=cefddf899cab
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"

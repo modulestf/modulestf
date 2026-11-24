@@ -143,6 +143,15 @@ printf 'provider "aws" {\n  assume_role {\n    role_arn = "arn:aws:iam::12345678
 printf '# Example\n' > "$C/examples/r1/README.md"
 printf 'terraform {\n  required_providers {\n    evil = {\n      source = "evil/evil"\n    }\n  }\n}\n\n' > "$C/examples/r2/main.tf"
 cat "$C/examples/r1/main.tf" >> "$C/examples/r2/main.tf"
+# examples/v1 is clean in the clone scope and cannot plan by design: the review role is denied a
+# read it needs (skip-coverage.md, Design skips). data.tf holds a top-level data attribute.
+mkdir -p "$C/examples/v1"
+printf 'module "lb" {\n  source = "../../"\n}\n' > "$C/examples/v1/main.tf"
+printf '# Example\n' > "$C/examples/v1/README.md"
+printf 'data "aws_iam_policy_document" "extra" {\n  version = var.policy_version\n}\n' > "$C/data.tf"
+# data.tf also reads two attributes of the root module: aws_lb.this.subnets by name, and the
+# whole aws_security_group.this object, so a change to either reaches a data source
+printf '\ndata "aws_iam_policy_document" "by_lb" {\n  policy_id               = aws_lb.this.subnets[0]\n  source_policy_documents = [jsonencode(one(aws_security_group.this[*]))]\n}\n' >> "$C/data.tf"
 G init -q && G add -A && G commit -qm base
 BASE="$(G rev-parse HEAD)"
 G worktree add -q --detach "$RUN/base" "$BASE"
@@ -181,6 +190,7 @@ records() {
         examples/d2) h="$(hits_of "$e")"; printf '%s\n' "$h" | sed 's/^/gate-hit /'
            echo "plan: plan gate $(printf '%s\n' "$h" | grep '^G3' | head -n 1) ($(printf '%s\n' "$h" | grep -c .) hits)" ;;
         examples/d*) printf '%s\n' "$DLHITS" | sed 's/^/gate-hit /'; echo "plan: $DLPLAN" ;;
+        examples/v*) echo "plan: $VCLASS"; [ -z "$VLINES" ] || printf '%s\n' "$VLINES" ;;
         *) echo "plan: planned | Plan: 3 to add, 0 to change, 0 to destroy."
            jq -n --arg h "$HEAD" --arg e "$e" '
              {addresses: ["module.lb.aws_lb.this", "module.lb.aws_security_group.this", "module.lb.module.listener.aws_lb_listener.this"],
@@ -221,7 +231,12 @@ recheck() {
   "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
     --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" --changed-files "$(jq length "$TMP/files.json")" "$@" > "$TMP/out.json"
 }
-reset_knobs() { NCH=; ADDRJQ=.; COVJQ=.; GATES=1; BGEDIT=; DLHITS="G3 downloaded/vpc/main.tf:11"; DLPLAN="plan gate G3 downloaded/vpc/main.tf:11 (1 hits)"; }
+VCLASS='environment (access-denied) | Error: AccessDenied'
+VDEF='denied: data.aws_ssm_parameter.p
+base: environment (access-denied)
+base-denied: data.aws_ssm_parameter.p'
+VLINES=$VDEF
+reset_knobs() { VCLASS='environment (access-denied) | Error: AccessDenied'; VLINES=$VDEF; VCOVX=; NCH=; ADDRJQ=.; COVJQ=.; GATES=1; BGEDIT=; DLHITS="G3 downloaded/vpc/main.tf:11"; DLPLAN="plan gate G3 downloaded/vpc/main.tf:11 (1 hits)"; }
 q() { jq -e "$1" "$TMP/out.json" > /dev/null 2>&1; echo $?; }
 why() { jq -r --arg d "$1" '(.uncovered[] | select(.dir == $d) | .why) // (if any(.covered[]; .dir == $d) then "covered" else "absent" end)' "$TMP/out.json"; }
 all_why() { [ "$(why examples/s1)" = "$1" ] && [ "$(why examples/s2)" = "$1" ] && [ "$(why examples/s3)" = "$1" ]; }
@@ -577,6 +592,174 @@ t_dup_one() { # the base record holds the s1 hit once, the head twice
 }
 t_dup_one; check "a hit printed twice on one side only: hit-set-differs" $?
 
+# --- Design skips (skip-coverage.md, Design skips): examples/v1 was denied a data source read at
+# head and at the merge base, its class environment (access-denied) with its denied lines, beside
+# the three gate skips; the same witnesses, no base hit.
+EXV="$EX examples/v1"
+VCOV='.unplanned += [{dir: "examples/v1", reason: "environment (access-denied)"}]'
+v_case() { # extra shell commands under the clone, then the expected reason of examples/v1
+  fresh; plain_change; (cd "$C" && eval "$1"); local keep="$EX"; EX="$EXV"; COVJQ="$VCOV${VCOVX:-}"
+  run_case; local s=$?; EX="$keep"
+  [ "$s" = 0 ] && [ "$(why examples/v1)" = "$2" ]
+}
+v_re() { # after v_case: check again with these arguments, then the expected reason of examples/v1
+  local w="$1"; shift; recheck "$@" && [ "$(why examples/v1)" = "$w" ]
+}
+t_v() { reset_knobs; v_case : covered && all_why covered \
+  && jq -e '[.covered[] | select(.dir == "examples/v1")] == [{dir: "examples/v1", gate: "design", reason: "access-denied",
+       witnesses: [{attribute: "security_groups", example: "examples/e1", address: "module.lb.aws_lb.this"}]}]' "$TMP/out.json" > /dev/null; }
+for sh in bash zsh; do
+  SH=$sh
+  t_v; check "$sh: design skip, denied a data source read at head and base, with a witness: covered" $?
+done
+SH=bash
+t_v_timeout() { reset_knobs; VCLASS='environment (timeout)'; VCOVX=' | .unplanned[-1].reason = "environment (timeout)"'; v_case : wrong-gate-class; }
+t_v_timeout; check "design skip: a timeout is transient, never covered: wrong-gate-class" $?
+for r in output-cap network throttling credentials sandbox registry plugin; do
+  reset_knobs; VCLASS="environment ($r)"; VCOVX=" | .unplanned[-1].reason = \"environment ($r)\""; v_case : wrong-gate-class
+  check "design skip: environment ($r) is no design reason: wrong-gate-class" $?
+done
+t_v_sole() { reset_knobs; VCOVX=' | .unplanned += [{dir: "examples/v1", reason: "plan gate G3"}]'; v_case : not-sole-reason; }
+t_v_sole; check "design skip: a directory with a second reason: not-sole-reason" $?
+t_v_head() { reset_knobs; v_case : covered && v_re head-mismatch --head "$BASE"; }
+t_v_head; check "design skip: the clone not at --head: head-mismatch" $?
+t_v_count() { reset_knobs; NCH=7; v_case : files-incomplete; }
+t_v_count; check "design skip: a files list shorter than the changed file count: files-incomplete" $?
+t_v_record() { reset_knobs; VCLASS='planned | Plan: 1 to add, 0 to change, 0 to destroy.'; v_case : plan-record-unusable; }
+t_v_record; check "design skip: a record that planned the example: plan-record-unusable" $?
+t_v_nodenied() { reset_knobs; VLINES='base: environment (access-denied)'; v_case : denial-unproven; }
+t_v_nodenied; check "design skip: no denied line, another error beside the denial: denial-unproven" $?
+t_v_twodenied() { reset_knobs; VLINES="denied: data.aws_ssm_parameter.p
+$VDEF"; v_case : denial-unproven; }
+t_v_twodenied; check "design skip: two denied lines: denial-unproven" $?
+t_v_baddenied() { reset_knobs; VLINES="${VDEF//data.aws_ssm_parameter.p/aws_lb.this}"; v_case : denial-unproven; }
+t_v_baddenied; check "design skip: a denial on a managed resource: denial-unproven" $?
+t_v_hit() { reset_knobs; v_case 'printf "\ndata \"aws_ssm_parameter\" \"q\" {\n  name = \"x\"\n}\n" >> bucket.tf' change-not-allowed; }
+t_v_hit; check "design skip: a data block added: change-not-allowed" $?
+t_v_data() { # a changed top-level data attribute can change what the plan reads: never a design skip
+  reset_knobs; fresh; ed data.tf 's/var\.policy_version/var.version_override/'
+  ADDRJQ='.addresses += ["module.lb.data.aws_iam_policy_document.extra"] | .attributes["module.lb.data.aws_iam_policy_document.extra"] = ["version"]
+    | .sensitive["module.lb.data.aws_iam_policy_document.extra"] = []'
+  local keep="$EX"; EX="$EXV"; COVJQ="$VCOV"; run_case; local s=$?; EX="$keep"
+  [ "$s" = 0 ] && [ "$(why examples/v1)" = change-not-allowed ] && [ "$(why examples/s1)" = covered ]
+}
+t_v_data; check "design skip: a changed data source attribute: change-not-allowed, the gate skips still covered" $?
+t_v_ref() { # aws_lb.this.subnets is read by a data source of data.tf
+  reset_knobs; fresh; ed main.tf 's/subnets         = var\.subnets/subnets         = var.subnet_ids/'
+  local keep="$EX"; EX="$EXV"; COVJQ="$VCOV"; run_case; local s=$?; EX="$keep"
+  [ "$s" = 0 ] && [ "$(why examples/v1)" = attribute-referenced ]
+}
+t_v_ref; check "design skip: a changed attribute a data source reads by name: attribute-referenced" $?
+t_v_whole() { # aws_security_group.this is read whole by a data source of data.tf
+  reset_knobs; fresh; ed main.tf 's/(count = var\.create \? 1 : 0\n  name  = )var\.name/${1}var.sg_name/'
+  local keep="$EX"; EX="$EXV"; COVJQ="$VCOV"; run_case; local s=$?; EX="$keep"
+  [ "$s" = 0 ] && [ "$(why examples/v1)" = attribute-referenced ]
+}
+t_v_whole; check "design skip: a changed attribute of a resource read whole: attribute-referenced" $?
+t_v_dir() { reset_knobs; v_case 'printf "More.\n" >> examples/v1/README.md' dir-changed; }
+t_v_dir; check "design skip: a change under the example itself: dir-changed" $?
+t_v_unres() { reset_knobs; v_case : covered && v_re merge-base-unresolved --base unresolved; }
+t_v_unres; check "design skip: an unresolvable merge base: merge-base-unresolved" $?
+t_v_basenew() { reset_knobs; VLINES='denied: data.aws_ssm_parameter.p
+base: new under this change'; v_case : base-not-denied; }
+t_v_basenew; check "design skip: the example planned at the merge base: base-not-denied" $?
+t_v_baseother() { reset_knobs; VLINES="${VDEF%data.aws_ssm_parameter.p}data.aws_ssm_parameter.other"; v_case : base-not-denied; }
+t_v_baseother; check "design skip: denied on other data sources at the merge base: base-not-denied" $?
+t_v_nobase() { reset_knobs; VLINES='denied: data.aws_ssm_parameter.p
+base: not available'; v_case : base-not-denied; }
+t_v_nobase; check "design skip: no merge base plan: base-not-denied" $?
+t_v_twobase() { reset_knobs; VLINES="$VDEF
+base: environment (access-denied)"; v_case : base-not-denied; }
+t_v_twobase; check "design skip: two base lines, one of them forged: base-not-denied" $?
+t_v_nowit() { reset_knobs; ADDRJQ='.module_calls = {}'; v_case : no-witness; }
+t_v_nowit; check "design skip: no planned example witnesses the change: no-witness" $?
+t_v_sens() { reset_knobs; ADDRJQ='.sensitive["module.lb.aws_lb.this"] = ["security_groups"]'; v_case : witness-sensitive; }
+t_v_sens; check "design skip: the witness attribute marked sensitive: witness-sensitive" $?
+t_v_noplan() { # the only candidates planned no changes: no witness planned the change
+  reset_knobs; v_case : covered || return 1
+  perl -pi -e 's/^plan: planned \| .*/plan: planned-no-changes/' "$TMP/record.txt"
+  v_re no-witness
+}
+t_v_noplan; check "design skip: a witness that did not plan: no-witness" $?
+t_v_gated() { # a record that says a gated example was denied a read: its head gate record has a hit
+  fresh; reset_knobs; plain_change; run_case || return 1
+  perl -0pi -e 's/(example: examples\/s1\n)(gate-hit [^\n]*\n)*plan: [^\n]*/${1}plan: environment (access-denied)\n'"${VDEF//$'\n'/\\n}"'/' "$TMP/record.txt"
+  jq '.unplanned[0].reason = "environment (access-denied)"' "$TMP/coverage.json" > "$TMP/c2" && mv "$TMP/c2" "$TMP/coverage.json"
+  recheck && [ "$(why examples/s1)" = hit-set-differs ]
+}
+t_v_gated; check "design skip: a gate hit in the example's scope at head: hit-set-differs" $?
+t_v_nohead() { # no head gate record (plan-pass.sh fails at head): hit-set-differs, never covered
+  reset_knobs; v_case : covered || return 1
+  local d="$TMP/nohead-$RANDOM"; mkdir -p "$d"; cp "${SC%/*}/skip-coverage.sh" "${SC%/*}/skip-coverage.jq" "$d/"
+  printf 'exit 1\n' > "$d/plan-pass.sh"
+  "$SH" "$d/skip-coverage.sh" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
+    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" --changed-files "$(jq length "$TMP/files.json")" > "$TMP/out.json" \
+    && [ "$(why examples/v1)" = hit-set-differs ]
+}
+t_v_nohead; check "design skip: no head gate record: hit-set-differs" $?
+# Runner mode: the same denial under the host's own lines, beside a covered recorded exception
+ROLE='exception: example assumes a role in another account'
+v_runner() { # extra lines of the excepted example examples/r1 ("" for none), the class of r1's plan line
+  fresh; reset_knobs; plain_change; commit; filesjson
+  rm -rf "$TMP/addr"; mkdir -p "$TMP/addr"
+  { echo "plan pass mode: runner"; i=0
+    for e in examples/e1 examples/e2 examples/v1 examples/r1; do
+      i=$((i + 1)); echo "host example $i: $e"; echo "example: $e"
+      case "$e" in
+        examples/v1) echo "plan: environment (access-denied)"; printf '%s\n' "$VDEF" ;;
+        examples/r1) echo "plan: $2"; [ -z "$1" ] || printf '%s\n' "$1" ;;
+        *) echo "plan: planned | Plan: 3 to add, 0 to change, 0 to destroy."
+           jq -n --arg h "$HEAD" --arg e "$e" '{addresses: ["module.lb.aws_lb.this"], attributes: {"module.lb.aws_lb.this": ["security_groups"]},
+             module_calls: {lb: "../../"}, sensitive: {"module.lb.aws_lb.this": []}, head_sha: $h, example: $e}' > "$TMP/addr/addresses-$i.json" ;;
+      esac
+    done; echo "plan summary: 4 examples, 2 planned, 1 exceptions, 1 other"; } > "$TMP/record.txt"
+  jq -n --arg r "$3" '{schema_version: 1, class: "partial", inert: false,
+    unplanned: [{dir: "examples/v1", reason: "environment (access-denied)"}, {dir: "examples/r1", reason: $r}]}' > "$TMP/coverage.json"
+  "$SH" "$SC" gates "$RUN" --tree "$RUN/base" --base "$BASE" --coverage "$TMP/coverage.json" --out "$TMP/base-gates.txt" --mode runner
+  "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
+    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" \
+    --changed-files "$(jq length "$TMP/files.json")" --mode runner > "$TMP/out.json"
+}
+t_v_runner() { v_runner "" "$ROLE" "$ROLE" && [ "$(why examples/v1)" = covered ] && [ "$(why examples/r1)" = covered ] \
+  && [ "$(q '[.covered[] | .gate] == ["design", "role"]')" = 0 ]; }
+t_v_runner; check "design skip: runner mode, beside a covered recorded exception: both covered" $?
+t_v_runner_x() { # r1 has the role exception hit in the runner gates: a denial recorded for it is forged
+  v_runner "$VDEF" 'environment (access-denied)' 'environment (access-denied)' && [ "$(why examples/r1)" = hit-set-differs ] && [ "$(why examples/v1)" = covered ]; }
+t_v_runner_x; check "design skip: runner mode, an exception hit in the example's scope: hit-set-differs" $?
+t_v_runner_base() { v_runner 'denied: data.aws_ssm_parameter.p' 'environment (access-denied)' 'environment (access-denied)' && [ "$(why examples/r1)" != covered ]; }
+t_v_runner_base; check "design skip: runner mode, no base lines: not covered" $?
+t_v_runner_ref() { # runner mode reads the same attribute references
+  fresh; reset_knobs; ed main.tf 's/subnets         = var\.subnets/subnets         = var.subnet_ids/'
+  commit; filesjson; local keep="$EX"; EX="$EXV"; records; EX="$keep"
+  perl -0pi -e 's/^plan pass mode: laptop\n/plan pass mode: runner\n/; my $i = 0; s/^example: (.*)$/"host example " . ++$i . ": $1\nexample: $1"/mge' "$TMP/record.txt"
+  jq -n '{schema_version: 1, class: "partial", inert: false, unplanned: [{dir: "examples/v1", reason: "environment (access-denied)"}]}' > "$TMP/coverage.json"
+  recheck --mode runner && [ "$(why examples/v1)" = attribute-referenced ]
+}
+t_v_runner_ref; check "design skip: runner mode, a changed attribute a data source reads: attribute-referenced" $?
+
+# The attribute scan itself, REFS_PL taken from the script under test: a negated read, tags_all
+# for tags, a .tf file that is a link, and a line of unclosed indexes that must stay linear.
+refs() { # pairs file -> the pairs the scan finds read in $TMP/refs, under a time limit of 5 seconds
+  local p; p="$(sed -n "/^REFS_PL='\$/,/^'\$/p" "$SC" | sed '1d;$d')"
+  perl -e 'alarm 5; exec @ARGV' perl -e "$p" "$TMP/refs" "$1"
+}
+refs_dir() { rm -rf "$TMP/refs"; mkdir -p "$TMP/refs"; printf 'aws_lb.this %s\n' "$1" > "$TMP/refs.pairs"; }
+t_refs_minus() { refs_dir name; printf 'locals {\n  n = -aws_lb.this.name\n}\n' > "$TMP/refs/a.tf"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this name' ]; }
+t_refs_minus; check "attribute scan: a negated read counts" $?
+t_refs_tags() { refs_dir tags; printf 'locals {\n  t = aws_lb.this.tags_all\n}\n' > "$TMP/refs/a.tf"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this tags' ]; }
+t_refs_tags; check "attribute scan: tags_all counts as a read of tags" $?
+t_refs_other() { refs_dir name; printf 'locals {\n  t = aws_lb.this.tags_all\n  a = aws_lb.this[0].arn\n}\n' > "$TMP/refs/a.tf"; [ -z "$(refs "$TMP/refs.pairs")" ]; }
+t_refs_other; check "attribute scan: other attributes are no read" $?
+t_refs_link() { refs_dir subnets; printf 'nothing\n' > "$TMP/refs/notes.txt"; ln -s notes.txt "$TMP/refs/l.tf"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this subnets' ]; }
+t_refs_link; check "attribute scan: a .tf file that is a link counts as a read of every pair" $?
+t_refs_json() { refs_dir subnets; printf '{"locals": {"x": "1"}}\n' > "$TMP/refs/extra.tf.json"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this subnets' ]; }
+t_refs_json; check "attribute scan: any .tf.json file counts as a read of every pair" $?
+t_refs_big() { # 40,000 unclosed indexes on one line: seconds when bounded, minutes when not
+  refs_dir name; perl -e 'print "locals {\n  x = \"", "aws_lb.this[" x 40000, "\"\n}\n"' > "$TMP/refs/big.tf"
+  [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this name' ]
+}
+t_refs_big; check "attribute scan: a line of 40,000 unclosed indexes finishes within 5 seconds, counted as a read" $?
+
 # --- Refused inputs: exit 2, nothing printed
 fresh; reset_knobs; plain_change; run_case > /dev/null 2>&1
 refused() { # name, arguments after check <run-dir>
@@ -658,6 +841,32 @@ mutate "a base commit missing from the clone not caught by check" 's/ \|\| BASES
 mutate "a downloaded hit with no line accepted" 's/\(\.line \/\/ ""\) \| test\("\^:\[0-9\]\+\$"\)/true/' t_dl_noline
 mutate "a downloaded hit taken while the clone scope has hits" 's/ and \(any\(\$h\.lines\[\]; startswith\("hit "\)\) \| not\)//' t_downloaded_hit
 mutate "downloaded hits never covered" 's/elif \$dl and \(all/elif \$dl or (all/' t_dl
+
+mutate "a transient reason taken as a design reason" 's/\{"environment \(access-denied\)": "access-denied"\}/{"environment (access-denied)": "access-denied", "environment (timeout)": "timeout"}/' t_v_timeout
+mutate "design skips never covered" 's/def design_kind: \{"environment \(access-denied\)": "access-denied"\}/def design_kind: {}/' t_v
+mutate "a change under a design-skipped example ignored" 's/     elif dir_changed\(\$x\.paths; \$x\.d; \$x\.h; null\) then "dir-changed"\n//' t_v_dir
+mutate "a design skip taken without a witness" 's/     elif \$x\.wp\.nowit != null then \$x\.wp\.nowit\n//' t_v_nowit
+mutate "the design record class not checked" 's/ or \$x\.blk\.plan != \$x\.rs\[0\]//' t_v_record
+mutate "a gate hit beside a design skip ignored" 's/ or any\(\$x\.h\.lines\[\]; startswith\("hit "\)\)//' t_v_gated
+mutate "a changed data source taken for a design skip" 's/ or any\(\$x\.cls\[\]\.attrs\[\]; \.address \| startswith\("data\."\)\)//' t_v_data
+mutate "a second reason of a design skip ignored" 's/  \| \(if \(\$x\.rs \| length\) > 1 then "not-sole-reason"\n     elif/  | (if/' t_v_sole
+mutate "a moved clone ignored for a design skip" 's/     elif \(\$x\.headok \| not\) then "head-mismatch"\n//' t_v_head
+mutate "a short files list ignored for a design skip" 's/     elif \(\$x\.files \| length\) != \$x\.nchanged or \(\$x\.cls \| length\) != \(\$x\.files \| length\) then "files-incomplete"\n//' t_v_count
+mutate "the denial evidence not required" 's/     elif \(\$x\.blk\.denied \| length\) != 1 or \(\$x\.blk\.denied\[0\] \| denied_set\) == null then "denial-unproven"\n//' t_v_nodenied
+mutate "a second denied line ignored" 's/\(\$x\.blk\.denied \| length\) != 1 or //' t_v_twodenied
+mutate "a denial on a managed resource accepted" 's/safe_address and test\("[^"]*data[^"]*"\)\)/safe_address)/' t_v_baddenied
+mutate "a changed attribute a data source reads ignored" 's/     elif any\(\$x\.cls\[\]\.attrs\[\]; "\\\(\.address\) \\\(\.attribute\)" \| IN\(\$x\.refs\[\]\)\) then "attribute-referenced"\n//' t_v_ref
+mutate "the attribute scan finds no read" 's/\$hit\{"\$a \$at"\} = 1 if !defined \$3/\$hit{"\$a \$at"} = 1 if 0 and !defined \$3/' t_v_ref
+mutate "a whole-object read not counted" 's/ if !defined \$3 \|\| / if (defined \$3 \&\& 0) || /' t_v_whole
+mutate "an unresolved merge base ignored for a design skip" 's/(dir_changed\(\$x\.paths; \$x\.d; \$x\.h; null\) then "dir-changed"\n)     elif \(\$x\.base \| sha \| not\) then "merge-base-unresolved"\n/$1/' t_v_unres
+mutate "the merge base denial not required" 's/     elif \$x\.blk\.base != \["environment \(access-denied\)"\] or \$x\.blk\.base_denied != \$x\.blk\.denied then "base-not-denied"\n//' t_v_basenew
+mutate "a missing head gate record taken for a design skip" 's/elif \$x\.h == null or \$x\.h\.done != true or /elif /' t_v_nohead
+mutate "a negated read missed" 's/\(\?<!\[A-Za-z0-9_\.\]\)/(?<![A-Za-z0-9_.-])/' t_refs_minus
+mutate "tags_all not read as tags" 's/ \|\| \(\$at eq "tags" && \$3 eq "tags_all"\)//' t_refs_tags
+mutate "a linked .tf file skipped" 's/\{ \$link = 1; return \}/{ return }/' t_refs_link
+mutate "a .tf.json file not counted" 's/tf\\\.json/tf\\.nothing/' t_refs_json
+mutate "the index group unbounded" 's/\{0,255\}/*/' t_refs_big
+mutate "the base denied set not compared" 's/ or \$x\.blk\.base_denied != \$x\.blk\.denied//' t_v_baseother
 
 # --- Recorded exceptions (skip-coverage.md, Recorded exceptions): a runner-mode record, its
 # blocks under the host's own lines, examples/r1 an exception for a role in another account, the

@@ -17,7 +17,8 @@
 #                                        by the user's authorization, the not-run-environment ones
 #   review-run.sh plan <run>            the plan pass (deep, focused, with a profile), then the
 #                                        plan coverage at every depth
-#   review-run.sh skip-coverage <run>   skip-coverage.sh after a laptop pass with gate skips
+#   review-run.sh skip-coverage <run>   skip-coverage.sh after a pass with gate skips, recorded
+#                                        exceptions or design skips
 #   review-run.sh ladder <run>          ladder-pass.sh run (not at light), then behaviour-pass.sh eval
 #   review-run.sh tests <run>           the test pass (test-pass.md) in the runner, with a
 #                                        non-hcl-dependency trigger
@@ -610,11 +611,12 @@ plan_mode() { # laptop or runner from the record's own line, as SKILL.md Step 10
 cmd_skip_coverage() {
   need_full skip-coverage
   [ -f "$RUN/coverage.json" ] || fail "skip-coverage needs plan first"
-  # Laptop gate skips, or a runner-mode pass's recorded exceptions (skip-coverage.md)
+  # Laptop gate skips, or a runner-mode pass's recorded exceptions, and in either mode the design
+  # skips (skip-coverage.md)
   local mode; mode="$(plan_mode)"
   case "$mode" in
-    laptop) jq -e 'any(.unplanned[]; .reason | IN("plan gate G1", "plan gate G2", "plan gate G3"))' "$RUN/coverage.json" > /dev/null ;;
-    runner) jq -e 'any(.unplanned[]; .reason | startswith("exception: "))' "$RUN/coverage.json" > /dev/null ;;
+    laptop) jq -e 'any(.unplanned[]; .reason | IN("plan gate G1", "plan gate G2", "plan gate G3", "environment (access-denied)"))' "$RUN/coverage.json" > /dev/null ;;
+    runner) jq -e 'any(.unplanned[]; .reason | startswith("exception: ") or . == "environment (access-denied)")' "$RUN/coverage.json" > /dev/null ;;
     *) false ;;
   esac || { echo "skip-coverage: nothing to check"; return 0; }
   local changed; changed="$(jq -r '.counts.changed_files // ""' "$RUN/index.json")"

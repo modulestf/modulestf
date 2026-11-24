@@ -2302,7 +2302,7 @@ mutate "covered skips still counted at rule 4" 's/ or \.unplanned_open > 0/ or .
 mutate "rule 8 reachable with covered skips" 's/elif has_sev\("LOW"\) or \.covered > 0 or/elif has_sev("LOW") or/' t_cov_rule8
 mutate "all or nothing dropped" 's/and all\(\$u\[\]; \. as \$x \| any\(\$cs\[\];/and all(\$u[]; true or any(\$cs[];/' t_cov_partial
 mutate "a covered entry that is no skip accepted" 's/and all\(\$cs\[\]; \. as \$x \| any\(\$u\[\];/and all(\$cs[]; true or any(\$u[];/' t_cov_extra
-mutate "the plan mode not checked" 's/and all\(\$cs\[\]; \.gate \| skip_mode == \$run\.plan_mode\)//' t_cov_runner
+mutate "the plan mode not checked" 's/and all\(\$cs\[\]; \.gate == "design" or \(\.gate \| skip_mode == \$run\.plan_mode\)\)//' t_cov_runner
 mutate "the head not checked" 's/\$cs != \[\] and \$cv\.skip_head_sha == \$in\.host\.head_sha/\$cs != []/' t_cov_head
 mutate "inert not checked" 's/and \(\$cv\.inert \| not\)//' t_cov_inert
 mutate "duplicate skips accepted" 's/and \(\$u \| map\(\.dir\) \| length == \(unique \| length\)\)//' t_cov_dup
@@ -2340,7 +2340,7 @@ mutate "a dir listed twice accepted" 's/type == "array" and \(map\(\.dir\?\) \| 
 mutate "the one form of the covered sentence dropped" 's/\+ \(if \$n == 1 then "-one" else "-many" end\); \{count: \$n, total/+ "-many"; {count: \$n, total/' t_cov_one
 mutate "STANDARD section 5 keeps its gap heading" 's/section\(if \$cov != \[\] then "Examples not planned" else/section(if false then "Examples not planned" else/' t_cov_one
 mutate "witnesses not deduplicated" 's/if any\(\.\[\]; \. == \$w\) then \. else \. \+ \[\$w\] end/. + [\$w]/' t_cov_gold
-mutate "the downloaded flag ignored" 's/\(if \$c\.downloaded then "-downloaded" elif/(if false then "-downloaded" elif/' t_cov_dl
+mutate "the downloaded flag ignored" 's/elif \$c\.downloaded then "-downloaded" elif/elif false then "-downloaded" elif/' t_cov_dl
 mutate "the one witness example not allowlisted" 's/ and \(\$e\[0\] \| allowed\)//' t_cov_names
 mutate "one example named for several witness examples" 's/if \(\$e \| length\) == 1 and/if true and/' t_cov_two
 
@@ -2892,8 +2892,66 @@ refused "a covered gate outside the list" "$(F556C)" "$H556N" "" "$(R556X xbad '
 mutate "exceptions never covered" 's/"role": "exception: example assumes a role in another account", //' t_cov_exc
 mutate "the exception mode not checked" 's/if IN\("role", "docker"\) then "runner" else "laptop" end/"laptop"/' t_cov_exc
 mutate "the exception lines dropped" 's/ elif \(\$c\.gate \| skip_mode\) == "runner" then "-exception"//' t_cov_exc
-mutate "the exception sentence dropped" 's/\(if \(\$cov\[0\]\.gate \| skip_mode\) == "runner" then "-exception" else "" end\)/""/' t_cov_exc
-mutate "a laptop run takes exception entries" 's/and all\(\$cs\[\]; \.gate \| skip_mode == \$run\.plan_mode\)//' t_cov_exc_laptop
+mutate "the exception sentence dropped" 's/elif \(\.gate \| skip_mode\) == "runner" then "-exception" else "" end\]/else "" end]/' t_cov_exc
+mutate "a laptop run takes exception entries" 's/and all\(\$cs\[\]; \.gate == "design" or \(\.gate \| skip_mode == \$run\.plan_mode\)\)//' t_cov_exc_laptop
+
+# --- Design skips join the covered skips (verdict.md, Covered safety-gate skips): an example whose
+# plan class is an environment reason of the closed list, witnessed by a planned example, in either
+# mode; a transient reason or a reason the entry does not match leaves the body as without the key.
+COVD='[{dir: "examples/vpc-endpoint", gate: "design", reason: "access-denied", witnesses: ['"$W1"']}]'
+R556D() { R556 "$1" '.plan_mode = "laptop" | .coverage.unplanned = [{dir: "examples/vpc-endpoint", reason: "environment (access-denied)"}]
+  | .coverage += {covered_skips: '"$COVD"', skip_head_sha: "'"$HEAD"'", skip_base_sha: "'"$BASE"'"} | '"${2:-.}"; }
+cat > "$TMP/want-556d.txt" <<'WANT'
+**Good to merge, with nits.** `validate` passed in all 9 examples; 8 were planned. 1 of 9 examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned in `examples/autoscaling` (see notes).
+- Not planned: `examples/vpc-endpoint` (the review role was denied a data source read, `environment (access-denied)`, at head 0123456 and at base 89abcde).
+- Covered by: `vpc_security_group_ids` planned in `examples/autoscaling` as `module.aurora.aws_rds_cluster.this` at 0123456.
+WANT
+t_cov_des() {
+  rc "$(F556C)" "$(R556D dgold)" "$H556N"
+  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] \
+    && grep -E '^\*\*Good|^- (Not planned|Covered by): ' "$O/comment.md" | cmp -s - "$TMP/want-556d.txt" || return 1
+  rc "$(F556C)" "$(R556D dstd)" "$H556N" --standard
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qxF -- '- Not planned: `examples/vpc-endpoint` (the review role was denied a data source read, `environment (access-denied)`, at head 0123456 and at base 89abcde).' "$O/comment.md" \
+    && grep -qF '1 of 9 examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned in `examples/autoscaling`, as listed below.' "$O/comment.md" \
+    && grep -qxF '### Examples not planned' "$O/comment.md" && ! grep -qF 'could not run' "$O/comment.md"
+}
+t_cov_des; check "covered: a design skip with a witness is approve with nits at rule 7, named with its reason token" $?
+t_cov_des_runner() { rc "$(F556C)" "$(R556D dr '.plan_mode = "runner"')" "$H556N"; [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qF '`environment (access-denied)`' "$O/comment.md"; }
+t_cov_des_runner; check "covered: a design skip after a runner pass is approve with nits" $?
+t_cov_des_mixed() {
+  rc "$(F556C)" "$(R556D dm '.coverage.unplanned += [{dir: "examples/mysql", reason: "plan gate G3"}] | .coverage.covered_skips += [{dir: "examples/mysql", gate: "G3", path: "main.tf", witnesses: ['"$W1"']}]')" "$H556N"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qF '2 of 9 examples were not planned, for the reasons in the notes;' "$O/comment.md" \
+    && grep -qF -- '- Not planned: `examples/mysql` (G3 hit in `main.tf`' "$O/comment.md" && grep -qF '`environment (access-denied)`' "$O/comment.md"
+}
+t_cov_des_mixed; check "covered: a design skip beside a covered gate skip is approve with nits, one mixed sentence" $?
+t_cov_des_trans() { unch x "$(F556C)" "$(R556D dt '.coverage.unplanned[0].reason = "environment (timeout)"')"; }
+t_cov_des_trans; check "covered: a design entry for an example that timed out is ignored" $?
+t_cov_des_gate() { unch x "$(F556C)" "$(R556D dg '.coverage.unplanned[0].reason = "plan gate G3"')"; }
+t_cov_des_gate; check "covered: a design entry for a gate skip is ignored" $?
+t_cov_des_part() { unch x "$(F556C)" "$(R556D dp '.coverage.unplanned += [{dir: "examples/b", reason: "environment (access-denied)"}]')"; }
+t_cov_des_part; check "covered: one design skip not covered leaves every skip an unknown" $?
+t_cov_des_wit() { unch x "$(F556C)" "$(R556D dw '.coverage.covered_skips[0].witnesses[0].example = "examples/vpc-endpoint"')"; }
+t_cov_des_wit; check "covered: a design skip witnessed by itself is ignored" $?
+t_cov_des_tok() { render "$(F556C)" "$H556N" "" "$(R556D dbad '.coverage.unplanned[0].reason = "environment (timeout)" | .coverage.covered_skips[0].reason = "timeout"')" "$TMP/assess-556.txt"; [ "$ST" = 2 ] && empty_out; }
+t_cov_des_tok; check "refused: a design entry with a transient reason" $?
+t_cov_des_nomode() { unch x "$(F556C)" "$(R556D dnm 'del(.plan_mode)')"; }
+t_cov_des_nomode; check "covered: a design entry in a run file with no plan mode is ignored" $?
+t_cov_des_exc() { # runner mode: a design skip beside a covered recorded exception
+  rc "$(F556C)" "$(R556D dx '.plan_mode = "runner" | .coverage.unplanned += [{dir: "examples/outpost", reason: "exception: example assumes a role in another account"}]
+    | .coverage.covered_skips += [{dir: "examples/outpost", gate: "role", path: "main.tf", witnesses: ['"$W1"']}]')" "$H556N"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qF '2 of 9 examples were not planned, for the reasons in the notes;' "$O/comment.md" \
+    && grep -qF '(recorded exception, it needs a role in another account' "$O/comment.md" && grep -qF '`environment (access-denied)`' "$O/comment.md"
+}
+t_cov_des_exc; check "covered: a design skip beside a covered recorded exception after a runner pass is approve with nits" $?
+refused "a design entry with a path" "$(F556C)" "$H556N" "" "$(R556D dbadp '.coverage.covered_skips[0].path = "main.tf"')" "$TMP/assess-556.txt"
+refused "a gate entry with a reason" "$(F556C)" "$H556N" "" "$(R556K kbadr '.coverage.covered_skips[0].reason = "access-denied"')" "$TMP/assess-556.txt"
+mutate "design skips never covered" 's/def entry_reason: if \.gate == "design" then "environment \(\\\(\.reason\)\)" else/def entry_reason: if false then "" else/' t_cov_des
+mutate "a transient reason accepted for a design entry" 's/def design_reasons: \["access-denied"\];/def design_reasons: ["access-denied", "timeout"];/' t_cov_des_tok
+mutate "a design entry taken for another reason" 's/and \.reason == \(\$x \| entry_reason\)/and true/; s/any\(\$cs\[\]; \.dir == \$x\.dir and entry_reason == \$x\.reason\)/any(\$cs[]; .dir == \$x.dir)/' t_cov_des_trans
+mutate "the design lines dropped" 's/if \$c\.gate == "design" then "-design" elif/if false then "" elif/' t_cov_des
+mutate "the design sentence dropped" 's/\[\$cov\[\] \| if \.gate == "design" then "-design" elif/[\$cov[] | if false then "" elif/' t_cov_des
+mutate "a design skip taken with no plan mode" 's/       and \(\$run\.plan_mode \| IN\("laptop", "runner"\)\)\n//' t_cov_des_nomode
+mutate "a design skip held to the plan mode" 's/and all\(\$cs\[\]; \.gate == "design" or \(/and all(\$cs[]; (/' t_cov_des_runner
 
 # --- Review follow-ups: a job-less list at host-pass.sh's cap may have lost an entry, so it stays
 # unknown; an unresolved provider keeps its directory's floor triggers unknown; review.path-missing
@@ -2971,6 +3029,9 @@ acc_case "a floor trigger cleared by its finding, approve with nits" t_fl_findin
 acc_case "a floor trigger cleared by the floors read, approve" t_fl_read
 acc_case "covered gate skips with no finding, approve with nits" t_cov_rule8
 acc_case "a covered recorded exception, approve with nits" t_cov_exc
+acc_case "a covered design skip, approve with nits" t_cov_des
+acc_case "a covered design skip beside a covered gate skip, approve with nits" t_cov_des_mixed
+acc_case "a covered design skip beside a covered recorded exception, approve with nits" t_cov_des_exc
 acc_case "a MEDIUM review.path-missing beside an unknown, inconclusive" t_pm_unknown
 acc_case "a MEDIUM review.verification-incomplete, inconclusive" t_bvi
 acc_case "an unregistered MEDIUM alone, inconclusive" t_unreg_alone
