@@ -2320,7 +2320,8 @@ mutate "the skip SHAs accepted alone" 's/and \(\[has\("covered_skips", "skip_bas
 mutate "covered names not allowlisted" 's/dir: \(\$c\.dir \| nm\(allowed\)\)/dir: (\$c.dir | nm(true))/' t_cov_names
 mutate "the witness lines left out of section 5" 's/if \$cov != \[\] then covered_lines\("unplanned-covered"; \$cov; \$run\) else/if false then [] else/' t_cov_std
 mutate "the COMPACT sentence dropped" 's/\+ \(if \$cov != \[\] then " " \+ covered_sentence\("compact-covered"; \$run; \$cov\)/+ (if false then " " + covered_sentence("compact-covered"; \$run; \$cov)/' t_cov_gold
-mutate "What to do with no item rendered" 's/ or \(\$cov != \[\] and \$items == \[\]\)//' t_cov_rule8_std
+mutate "What to do with no item rendered" 's/ or \(\(\$cov != \[\] or \$l\.undemonstrated > 0\) and \$items == \[\]\)//' t_cov_rule8_std
+mutate "What to do with no item rendered beside undemonstrated coverage" 's/\(\$cov != \[\] or \$l\.undemonstrated > 0\) and \$items == \[\]/\$cov != [] and \$items == []/' t_ux
 mutate "the rule 7 rationale for covered skips alone dropped" 's/elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.covered > 0 then tx\("rationale-7-covered"\)\n//' t_cov_rule8_std
 mutate "the base not checked" 's/ and \$cv\.skip_base_sha == \$in\.host\.merge_base//' t_cov_base
 mutate "a plan pass that did not run accepted" 's/and \$run\.plan_ran and \(\$cv\.inert/and (\$cv.inert/' t_cov_noplan
@@ -2855,58 +2856,81 @@ mutate "Check A not run ignored" 's/check_a_ran\(\$findings; \$run\) and \$fl !=
 mutate "judged triggers counted as gaps" 's/select\(\(ci_gated or floor_ok or demo_ok\) \| not\)\), \.claims/select((ci_gated or demo_ok) | not)), .claims/' t_fl_read
 
 # --- Undemonstrated features (verdict.md, Undemonstrated features): a trigger behaviour-pass.sh
-# marked unexercised leaves rule 4 when an examples.feature-undemonstrated finding names its file
-# and the whole selection was planned; anything else keeps it an unknown.
-UT='{id: "T-001", file: "main.tf", line: 266, category: "unclassified-change", state: "unverifiable", unexercised: true}'
-RUX() { runf "ux-$1" '.plan_ran = true | .behaviour.triggers = ['"$UT"', ('"$UT"' | .id = "T-002" | .line = 267)] | '"${2:-.}"; }
-UXF="$(f examples.feature-undemonstrated LOW main.tf 266 "No example sets idle_timeout." "In examples/complete/main.tf, in module \"lb\", set idle_timeout = 60." | list uxf)"
-UXO="$(f examples.feature-undemonstrated LOW modules/a/main.tf 266 "No example sets idle_timeout." "In examples/complete/main.tf, set idle_timeout = 60." | list uxo)"
-UXC="$( (f examples.feature-undemonstrated LOW main.tf 266 "No example sets idle_timeout." "In examples/complete/main.tf, set idle_timeout = 60."
-  f compat.default-changed MEDIUM main.tf 266 "The default idle timeout changes for callers of the secondary listener." "needs decision: (a) keep (b) revert.") | list uxc)"
-UNDEMO='Changes no planned example reaches, each named by an examples.feature-undemonstrated finding: 2.'
+# marked unexercised is undemonstrated coverage, as a covered skip is: approve with nits at best,
+# listed as information, with no finding needed. Anything else keeps it an unknown.
+UT='{id: "T-001", file: "main.tf", line: 266, category: "literal-argument-change", state: "unverifiable", unexercised: true}'
+RUX() { runf "ux-$1" '.plan_ran = true | .behaviour.triggers = ['"$UT"', ('"$UT"' | .id = "T-002" | .line = 267 | .category = "dynamic-block-change")] | '"${2:-.}"; }
+UXL="$(f examples.feature-undemonstrated LOW examples/complete/main.tf 3 "No example sets idle_timeout." "In examples/complete/main.tf, in module \"lb\", set idle_timeout = 60." | list uxl)"
+cmpx() { f "$1" "$2" "$3" 266 "The change alters what callers of the secondary listener get." "needs decision: (a) keep (b) revert." | list "uxc$oc"; }
+UNDEMO='Changes to a resource no planned example creates, which no plan can show: 2.'
+UXRAT='No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7).'
+cat > "$TMP/want-ux.txt" <<'WANT'
+### Changes no example creates
+
+- Not demonstrated: `main.tf:266` (literal-argument-change): no planned example creates this resource, so no plan shows the change.
+- Not demonstrated: `main.tf:267` (dynamic-block-change): no planned example creates this resource, so no plan shows the change.
+WANT
+uxsec() { awk '/^### Changes no example creates$/ { on = 1 } on && /^### / && !/no example creates/ { exit } on' "$O/comment.md" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'; }
 t_ux() {
-  render "$UXF" "" "" "$(RUX f)"
-  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$UNDEMO" "$O/comment.md" \
-    && ! grep -qF '### Checks that could not run' "$O/comment.md" && [ "$(accept "$O/result.json")" = "findings accepted: full" ]
+  render "$NONE" "" "" "$(RUX f)"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && [ "$(tier)" = STANDARD ] \
+    && grep -qxF "$UNDEMO" "$O/comment.md" && grep -qxF "$UXRAT" "$O/comment.md" && uxsec | cmp -s - "$TMP/want-ux.txt" \
+    && ! grep -qF '### Checks that could not run' "$O/comment.md" && ! grep -qxF '### What to do' "$O/comment.md" \
+    && [ "$(accept "$O/result.json")" = "findings accepted: full" ]
 }
-t_ux; check "undemonstrated: a finding naming the file clears both unexercised triggers, approve with nits, accepted by host-pass.sh" $?
-t_ux_keep() { # run update [findings] -> rule 4, both triggers listed, no count line
-  render "${2:-$UXF}" "" "" "$(RUX "k$oc" "$1")"
+t_ux; check "undemonstrated: unexercised triggers alone are approve with nits, STANDARD, listed as information byte for byte, accepted by host-pass.sh" $?
+t_ux_low() { render "$UXL" "" "" "$(RUX l)"; [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && uxsec | cmp -s - "$TMP/want-ux.txt" && [ "$(accept "$O/result.json")" = "findings accepted: full" ]; }
+t_ux_low; check "undemonstrated: an examples.feature-undemonstrated LOW anywhere is an ordinary LOW beside them" $?
+t_ux_keep() { # run update [findings] -> rule 4, the triggers in section 5, nothing cleared
+  render "${2:-$NONE}" "" "" "$(RUX "k$oc" "$1")"
   [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qE '^- Behaviour change at `main\.tf:266` \([a-z-]+\): not verified\.$' "$O/comment.md" \
-    && ! grep -qF 'Changes no planned example reaches' "$O/comment.md"
+    && ! grep -qF 'no planned example creates' "$O/comment.md"
 }
-t_ux_nofind() { t_ux_keep . "$NONE"; }
-t_ux_nofind; check "undemonstrated: no finding leaves the triggers unknowns" $?
-t_ux_other() { t_ux_keep . "$UXO"; }
-t_ux_other; check "undemonstrated: a finding at another file leaves the triggers unknowns" $?
 t_ux_mark() { t_ux_keep '.behaviour.triggers |= map(del(.unexercised))'; }
 t_ux_mark; check "undemonstrated: a trigger not marked unexercised stays an unknown" $?
 t_ux_noplan() { t_ux_keep '.plan_ran = false'; }
 t_ux_noplan; check "undemonstrated: no plan pass leaves the triggers unknowns" $?
 t_ux_partial() { t_ux_keep '.coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/x", reason: "plan gate G1"}]}'; }
 t_ux_partial; check "undemonstrated: an example not planned leaves the triggers unknowns" $?
+t_ux_scope() { t_ux_keep ".depth = $(dep focused)"; }
+t_ux_scope; check "undemonstrated: an example out of scope leaves the triggers unknowns" $?
 t_ux_cat() { t_ux_keep '.behaviour.triggers |= map(.category = "default-change")'; }
-t_ux_cat; check "undemonstrated: a category that is a compat break stays an unknown" $?
+t_ux_cat; check "undemonstrated: a category off the list stays an unknown" $?
 t_ux_also() { t_ux_keep '.behaviour.triggers |= map(.also_categories = ["type-validation-change"])'; }
-t_ux_also; check "undemonstrated: a merged compat category stays an unknown" $?
-t_ux_triage() { render "$UXF" "" "" "$(RUX t '.triage = true')"; [ "$(rule)" = 4 ] && ! grep -qF 'Changes no planned example reaches' "$O/comment.md"; }
+t_ux_also; check "undemonstrated: a merged category off the list stays an unknown" $?
+t_ux_triage() { render "$NONE" "" "" "$(RUX t '.triage = true')"; [ "$(rule)" = 4 ] && ! grep -qF 'no planned example creates' "$O/comment.md"; }
 t_ux_triage; check "undemonstrated: a triage run does not clear the triggers" $?
-t_ux_compat() { render "$UXC" "" "" "$(RUX c)"; [ "$ST" = 0 ] && [ "$(rule)" = 6 ] && grep -qxF -- '- Behaviour change at `main.tf:266` (unclassified-change): not verified.' "$O/comment.md"; }
-t_ux_compat; check "undemonstrated: a compat finding above LOW at the file keeps the triggers in section 5" $?
+t_ux_compat_low() { t_ux_keep . "$(cmpx compat.expression-behaviour-changed LOW variables.tf)"; }
+t_ux_compat_low; check "undemonstrated: a compat LOW in another file of the directory keeps the triggers unknowns" $?
+t_ux_compat_med() { render "$(cmpx compat.default-changed MEDIUM main.tf)" "" "" "$(RUX cm)"; [ "$ST" = 0 ] && [ "$(rule)" = 6 ] && grep -qE '^- Behaviour change at `main\.tf:266`' "$O/comment.md"; }
+t_ux_compat_med; check "undemonstrated: a compat MEDIUM keeps the triggers in section 5" $?
+t_ux_compat_far() { render "$(cmpx compat.expression-behaviour-changed LOW modules/a/main.tf)" "" "" "$(RUX cf)"; [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && uxsec | cmp -s - "$TMP/want-ux.txt"; }
+t_ux_compat_far; check "undemonstrated: a compat finding in another module directory does not stop the clearing" $?
+t_ux_one() { render "$NONE" "" "" "$(RUX o '.behaviour.triggers[1] |= del(.unexercised)')"; [ "$(rule)" = 4 ] && grep -qF 'Not demonstrated: `main.tf:266`' "$O/comment.md" && grep -qE '^- Behaviour change at `main\.tf:267`' "$O/comment.md"; }
+t_ux_one; check "undemonstrated: each trigger is read alone; an unmarked one beside a marked one stays an unknown" $?
 refused "an unexercised trigger that is not unverifiable" "$NONE" "" "" "$(RUX r1 '.behaviour.triggers[0].state = "covered"')"
 refused "an unexercised mark that is not true" "$NONE" "" "" "$(RUX r2 '.behaviour.triggers[0].unexercised = false')"
 refused "an unexercised trigger with sweep evidence" "$NONE" "" "" "$(RUX r3 '.behaviour.triggers[0].complete = false')"
-mutate "the undemonstrated finding ignored" 's/and any\(\$findings\[\]; \.rule_id == "examples\.feature-undemonstrated" and \.file == \$t\.file\)/and false/' t_ux
-mutate "a finding at another file accepted" 's/\.rule_id == "examples\.feature-undemonstrated" and \.file == \$t\.file/.rule_id == "examples.feature-undemonstrated"/' t_ux_other
-mutate "an unmarked trigger cleared" 's/and \.unexercised == true\n/\n/' t_ux_mark
+t_ux_grammar() { render "$NONE" "" "" "$(RUX r4 '.behaviour.triggers[0].outstanding = []')"; [ "$ST" != 0 ]; }
+t_ux_grammar; check "refused: an unexercised trigger with an outstanding list" $?
+mutate "an unmarked trigger cleared" 's/ and \.unexercised == true\n/\n/' t_ux_mark
 mutate "the plan pass not required" 's/ and \$run\.plan_ran and / and /' t_ux_noplan
 mutate "partial coverage accepted" 's/ and \$run\.coverage\.class == "complete"\n/\n/' t_ux_partial
+mutate "an example out of scope accepted" 's/\n     and \(\(\$run\.depth\.examples_out_of_scope \/\/ \[\]\) == \[\]\)\) as \$whole/) as \$whole/' t_ux_scope
 mutate "any category cleared" 's/and \(\[\.category, \(\.also_categories \/\/ \[\]\)\[\]\] - demo_categories == \[\]\)/and true/' t_ux_cat
 mutate "the merged categories not read" 's/\[\.category, \(\.also_categories \/\/ \[\]\)\[\]\] - demo_categories/[.category] - demo_categories/' t_ux_also
 mutate "a triage run accepted" 's/\(\(\$run\.triage \| not\) and \$run\.plan_ran/(\$run.plan_ran/' t_ux_triage
-mutate "a compat finding above LOW ignored" 's/and \(any\(\$findings\[\]; \.file == \$t\.file and \(\.rule_id \| startswith\("compat\."\)\) and \.severity != "LOW"\) \| not\)//' t_ux_compat
+mutate "a compat finding at LOW ignored" 's/\(\.rule_id \| startswith\("compat\."\)\) and \(\.file \| file_dir\)/(.rule_id | startswith("compat.")) and .severity != "LOW" and (.file | file_dir)/' t_ux_compat_low
+mutate "only a compat finding at the same file read" 's/and \(\.file \| file_dir\) == \(\$t\.file \| file_dir\)/and .file == \$t.file/' t_ux_compat_low
 mutate "cleared triggers counted as gaps" 's/select\(\(ci_gated or floor_ok or demo_ok\) \| not\)\), \.claims/select((ci_gated or floor_ok) | not)), .claims/' t_ux
+mutate "cleared triggers listed as not verified" 's/select\(\.state == "unverifiable" and \(\(ci_gated or floor_ok or demo_ok\) \| not\)\)/select(.state == "unverifiable" and ((ci_gated or floor_ok) | not))/' t_ux
+mutate "rule 7 not reached by undemonstrated coverage" 's/ or \.undemonstrated > 0 or / or /' t_ux
 mutate "the count line dropped" 's/    \+ \(\[\$b\.triggers\[\] \| select\(demo_ok\)\][^\n]*\n//' t_ux
+mutate "the information section dropped" 's/     \+ section\("Changes no example creates"[^\n]*\n//' t_ux
+mutate "the rule 7 rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.undemonstrated > 0 then tx\("rationale-7-undemonstrated"\)//' t_ux
+mutate "sweep evidence beside the mark accepted" 's/\n              and \(has\("complete"\) or has\("outstanding"\) or has\("evidence_digest"\) \| not\)\)\)\)/)))/' t_ux_grammar
+t_ux_state() { render "$NONE" "" "" "$(RUX r5 '.behaviour.triggers[0].state = "covered"')"; [ "$ST" != 0 ]; }
+mutate "the mark on a trigger that passed accepted" 's/\(\.unexercised == true and \.state == "unverifiable"\n/(.unexercised == true\n/' t_ux_state
 
 # --- Recorded exceptions join the covered skips (verdict.md, Covered safety-gate skips): a
 # runner-mode run whose every unplanned example is a recorded exception witnessed by a planned

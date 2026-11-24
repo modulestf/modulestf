@@ -243,25 +243,36 @@ evaluate() {
         | if .state == "unverifiable" and ($w[$f] // "" | IN("derived", "copied"))
           then {id, state: "inert", wrapper: $w[$f]} else . end)) as $e
     | def kstate($id): first($e.claims[] | select(.claim_id == $id) | .state) // "discarded";
-    # Contract 6, unexercised (behaviour-pass.md, The Run Object): an unverifiable trigger whose only
-    # level is the plan coverage, with an address, when every selected example planned and no
-    # planned address is that address, in the example itself or under a module call to its directory.
-    def at($t; $e): ($t.file | if test("/") then sub("/[^/]*$"; "") else "." end) as $d
-      | any($e.addresses[]?; . as $a
-          | if $e.dir == $d then $a == $t.address or ($t.address | startswith("module.")) and ($a | startswith($t.address + "."))
-            else ($a | capture("^module\\.(?<c>[^.]+)\\.(?<r>.+)$")? // null) as $m
-              | $m != null and ($e.module_calls // {} | .[$m.c]) == $d
-              and ($m.r == $t.address or ($t.address | startswith("module.")) and ($m.r | startswith($t.address + "."))) end);
-    def unexercised($t; $s): $s == "unverifiable" and $t.levels == ["L4"] and ($t.address | type == "string")
-      and $l.coverage.class == "complete" and ($l.coverage.examples | type == "array" and length > 0)
-      and all($l.coverage.examples[]; .head | IN("planned", "planned-no-changes"))
-      and (any($l.coverage.examples[]; at($t; .)) | not);
+    # Contract 6, unexercised (behaviour-pass.md, The Run Object): an argument or dynamic block the
+    # change adds to a managed resource that no planned example can create. When in doubt, no mark.
+    # The categories: an added argument or block of a managed resource, never a removal or a type,
+    # default, address, lifecycle or wrapper change, which take their own categories or kinds.
+    def unex_cats: ["literal-argument-change", "dynamic-block-change", "unclassified-change"];
+    # Meta-arguments change how a resource is created, not what it sets: never marked.
+    def meta_args: ["provider", "count", "for_each", "depends_on", "lifecycle", "provisioner", "connection"];
+    # A managed resource address, [module.<call>[<key>].]...<type>.<name>[<key>], with no keyword root.
+    def managed: test("^(module\\.[A-Za-z0-9_-]+(\\[[^\\]]*\\])?\\.)*[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*(\\[[^\\]]*\\])?$");
+    def bare: gsub("\\[[^\\]]*\\]"; "");
+    # The plan side: every example planned, with its addresses read whole (none empty, none at the
+    # 1000 cap) and its module calls known, and no planned address that could be the resource at any
+    # module depth: equal, or ending in "." and the address, whatever module calls lead to it.
+    def plans_known: $l.coverage.class == "complete" and ($l.coverage.examples | type == "array" and length > 0)
+      and all($l.coverage.examples[]; (.head | IN("planned", "planned-no-changes"))
+            and (.addresses | type == "array" and length > 0 and length < 1000)
+            and (.module_calls | type == "object" and length > 0));
+    def unexercised($t; $et): ($t.address | if type == "string" then bare else "" end) as $a
+      | ($t.address | type == "string" and managed) and $et.state == "unverifiable" and ($et | has("complete") or has("outstanding") or has("evidence_digest") | not)
+      and $t.levels == ["L4"] and $t.change_kind == "added"
+      and ([$t.category, ($t.also_categories // [])[]] - unex_cats == [])
+      and ($t.attribute | type == "string" and (sub("^dynamic\\."; "") | split(".")[0] | IN(meta_args[]) | not))
+      and plans_known
+      and (any($l.coverage.examples[].addresses[]; bare | . == $a or endswith("." + $a)) | not);
     {run: {status: "ran", reason: null,
        triggers: [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
                   | {id: $t.id, file: $t.file, line: $t.line, category: $t.category, state: $et.state}
                     + ($t | with_entries(select(.key == "also_categories")))
                     + ($et | with_entries(select(.key | IN("complete", "outstanding", "evidence_digest"))))
-                    + (if unexercised($t; $et.state) then {unexercised: true} else {} end)],
+                    + (if unexercised($t; $et) then {unexercised: true} else {} end)],
        claims: [$c.claims[] | {claim_id, state: (kstate(.claim_id) | if . == "discarded" then "unverifiable" else . end)}],
        capped: $b.capped},
      record: (["behaviour: ran, \($b.triggers | length) triggers, \($b.capped) over the cap\(if $b.inert then ", inert" else "" end)"]
@@ -269,7 +280,7 @@ evaluate() {
           | "trigger \($t.id) `\($t.file)`\(if $t.line == null then "" else " line \($t.line)" end) \($t.category): \($et.state)"
             + (if $et.wrapper != null then ", wrapper \($et.wrapper)" else "" end)
             + (if $et.complete == true then ", complete" else "" end)
-            + (if unexercised($t; $et.state) then ", unexercised" else "" end)
+            + (if unexercised($t; $et) then ", unexercised" else "" end)
             + (if ($et.outstanding // []) != [] and $et.evidence_digest != null
                then ", outstanding \($et.outstanding | length), digest \($et.evidence_digest)" else "" end)]
        # Each base and head difference claims-eval found, for the compatibility judgement; no input crosses.

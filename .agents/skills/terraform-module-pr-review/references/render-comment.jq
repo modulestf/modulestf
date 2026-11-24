@@ -427,13 +427,13 @@ def mark_floors($findings; $run; $h):
           then . + {floor: true} else . end)
   end;
 
-# Features no example demonstrates (verdict.md, Undemonstrated features). A trigger behaviour-pass.sh
-# marked unexercised has the plan coverage as its only level, and no plan of a whole selection holds
-# its address and changed attribute. It leaves the gaps when an examples.feature-undemonstrated
-# finding names its file, so the review says at LOW that no example shows it. Fail closed: every
-# selected example planned and none out of scope, no triage run, each category one that is no
-# compat.* break, and no compat.* finding above LOW at the trigger's file.
-def demo_categories: ["unclassified-change", "unknown-propagation-candidate", "literal-argument-change", "dynamic-block-change"];
+# Undemonstrated coverage (verdict.md, Undemonstrated features), as covered skips are: a total
+# function of the engine's output, with no finding read but compat.*. behaviour-pass.sh marked the
+# trigger unexercised: an argument or dynamic block the change adds to a managed resource that no
+# planned example can create. It leaves the gaps for rule 7 at best when the whole selection was
+# planned, it is no triage run, its categories are on the list, and no compat.* finding, at any
+# severity, sits in its directory.
+def demo_categories: ["literal-argument-change", "dynamic-block-change", "unclassified-change"];
 def mark_undemonstrated($findings; $run):
   if . == null or .status != "ran" then . else
     (($run.triage | not) and $run.plan_ran and $run.coverage.class == "complete"
@@ -441,10 +441,10 @@ def mark_undemonstrated($findings; $run):
     | .triggers |= map(. as $t
         | if $whole and .state == "unverifiable" and .unexercised == true
              and ([.category, (.also_categories // [])[]] - demo_categories == [])
-             and any($findings[]; .rule_id == "examples.feature-undemonstrated" and .file == $t.file)
-             and (any($findings[]; .file == $t.file and (.rule_id | startswith("compat.")) and .severity != "LOW") | not)
+             and (any($findings[]; (.rule_id | startswith("compat.")) and (.file | file_dir) == ($t.file | file_dir)) | not)
           then . + {demo: true} else . end)
   end;
+def demo_count: if . == null then 0 else [.triggers[] | select(demo_ok)] | length end;
 # A location is a code span; under --links (link_base set) a link to the file at the head when
 # the path is in the allowed set, and is not the module root `.`, so the URL holds no character the pull request could choose.
 def link_base: $ARGS.named.link_base // "";
@@ -492,7 +492,7 @@ def ladder:
     then {rule: 4, verdict: "inconclusive"}
   elif ($m | not) and .unresolved > 0 then {rule: 5, verdict: "changes suggested"}
   elif has_sev("MEDIUM") then {rule: 6, verdict: "block"}
-  elif has_sev("LOW") or .covered > 0 or $g.checks == "jobless" then {rule: 7, verdict: "approve with nits"}
+  elif has_sev("LOW") or .covered > 0 or .undemonstrated > 0 or $g.checks == "jobless" then {rule: 7, verdict: "approve with nits"}
   else {rule: 8, verdict: "approve"} end;
 
 def verdict_line: {
@@ -536,6 +536,7 @@ def texts: {
   "rationale-4-listed":"A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-5": "Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5).",
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
+  "rationale-7-undemonstrated": "No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-covered": "No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-jobless": "No finding is open, and a workflow ended without starting a job, so the repository's CI did not run. While it has not run, approve with nits is the best verdict (ladder rule 7).",
   "rationale-8": "No finding is open. With nothing open, the change is approved (ladder rule 8).",
@@ -598,7 +599,8 @@ def texts: {
   "rule-unregistered": "- `{rule_id}` at {location}: rule not in the registry, so this {severity} finding does not decide the verdict.",
   "rule-unregistered-low": "- `{rule_id}` at {location}: rule not in the registry; this LOW finding counts as any LOW finding.",
   "behaviour-floor-judged": "Provider floor changes judged by Check A, which no behaviour level verifies: {count}.",
-  "behaviour-undemonstrated": "Changes no planned example reaches, each named by an examples.feature-undemonstrated finding: {count}.",
+  "behaviour-undemonstrated": "Changes to a resource no planned example creates, which no plan can show: {count}.",
+  "undemonstrated-trigger": "- Not demonstrated: {location} ({category}): no planned example creates this resource, so no plan shows the change.",
   "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "thread-match": "- {location}: this review has a finding at the same path and line.",
   "thread-no-match": "- {location}: this review has no finding at the same path and line.",
@@ -739,6 +741,7 @@ def rationale($in):
          else "rationale-4-listed" end)
     # Rule 7 with no LOW finding: covered skips alone keep the verdict off rule 8.
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.covered > 0 then tx("rationale-7-covered")
+    elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.undemonstrated > 0 then tx("rationale-7-undemonstrated")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) then tx("rationale-7-jobless")
     else tx("rationale-\($r)") end;
 
@@ -1301,7 +1304,8 @@ def render($in):
                     else [($b // {triggers: []}).triggers[] | select(.state == "refuted")] end),
      skipped: ($in.run | skipped_gap),
      gaps: (($in.run | skipped_gap) + ($h.could_not_run | cnr_count) + ($unreg | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
-     unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end)};
+     unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end),
+     undemonstrated: ($b | demo_count)};
   # Triggers that are all inert make the change inert for plan coverage (triggers_inert), unless
   # another rule 4 unknown is present: then the coverage stays required.
   ledger($in) as $l0
@@ -1328,7 +1332,7 @@ def render($in):
      + evidence_lines($b)
      + tests_lines($in.run.tests; $b)
      # Rule 7 reached by covered skips alone has no optional item to list.
-     + (if $v.rule == 8 or $quiet or ($cov != [] and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items; $h.state.state == "closed" and ($h.state.merged | not))] end)
+     + (if $v.rule == 8 or $quiet or (($cov != [] or $l.undemonstrated > 0) and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items; $h.state.state == "closed" and ($h.state.merged | not))] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
      # Covered skips leave no gap, so section 5 then holds only their witness lines, which no
      # check that could not run describes.
@@ -1336,6 +1340,8 @@ def render($in):
        + [$unreg_all[] | tx(if .severity == "LOW" then "rule-unregistered-low" else "rule-unregistered" end;
                             {rule_id, severity, location: loc($p)})]
        + skipped_lines($in.run; $p); "\n")
+     # Undemonstrated changes are information, no gap: their own section, one line per trigger.
+     + section("Changes no example creates"; [($b // {triggers: []}).triggers[] | select(demo_ok) | tx("undemonstrated-trigger"; trigger_at($p))]; "\n")
      + section("Review depth"; depth_lines($in.run); "\n\n")
      + section("Profile"; profile_lines($in.run); "\n\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")

@@ -22,7 +22,7 @@ A pull request body also carries the What to do section, between sections 3 and 
 
 A run file with a `depth` key ([depth.md](depth.md)) adds the Review depth section between sections 5 and 6: the `depth-line` row with the depth and its reasons, each in a code span, then, when a check or an example is out of scope, the `depth-out-of-scope` row naming the checks out of scope, at light the plan pass, the ladder and the provider facts, and then the examples out of scope, the first 20 and `depth-more` with the count of the rest. Each is its own paragraph. An example out of scope is not listed in section 5 and is no unknown, nor, at light, an example not planned ([verdict.md](verdict.md#rule-4-per-depth)). A run file without the key renders no such section and nothing else changes.
 
-A run file with a `profile` key adds the Profile section after the Review depth section: the `profile-line` row with the reviewer's profile label, `shipped:<id>` or `custom`, and its `profile_tree_sha256`, which the run checked against what it handed over ([github-io.md](github-io.md#handover)). In COMPACT the row is one more evidence note. A run file without the key renders no such section and nothing else changes.
+A behaviour object with an undemonstrated trigger ([verdict.md](verdict.md#undemonstrated-features)) adds the Changes no example creates section between sections 5 and the Review depth section: one `undemonstrated-trigger` row per such trigger, with its file, line and category. It is information and no gap. A run file with a `profile` key adds the Profile section after the Review depth section: the `profile-line` row with the reviewer's profile label, `shipped:<id>` or `custom`, and its `profile_tree_sha256`, which the run checked against what it handed over ([github-io.md](github-io.md#handover)). In COMPACT the row is one more evidence note. A run file without the key renders no such section and nothing else changes.
 
 Sections 1 to 3 carry no heading: the assessment and the rationale are paragraphs and the verdict line is bold. The What to do section and sections 4 to 8 each open with a `###` heading naming the section: `### What to do`, `### Findings`, `### Checks that could not run` (`### Examples not planned` when it holds covered skips only), `### Review depth`, `### Profile`, `### Pull request state`, `### Existing threads`, `### Conversation comments`. An omitted section drops its heading too. Where a section above says one line, it means the content under that heading. Inside section 4 each severity is a bold label on its own line, not a heading.
 
@@ -468,6 +468,7 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `rationale-4-listed` | A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4). |
 | `rationale-5` | Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5). |
 | `rationale-7` | Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7). |
+| `rationale-7-undemonstrated` | No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7). |
 | `rationale-7-covered` | No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7). |
 | `rationale-7-jobless` | No finding is open, and a workflow ended without starting a job, so the repository's CI did not run. While it has not run, approve with nits is the best verdict (ladder rule 7). |
 | `rationale-8` | No finding is open. With nothing open, the change is approved (ladder rule 8). |
@@ -530,7 +531,8 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `rule-unregistered-low` | - `{rule_id}` at {location}: rule not in the registry; this LOW finding counts as any LOW finding. |
 | `rule-unregistered` | - `{rule_id}` at {location}: rule not in the registry, so this {severity} finding does not decide the verdict. |
 | `behaviour-floor-judged` | Provider floor changes judged by Check A, which no behaviour level verifies: {count}. |
-| `behaviour-undemonstrated` | Changes no planned example reaches, each named by an examples.feature-undemonstrated finding: {count}. |
+| `behaviour-undemonstrated` | Changes to a resource no planned example creates, which no plan can show: {count}. |
+| `undemonstrated-trigger` | - Not demonstrated: {location} ({category}): no planned example creates this resource, so no plan shows the change. |
 | `behaviour-evidence` | Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified. |
 | `thread-match` | - {location}: this review has a finding at the same path and line. |
 | `thread-no-match` | - {location}: this review has no finding at the same path and line. |
