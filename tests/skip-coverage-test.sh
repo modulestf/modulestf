@@ -862,7 +862,7 @@ mutate "a missing head gate record taken for a design skip" 's/elif \$x\.h == nu
 mutate "a negated read missed" 's/\(\?<!\[A-Za-z0-9_\.\]\)/(?<![A-Za-z0-9_.-])/' t_refs_minus
 mutate "tags_all not read as tags" 's/ \|\| \(\$at eq "tags" && \$3 eq "tags_all"\)//' t_refs_tags
 mutate "a linked .tf file skipped" 's/\{ \$link = 1; return \}/{ return }/' t_refs_link
-mutate "the index group unbounded" 's/\{0,256\}/*/' t_refs_big
+mutate "the index group unbounded" 's/\{0,255\}/*/' t_refs_big
 mutate "the base denied set not compared" 's/ or \$x\.blk\.base_denied != \$x\.blk\.denied//' t_v_baseother
 
 # --- Recorded exceptions (skip-coverage.md, Recorded exceptions): a runner-mode record, its

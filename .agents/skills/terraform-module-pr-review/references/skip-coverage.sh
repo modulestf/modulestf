@@ -381,7 +381,7 @@ done < "$W/files.jsonl"
 # "<address> <attribute>" pair, the pair once when any mention of the resource, outside a .git or
 # .terraform directory, is not followed by an index or splat and then another attribute's name.
 # Conservative: a comment, the whole object, the changed attribute itself, tags_all for tags, an
-# index of over 256 characters and a .tf file that is a link count as a read. The bound keeps a
+# index of over 255 characters and a .tf file that is a link count as a read. The bound keeps a
 # line of unclosed indexes linear.
 REFS_PL='
 use strict; use warnings; use File::Find;
@@ -397,7 +397,7 @@ for my $f (@files) {
   open(my $h, "<", $f) or next; local $/; my $t = <$h>; close $h;
   for my $p (@pairs) {
     my ($a, $at) = @$p;
-    while ($t =~ /(?<![A-Za-z0-9_.])\Q$a\E(?![A-Za-z0-9_-])((?:\[[^\]\n]{0,256}\]|\.\*)*)(\.([A-Za-z0-9_-]+))?/g) {
+    while ($t =~ /(?<![A-Za-z0-9_.])\Q$a\E(?![A-Za-z0-9_-])((?:\[[^\]\n]{0,255}\]|\.\*)*)(\.([A-Za-z0-9_-]+))?/g) {
       $hit{"$a $at"} = 1 if !defined $3 || $3 eq $at || ($at eq "tags" && $3 eq "tags_all");
     }
   }
