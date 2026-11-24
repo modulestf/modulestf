@@ -234,6 +234,21 @@ fopl="$(listf opl '.[0].rule_id = "compat.output-attribute-removed" | .[0].summa
 grep -q '^note F-001 severity: LOW is outside' <<< "$(said "$(listf low-vr '.[0].rule_id = "compat.variable-removed" | .[0].severity = "LOW"')")"; check "a note for compat.variable-removed at LOW, which no text gives" $?
 ! grep -qi 'rule name is wrong' "$REV/findings-schema.md" "$SC"; check "no text says the rule name is wrong" $?
 
+# The calibrated bands of the structure rules the maintainers merged over: a rename or an optional
+# field with a working default is LOW, and no MEDIUM band is left between it and HIGH.
+band_note() { # rule, severity: 0 when the checker notes the severity as outside the rule's row
+  grep -q '^note F-001 severity: ' <<< "$(said "$(listf "cb-$1-$2" ".[0].rule_id = \"$1\" | .[0].severity = \"$2\"")")"
+}
+for c in structure.schema-shape-flattened/LOW/no structure.schema-shape-flattened/MEDIUM/yes \
+  structure.sibling-block-asymmetry/LOW/no structure.sibling-block-asymmetry/MEDIUM/yes \
+  structure.input-ignored-in-branch/LOW/no profile.release-config-changed/MEDIUM/yes \
+  structure.schema-shape-flattened/HIGH/no structure.sibling-block-asymmetry/HIGH/no \
+  structure.input-ignored-in-branch/HIGH/no structure.input-ignored-in-branch/MEDIUM/no; do
+  IFS=/ read -r r s want <<< "$c"
+  band_note "$r" "$s"; got=$([ $? = 0 ] && echo yes || echo no)
+  [ "$got" = "$want" ]; check "$r at $s: note $want" $?
+done
+
 # Input of any type is a violation or ok, never the checker's own failure.
 fuzz_field() { # field, refuted: one list, the field set to twelve odd values
   local f; f="$TMP/fuzz-$1.json"

@@ -114,10 +114,10 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `structure.output-no-try` | none | - | - | never | candidate | config-semantic | newly-introduced | no | root, submodule | candidates, interface-diff | HIGH | lead | small |
 | `structure.passthrough-default-drift` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule | candidates, interface-diff | HIGH, MEDIUM, LOW | lead | lead |
 | `structure.passthrough-field-drift` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule | candidates, interface-diff | HIGH, MEDIUM | lead | lead |
-| `structure.schema-shape-flattened` | schema | - | - | never | llm | config-semantic | touched-block | no | root, submodule | schema-coverage, interface-diff | HIGH | - | - |
+| `structure.schema-shape-flattened` | schema | - | - | never | llm | config-semantic | touched-block | no | root, submodule | schema-coverage, interface-diff | HIGH, LOW | - | - |
 | `structure.set-index-by-position` | schema | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | schema-coverage | HIGH, MEDIUM | - | - |
 | `structure.sibling-argument-omitted` | schema | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | schema-coverage | HIGH | - | - |
-| `structure.sibling-block-asymmetry` | schema | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | schema-coverage | HIGH, MEDIUM | - | - |
+| `structure.sibling-block-asymmetry` | schema | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | schema-coverage | HIGH, LOW | - | - |
 | `structure.suppression-unexplained` | none | - | - | file | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
 | `structure.validation-message-uninformative` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | LOW | - | - |
 | `structure.validation-missing` | none | - | - | never | llm | config-semantic | touched-block | no | root, submodule | interface-diff | MEDIUM | - | - |
