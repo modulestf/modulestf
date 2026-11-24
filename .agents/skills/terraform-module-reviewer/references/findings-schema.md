@@ -100,6 +100,8 @@ Stability rules:
 
 The names in use are listed per check in the check reference files, and the `review.*` names in [SKILL.md](../SKILL.md); SKILL.md's Final Step states which names form the registry. A review never edits it: Rule 1 makes the reviewer read-only, so a run has no way to add a name and no standing to try.
 
+A fact whose effect a registered rule already rates goes under that rule, the nearest registered one, at that rule's severity, even when the rule's text names the case only by its effect. A caller may count a finding under a new name as an unknown, as the last paragraph of this section says, so a fact a registered rule covers loses its weight under a new name. For example, a registry module call whose pinned version requires a provider floor above the one its caller declares raises the floor callers resolve, which is `compat.provider-floor-raised`, LOW, and never a new `structure.*` name.
+
 When a run finds a defect class the registry has no name for, it may use a new name under one of the check prefixes above. Minting a name is a report the run emits, never an edit it makes:
 
 - The new `rule_id` follows the format rules above and sits under the prefix of the check that found the defect.

@@ -21,7 +21,7 @@ See [templates-map.md](../templates-map.md) for the full mapping.
 | File | Purpose |
 |------|---------|
 | `.editorconfig.template` | Code style (2-space indent, UTF-8, LF) |
-| `.gitignore.template` | Git exclusions (.terraform, .tfstate, .tfvars) |
+| `.gitignore.template` | Git exclusions (.terraform, .tfstate, .tfvars, Lambda build artifacts, editor files) |
 | `.releaserc.json.template` | Semantic release configuration |
 | `github-workflows-pre-commit.yml.template` | CI/CD: pre-commit validation |
 | `github-workflows-release.yml.template` | CI/CD: semantic release |

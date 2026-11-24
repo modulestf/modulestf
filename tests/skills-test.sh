@@ -638,6 +638,32 @@ EOF
 grep -qxF "profile constants" "$TMP/failed" ||
   echo "ok   profile constants ($nconst values; $nmut mutations caught)"
 
+# Template sources: a `Source of `<template>`:` line of the terraform-aws-modules
+# templates-map.md that ends in `git blob `<sha>`` records the family file the verbatim
+# template was copied from, and the template must still be those bytes. At least one such
+# line must exist. A negative self-check changes a temp copy of the template, and drops the
+# record from a temp copy of the map, and requires each to be reported.
+template_sources() { # templates-map file, templates dir: one line per problem
+  local t b n=0
+  while read -r t b; do
+    n=$((n + 1))
+    if [ ! -f "$2/$t" ] || [ -L "$2/$t" ]; then echo "$t: no such template file"
+    elif [ "$(git hash-object "$2/$t")" != "$b" ]; then echo "$t: is not the recorded git blob $b"; fi
+  done < <(LC_ALL=C sed -n 's/^Source of `\([^`/]*\)`: .* git blob `\([0-9a-f]\{40\}\)`\.$/\1 \2/p' "$1")
+  [ "$n" -gt 0 ] || echo "no template source is recorded"
+}
+while IFS= read -r hit; do fail "template sources" "$GDIR/templates-map.md" "$hit"; done \
+  < <(template_sources "$GDIR/templates-map.md" "$GDIR/templates")
+mkdir -p "$TMP/tsrc"; cp "$GDIR"/templates/.gitignore.template "$TMP/tsrc/"
+printf '*.bak\n' >> "$TMP/tsrc/.gitignore.template"
+[ -n "$(template_sources "$GDIR/templates-map.md" "$TMP/tsrc")" ] ||
+  fail "template sources" "$TMP/tsrc" "self-check: a changed .gitignore.template is not reported"
+grep -v '^Source of `\.gitignore\.template`' "$GDIR/templates-map.md" > "$TMP/tsrc-map.md"
+[ -n "$(template_sources "$TMP/tsrc-map.md" "$GDIR/templates")" ] ||
+  fail "template sources" "$TMP/tsrc-map.md" "self-check: a map with no recorded source is not reported"
+grep -qxF "template sources" "$TMP/failed" ||
+  echo "ok   template sources (2 mutations caught)"
+
 # The rule to provider fact table: one row for every rule_id the reviewer skill names in
 # SKILL.md and its references (the fixtures excepted, which also record rejected names),
 # and no other row.

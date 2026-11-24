@@ -242,7 +242,7 @@ Engine: `candidate`
 ### Rule text: `structure.version-floor-understated`
 
 **Fails when:**
-- A `versions.tf` the change touches declares a lower floor than the thing it calls - the root against a submodule under `modules/` it calls, or an example against the module it calls - against [Version floors](../../../terraform-module-maintainer/profiles/terraform-aws-modules/code-conventions.md#version-floors). Scope is those files and their counterparts; a caller declaring more than its callee is silent.
+- A `versions.tf` the change touches declares a lower floor than the thing it calls - the root against a submodule under `modules/` it calls, or an example against the module it calls - against [Version floors](../../../terraform-module-maintainer/profiles/terraform-aws-modules/code-conventions.md#version-floors). Scope is those files and their counterparts; a caller declaring more than its callee is silent. A module called from a registry is no callee here: a pinned registry module whose provider floor is above its caller's is `compat.provider-floor-raised`, LOW.
 
 **Severity:**
 - MEDIUM when a caller declares a lower floor than the thing it calls but the two constraint sets still intersect (`structure.version-floor-understated`): the configuration still initializes, and only a must-pass convention of the family is violated. CRITICAL when the two sets do not intersect at all - an upper bound excluding the callee's floor - because no version satisfies both and the configuration cannot initialize.
