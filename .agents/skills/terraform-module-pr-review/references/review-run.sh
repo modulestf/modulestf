@@ -62,6 +62,9 @@ REGION_LINE_RE='^([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/){0,8}README\.md (generated|d
 # half of a 200,000 token window. Any smaller change is reviewed whole.
 REVIEW_THRESHOLD=1048576
 REVIEW_BUDGET=262144
+# A family needs this many submodules with equal copies; generator sources rank first up to this many bytes.
+FAMILY_MIN=3
+GENERATOR_CAP=65536
 
 die() { echo "review-run.sh: $1" >&2; exit 2; }
 fail() { echo "review-run.sh: $1"; exit 1; }
@@ -365,28 +368,13 @@ cmd_prepare() {
     pin_depth
   fi
 
-  # The review budget: over the threshold, the files in budget order, each kept while its patch fits
-  # beside the patches kept before it, and every file with a patch that does not fit named in
-  # skipped.json; under the threshold an empty list.
+  # The review budget (budget.jq): over the threshold, the files in budget order, each kept while
+  # its patch fits beside the patches kept before it, and every file with a patch that does not fit
+  # named in skipped.json; under the threshold an empty list.
   local fsize; fsize="$(wc -c < "$RUN/host/files.json" | tr -d ' ')"
-  jq --argjson cap "$REVIEW_BUDGET" --argjson th "$REVIEW_THRESHOLD" --argjson fsize "${fsize:-0}" --arg p "$prefix" '
-    def bytes: .patch // "" | utf8bytelength;
-    def tf: test("\\.(tf|tofu|hcl|tfvars)(\\.json)?$");
-    # 0 the interface files of the root and of each submodule, 1 their other Terraform files,
-    # 2 example Terraform, 3 README files and the rest of the examples, 4 the rest, wrappers included.
-    def rank: .filename as $n
-      | if ($n | test("(^|/)wrappers/")) then 4
-        elif ($n | test("(^|/)examples/")) then (if ($n | tf) then 2 else 3 end)
-        elif ($n | test("(^|/)(main|variables|outputs|versions)\\.tf$")) then 0
-        elif ($n | tf) then 1
-        elif ($n | test("(^|/)README\\.md$")) then 3 else 4 end;
-    if $fsize <= $th and (map(bytes) | add // 0) <= $th then []
-    # The files directly in the module root first: with a prefix, the files of that directory.
-    else sort_by([rank, (.filename | if $p == "" then . else ltrimstr($p + "/") end | contains("/")), .filename])
-      | reduce .[] as $f ({kept: 0, skipped: []};
-          ($f | bytes) as $b
-          | if $f.patch == null then . elif .kept + $b <= $cap then .kept += $b else .skipped += [$f.filename] end)
-      | .skipped end' "$RUN/host/files.json" > "$RUN/skipped.json" 2> /dev/null ||
+  jq -L "$HERE" --argjson cap "$REVIEW_BUDGET" --argjson th "$REVIEW_THRESHOLD" --argjson fsize "${fsize:-0}" --arg p "$prefix" \
+    --argjson fmin "$FAMILY_MIN" --argjson gcap "$GENERATOR_CAP" \
+    'include "budget"; budget($cap; $th; $fsize; $p; $fmin; $gcap)' "$RUN/host/files.json" > "$RUN/skipped.json" 2> /dev/null ||
     refuse index-failed "the review budget could not be computed"
 
   # The example selection, for the index (verify-pass.sh select, which runs no terraform).

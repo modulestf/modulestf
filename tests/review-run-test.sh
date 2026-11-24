@@ -1601,7 +1601,8 @@ check "large change: the task names every skipped file before the block, a name 
 check "large change: the run file carries skipped_files, the render lists them and is no approval" \
   "$([ "$(q "$RUN/render/run-file.json" '.skipped_files == ["examples/one/main.tf", "docs/a;b.md", "wrappers/x.tf"]')" = 0 ] &&
      grep -qxF -- '- 3 changed files were over the review budget and were not reviewed:' "$TMP/render-large/comment.md" &&
-     grep -qxF -- '  - `wrappers/x.tf`' "$TMP/render-large/comment.md" && grep -qxF -- '  - name withheld' "$TMP/render-large/comment.md" &&
+     grep -qxF -- '  - `wrappers/`: 1 file' "$TMP/render-large/comment.md" && grep -qxF -- '    - `wrappers/x.tf`' "$TMP/render-large/comment.md" &&
+     grep -qxF -- '  - `docs/`: 1 file' "$TMP/render-large/comment.md" && grep -qxF -- '    - name withheld' "$TMP/render-large/comment.md" &&
      [ "$(q "$TMP/render-large/result.json" '.verdict == "inconclusive"')" = 0 ]; echo $?)"
 echo '[]' > "$RUN/skipped.json"
 run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render-large2" > "$TMP/re-l2.out" 2>&1
@@ -1616,19 +1617,20 @@ check "self-check: the 1 MiB refusal restored in depth.sh, prepare refuses the l
   "$(! cmp -s "$SK/depth.sh" "$TMP/depth-keep" && [ "$LRC" != 0 ] && grep -q '^prepare refused: depth-refused' "$TMP/p.out"; echo $?)"
 [ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null
 cp "$TMP/depth-keep" "$SK/depth.sh"
-rr_mut() { # name, perl -0 expression, check after a prepare, full and handover of the large change
-  cp "$RR" "$TMP/rr-keep"; perl -0pi -e "$2" "$RR"
-  if cmp -s "$RR" "$TMP/rr-keep"; then check "self-check: $1 (the mutation changed nothing)" 1
+rr_mut() { # name, perl -0 expression, check after a prepare, full and handover of the large change [, file: review-run.sh]
+  local mf="${4:-$RR}"
+  cp "$mf" "$TMP/rr-keep"; perl -0pi -e "$2" "$mf"
+  if cmp -s "$mf" "$TMP/rr-keep"; then check "self-check: $1 (the mutation changed nothing)" 1
   else prep --render-only; full; run_rr handover "$RUN" > /dev/null 2>&1; "$3"; check "self-check: $1 is caught" "$([ $? != 0 ]; echo $?)"
     [ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null; fi
-  cp "$TMP/rr-keep" "$RR"
+  cp "$TMP/rr-keep" "$mf"
 }
 skipped_ok() { [ "$(jq -c . "$RUN/skipped.json")" = '["examples/one/main.tf","docs/a;b.md","wrappers/x.tf"]' ]; }
 # grep -q on a file: in a pipe its early exit fails the writer, which pipefail reports.
 cut_ok() { T="$RUN/handover/task.md"; pre > "$TMP/pre.txt"; ! grep -q '^diff --git a/wrappers/x.tf' "$TMP/pre.txt"; }
 rr_mut "a handover that keeps the skipped diff" 's/    t="\$RUN\/state\/task-budget\.md"\n//' cut_ok
-rr_mut "a file that does not fit skipping every later file" 's/else \.skipped \+= \[\$f\.filename\]/else .kept += \$b | .skipped += [\$f.filename]/' skipped_ok
-rr_mut "example Terraform ranked with the interface files" 's/then \(if \(\$n \| tf\) then 2 else 3 end\)/then (if (\$n | tf) then -1 else 3 end)/' skipped_ok
+rr_mut "a file that does not fit skipping every later file" 's/else \.skipped \+= \[\$f\.filename\]/else .kept += \$b | .skipped += [\$f.filename]/' skipped_ok "$SK/budget.jq"
+rr_mut "example Terraform ranked with the interface files" 's/then \(if \(\$n \| tf\) then 2 else 3 end\)/then (if (\$n | tf) then -1 else 3 end)/' skipped_ok "$SK/budget.jq"
 pin_ok() { # an emptied skipped list after the handover stops the render
   echo '[]' > "$RUN/skipped.json"; rm -rf "$TMP/render-pin"
   run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render-pin" > "$TMP/re-pin.out" 2>&1
@@ -1638,6 +1640,100 @@ names_ok() { T="$RUN/handover/task.md"; budget_lines | cmp -s - <(printf '%s\n' 
 rr_mut "a render that does not check the skipped.json pin" 's/  \[ "\$\(shasum -a 256 < "\$RUN\/skipped\.json"[^\n]*\n[^\n]*\n//' pin_ok
 rr_mut "skipped names printed without the charset filter" 's/\| \(\$l\[\] \| select\(test\("\^\[A-Za-z0-9\._\/-\]\+\$"\)\) \| "- /| (\$l[] | "- /' names_ok
 rr_mut "the cut over the whole task, past the diff's fence" 's/head -n \$\(\(n - 1\)\) "\$t" \| SF=/SF=/; s/        p == 3 \{ print; next \}\n//; s/\{ p = 3; print; next \}/{ p = 0; print; next }/; s/\{ print \}\x27\n      tail -n \+"\$n" "\$t"; \}/{ print }\x27 "\$t"; }/' block_kept
+ghfiles open false APPROVED
+# A generated family: four submodules with the same changed paths, generator sources and a large
+# wrapper. The first submodule and the generator sources come before every second submodule.
+famfiles() {
+  jq -n 'def p($n): "@@ -0,0 +1 @@\n+" + ("a" * $n);
+    [ (["activemq", "cassandra", "kafka", "zookeeper"][] as $m | ("main.tf", "variables.tf", "auto_values.tf", "README.md") as $f
+       | {filename: "modules/\($m)/\($f)", status: "added", additions: 1, deletions: 0, patch: p(30000)}),
+      {filename: "main.tf", status: "modified", additions: 1, deletions: 0, patch: p(20000)},
+      {filename: "generate/templates/main.tftpl", status: "added", additions: 1, deletions: 0, patch: p(40000)},
+      {filename: "generate/catalog.tf", status: "added", additions: 1, deletions: 0, patch: p(10000)},
+      {filename: "examples/one/main.tf", status: "modified", additions: 1, deletions: 0, patch: p(20000)},
+      {filename: "modules/http/main.tf", status: "added", additions: 1, deletions: 0, patch: p(5000)},
+      {filename: "wrappers/x.tf", status: "added", additions: 1, deletions: 0, patch: p(900000)}]' > "$GHD/files"
+}
+FAM_SKIPPED='["modules/cassandra/variables.tf","modules/cassandra/auto_values.tf","modules/cassandra/README.md","modules/kafka/main.tf","modules/kafka/variables.tf","modules/kafka/auto_values.tf","modules/kafka/README.md","modules/zookeeper/main.tf","modules/zookeeper/variables.tf","modules/zookeeper/auto_values.tf","modules/zookeeper/README.md","wrappers/x.tf"]'
+fam_ok() { [ "$(jq -c . "$RUN/skipped.json")" = "$FAM_SKIPPED" ]; }
+famfiles; prep --render-only
+check "families: one submodule of a generated family and the generator sources before a second submodule of it" "$(fam_ok; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+fam_mut() { # name, perl expression
+  cp "$RR" "$TMP/rr-keep"; perl -pi -e "$2" "$RR"
+  if cmp -s "$RR" "$TMP/rr-keep"; then check "self-check: $1 (the mutation changed nothing)" 1
+  else prep --render-only; check "self-check: $1 is caught" "$(! fam_ok; echo $?)"; [ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null; fi
+  cp "$TMP/rr-keep" "$RR"
+}
+fam_mut "no family: FAMILY_MIN raised past the members" 's/^FAMILY_MIN=3$/FAMILY_MIN=999/'
+fam_mut "no generator sources: GENERATOR_CAP of 0" 's/^GENERATOR_CAP=65536$/GENERATOR_CAP=0/'
+check "budget: review-run.sh passes FAMILY_MIN 3 and GENERATOR_CAP 65536, the values the cases below assume" \
+  "$(grep -qx 'FAMILY_MIN=3' "$RR" && grep -qx 'GENERATOR_CAP=65536' "$RR" && grep -qx 'REVIEW_BUDGET=262144' "$RR" && grep -qx 'REVIEW_THRESHOLD=1048576' "$RR" &&
+     grep -qF -- '--argjson fmin "$FAMILY_MIN" --argjson gcap "$GENERATOR_CAP"' "$RR"; echo $?)"
+# budget.jq case by case, each with the mutation it must catch. A family is made of copies: patches
+# equal once the submodule's name is taken out, in 3 or more submodules under the module root at any
+# depth; a generator source is a *.tftpl template or a Terraform or template file of the top-level
+# generate/ directory, up to GENERATOR_CAP bytes.
+BJ="$TMP/bj"; mkdir -p "$BJ/ok"; cp "$SK/budget.jq" "$BJ/ok/"
+bj() { jq -c -L "$1" --argjson cap 262144 --argjson th 1048576 --argjson fsize 2000000 --arg p "${3-}" --argjson fmin 3 --argjson gcap 65536 \
+  'include "budget"; budget($cap; $th; $fsize; $p; $fmin; $gcap)' "$2" 2> /dev/null; }
+BP='def p($t; $n): "@@ -0,0 +1 @@\n+" + $t + "\n+" + ("a" * $n); def f($name; $t; $n): {filename: $name, patch: p($t; $n)};'
+jq -n "$BP"'[f("main.tf"; "root"; 2000), f("modules/cos-a/main.tf"; "a"; 1000), f("modules/cos-b/main.tf"; "b"; 1000),
+  f("modules/iam-policy/main.tf"; "policy"; 6000), f("examples/e/main.tf"; "e"; 254000)]' > "$BJ/names.json"
+jq -n "$BP"'[f("main.tf"; "root"; 2000), (("x-aaa", "x-bbb", "x-ccc") as $m | f("modules/\($m)/main.tf"; "module \($m)"; 3000)),
+  f("examples/e/main.tf"; "e"; 255000)]' > "$BJ/three.json"
+jq 'map(select(.filename != "modules/x-ccc/main.tf"))' "$BJ/three.json" > "$BJ/two.json"
+jq 'map(.filename |= sub("^modules/"; "stacks/net/modules/"))' "$BJ/three.json" > "$BJ/deep.json"
+bg() { jq -n --arg x "$1" --arg pre "${2-}" "$BP"'[f($pre + "main.tf"; "root"; 2000), f($x; "x"; 30000), f($pre + "a/fill.tf"; "fill"; 231000)]'; }
+bg modules/m/templates/main.tftpl > "$BJ/tftpl.json"; bg generate/catalog.tf > "$BJ/gendir.json"
+bg lib/generate/x.tf > "$BJ/nested.json"; bg generate/golden.json > "$BJ/gentype.json"
+bg modules/x/generate/catalog.tf modules/x/ > "$BJ/prefix.json"
+jq -n "$BP"'[f("main.tf"; "root"; 2000), f("generate/a.tf"; "a"; 40000), f("generate/b.tf"; "b"; 40000), f("a/fill.tf"; "fill"; 200000)]' > "$BJ/gcap.json"
+bj_case() { # name, fixture, expected skipped list, prefix, mutation of budget.jq
+  check "budget.jq: $1" "$([ "$(bj "$BJ/ok" "$BJ/$2.json" "$4")" = "$3" ]; echo $?)"
+  rm -rf "$BJ/m"; mkdir -p "$BJ/m"; cp "$SK/budget.jq" "$BJ/m/"; perl -0pi -e "$5" "$BJ/m/budget.jq"
+  if cmp -s "$SK/budget.jq" "$BJ/m/budget.jq"; then check "self-check: budget.jq $1 (the mutation changed nothing)" 1
+  else check "self-check: budget.jq $1 is caught" "$([ "$(bj "$BJ/m" "$BJ/$2.json" "$4")" != "$3" ]; echo $?)"; fi
+}
+bj_case "hand-written submodules that change main.tf alike are no family, so none is read after the example" names '["examples/e/main.tf"]' "" \
+  's/normalized\(\$d\)\]/""]/'
+bj_case "three copies are a family: the first read with the interface files, the others after the example" three '["modules/x-bbb/main.tf","modules/x-ccc/main.tf"]' "" \
+  's/>= \$fmin\)/> \$fmin)/'
+bj_case "two copies are no family" two '["examples/e/main.tf"]' "" 's/>= \$fmin\)/>= (\$fmin - 1))/'
+bj_case "a family of submodules at any depth" deep '["stacks/net/modules/x-bbb/main.tf","stacks/net/modules/x-ccc/main.tf"]' "" \
+  's/\^\(\?<d>\(\.\*\/\)\?modules/^(?<d>modules/'
+bj_case "a *.tftpl template ranks with the interface files" tftpl '["a/fill.tf"]' "" 's/\(\$r \| test\("\\\\\.tftpl\$"\) or /(\$r | /'
+bj_case "a Terraform file of the top-level generate/ ranks with the interface files" gendir '["a/fill.tf"]' "" \
+  's/ or test\("\^generate\/\.\*\\\\\.\(tf\|tftpl\|tofu\|hcl\|tfvars\)\(\\\\\.json\)\?\$"\)\)/)/'
+bj_case "a generate/ directory below the top is no generator source" nested '["lib/generate/x.tf"]' "" 's/test\("\^generate\//test("(^|\/)generate\//'
+bj_case "a file of generate/ that is no Terraform or template file is no generator source" gentype '["generate/golden.json"]' "" \
+  's/\^generate\/\.\*\\\\\.\(tf\|tftpl\|tofu\|hcl\|tfvars\)\(\\\\\.json\)\?\$/^generate\//'
+bj_case "generator sources past GENERATOR_CAP bytes keep the class of their file type" gcap '["generate/b.tf"]' "" 's/if \.b \+ \$x <= \$gcap then/if true then/'
+bj_case "generate/ at the top of the module root under a prefix" prefix '["modules/x/a/fill.tf"]' modules/x \
+  's/def generator\(\$p\): rel\(\$p\) as \$r/def generator(\$p): .filename as \$r/'
+jq -n "$BP"'[f("main.tf"; "root"; 2000), f("variables.tf"; "v"; 2000), (range(10; 50) as $i | f("modules/mod-\($i)/policy.json"; "{}"; 8000)),
+  f(".github/workflows/release.yml"; "on: push"; 30000), f("Makefile"; "all:"; 30000)]' > "$BJ/class4.json"
+jq -n "$BP"'[(("w", "x", "y", "z") as $m | f("modules/\($m)/main.tf"; "same"; 3000)), f("modules/x/examples/e/main.tf"; "e"; 252000)]' > "$BJ/pfam.json"
+jq -n "$BP"'[f("main.tf"; "root"; 2000), (("my-mod-a", "my-mod-b", "my-mod-c") as $m | f("modules/\($m)/main.tf"; "name = \($m | gsub("-"; "_"))"; 3000)),
+  f("examples/e/main.tf"; "e"; 255000)]' > "$BJ/spell.json"
+jq -n "$BP"'[f("main.tf"; "root"; 2000), (("qq", "rr", "ss") as $m | f("modules/\($m)/main.tf"; "name = \($m)"; 3000)), f("examples/e/main.tf"; "e"; 255000)]' > "$BJ/short.json"
+jq -n "$BP"'[f("main.tf"; "root"; 2000), f("modules/ma/main.tf"; "same"; 3000), f("modules/mb/variables.tf"; "same"; 3000), f("modules/mc/outputs.tf"; "same"; 3000),
+  f("examples/e/main.tf"; "e"; 255000)]' > "$BJ/paths.json"
+jq -n "$BP"'[f("modules/x/main.tf"; "root"; 2000), f("templates/t.tftpl"; "x"; 30000), f("modules/x/a/fill.tf"; "fill"; 231000)]' > "$BJ/tplout.json"
+jq -n "$BP"'[f("main.tf"; "root"; 2000), f("generate/a.tf"; "a"; 70000), f("generate/b.tf"; "b"; 2000), f("a/fill.tf"; "fill"; 190000)]' > "$BJ/gstop.json"
+bj_case "a copy of a file past class 3.5 keeps its class: a release workflow, a Makefile and the first copy are read" class4 \
+  "$(jq -nc '[range(34; 50) | "modules/mod-\(.)/policy.json"]')" "" 's/\[\(\[3\.5, rank\] \| max\), \$i/[3.5, \$i/'
+bj_case "copies outside the module root are no family" pfam '["modules/x/examples/e/main.tf"]' modules/x \
+  's/def rel\(\$p\): \.filename \| if \$p == "" then/def rel(\$p): .filename | if true then/'
+bj_case "the name spelled with _ for - is taken out" spell '["modules/my-mod-b/main.tf","modules/my-mod-c/main.tf"]' "" \
+  's/\[\$n, \(\$n \| gsub\("-"; "_"\)\), \(\$n \| gsub\("_"; "-"\)\)\]/[\$n]/'
+bj_case "a name under 3 characters is left in, so its copies are no family" short '["examples/e/main.tf"]' "" 's/if \(\$n \| length\) < 3 then \. else/if false then . else/'
+bj_case "equal patches at different paths are no family" paths '["examples/e/main.tf"]' "" \
+  's/k: \[\(rel\(\$p\) \| ltrimstr\(\$d \+ "\/"\)\), normalized\(\$d\)\]/k: [normalized(\$d)]/'
+bj_case "a *.tftpl outside the module root is no generator source" tplout '["templates/t.tftpl"]' modules/x \
+  's/def generator\(\$p\): rel\(\$p\) as \$r \| \$r != null/def generator(\$p): (rel(\$p) \/\/ .filename) as \$r | \$r != null/'
+bj_case "a generator source over the cap does not stop a smaller one after it" gstop '["generate/a.tf"]' "" \
+  's/\| \.s\[\$f\.filename\] = true else \. end\)/| .s[\$f.filename] = true else .b = \$gcap end)/'
 ghfiles open false APPROVED
 # A change under the threshold is reviewed whole, as before the budget: about 600 KiB of patch text,
 # and one just under 1 MiB; one just over it takes the budget.
