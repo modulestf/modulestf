@@ -1,3 +1,12 @@
+## [0.12.19](https://github.com/modulestf/modulestf/compare/v0.12.18...v0.12.19) (2026-11-24)
+
+
+### Bug Fixes
+
+* **pr-review:** Keep the floor reads when the latest provider version is not mirrored yet ([#194](https://github.com/modulestf/modulestf/issues/194)) ([7641213](https://github.com/modulestf/modulestf/commit/7641213e6724b8a9f61f6cb11d47a3b5fc521353))
+
+
+
 ## [0.12.18](https://github.com/modulestf/modulestf/compare/v0.12.17...v0.12.18) (2026-11-24)
 
 
