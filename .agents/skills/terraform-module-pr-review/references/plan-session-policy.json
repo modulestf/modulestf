@@ -2,7 +2,6 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadConfiguration",
       "Effect": "Allow",
       "Action": [
         "sts:GetCallerIdentity",
@@ -32,12 +31,12 @@
         "backup:Describe*", "backup:List*",
         "organizations:Describe*", "organizations:List*",
         "kinesis:Describe*", "kinesis:List*",
-        "es:Describe*", "es:List*"
+        "es:Describe*", "es:List*",
+        "states:ValidateStateMachineDefinition", "elasticmapreduce:ListReleaseLabels"
       ],
       "Resource": "*"
     },
     {
-      "Sid": "NoDataReads",
       "Effect": "Deny",
       "Action": [
         "s3:GetObject*", "secretsmanager:GetSecretValue",
@@ -53,7 +52,6 @@
       "Resource": "*"
     },
     {
-      "Sid": "PublicParametersOnly",
       "Effect": "Deny",
       "Action": ["ssm:GetParameter*"],
       "NotResource": "arn:aws:ssm:*::parameter/aws/service/*"

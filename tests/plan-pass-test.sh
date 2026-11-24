@@ -871,7 +871,7 @@ for sh in bash zsh; do
   log="$(cat "$TMP/aws.log" 2>/dev/null)"
   check "$sh: the session is assumed on the review role with the profile, for 900 seconds" \
     "$(printf '%s\n' "$log" | grep -- '--profile=demo --role-arn arn:aws:iam::210987654321:role/modulestf-review --role-session-name modulestf-plan-pass --duration-seconds 900 --policy {' > /dev/null && echo 0 || echo 1)"
-  check "$sh: the session carries the pinned policy" "$(printf '%s\n' "$log" | grep -F '"Sid":"NoDataReads"' > /dev/null && echo 0 || echo 1)"
+  check "$sh: the session carries the pinned policy" "$(printf '%s\n' "$log" | grep -F -- "--policy $(jq -c . "${PP%/*}/plan-session-policy.json")" > /dev/null && echo 0 || echo 1)"
   check "$sh: the profile's own credentials are never exported" "$(lacks "$log" 'export-credentials')"
   check "$sh: the role ARN and its account never leave the pass" "$(printf '%s\n' "$out" | grep -E 'modulestf-review|210987654321' > /dev/null && echo 1 || echo 0)"
   R="$(newrun)"; run g0 "$R" > /dev/null
@@ -1249,11 +1249,11 @@ POL="${PP%/*}/plan-session-policy.json"
 # Measured as plan-session.sh measures what it sends: the compact form, no trailing newline.
 fits() { local p; p="$(jq -c . "$1" 2> /dev/null)" && [ -n "$p" ] && [ "${#p}" -le 2048 ]; }
 check "session policy: parses and fits AssumeRole's 2,048 characters" "$(fits "$POL" && echo 0 || echo 1)"
-jq '.Statement[0].Sid += (" " * (2049 - (tojson | length)))' "$POL" > "$TMP/policy-over.json"
+jq '.Version += (" " * (2049 - (tojson | length)))' "$POL" > "$TMP/policy-over.json"
 check "session policy: mutation one character over the limit is caught by the size check" \
   "$(p="$(jq -c . "$TMP/policy-over.json")" && [ "${#p}" -eq 2049 ] && ! fits "$TMP/policy-over.json" && echo 0 || echo 1)"
-check "session policy: allows only Describe, List and Get actions and GetCallerIdentity" \
-  "$(jq -e '[.Statement[] | select(.Effect == "Allow") | .Action[] | test("^[a-z0-9-]+:(Describe|List|Get)[A-Za-z]*[*]?$")] | all' "$POL" > /dev/null && echo 0 || echo 1)"
+check "session policy: allows only Describe, List and Get actions, GetCallerIdentity and the one validation call" \
+  "$(jq -e '[.Statement[] | select(.Effect == "Allow") | .Action[] | test("^[a-z0-9-]+:(Describe|List|Get)[A-Za-z]*[*]?$") or . == "states:ValidateStateMachineDefinition"] | all' "$POL" > /dev/null && echo 0 || echo 1)"
 for a in s3:GetObject secretsmanager:GetSecretValue ssm:GetParametersByPath ssm:GetParameterHistory kms:Decrypt \
   lambda:GetFunctionConfiguration ecs:DescribeTaskDefinition ec2:DescribeLaunchTemplateVersions ec2:DescribeInstanceAttribute \
   cloudfront:GetFunction iam:GetAccountAuthorizationDetails ecr:GetAuthorizationToken ecr:GetDownloadUrlForLayer lambda:GetFunction; do
@@ -1264,7 +1264,7 @@ done
 # NotAction, a Condition or a Principal, and every Action is an array.
 PUB='arn:aws:ssm:*::parameter/aws/service/*'
 check "session policy: account parameters are denied by one NotResource statement on the public pattern" \
-  "$(jq -e --arg p "$PUB" '[.Statement[] | select(has("NotResource"))] == [{Sid: "PublicParametersOnly", Effect: "Deny", Action: ["ssm:GetParameter*"], NotResource: $p}]' "$POL" > /dev/null && echo 0 || echo 1)"
+  "$(jq -e --arg p "$PUB" '[.Statement[] | select(has("NotResource"))] == [{Effect: "Deny", Action: ["ssm:GetParameter*"], NotResource: $p}]' "$POL" > /dev/null && echo 0 || echo 1)"
 check "session policy: no NotAction, Condition or Principal, every Action an array" \
   "$(jq -e 'all(.Statement[]; (has("NotAction") or has("Condition") or has("Principal") | not) and (.Action | type == "array"))' "$POL" > /dev/null && echo 0 || echo 1)"
 check "session policy: the only parameter reads it allows are GetParameter and GetParameters" \
@@ -1325,6 +1325,17 @@ mutate_policy() { # name, sed expression, witness action that the mutation allow
 mutate_policy es-wildcard 's/"es:Describe\*"/"es:*"/' es:CreateDomain
 mutate_policy dynamodb-wildcard 's/"dynamodb:ListTa\*"/"dynamodb:*"/' dynamodb:BatchGetItem
 mutate_policy dynamodb-list 's/"dynamodb:ListTa\*"/"dynamodb:List*"/' dynamodb:ListStreams
+# Step Functions: the one validation call a plan makes, which checks the definition the plan
+# sends; no read of a state machine or an execution. EMR: the public list of release labels; no
+# list of clusters, steps or bootstrap actions, whose arguments can hold secrets.
+pev allow states:ValidateStateMachineDefinition '*'
+pev allow elasticmapreduce:ListReleaseLabels '*'
+for a in states:DescribeExecution states:GetExecutionHistory states:StartExecution states:DescribeStateMachine \
+  elasticmapreduce:ListSteps elasticmapreduce:ListClusters elasticmapreduce:ListBootstrapActions elasticmapreduce:DescribeStep; do
+  pev 'implicit deny' "$a" '*'
+done
+mutate_policy states-wildcard 's/"states:ValidateStateMachineDefinition"/"states:*"/' states:GetExecutionHistory
+mutate_policy emr-list 's/"elasticmapreduce:ListReleaseLabels"/"elasticmapreduce:List*"/' elasticmapreduce:ListSteps
 POL=$POL_REAL
 
 # The plan proxy's allowlist, matched as tinyproxy matches a CONNECT target: each line an
@@ -1334,7 +1345,8 @@ POL=$POL_REAL
 AL="${PP%/*}/plan-runner/allowlist-plan"
 alw() { if printf '%s\n' "$2" | grep -Eiqf "$1"; then echo allow; else echo refuse; fi; }
 for h in sts.amazonaws.com:443 iam.amazonaws.com:443 es.eu-west-1.amazonaws.com:443 ES.US-EAST-1.AMAZONAWS.COM:443 \
-  es.us-gov-west-1.amazonaws.com:443 kinesis.us-east-1.amazonaws.com:443; do
+  es.us-gov-west-1.amazonaws.com:443 kinesis.us-east-1.amazonaws.com:443 states.eu-west-1.amazonaws.com:443 \
+  elasticmapreduce.eu-west-1.amazonaws.com:443; do
   check "plan allowlist: $h passes" "$([ "$(alw "$AL" "$h")" = allow ] && echo 0 || echo 1)"
 done
 for h in search-demo-abc123.eu-west-1.es.amazonaws.com:443 vpc-demo-abc123.eu-west-1.es.amazonaws.com:443 \

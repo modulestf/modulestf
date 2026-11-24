@@ -140,7 +140,7 @@ a third proxy configuration that passes the Python package index alone
 | `tinyproxy.conf` | Proxy configuration: default deny, filter on the whole request target, `CONNECT` to port 443 only, every connection and refusal logged |
 | `allowlist-init` | Init phase: `registry.terraform.io`, `releases.hashicorp.com`, `github.com`, `codeload.github.com`, `objects.githubusercontent.com`. No AWS |
 | `allowlist-test` | Test pass: `pypi.org` and `files.pythonhosted.org`, nothing else |
-| `allowlist-plan` | Plan phase: named AWS service endpoints, in their global and regional forms, and nothing else. A host a legitimate example needs shows in `plan-refused-hosts.txt`, and its service is added here; `kinesis` came from the lambda event source mapping example, and `es` from the OpenSearch complete example, whose plan retried the refused endpoint until its 300 second limit and ended `environment (timeout)`, before the runner ended such a plan early ([Refused hosts](#refused-hosts)). EC2 public DNS names, load balancer and API Gateway hosts, S3 website hosts and S3 bucket virtual hosts do not match |
+| `allowlist-plan` | Plan phase: named AWS service endpoints, in their global and regional forms, and nothing else. A host a legitimate example needs shows in `plan-refused-hosts.txt`, and its service is added here; `kinesis` came from the lambda event source mapping example, `states` from the Step Functions state machines of the eventbridge and apigateway-v2 examples, `elasticmapreduce` from the EMR modules' release label lookup, and `es` from the OpenSearch complete example, whose plan retried the refused endpoint until its 300 second limit and ended `environment (timeout)`, before the runner ended such a plan early ([Refused hosts](#refused-hosts)). EC2 public DNS names, load balancer and API Gateway hosts, S3 website hosts and S3 bucket virtual hosts do not match |
 | `entry.sh` | Runner entrypoint, one phase per container: `init` copies the read-only clone to `/work` and runs `init` with no credentials; `plan` runs `plan` in the same copy |
 | `egress-probe.sh` | Probe run inside the runner on the internal network. `init` and `plan`, for the smoke test after a phase: direct connections, name resolution, plain HTTP, and one line per host through the proxy, always exiting 0. `check`, for `run-pass.sh` behind each proxy before its first session: fails closed, exiting 1 on any open path or fault, from two positive controls, the interfaces and routes, name resolution, refused `CONNECT`s and direct connections to the host addresses it is passed |
 | `run-pass.sh` | Host side of the plan pass: checks the run networks with `egress-probe.sh check`, copies the clone into the work volume, runs the init phase in one container and the plan phase in one container per example, each behind its own proxy, issues each plan container its session, and writes the record |
@@ -361,10 +361,11 @@ client puts in a request line never reads as a refusal. When the log cannot be r
 container starts, no watcher runs for it, and a later read that fails counts nothing: either
 way the plan's time limit stays in place. The watcher also ends when `run-pass.sh` is gone.
 The bare runner, `run-plan.sh`, has no watcher. Some data sources need what no allowlist entry should give: the
-eks module's `eks-capabilities` example reads the account's Identity Center directory
-(`aws_ssoadmin_instances`, `aws_identitystore_group`), and its `karpenter` example reads a
-public registry token (`aws_ecrpublic_authorization_token`), which is a credential. Those
-examples end this way.
+eks module's `eks-capabilities` example and the emr module's `studio` example read the
+account's Identity Center directory (`aws_ssoadmin_instances`, then `aws_identitystore_group`),
+so the `sso` and `identitystore` hosts stay refused, and the eks module's `karpenter` example
+reads a public registry token (`aws_ecrpublic_authorization_token`), which is a credential, so
+`api.ecr-public` stays refused. Those examples end this way.
 
 ## The bare runner
 
