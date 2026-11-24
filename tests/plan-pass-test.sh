@@ -350,6 +350,25 @@ w docker-and-backend 'terraform {
   }
   backend "s3" {}
 }'
+# A registry submodule whose name has an underscore, as the family's rds module has, and
+# sources that stay outside the rule: a capital, a dot, a deeper path, an empty name, and an
+# underscore in the module name, which the rule keeps out.
+w sub-underscore 'module "db" {
+  source  = "terraform-aws-modules/rds/aws//modules/db_instance"
+  version = "7.0.0"
+}'
+: > "$TMP/rt-sub-bad.txt"
+for s in Db_instance db.instance db_instance/x ''; do
+  n="sub-bad-$(printf '%s' "$s" | cksum | cut -d' ' -f1)"
+  w "$n" "module \"db\" {
+  source = \"terraform-aws-modules/rds/aws//modules/$s\"
+}"
+  printf '%s\n' "$n" >> "$TMP/rt-sub-bad.txt"
+done
+w sub-bad-name 'module "db" {
+  source = "terraform-aws-modules/rds_x/aws//modules/db_instance"
+}'
+echo sub-bad-name >> "$TMP/rt-sub-bad.txt"
 w ok "$(printf '%s\n' 'terraform {
   required_providers {
     aws        = { source = "hashicorp/aws" }
@@ -1058,6 +1077,16 @@ for sh in bash zsh; do
   for t in build-in-docker-var build-in-docker-false build-in-docker-nested; do
     check "$sh: runner mode records nothing for $t" "$(test -z "$(gates runner "$t")"; echo $?)"
   done
+  for m in runner laptop; do
+    check "$sh: $m mode takes a registry submodule whose name has an underscore" "$(test -z "$(gates "$m" sub-underscore)"; echo $?)"
+    while read -r t; do
+      check "$sh: $m mode refuses the registry source of $t" "$(gates "$m" "$t" | grep '^class: plan gate G2' > /dev/null; echo $?)"
+    done < "$TMP/rt-sub-bad.txt"
+  done
+  perl -pe 's{\[a-z0-9_-\]\+\)\?\\z\}}{[a-z0-9-]+)?\\z\}}' "$PP" > "$TMP/pp-no-underscore.sh"
+  check "$sh: mutation submodule-underscore changes the script" "$(cmp -s "$PP" "$TMP/pp-no-underscore.sh"; test $? -eq 1; echo $?)"
+  check "$sh: mutation submodule-underscore is caught by the db_instance case" \
+    "$(printf '%s\n' "$R/clone/rt/sub-underscore.tf" | PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/pp-no-underscore.sh" gates "$R" runner clone 2>&1 | grep '^class: plan gate G2' > /dev/null; echo $?)"
   check "$sh: laptop mode records no build_in_docker exception" \
     "$(gates laptop build-in-docker | grep exception > /dev/null; test $? -eq 1; echo $?)"
   for t in adj-data adj-provider adj-module cr-heredoc ff-heredoc; do
@@ -1135,7 +1164,8 @@ mutate region-free-all 's/&& \$rfree\{\$b->\[0\]\[0\]\}/\&\& 1/' rfree-az
 g2pl() { sed -n "/^  perl -MJSON::PP -MCwd=realpath -e '\$/,/^  ' \"\$2\" \"\$CROOT\"/p" "$1" | sed '1d;$d'; }
 G="$TMP/g2"; GM="$G/data/modules"
 mkdir -p "$G/clone/examples/ex" "$G/clone/modules/y" "$G/outside/modules/ng" "$GM/other/x" \
-  "$GM/eks/modules/eks-managed-node-group" "$GM/eks/modules/_user_data" "$GM/ng/modules/eks-managed-node-group" "$GM/ng/modules/_user_data"
+  "$GM/eks/modules/eks-managed-node-group" "$GM/eks/modules/_user_data" "$GM/ng/modules/eks-managed-node-group" "$GM/ng/modules/_user_data" \
+  "$GM/db/modules/db_instance"
 ln -s _user_data "$GM/eks/modules/lnk"
 ln -s "$G/outside" "$GM/eks/modules/out"
 ln -s "$G/outside" "$GM/lr"
@@ -1149,6 +1179,7 @@ g2e() { printf ',{"Key":"%s","Source":"%s","Dir":"%s"}' "$1" "$2" "$GM/$3"; }
   g2e lc.y ./modules/y lc/modules/y
   g2e eks.ng.lnk2 ../lnk eks/modules/_user_data
   printf ',{"Key":"ng","Source":"terraform-aws-modules/eks/aws//modules/eks-managed-node-group","Version":"21.0.0","Dir":"%s"}' "$GM/ng/modules/eks-managed-node-group"
+  printf ',{"Key":"db","Source":"terraform-aws-modules/rds/aws//modules/db_instance","Version":"7.0.0","Dir":"%s"}' "$GM/db/modules/db_instance"
   g2e eks.ng ./modules/eks-managed-node-group eks/modules/eks-managed-node-group
   g2e eks.ng.user_data ../_user_data eks/modules/_user_data
   g2e ng.user_data ../_user_data ng/modules/_user_data
@@ -1162,7 +1193,7 @@ g2e() { printf ',{"Key":"%s","Source":"%s","Dir":"%s"}' "$1" "$2" "$GM/$3"; }
 g2run() { perl -MJSON::PP -MCwd=realpath -e "$(g2pl "$1")" "$G/clone/examples/ex" "$G/clone" "$GM/modules.json" "$GM" laptop; }
 out="$(g2run "$PP")"
 check "G2: the program is taken from the script" "$([ -n "$(g2pl "$PP")" ]; echo $?)"
-for k in eks.ng eks.ng.user_data ng.user_data; do
+for k in eks.ng eks.ng.user_data ng.user_data db; do
   check "G2: $k inside its downloaded package passes" "$([ "$(has "$out" "G2 $GM/modules.json:$k")" = 1 ]; echo $?)"
 done
 for k in eks.ng.other eks.ng.pkg eks.ng.lnk eks.ng.lnk2 eks.ng.out eks.ng.data eks.ng.ws lr lr.ng lc lc.y far; do
@@ -1194,6 +1225,9 @@ g2mut g2-all-packages 's/\("\$mr\/\$1", lex/(\$mr, lex/' eks.ng.other
 g2mut g2-link-package-root 's/if \(defined \$in && \$r ne/if (0 \&\& \$r ne/' lr
 g2mut g2-link-clone-child 's/if \(defined \$in && \$r ne/if (0 \&\& \$r ne/' lc.y
 g2mut g2-remote-anywhere 's/ && !defined \$in\) \{/ \&\& 0) {/' far
+perl -pe 's{\[a-z0-9_-\]\+\)\?\\z\}}{[a-z0-9-]+)?\\z\}}' "$PP" > "$TMP/mut/g2-submodule-underscore.sh"
+check "mutation g2-submodule-underscore changes the script" "$(cmp -s "$PP" "$TMP/mut/g2-submodule-underscore.sh"; test $? -eq 1; echo $?)"
+check "mutation g2-submodule-underscore is caught by db" "$(has "$(g2run "$TMP/mut/g2-submodule-underscore.sh")" "G2 $GM/modules.json:db")"
 
 # plan-session.sh: one fixed reason on standard error per failure class, nothing on standard output.
 SESS="${PP%/*}/plan-session.sh"
@@ -1312,6 +1346,149 @@ sed 's/^\^//' "$AL" > "$TMP/allowlist-mutated"
 check "plan allowlist: mutation no-anchor changes the allowlist" "$(cmp -s "$AL" "$TMP/allowlist-mutated"; test $? -eq 1; echo $?)"
 check "plan allowlist: mutation no-anchor is caught by the domain endpoint case" \
   "$([ "$(alw "$TMP/allowlist-mutated" search-demo-abc123.eu-west-1.es.amazonaws.com:443)" = allow ] && echo 0 || echo 1)"
+
+# The plan runner's refused-host watcher, taken from run-pass.sh and run with docker stubbed:
+# the refused targets of a tinyproxy log, and stall_watch, which kills a plan container once one
+# host was refused stall_tries times and the grace has passed, counting only the log lines after
+# the container started, and flags the host only when the kill found the container running.
+RP="${PP%/*}/plan-runner/run-pass.sh"
+swpl() { sed -n '/^refused_targets() {/,/^plan_container() {/p' "$1" | sed '$d'; }
+SW="$TMP/stall"; mkdir -p "$SW"
+cat > "$SW/proxy.log" <<'EOF'
+CONNECT   Nov 23 22:33:11.505 [1]: Request (file descriptor 10): CONNECT iam.amazonaws.com:443 HTTP/1.1
+CONNECT   Nov 23 22:33:11.565 [1]: Established connection to host "iam.amazonaws.com" using file descriptor 11.
+CONNECT   Nov 23 22:33:12.066 [1]: Request (file descriptor 12): CONNECT es.eu-west-1.amazonaws.com:443 HTTP/1.1
+NOTICE    Nov 23 22:33:12.066 [1]: Proxying refused on filtered url "es.eu-west-1.amazonaws.com:443"
+CONNECT   Nov 23 22:33:12.178 [1]: Request (file descriptor 12): CONNECT ec2.us-east-1.amazonaws.com:80 HTTP/1.1
+CONNECT   Nov 23 22:33:12.180 [1]: Request (file descriptor 9): GET http://x/ refused on filtered url "sts.us-east-1.amazonaws.com:443" HTTP/1.1
+X Request (a): CONNECT forged-by-head:1
+CONNECT   Nov  3 22:33:12.190 [1]: Request (file descriptor 13): CONNECT portless.example HTTP/1.1
+NOTICE    Nov  3 22:33:12.190 [1]: Proxying refused on filtered url "portless.example"
+EOF
+swrun() { # script, log, baseline, running (1 or 0), seconds to wait, grace (default 2)
+  { printf 'proxy_plan=p runner=r\ndocker() { case $1 in logs) cat "%s" ;; kill) echo kill >> "%s"; [ "%s" = 1 ] ;; esac; }\n' "$2" "$SW/calls" "$4"
+    swpl "$1"; printf 'stall_grace=%s stall_poll=0.2\n' "${6:-2}"
+    printf 'stall_watch %s "%s" & w=$!; sleep %s; kill $w 2> /dev/null; wait $w 2> /dev/null; true\n' "$3" "$SW/flag" "$5"; } > "$SW/run.sh"
+  rm -f "$SW/flag" "$SW/calls"; bash "$SW/run.sh"
+}
+refused() { printf 'NOTICE    Nov 23 22:33:12.%03d [1]: Proxying refused on filtered url "%s"\n' "$2" "$1"; }
+check "stall watch: the program is taken from run-pass.sh" "$([ -n "$(swpl "$RP")" ]; echo $?)"
+check "stall watch: the refused targets are the filtered hosts and the CONNECT to another port, each once, in tinyproxy's own lines only" \
+  "$([ "$(printf '%s\n' "$(swpl "$RP")" 'refused_targets < "$1"' | bash -s "$SW/proxy.log" | tr '\n' ' ')" = 'es.eu-west-1.amazonaws.com:443 ec2.us-east-1.amazonaws.com:80 portless.example ' ] && echo 0 || echo 1)"
+check "stall watch: the record's refused hosts come from the same function" \
+  "$(grep -qx 'refused_targets < "$record/proxy-plan.log" | sort -u > "$record/plan-refused-hosts.txt" || true' "$RP"; echo $?)"
+{ for i in 1 2 3; do refused es.eu-west-1.amazonaws.com:443 "$i"; done; } > "$SW/three.log"
+{ for i in 1 2; do refused es.eu-west-1.amazonaws.com:443 "$i"; done; refused sso.us-east-1.amazonaws.com:443 3; } > "$SW/mixed.log"
+swrun "$RP" "$SW/three.log" 0 1 4
+check "stall watch: a host refused three times ends a running plan and names the host" \
+  "$([ "$(cat "$SW/flag" 2> /dev/null)" = es.eu-west-1.amazonaws.com:443 ] && grep -qx kill "$SW/calls" && echo 0 || echo 1)"
+swrun "$RP" "$SW/mixed.log" 0 1 4
+check "stall watch: no host refused three times leaves the plan running" "$([ ! -e "$SW/flag" ] && [ ! -e "$SW/calls" ] && echo 0 || echo 1)"
+swrun "$RP" "$SW/three.log" 3 1 4
+check "stall watch: refusals before the container started do not count" "$([ ! -e "$SW/flag" ] && [ ! -e "$SW/calls" ] && echo 0 || echo 1)"
+swrun "$RP" "$SW/three.log" 0 0 4
+check "stall watch: a container that already ended is not flagged" "$([ ! -e "$SW/flag" ] && grep -qx kill "$SW/calls" && echo 0 || echo 1)"
+swrun "$RP" "$SW/three.log" 0 1 0.8 3
+check "stall watch: the grace passes before the kill" "$([ ! -e "$SW/flag" ] && [ ! -e "$SW/calls" ] && echo 0 || echo 1)"
+# The watcher ends when the shell that started it is gone, as after a SIGKILL of run-pass.sh.
+swparent() { # script: prints 1 when the watcher outlived its parent by a second
+  { printf 'proxy_plan=p runner=r\ndocker() { :; }\n'; swpl "$1"; printf 'stall_poll=0.2\n'
+    printf 'stall_watch 0 "%s" & echo $! > "%s"; kill -9 $$\n' "$SW/flag" "$SW/wpid"; } > "$SW/parent.sh"
+  rm -f "$SW/wpid"; bash "$SW/parent.sh" 2> /dev/null; sleep 1
+  if kill -0 "$(cat "$SW/wpid")" 2> /dev/null; then kill "$(cat "$SW/wpid")"; echo 1; else echo 0; fi
+}
+check "stall watch: the watcher ends when its parent is gone" "$(swparent "$RP")"
+perl -ne 'print unless /^    kill -0 "\$\$" 2> \/dev\/null \|\| return 0$/' "$RP" > "$SW/stall-orphan.sh"
+check "mutation stall-orphan changes the script" "$(cmp -s "$RP" "$SW/stall-orphan.sh"; test $? -eq 1; echo $?)"
+check "mutation stall-orphan is caught" "$([ "$(swparent "$SW/stall-orphan.sh")" = 1 ] && echo 0 || echo 1)"
+
+# The host side, run as run-pass.sh runs it: plan_container, the plan loop and the merge base
+# loop taken from the script, with the containers and Docker stubbed. A stub container named
+# .../stall adds refusals to the proxy log and waits to be killed, .../slow plans after 2.5
+# seconds, past the grace. Head: a stalled example then a slow one; base: the same pair as
+# deferred examples; a failed first log read with earlier refusals in the log.
+wirerun() { # script, scenario (head, base or baseline)
+  local d="$SW/wire-$2"; rm -rf "$d"; mkdir -p "$d"
+  { cat <<EOF
+set -uo pipefail
+TMPRUN="$d" W="$d"; RUN=/run SEED=/seed net_int=n volume=v saved=s runner_image=i pname=p load_creds=:
+common=() proxy_env=() base=0000000000000000000000000000000000000000 base_args=()
+proxy_plan=p runner=r
+EOF
+    cat <<'EOF'
+issue_session() { :; }; left() { echo 100; }; start_proxy() { :; }; save_proxy_log() { :; }
+docker() {
+  case $1 in
+    logs) echo poll >> "$W/calls"; if [ -e "$W/fail-first" ]; then rm -f "$W/fail-first"; return 1; fi; cat "$W/proxy.log" ;;
+    kill) [ -e "$W/running" ] && touch "$W/killed" ;;
+  esac
+}
+in_runner() { # output file, docker arguments; the last is the example
+  local outf=$1 ex="${!#}" i base_phase=0
+  case "$*" in *"--phase 'base-plan'"*) base_phase=1 ;; esac
+  touch "$W/running"; rm -f "$W/killed"
+  case "$ex" in
+    */stall)
+      for i in 1 2 3 4; do printf 'NOTICE    Nov 23 22:33:12.%03d [1]: Proxying refused on filtered url "sso.us-east-1.amazonaws.com:443"\n' "$i" >> "$W/proxy.log"; done
+      [ "$base_phase" = 1 ] || printf 'example: %s\n' "$ex" >> "$outf"
+      for i in $(seq 1 40); do [ ! -e "$W/killed" ] || { rm -f "$W/running"; return 0; }; sleep 0.1; done
+      if [ "$base_phase" = 1 ]; then echo 'base: not available' >> "$outf"; else echo 'plan: environment (timeout)' >> "$outf"; fi ;;
+    */slow)
+      sleep 2.5
+      if [ "$base_phase" = 1 ]; then echo 'base: reproduces at base' >> "$outf"
+      else printf 'example: %s\nplan: planned | Plan: 1 to add, 0 to change, 0 to destroy.\n' "$ex" >> "$outf"; fi ;;
+  esac
+  rm -f "$W/running"
+}
+EOF
+    swpl "$1"; echo 'stall_grace=1 stall_poll=0.2 stall_tries=3'
+    sed -n '/^plan_container() {/,/^}/p' "$1"
+    sed -n '/^host_only=/,/^untrusted() /p' "$1"
+    case "$2" in
+      head) echo 'set -- ex/stall ex/slow'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1"
+        printf 'echo "planned $planned"; c=$(wc -l < "$W/calls"); sleep 1; [ "$(wc -l < "$W/calls")" = "$c" ] && echo stopped\n' ;;
+      base) echo 'examples=(ex/stall ex/slow) deferred=(1 2)'; sed -n '/^  start_proxy "\$proxy_plan" plan.conf$/,/^  done$/p' "$1" ;;
+      baseline) echo 'set -- ex/slow'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1" ;;
+    esac; } > "$d/run.sh"
+  : > "$d/proxy.log"; : > "$d/calls"
+  if [ "$2" = baseline ]; then # earlier refusals in the log, and the first read fails
+    for i in 1 2 3; do printf 'NOTICE    Nov 23 22:33:12.%03d [1]: Proxying refused on filtered url "sso.us-east-1.amazonaws.com:443"\n' "$i"; done > "$d/proxy.log"
+    touch "$d/fail-first"
+  fi
+  bash "$d/run.sh" > "$d/out" 2> "$d/err"
+}
+wirerun "$RP" head
+check "stall wiring: a stalled example is recorded environment (network) at the head" \
+  "$([ "$(cat "$SW/wire-head/block.1")" = "$(printf 'example: ex/stall\nplan: environment (network)')" ] && echo 0 || echo 1)"
+check "stall wiring: the next example keeps its own result" \
+  "$(grep -qx 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.' "$SW/wire-head/block.2" && grep -qx 'planned 1' "$SW/wire-head/out" && echo 0 || echo 1)"
+check "stall wiring: no watcher runs after the plan loop" "$(grep -qx stopped "$SW/wire-head/out"; echo $?)"
+wirerun "$RP" base
+check "stall wiring: a stalled base plan is recorded environment (network), the next keeps its line" \
+  "$([ "$(cat "$SW/wire-base/base.1")" = 'base: environment (network)' ] && [ "$(cat "$SW/wire-base/base.2")" = 'base: reproduces at base' ] && echo 0 || echo 1)"
+wirerun "$RP" baseline
+check "stall wiring: a failed baseline read starts no watcher" \
+  "$(grep -qx 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.' "$SW/wire-baseline/block.1"; echo $?)"
+wiremut() { # name, perl program, scenario, file, line the real script writes there
+  perl -ne "$2" "$RP" > "$SW/$1.sh"
+  check "mutation $1 changes the script" "$(cmp -s "$RP" "$SW/$1.sh"; test $? -eq 1; echo $?)"
+  wirerun "$SW/$1.sh" "$3"
+  check "mutation $1 is caught" "$(grep -qxF "$5" "$SW/wire-$3/$4"; test $? -eq 1; echo $?)"
+}
+wiremut stall-flag-kept 'print unless /^  rm -f "\$TMPRUN\/stalled"$/' head block.2 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.'
+wiremut stall-baseline-zero 's/stall_watch "\$lines"/stall_watch 0/; print' head block.2 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.'
+wiremut stall-no-head-line 'print unless /plan: environment \(network\)/' head block.1 'plan: environment (network)'
+wiremut stall-no-base-line 'print unless /base: environment \(network\)/' base base.1 'base: environment (network)'
+wiremut stall-baseline-fallback 's/ && \[\[ "\$lines" =~ \^\[0-9\]\+\$ \]\]; then/ || lines=0; then/; print' baseline block.1 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.'
+swmut() { # name, perl substitution, log, baseline, running: the weakened copy flags or kills where the real one does not
+  perl -pe "$2" "$RP" > "$SW/$1.sh"
+  check "mutation $1 changes the script" "$(cmp -s "$RP" "$SW/$1.sh"; test $? -eq 1; echo $?)"
+  swrun "$SW/$1.sh" "$3" "$4" "$5" 4
+  check "mutation $1 is caught" "$([ -e "$SW/flag" ] && echo 0 || echo 1)"
+}
+swmut stall-any-refusal 's/\$1 >= n \{/\$1 >= 1 {/' "$SW/mixed.log" 0 1
+swmut stall-whole-log 's/tail -n \+"\$\(\(\$1 \+ 1\)\)"/tail -n +1/' "$SW/three.log" 3 1
+swmut stall-flag-without-kill 's/if docker kill "\$runner" > \/dev\/null 2>&1; then printf/docker kill "\$runner" > \/dev\/null 2>\&1; if :; then printf/' "$SW/three.log" 0 0
 # The evaluator itself: a deny wins over an allow of the same action
 check "session policy: the evaluator lets a deny win" \
   "$([ "$(jq -r --arg a s3:GetObject --arg r x "$EVAL" <<< '{"Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":"*"},{"Effect":"Deny","Action":["s3:Get*"],"Resource":"*"}]}')" = deny ] && echo 0 || echo 1)"

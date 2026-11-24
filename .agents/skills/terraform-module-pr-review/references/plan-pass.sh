@@ -72,7 +72,7 @@ my %pok = map { ("registry.terraform.io/hashicorp/$_" => 1) } qw(aws random time
 my @pre = qw(aws_ random_ time_ tls_ cloudinit_);
 my %dok = map { ($_ => 1) } qw(aws_caller_identity aws_canonical_user_id aws_partition aws_region aws_availability_zones aws_iam_policy_document aws_service_principal aws_default_tags tls_public_key cloudinit_config);
 my %top = map { ($_ => 1) } qw(terraform provider variable locals output resource data module moved removed);
-my $reg = qr{\A(?:registry\.terraform\.io/)?terraform-aws-modules/[a-z0-9-]+/aws(?://modules/[a-z0-9-]+)?\z};
+my $reg = qr{\A(?:registry\.terraform\.io/)?terraform-aws-modules/[a-z0-9-]+/aws(?://modules/[a-z0-9_-]+)?\z};
 my $B = qr{(?<b>\{(?:[^{}]++|(?&b))*\})};
 sub hit { my ($g, $f, $t, $p) = @_; my $l = defined $p ? 1 + (substr($t, 0, $p) =~ tr/\n//) : 0; print "$g $f:$l\n" }
 sub canon { my $s = lc shift; $s = "registry.terraform.io/$s" if ($s =~ tr{/}{}) == 1; $s }
@@ -749,7 +749,7 @@ post_init() { # example key, absolute example directory
   perl -MJSON::PP -MCwd=realpath -e '
     my ($ex, $root, $j, $mr, $gm) = @ARGV;
     my $gh = qr{\A(?:github\.com/|git\@github\.com:|git::https://github\.com/|git::ssh://git\@github\.com/)};
-    my $reg = qr{\A(?:registry\.terraform\.io/)?terraform-aws-modules/[a-z0-9-]+/aws(?://modules/[a-z0-9-]+)?\z};
+    my $reg = qr{\A(?:registry\.terraform\.io/)?terraform-aws-modules/[a-z0-9-]+/aws(?://modules/[a-z0-9_-]+)?\z};
     (my $ml = $j) =~ s{/[^/]*\z}{};
     sub lex { my @p; for (split m{/}, $_[0]) { next if $_ eq "" || $_ eq "."; if ($_ eq "..") { pop @p } else { push @p, $_ } } "/" . join("/", @p) }
     open(my $fh, "<", $j) or do { print "G2 $j:0\n"; exit };
