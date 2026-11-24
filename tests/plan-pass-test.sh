@@ -1331,11 +1331,14 @@ mutate_policy dynamodb-list 's/"dynamodb:ListTa\*"/"dynamodb:List*"/' dynamodb:L
 pev allow states:ValidateStateMachineDefinition '*'
 pev allow elasticmapreduce:ListReleaseLabels '*'
 for a in states:DescribeExecution states:GetExecutionHistory states:StartExecution states:DescribeStateMachine \
-  elasticmapreduce:ListSteps elasticmapreduce:ListClusters elasticmapreduce:ListBootstrapActions elasticmapreduce:DescribeStep; do
+  states:ListExecutions states:ListStateMachines elasticmapreduce:ListSteps elasticmapreduce:ListClusters \
+  elasticmapreduce:ListBootstrapActions elasticmapreduce:DescribeStep elasticmapreduce:GetClusterSessionCredentials; do
   pev 'implicit deny' "$a" '*'
 done
 mutate_policy states-wildcard 's/"states:ValidateStateMachineDefinition"/"states:*"/' states:GetExecutionHistory
+mutate_policy states-list 's/"states:ValidateStateMachineDefinition"/"states:List*"/' states:ListExecutions
 mutate_policy emr-list 's/"elasticmapreduce:ListReleaseLabels"/"elasticmapreduce:List*"/' elasticmapreduce:ListSteps
+mutate_policy emr-get 's/"elasticmapreduce:ListReleaseLabels"/"elasticmapreduce:Get*"/' elasticmapreduce:GetClusterSessionCredentials
 POL=$POL_REAL
 
 # The plan proxy's allowlist, matched as tinyproxy matches a CONNECT target: each line an
@@ -1351,7 +1354,9 @@ for h in sts.amazonaws.com:443 iam.amazonaws.com:443 es.eu-west-1.amazonaws.com:
 done
 for h in search-demo-abc123.eu-west-1.es.amazonaws.com:443 vpc-demo-abc123.eu-west-1.es.amazonaws.com:443 \
   es.eu-west-1.amazonaws.com:80 es.eu-west-1.amazonaws.com.example.com:443 xes.eu-west-1.amazonaws.com:443 \
-  aoss.eu-west-1.amazonaws.com:443 registry.terraform.io:443; do
+  aoss.eu-west-1.amazonaws.com:443 registry.terraform.io:443 \
+  sso.eu-west-1.amazonaws.com:443 identitystore.eu-west-1.amazonaws.com:443 api.ecr-public.us-east-1.amazonaws.com:443 \
+  states.eu-west-1.amazonaws.com:80 elasticmapreduce.eu-west-1.amazonaws.com:8443; do
   check "plan allowlist: $h is refused" "$([ "$(alw "$AL" "$h")" = refuse ] && echo 0 || echo 1)"
 done
 sed 's/^\^//' "$AL" > "$TMP/allowlist-mutated"
