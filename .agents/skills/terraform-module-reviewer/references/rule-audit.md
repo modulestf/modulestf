@@ -61,6 +61,8 @@ Three rows change `scope` after the facts engine review found them:
 - `coverage.attribute-not-output`: HIGH for an output wrong in a supported mode, MEDIUM for a computed attribute with no output.
 - `structure.input-ignored-in-branch`: CRITICAL, HIGH, MEDIUM and LOW, all four named in its Check C bullets.
 - `structure.docs-contradict-code`: HIGH, MEDIUM and LOW, by what a caller who follows the text gets, all three named in its Check C bullet.
+- `structure.schema-shape-flattened`: HIGH for a flattened or re-nested shape, and for a declared field that reaches no argument while the provider has a control the caller would set through it; LOW for a renamed key every field of which reaches its argument, and for a field with no argument and no such control.
+- `structure.sibling-block-asymmetry`: HIGH and LOW, by the effect of the missing field, whether a description documents it or a sibling sets it.
 - `structure.passthrough-default-drift`: HIGH, MEDIUM and LOW; its CRITICAL case is reported as `structure.insecure-default`, so CRITICAL is not in its set.
 - `structure.passthrough-field-drift`: HIGH and MEDIUM.
 - `examples.disabled-call-missing`: MEDIUM, and LOW for a call the base's complete example lacked too, both named in the Check D block.
@@ -77,7 +79,6 @@ Three rows change `scope` after the facts engine review found them:
 
 These rules left a value open. Each value in the table is the reading above; a reviewer of the audit may decide otherwise.
 
-- `structure.sibling-block-asymmetry`: Check C's **Severity** block gives HIGH for a field a variable description, README or example of the change documents and MEDIUM for a field only a sibling block sets.
 - Check C's MEDIUM for "missing tag propagation" and its **Fails when** bullet on tags have no `rule_id` in the registry. No row takes them; a finding of that kind is minted under [findings-schema.md](findings-schema.md).
 - Check D's bullet on invented input names has no `rule_id` of its own. It is left with the per-example rules, without a row change.
 - Check C does not say whether its rules run in example areas. `area_kinds` adds `example` only where a rule names examples: `structure.docs-contradict-code` ("an example comment"), `structure.version-floor-understated` ("an example against the module it calls") and `structure.comment-unsourced` ("in an example alike"). `structure.multi-provider` excludes examples in its own text.
