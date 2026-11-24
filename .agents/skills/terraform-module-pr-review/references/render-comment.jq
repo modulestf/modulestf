@@ -154,7 +154,7 @@ def behaviour_of($run):
 def ci_gated: .ci == true;
 # A provider floor trigger Check A judged (mark_floors): no gap, as a ci_gated trigger.
 def floor_ok: .floor == true;
-# A trigger an examples.feature-undemonstrated finding names (mark_undemonstrated): no gap either.
+# A trigger the host reads as undemonstrated (mark_undemonstrated): no gap either.
 def demo_ok: .demo == true;
 # A workflow that never started a job ran no test, so with one the trigger stays a gap.
 def mark_ci($checks): if . == null or .status != "ran" or (($checks.runs // 0) == 0) or (($checks.jobless // []) != []) then .

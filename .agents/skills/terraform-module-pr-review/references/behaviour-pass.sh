@@ -131,11 +131,16 @@ run_facts() {
   elif [ "$(wc -c < "$f")" -gt "$CAP" ]; then echo big; elif [ "$rc" != 0 ]; then echo fail; else echo ok; fi
 }
 
-# null_vars: <out>/nullvars.json, the variables the change adds whose head block has exactly one
-# top-level `default = null` and no `nullable`, read from the clone as text, never run. A block this
-# strict reader cannot delimit, a link, a file outside the module root or over 1 MiB gives no name.
+# null_vars: <out>/nullvars.json, {dir, name} of each variable the change adds whose head block, read
+# from the clone as text at the classifier's line and never run, has one line holding "default", that
+# line exactly `default = null`, no `nullable` line, no comment (`#`, `//`, `/*`, `*/`) and no heredoc
+# on any line, and ends within 200 lines. A link, a file that resolves outside the module root or is
+# over 1 MiB, or a block this strict reader cannot delimit gives no entry. A variable is one of its
+# module directory, so the directory is part of the key.
+# <out>/required.json, "<type>.<attribute>" for each attribute or block the given provider schema
+# requires (`required`, or a block with min_items above 0) on a type a trigger names.
 null_vars() {
-  local root list=""
+  local root list="" rmax=200
   root="$(cd "$dir" && pwd -P)" || return 0
   while IFS=$'\t' read -r name file line; do
     local f="$dir/$file" real
@@ -143,21 +148,30 @@ null_vars() {
     real="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")" || continue
     case "$real" in "$root"/*) ;; *) continue ;; esac
     perl -e '
-      my ($name, $at) = (shift, shift); my @l = <STDIN>; my $i = $at - 1;
+      my ($name, $at, $max) = (shift, shift, shift); my @l = <STDIN>; my $i = $at - 1;
       exit 1 unless defined $l[$i] && $l[$i] =~ /^variable\s+"\Q$name\E"\s*\{\s*$/;
       my ($d, $n) = (0, 0);
-      for my $j ($i + 1 .. $#l) {
+      for my $j ($i .. $#l) {
         my $s = $l[$j];
-        exit 1 if $s =~ /<</ || $j - $i > 200;
-        if ($s =~ /^\}\s*$/) { exit(($n == 1 && $d == 1) ? 0 : 1) }
+        exit 1 if $s =~ /<<|#|\/\/|\/\*|\*\// || $j - $i > $max;
+        if ($j > $i && $s =~ /^\}\s*$/) { exit(($n == 1 && $d == 1) ? 0 : 1) }
         exit 1 if $s =~ /^\s*nullable\s*=/;
-        if ($s =~ /^\s*default\s*=/) { $n++; $d = 1 if $s =~ /^\s*default\s*=\s*null\s*$/ }
+        if ($s =~ /default/) { $n++; $d = 1 if $s =~ /^\s*default\s*=\s*null\s*\r?$/ }
       }
-      exit 1' "$name" "$line" < "$f" && list="$list$name"$'\n'
+      exit 1' "$name" "$line" "$rmax" < "$f" \
+      && list="$list$(dirname "$file")"$'\t'"$name"$'\n'
   done < <(jq -r '.triggers[] | select(.change_kind == "added" and (.address | type == "string" and test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$"))
       and (.line | type == "number") and (.file | test("^[A-Za-z0-9_./-]+\\.tf$")) and (.file | split("/") | all(. != "..")))
       | [(.address | ltrimstr("var.")), .file, (.line | tostring)] | @tsv' "$out/behaviour.json")
-  printf '%s' "$list" | jq -R -s -c 'split("\n") | map(select(. != ""))' > "$out/nullvars.json"
+  printf '%s' "$list" | jq -R -s -c 'split("\n") | map(select(. != "") | split("\t") | {dir: .[0], name: .[1]})' > "$out/nullvars.json"
+  if [ -n "$schema" ]; then
+    jq -c --slurpfile b "$out/behaviour.json" '
+      ([$b[0].triggers[].address | strings | gsub("\\[[^\\]]*\\]"; "") | split(".") | select(length >= 2) | .[-2] | select(test("^[a-z][a-z0-9]*_[a-z0-9_]+$"))] | unique) as $ty
+      | [.provider_schemas[]?.resource_schemas // {} | to_entries[] | select(.key | IN($ty[])) | .key as $k
+         | ((.value.block.attributes // {}) | to_entries[] | select(.value.required == true) | "\($k).\(.key)"),
+           ((.value.block.block_types // {}) | to_entries[] | select((.value.min_items // 0) > 0) | "\($k).\(.key)")] | unique' \
+      "$schema" > "$out/required.json" 2> /dev/null || printf '["*"]\n' > "$out/required.json"
+  fi
 }
 
 classify() {
@@ -265,9 +279,15 @@ evaluate() {
   # kept or discarded, and nothing else.
   jq -e --slurpfile b "$out/behaviour.json" --argjson c "$cf" "$JQ_DEFS"' valid_eval($b[0]; $c)' \
     "$out/eval.raw" > /dev/null 2>&1 || not_run "output refused"
-  local nv='[]'
-  [ -f "$out/nullvars.json" ] && nv="$(jq -c 'if type == "array" and all(.[]; type == "string") then . else [] end' "$out/nullvars.json" 2> /dev/null)" || nv='[]'
-  jq -n --slurpfile b "$out/behaviour.json" --slurpfile e "$out/eval.raw" --slurpfile l "$ladder" --argjson c "$cf" --argjson w "$wj" --argjson nv "${nv:-[]}" "$JQ_DEFS"'
+  local nv='[]' rq='[]'
+  if [ -f "$out/nullvars.json" ]; then
+    nv="$(jq -c 'if type == "array" and all(.[]; type == "object" and (.dir | type == "string") and (.name | type == "string")) then . else [] end' "$out/nullvars.json" 2> /dev/null)" || nv='[]'
+  fi
+  # A required list that cannot be read requires everything, so nothing is marked.
+  if [ -f "$out/required.json" ]; then
+    rq="$(jq -c 'if type == "array" and all(.[]; type == "string") then . else ["*"] end' "$out/required.json" 2> /dev/null)" || rq='["*"]'
+  fi
+  jq -n --slurpfile b "$out/behaviour.json" --slurpfile e "$out/eval.raw" --slurpfile l "$ladder" --argjson c "$cf" --argjson w "$wj" --argjson nv "${nv:-[]}" --argjson rq "${rq:-[\"*\"]}" "$JQ_DEFS"'
     $b[0] as $b | $l[0] as $l
     # An unverifiable trigger at a wrapper versions.tf the host found equal to its generator output
     # is inert, with no outstanding difference: the wrapper is the module file, as the hook writes it.
@@ -283,9 +303,10 @@ evaluate() {
     # The value reads one variable the change adds with a null default ($nv), and nothing else: an
     # argument is exactly var.<name>; a dynamic block is null-guarded to no block. A literal, another
     # variable, a local, a resource or any function changes what existing callers get: never marked.
+    def tdir: if test("/") then sub("/[^/]*$"; "") else "." end;
     def null_pass($t): ($t.contextual_refs == []) and ($t.head_expr | type == "string")
       and ($t.referenced_inputs | type == "array" and length == 1 and (.[0].name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]*$")))
-      and ($t.referenced_inputs[0].name as $n | ($n | IN($nv[]))
+      and ($t.referenced_inputs[0].name as $n | ({dir: ($t.file | tdir), name: $n} | IN($nv[]))
         and (if $t.category == "dynamic-block-change"
              then ($t.head_expr | test("^var\\.\($n) == null \\? \\[\\] : \\[[^?:]*\\]$") or test("^var\\.\($n) != null \\? \\[[^?:]*\\] : \\[\\]$"))
              else $t.head_expr == "var.\($n)" end));
@@ -294,6 +315,9 @@ evaluate() {
     # A managed resource address, [module.<call>[<key>].]...<type>.<name>[<key>], with no keyword root.
     def managed: test("^(module\\.[A-Za-z0-9_-]+(\\[[^\\]]*\\])?\\.)*[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*(\\[[^\\]]*\\])?$");
     def bare: gsub("\\[[^\\]]*\\]"; "");
+    # A required attribute or block takes no null: the schema says so when there is one.
+    def not_required($t): (($t.address | bare | split(".") | .[-2]) + "." + ($t.attribute | sub("^dynamic\\."; "") | split(".")[0])) as $ta
+      | (("*" | IN($rq[])) or ($ta | IN($rq[]))) | not;
     # The plan side: every example planned, with its addresses read whole (none empty, none at the
     # 1000 cap) and its module calls known, and no planned address that could be the resource at any
     # module depth: equal, or ending in "." and the address, whatever module calls lead to it.
@@ -305,7 +329,7 @@ evaluate() {
       | ($t.address | type == "string" and managed) and $et.state == "unverifiable" and ($et | has("complete") or has("outstanding") or has("evidence_digest") | not)
       and $t.levels == ["L4"] and $t.change_kind == "added"
       and ([$t.category, ($t.also_categories // [])[]] - unex_cats == [])
-      and null_pass($t)
+      and null_pass($t) and not_required($t)
       and ($t.attribute | type == "string" and (sub("^dynamic\\."; "") | split(".")[0] | IN(meta_args[]) | not))
       and plans_known
       and (any($l.coverage.examples[].addresses[]; bare | . == $a or endswith("." + $a)) | not);
@@ -315,7 +339,8 @@ evaluate() {
     # adds and every trigger it follows is marked.
     ([$b.triggers[] as $t | select(unexercised($t; etof($t.id))) | $t.id]) as $m
     | def unex($t; $et): unexercised($t; $et)
-        or ($t.address | type == "string" and test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$") and (ltrimstr("var.") | IN($nv[])))
+        or ($t.address | type == "string" and test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$")
+            and ({dir: ($t.file | tdir), name: ltrimstr("var.")} | IN($nv[])))
            and $t.change_kind == "added" and $t.category == "unclassified-change" and (($t.also_categories // []) == [])
            and $t.levels == [] and $et.state == "unverifiable" and ($et | has("complete") or has("outstanding") or has("evidence_digest") | not)
            and ($t.follows | type == "array" and length > 0 and all(.[]; IN($m[])));
