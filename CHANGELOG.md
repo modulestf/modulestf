@@ -1,3 +1,12 @@
+## [0.12.13](https://github.com/modulestf/modulestf/compare/v0.12.12...v0.12.13) (2026-11-24)
+
+
+### Bug Fixes
+
+* **pr-review:** End a plan the proxy keeps refusing early, and take registry submodules with an underscore ([#188](https://github.com/modulestf/modulestf/issues/188)) ([9aee05e](https://github.com/modulestf/modulestf/commit/9aee05e80b6a5225adaa5658ea6d2989bd91d59a))
+
+
+
 ## [0.12.12](https://github.com/modulestf/modulestf/compare/v0.12.11...v0.12.12) (2026-11-24)
 
 
