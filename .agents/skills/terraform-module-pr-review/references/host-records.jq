@@ -87,14 +87,54 @@ def context: split("\n") | (length - 1) as $last
 # whose association is not OWNER, MEMBER or COLLABORATOR decides nothing.
 def decision($login; $render_only):
   [.[] | select(.state != "COMMENTED" and .state != "PENDING")] as $nc
-  | ($nc | map(select($login != "" and .user.login == $login)) | last
+  | ($nc | map(select($login != "" and ((.user.login // "") | ascii_downcase) == ($login | ascii_downcase))) | last
      | if . == null then null else {state, commit_id} end) as $own
-  | [$nc[] | select(($login == "" or .user.login != $login)
+  | [$nc[] | select(($login == "" or ((.user.login // "") | ascii_downcase) != ($login | ascii_downcase))
       and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")))]
   | group_by(.user.id) | map(last.state) as $latest
   | {review_decision: (if any($latest[]; . == "CHANGES_REQUESTED") then "fail"
                        elif any($latest[]; . == "APPROVED") then "pass" else "none" end),
      own_review: $own};
+
+# --- Answered threads: an unresolved thread is no open objection (verdict.md, rule 5) when its
+# opener raised it, the pull request author replied, and the opener then approved the head. Input:
+# a thread node of the threads query, comments with author, publishedAt and pullRequestReview.
+# All of these must hold, else the thread stays open:
+# - the first comment is by a User with a numeric id (the opener, not a ghost), and every comment
+#   of the thread is by the opener or by the pull request author, $pr_author, so an objection of
+#   a third person is never answered by the opener's approval;
+# - at least one comment is by the pull request author, a reply the opener could read, and every
+#   comment has a publishedAt in GitHub's form: a comment drafted in a pending review has
+#   createdAt before it is visible, so only publishedAt orders a thread against a review;
+# - the opener's latest review that is not a COMMENT or PENDING one, from the reviews list with
+#   the posting login's reviews left out (compared in lower case, as an empty login leaves none
+#   out, as in decision()), is APPROVED, has OWNER, MEMBER or COLLABORATOR association, is of the
+#   commit $head, is not the review that holds the thread's first comment, and was submitted
+#   strictly after the latest comment of the thread.
+# A reviews list that was not read leaves the thread open.
+def ts: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z");
+
+def answered($reviews; $login; $pr_author; $head):
+  .comments.nodes as $c
+  | ($c[0] // null) as $f
+  | ($f.author // null) as $a
+  | if ($reviews | type) != "array" or $f == null or $a == null or $a.__typename != "User"
+       or ($a.databaseId | type) != "number" or $a.login == "ghost"
+       or ($pr_author | type) != "number" or ($head | type) != "string" then false
+    else
+      ($c | all(.[]; .author.__typename == "User"
+                     and (.author.databaseId == $a.databaseId or .author.databaseId == $pr_author))) as $mine
+      | ($c | any(.[]; .author.databaseId == $pr_author and $pr_author != $a.databaseId)) as $replied
+      | ([$c[] | .publishedAt] | if all(.[]; ts) then max else null end) as $lc
+      | ([$reviews[] | select(.state != "COMMENTED" and .state != "PENDING"
+                              and .user.id == $a.databaseId
+                              and ($login == "" or ((.user.login // "") | ascii_downcase) != ($login | ascii_downcase)))] | last) as $r
+      | $mine and $replied and $lc != null and $r != null and $r.state == "APPROVED"
+        and ($r.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))
+        and $r.commit_id == $head
+        and ($f.pullRequestReview.databaseId == null or $r.id != $f.pullRequestReview.databaseId)
+        and ($r.submitted_at | ts) and $r.submitted_at > $lc
+    end;
 
 # --- Origin: numeric ids, never logins; ghost and non-User authors never match.
 
@@ -213,12 +253,12 @@ def cut($n):
 
 # Items [{kind, origin, text}] in block order -> items with text cut and omitted bytes, under
 # the per-item 8000 for the body and 4000 for the title and a thread item, and the total 16000.
-# An issue item has its own 4000, outside the total: at most two travel.
+# An issue item has its own 8000, outside the total: at most two travel.
 def capped:
   reduce .[] as $i ({out: [], left: 16000};
     ($i.text | crlf) as $t
     | if $i.kind | IN("title", "body", "thread", "issue") then
-        (if $i.kind == "issue" then 4000 else [(if $i.kind == "body" then 8000 else 4000 end), .left] | min end) as $lim
+        (if $i.kind == "issue" then 8000 else [(if $i.kind == "body" then 8000 else 4000 end), .left] | min end) as $lim
         | ($t | cut($lim)) as $k
         | .out += [$i + {text: $k, omitted: (($t | utf8bytelength) - ($k | utf8bytelength))}]
         | .left -= (if $i.kind == "issue" then 0 else $k | utf8bytelength end)
@@ -264,7 +304,7 @@ def reopen_fact($m; $closer; $reviews; $comments):
     elif any($reviews[]; .user.id != $m.user.id and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))) then null
     else {last_author_comment: (if ($comments | type) == "array"
         then [$comments[] | select(origin($author) == "change-author") | .created
-              | select(type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))]
+              | select(ts)]
              | max | if . == null then null else .[:10] end
         else null end)} end;
 

@@ -302,15 +302,15 @@ bget() { # out, gh api arguments...
   done
 }
 
-Q_THREADS='query($owner:String!,$repo:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100, after:$cursor){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated path line resolvedBy{login} comments(first:50){pageInfo{hasNextPage endCursor} nodes{author{__typename login ... on User{databaseId}} body}}}}}}}'
+Q_THREADS='query($owner:String!,$repo:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100, after:$cursor){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated path line resolvedBy{login} comments(first:50){pageInfo{hasNextPage endCursor} nodes{author{__typename login ... on User{databaseId}} publishedAt pullRequestReview{databaseId} body}}}}}}}'
 Q_COMMENTS='query($owner:String!,$repo:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){comments(first:100, after:$cursor){pageInfo{hasNextPage endCursor} nodes{body createdAt updatedAt isMinimized authorAssociation author{__typename login ... on User{databaseId}}}}}}}'
 Q_CLOSING='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){closingIssuesReferences(first:50){pageInfo{hasNextPage} nodes{number repository{nameWithOwner}}}}}}'
 
 # Step 5, threads: GraphQL, both levels paginated; a stop for any reason is unknown. Without
 # GraphQL, the review comments list. Writes threads.json:
 # {path, signal, unknown, items: [comments as {typename, login, id, body}], unresolved: [{path, line}]}.
-read_threads() { # work, owner, name, pr
-  local w="$1" owner="$2" name="$3" pr="$4" page=0 stopped=false cur=(-F cursor=null)
+read_threads() { # work, owner, name, pr, login, head
+  local w="$1" owner="$2" name="$3" pr="$4" login="$5" head="$6" page=0 stopped=false cur=(-F cursor=null)
   : > "$w/thread-pages"
   while :; do
     page=$((page + 1))
@@ -325,14 +325,14 @@ read_threads() { # work, owner, name, pr
     jq -e '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' "$w/tp" > /dev/null || break
     cur=(-f cursor="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' "$w/tp")")
   done
-  jq -s --argjson stopped "$stopped" '
+  RJ -s --argjson stopped "$stopped" --slurpfile rv "$w/rv.json" --slurpfile meta "$w/meta" --arg login "$login" --arg head "$head" 'include "host-records";
     [.[].nodes[]] as $t
     | ($stopped or any($t[]; .comments.pageInfo.hasNextPage)) as $unknown
     | {path: "graphql", unknown: $unknown,
        signal: (if $unknown then "unknown" else "pass" end),
        items: [$t[] | select(.isResolved | not) | .comments.nodes[]
                | {typename: .author.__typename, login: .author.login, id: .author.databaseId, body}],
-       unresolved: (if $unknown then [] else [$t[] | select(.isResolved | not) | {path, line}] end)}' \
+       unresolved: (if $unknown then [] else [$t[] | select(.isResolved | not) | select(answered($rv[0]; $login; $meta[0].user.id; $head) | not) | {path, line}] end)}' \
     "$w/thread-pages" > "$w/threads.json"
 }
 
@@ -541,7 +541,7 @@ cmd_run() {
     echo '{"review_decision": "unknown", "own_review": null}' > "$w/decision.json"
     echo null > "$w/rv.json"
   fi
-  read_threads "$w" "$owner" "$name" "$pr"
+  read_threads "$w" "$owner" "$name" "$pr" "$login" "$head"
   path="$(jq -r '.path' "$w/threads.json")"
   read_comments "$w" "$path" "$owner" "$name" "$pr"
 

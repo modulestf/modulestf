@@ -155,7 +155,7 @@ gh api graphql -f owner=<owner> -f repo=<repo> -F number=<number> -f cursor=<cur
           nodes{
             isResolved isOutdated path line
             resolvedBy{login}
-            comments(first:50){pageInfo{hasNextPage endCursor} nodes{author{__typename login ... on User{databaseId}} body}}
+            comments(first:50){pageInfo{hasNextPage endCursor} nodes{author{__typename login ... on User{databaseId}} publishedAt pullRequestReview{databaseId} body}}
           }
         }
       }
@@ -170,6 +170,8 @@ The reviews list read above is also where the review decision comes from, since 
 When GraphQL is unavailable - a token without the scope, a policy that blocks it, a host that does not allow it - read the review comments list, `pulls/<number>/comments` above, to its last page. Every review thread holds at least one review comment, so if that list is empty there are no review threads: the Threads signal passes, and nothing is recorded as a check that could not run. If the list is not empty, group it on `in_reply_to_id`, one group per thread, take each comment's author id from `user.id`, and set every thread's resolution to unknown. Record that as a check that could not run, which makes the verdict inconclusive. A list that could not be read to its last page proves nothing: resolution is unknown.
 
 Never infer resolution. A later reply in a thread does not resolve it, and `isOutdated` means the code moved, not that the objection was answered. Unknown stays unknown.
+
+One read of the reviews list does answer a thread, for rule 5 only. An unresolved thread is no open objection when all of these hold: its first comment is by a User, the opener; every comment of the thread is by the opener or by the pull request author, so an objection of a third person keeps it open; at least one comment is by the pull request author, a reply; every comment has a `publishedAt` in the form `YYYY-MM-DDTHH:MM:SSZ` (the time it became visible, never `createdAt`, which is the time a comment in a pending review was drafted; an unpublished comment has none); and the opener's latest review that is not a `COMMENT`, from the reviews list above with the resolved login left out (compared in lower case; an empty login, as in a render-only run, leaves none out, as for the review decision) is `APPROVED`, has `author_association` `OWNER`, `MEMBER` or `COLLABORATOR`, is of the head commit (its `commit_id` equals the head SHA), is not the review that holds the thread's first comment (`pullRequestReview.databaseId` is its `id`), and has a `submitted_at` strictly later than the latest `publishedAt` of the thread, in the same form. A thread by someone else, an approval with no reply before it, an approval before or at the second of the last comment, an approval of an earlier commit, a later `CHANGES_REQUESTED` or a dismissed approval (the review then reads `DISMISSED`) leaves it open. The thread stays unresolved on GitHub and its comments still cross as prose; only `unresolved_threads` of host.json leaves it out. A reviews list that was not read answers nothing, and without GraphQL no thread is read.
 
 ## Conversation Comments
 
@@ -474,7 +476,7 @@ Three limits are known and accepted. A second account the author controls writes
 
 The title, the body and the thread comments are capped per item, the body at 8000 bytes and the title and each thread comment at 4000, and at 16000 bytes in total, in UTF-8 bytes of item text after the CRLF conversion. Marker lines, the truncation marker included, are outside the cap. Items are taken in block order: one over its item cap is cut to that cap, one larger than what is left of the 16000 is cut to what is left, and one that arrives with nothing left travels as its item line and a truncation marker for its whole size. With the body at its 8000 bytes and the title at its 4000, the thread comments share the 4000 that is left of the 16000.
 
-An issue item is capped at 4000 bytes on its own and is outside the 16000, so the issues never take the thread comments' share. At most two travel, so they add at most 8000 bytes. A cut issue is recorded as `prose-truncated` with item `issue`.
+An issue item is capped at 8000 bytes on its own and is outside the 16000, so the issues never take the thread comments' share. At most two travel, so they add at most 16000 bytes. A cut issue is recorded as `prose-truncated` with item `issue`.
 
 A cut keeps the longest run of whole lines that fits. When no line boundary falls within the cap, because the first line alone is longer, it keeps the longest prefix that ends on a character boundary, so a multi-byte character is never split. The truncation marker follows on its own line. Truncation is recorded and makes the verdict inconclusive, because an instruction could have been hiding in the part that was dropped.
 

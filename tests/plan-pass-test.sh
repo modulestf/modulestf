@@ -1687,15 +1687,107 @@ check "caps: a conversation comment is not cut" "$([ "$(cq '.[4] | [(.text | len
 check "caps: truncations name each cut class with its bytes" \
   "$([ "$(cq 'truncations')" = '[{"kind":"prose-truncated","item":"body","omitted":200},{"kind":"prose-truncated","item":"thread","omitted":1004},{"kind":"prose-truncated","item":"title","omitted":100}]' ]; echo $?)"
 check "caps: no truncation, no entry" "$([ "$(jq -n -c -L "${PP%/*}" 'include "host-records"; [{kind: "body", text: "short"}] | capped | truncations')" = '[]' ]; echo $?)"
-# An issue item: 4000 bytes of its own, outside the 16000, so the threads keep their share.
+# An issue item: 8000 bytes of its own, outside the 16000, so the threads keep their share.
 iq() { jq -n -c -L "${PP%/*}" "include \"host-records\";
   [{kind: \"title\", text: (\"t\" * 4000)}, {kind: \"body\", text: (\"b\" * 8000)},
-   {kind: \"issue\", text: (\"i\" * 4100)}, {kind: \"issue\", text: \"short\"}, {kind: \"thread\", text: (\"c\" * 4000)}]
+   {kind: \"issue\", text: (\"i\" * 8100)}, {kind: \"issue\", text: \"short\"}, {kind: \"thread\", text: (\"c\" * 4000)}]
   | capped | $1"; }
-check "caps: an issue is cut to 4000 bytes" "$([ "$(iq '.[2] | [(.text | length), .omitted]')" = '[4000,100]' ]; echo $?)"
+check "caps: an issue is cut to 8000 bytes" "$([ "$(iq '.[2] | [(.text | length), .omitted]')" = '[8000,100]' ]; echo $?)"
 check "caps: issues take nothing from the 16000" "$([ "$(iq '[.[3].omitted, (.[4].text | length), .[4].omitted]')" = '[0,4000,0]' ]; echo $?)"
 check "caps: a cut issue has its own prose-truncated entry, last" \
   "$([ "$(iq 'truncations')" = '[{"kind":"prose-truncated","item":"issue","omitted":100}]' ]; echo $?)"
+# Negative self-check: a copy of host-records.jq with the old issue cap of 4000 fails the case above.
+mkdir "$TMP/cap-mut" && cp "${PP%/*}/host-records.jq" "$TMP/cap-mut/"
+perl -0pi -e 's/\(if \$i\.kind == "issue" then 8000 else/(if \$i.kind == "issue" then 4000 else/' "$TMP/cap-mut/host-records.jq"
+check "self-check: the issue cap mutation changes the file and is caught" \
+  "$(! cmp -s "$TMP/cap-mut/host-records.jq" "${PP%/*}/host-records.jq" &&
+     [ "$(jq -n -c -L "$TMP/cap-mut" 'include "host-records"; [{kind: "issue", text: ("i" * 8100)}] | capped | .[0] | [(.text | length), .omitted]')" != '[8000,100]' ]; echo $?)"
+# Answered threads (github-io.md, Discussion): `answered` of host-records.jq, one case per rule
+# of the conjunction. The opener is user 20, the pull request author user 11, the head HEADSHA;
+# the opener's comment is published at P1 in review 900, the author's reply at P2, the approval
+# submitted at A. Each negative case differs from the base case in one thing.
+AH=$(printf 'a%.0s' $(seq 40)); OH=$(printf 'b%.0s' $(seq 40))
+P1=2026-01-01T10:00:00Z; P2=2026-01-02T10:00:00Z; A=2026-01-03T10:00:00Z
+cm() { jq -n -c --argjson id "$1" --arg p "$2" --argjson rv "${3:-null}" --arg t "${4:-User}" --arg c "${5:-$2}" \
+  '{author: (if $id == null then null else {__typename: $t, login: "u\($id)", databaseId: (if $t == "User" then $id else null end)} end),
+    publishedAt: (if $p == "null" then null else $p end), createdAt: $c, pullRequestReview: (if $rv == null then null else {databaseId: $rv} end), body: "x"}'; }
+th() { printf '{"comments":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}' "$(IFS=,; echo "$*")"; }
+rv() { jq -n -c --argjson u "$1" --arg s "$2" --arg a "$3" --arg t "$4" --arg c "${5:-$AH}" --argjson id "${6:-501}" \
+  '{id: $id, user: {login: "u\($u)", id: $u}, state: $s, author_association: $a, submitted_at: $t, commit_id: $c}'; }
+arr() { printf '[%s]' "$(IFS=,; echo "$*")"; }
+T_BASE="$(th "$(cm 20 $P1 900)" "$(cm 11 $P2)")"
+R_BASE="$(arr "$(rv 20 APPROVED MEMBER $A)")"
+AD="${PP%/*}"
+ans() { # thread, reviews, login, dir: true or false
+  jq -n -c -L "${4:-$AD}" --argjson t "$1" --argjson r "$2" --arg l "${3-}" --arg h "$AH" 'include "host-records"; $t | answered($r; $l; 11; $h)'; }
+# name|expected|thread|reviews|login, in variables so the mutations below reuse them
+sc() { # n, name, expected, thread, reviews, login
+  eval "SC_$1_N=\$2 SC_$1_E=\$3 SC_$1_T=\$4 SC_$1_R=\$5 SC_$1_L=\$6"; SC_LIST="${SC_LIST-} $1"; }
+sc base "the opener's approval after the author's reply answers the thread" true "$T_BASE" "$R_BASE" ""
+sc before "an approval before the reply leaves it open" false "$T_BASE" "$(arr "$(rv 20 APPROVED MEMBER 2026-01-01T12:00:00Z)")" ""
+sc second "an approval at the second of the reply leaves it open" false "$T_BASE" "$(arr "$(rv 20 APPROVED MEMBER $P2)")" ""
+sc changes "a later CHANGES_REQUESTED leaves it open" false "$T_BASE" "$(arr "$(rv 20 APPROVED MEMBER $A)" "$(rv 20 CHANGES_REQUESTED MEMBER 2026-01-04T10:00:00Z)")" ""
+sc dismissed "a dismissed approval leaves it open" false "$T_BASE" "$(arr "$(rv 20 DISMISSED MEMBER $A)")" ""
+sc commented "a later plain comment review does not undo the approval" true "$T_BASE" "$(arr "$(rv 20 APPROVED MEMBER $A)" "$(rv 20 COMMENTED MEMBER 2026-01-04T10:00:00Z)")" ""
+sc pending "a later pending review does not undo the approval" true "$T_BASE" "$(arr "$(rv 20 APPROVED MEMBER $A)" "$(rv 20 PENDING MEMBER 2026-01-04T10:00:00Z)")" ""
+sc other "another reviewer's approval leaves it open" false "$T_BASE" "$(arr "$(rv 21 APPROVED MEMBER $A)")" ""
+sc assoc "an approval without write association leaves it open" false "$T_BASE" "$(arr "$(rv 20 APPROVED CONTRIBUTOR $A)")" ""
+sc head "an approval of an earlier commit leaves it open" false "$T_BASE" "$(arr "$(rv 20 APPROVED MEMBER $A "$OH")")" ""
+sc selfrev "the review that holds the thread's first comment never answers it" false "$T_BASE" "$(arr "$(rv 20 APPROVED MEMBER $A "$AH" 900)")" ""
+sc inline "an approval with its own inline comment and no reply leaves it open" false \
+  "$(th "$(cm 20 2026-01-03T10:00:00Z)")" "$(arr "$(rv 20 APPROVED MEMBER 2026-01-03T10:00:05Z)")" ""
+sc inline900 "the same, the comment linked to the approving review" false \
+  "$(th "$(cm 20 2026-01-03T10:00:00Z 900)")" "$(arr "$(rv 20 APPROVED MEMBER 2026-01-03T10:00:05Z "$AH" 900)")" ""
+sc noreply "the opener's own later comment is no reply" false "$(th "$(cm 20 $P1 900)" "$(cm 20 $P2)")" "$R_BASE" ""
+sc drafted "a reply drafted before the approval and published after it leaves it open" false \
+  "$(th "$(cm 20 $P1 900)" "$(cm 11 2026-01-04T10:00:00Z null User 2026-01-02T09:00:00Z)")" "$R_BASE" ""
+sc unpublished "a reply with no publication time leaves it open" false "$(th "$(cm 20 $P1 900)" "$(cm 11 null)")" "$R_BASE" ""
+sc third "an objection of a third person in the thread keeps it open" false \
+  "$(th "$(cm 20 $P1 900)" "$(cm 21 $P2)" "$(cm 11 $P2)")" "$R_BASE" ""
+sc selfopen "a thread the pull request author opened is never answered" false \
+  "$(th "$(cm 11 $P1 900)" "$(cm 11 $P2)")" "$(arr "$(rv 11 APPROVED MEMBER $A)")" ""
+sc bot "a bot opener leaves it open" false "$(th "$(cm 20 $P1 900 Bot)" "$(cm 11 $P2)")" "$R_BASE" ""
+sc ghost "a deleted opener leaves it open" false "$(th "$(cm null $P1 900)" "$(cm 11 $P2)")" "$R_BASE" ""
+sc unread "a reviews list that was not read leaves it open" false "$T_BASE" null ""
+sc nlpub "a publication time with a trailing newline leaves it open" false "$(th "$(cm 20 $P1 900)" "$(cm 11 "$P2"$'\n')")" "$R_BASE" ""
+sc nlsub "a submission time with a trailing newline leaves it open" false "$T_BASE" "$(arr "$(rv 20 APPROVED MEMBER "$A"$'\n')")" ""
+sc login "the posting login's own approval leaves it open, whatever its case" false "$T_BASE" "$R_BASE" U20
+sc nologin "with an empty login nothing is left out, as for the review decision" true "$T_BASE" "$R_BASE" ""
+sc nullrev "a review of a deleted user is skipped, not an error" true "$T_BASE" "$(arr '{"id":9,"user":null,"state":"APPROVED","author_association":"MEMBER","submitted_at":"'$A'","commit_id":"'$AH'"}' "$(rv 20 APPROVED MEMBER $A)")" ""
+for n in $SC_LIST; do
+  for f in N E T R L; do eval "v$f=\$SC_${n}_$f"; done
+  check "answered: $vN" "$([ "$(ans "$vT" "$vR" "$vL")" = "$vE" ]; echo $?)"
+done
+# Negative self-check: each weakened copy of host-records.jq flips the case that pins its rule.
+ans_mut() { # name, perl expression, the case that must change
+  local d="$TMP/ans-mut-$1"; mkdir "$d"; cp "$AD/host-records.jq" "$d/"
+  perl -0pi -e "$2" "$d/host-records.jq"
+  if cmp -s "$d/host-records.jq" "$AD/host-records.jq"; then check "self-check: answered mutation $1 changes the file" 1; return; fi
+  for f in E T R L; do eval "v$f=\$SC_$3_$f"; done
+  check "self-check: answered mutation $1 is caught" "$([ "$(ans "$vT" "$vR" "$vL" "$d" 2> /dev/null)" != "$vE" ]; echo $?)"
+}
+ans_mut no-publish-time 's/\[\$c\[\] \| \.publishedAt\]/[\$c[] | .createdAt]/' drafted
+ans_mut no-reply 's/\$mine and \$replied and \$lc/\$mine and \$lc/' inline
+ans_mut no-opener-only 's/\$mine and \$replied and \$lc/\$replied and \$lc/' third
+ans_mut no-head 's/\n        and \$r\.commit_id == \$head//' head
+ans_mut no-review-id 's/\n        and \(\$f\.pullRequestReview\.databaseId == null or \$r\.id != \$f\.pullRequestReview\.databaseId\)//' selfrev
+ans_mut no-login-case 's/\(\(\.user\.login \/\/ ""\) \| ascii_downcase\) != \(\$login \| ascii_downcase\)\)\)\] \| last\) as \$r/.user.login != \$login))] | last) as \$r/' login
+ans_mut no-ts-anchor 's/Z\\\\z"\);\n\ndef answered/Z\$");\n\ndef answered/' nlpub
+ans_mut no-strict-time 's/\$r\.submitted_at > \$lc/\$r.submitted_at >= \$lc/' second
+ans_mut no-approved-test 's/\$r != null and \$r\.state == "APPROVED"/\$r != null/' changes
+ans_mut no-comment-filter 's/select\(\.state != "COMMENTED" and \.state != "PENDING"\n(\s+)and \.user\.id == \$a/select(.state != "PENDING"\n$1and .user.id == \$a/' commented
+ans_mut no-pending-filter 's/select\(\.state != "COMMENTED" and \.state != "PENDING"\n(\s+)and \.user\.id == \$a/select(.state != "COMMENTED"\n$1and .user.id == \$a/' pending
+ans_mut no-association 's/\(\$r\.author_association \| IN\("OWNER", "MEMBER", "COLLABORATOR"\)\)/true/' assoc
+ans_mut no-author-match 's/\n(\s+)and \.user\.id == \$a\.databaseId//' other
+ans_mut no-latest-review 's/\| last\) as \$r/| first) as \$r/' changes
+# The review decision compares the posting login in lower case, as `answered` does.
+dec() { jq -n -c -L "${1:-$AD}" 'include "host-records"; [{state: "APPROVED", user: {login: "u20", id: 20}, author_association: "MEMBER"}] | decision("U20"; false)'; }
+check "decision: the posting login's own review is left out whatever its case" \
+  "$([ "$(dec)" = '{"review_decision":"none","own_review":{"state":"APPROVED","commit_id":null}}' ]; echo $?)"
+mkdir "$TMP/dec-mut" && cp "$AD/host-records.jq" "$TMP/dec-mut/"
+perl -0pi -e 's/\(\(\.user\.login \/\/ ""\) \| ascii_downcase\) != \(\$login \| ascii_downcase\)\)\n      and/.user.login != \$login)\n      and/' "$TMP/dec-mut/host-records.jq"
+check "self-check: the decision login case mutation changes the file and is caught" \
+  "$(! cmp -s "$TMP/dec-mut/host-records.jq" "$AD/host-records.jq" && [ "$(dec "$TMP/dec-mut")" != "$(dec)" ]; echo $?)"
 # The issue item: number and title first, origin by numeric id as for a comment.
 ii() { jq -n -c -L "${PP%/*}" "include \"host-records\"; $1 | issue_item({typename: \"User\", id: 11, login: \"a\"})"; }
 check "issue item: the pull request author's issue is change-author, number and title first" \

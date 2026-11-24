@@ -313,7 +313,7 @@ def items_of:
 # $read_at; later counts the comments created after it. A time that is not in that form never
 # proves a comment older: it counts as later, or as an edit of a kept comment.
 def plan_comments($read_at):
-  def ts: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$");
+  def ts: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z");
   [.comments[] | select((.created_at | ts) and .created_at <= $read_at)] as $k
   | {keep: $k,
      edited: [$k[] | select(((.updated_at | ts) and .updated_at <= $read_at) | not) | "\(if .kind == "thread" then "T" elif .kind == "review" then "V" else "C" end)-\(.id)"],
