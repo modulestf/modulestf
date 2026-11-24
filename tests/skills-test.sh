@@ -981,5 +981,27 @@ if ! grep -qxF "judgment prefix" "$TMP/failed"; then
   echo "ok   judgment prefix ($(wc -c < "$RSK/$JUD/prefix.md" | tr -d ' ') bytes; $nmut mutations caught)"
 fi
 
+# --- Merge conflict markers: no line of a tracked markdown file is a git conflict marker
+# (`<<<<<<< `, `||||||| `, `>>>>>>> ` or a line of exactly seven `=`). A rebase or merge
+# can leave one in a file that still passes every other check. A negative self-check
+# puts each marker into a temp copy and requires it to be reported.
+conflict_markers() { # files...: one file:line per marker line
+  LC_ALL=C grep -nE '^(<{7} |\|{7} |>{7} |={7}$)' "$@" 2> /dev/null
+}
+nmd=0; while IFS= read -r f; do
+  nmd=$((nmd + 1))
+  while IFS= read -r hit; do fail "conflict markers" "${hit%%:*}:$(cut -d: -f2 <<< "$hit")" "is a git conflict marker line; resolve it"; done \
+    < <(conflict_markers "$f" | sed "s|^|$f:|")
+done < <(git ls-files '*.md')
+for m in '<<<<<<< HEAD' '||||||| parent of 1234567 (fix: x)' '=======' '>>>>>>> 1234567 (fix: x)'; do
+  printf '# T\n\ntext\n%s\nmore\n' "$m" > "$TMP/cm.md"
+  [ -n "$(conflict_markers "$TMP/cm.md")" ] || fail "conflict markers" "$TMP/cm.md" "self-check: the marker '$m' is not reported"
+done
+printf '# T\n\n=======x\n<<<<<<<\n    ======= \n' > "$TMP/cm.md"
+[ -z "$(conflict_markers "$TMP/cm.md")" ] || fail "conflict markers" "$TMP/cm.md" "self-check: a line that is no marker is reported"
+if ! grep -qxF "conflict markers" "$TMP/failed"; then
+  echo "ok   conflict markers ($nmd markdown files; 4 mutations caught)"
+fi
+
 if [ "$fails" != 0 ]; then echo "$fails failed"; exit 1; fi
 echo "all passed"

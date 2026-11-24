@@ -692,6 +692,37 @@ refused "a run file with a negative count" "$G" "" "" "$(runf neg '.counts["conv
 t_partial_counts() { render "$G" "" "" "$(runf partial 'del(.counts["conversation-claims-unread"])')"; [ "$ST" = 2 ] && empty_out; }
 t_partial_counts; check "refused: a run file with a count missing" $?
 refused "a run file with empty counts" "$G" "" "" "$(runf emptycounts '.counts = {}')"
+
+# --- The review budget (review-run-details.md, Review Budget): the changed files the reviewer was not
+# handed are a rule 4 unknown, never an approval, listed in section 5 as data, the first 100 by name.
+SKIPPED='["modules/a/main.tf", "wrappers/a/main.tf"]'
+t_skipped() {
+  render "$(one structure.grouping LOW a.tf 1 "S." "F.")" "" "" "$(runf skipped ".skipped_files = $SKIPPED")"
+  [ "$ST" = 0 ] && [ "$(verdict)" = "inconclusive COMMENT" ] && [ "$(rule)" = 4 ] &&
+    grep -qxF -- "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-skipped"]')" "$O/comment.md" &&
+    awk '/^### Checks that could not run$/ { on = 1; next } on && /^### / { exit } on' "$O/comment.md" |
+      cmp -s - <(printf '%s\n' '' '- 2 changed files were over the review budget and were not reviewed:' '  - `modules/a/main.tf`' '  - `wrappers/a/main.tf`')
+}
+t_skipped; check "budget: skipped files with a LOW finding are inconclusive at rule 4, section 5 golden" $?
+# Beside an unread thread resolution, the What to do section counts the list as one gap.
+render "$(one structure.grouping LOW a.tf 1 "S." "F.")" "$(host skipped-tu '.signals.threads = "unknown"')" "" "$TMP/run-skipped.json"
+check "budget: the skipped list counts once among the gaps of What to do" "$([ "$ST" = 0 ] && grep -qxF -- '- 1 check could not run; see Checks that could not run.' "$O/comment.md"; echo $?)"
+# Beside a cause of the COMPACT table, no AWS profile named, the skipped files are a cause outside it:
+# the body is STANDARD and section 5 lists them. Without them the same run is COMPACT.
+NOPLAN='.examples = {count: 1, skipped: 0, validated: 1} | .coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}'
+t_skipped_clean() { render "$NONE" "" "" "$(runf skipped-clean "$NOPLAN | .skipped_files = $SKIPPED")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && printf '%s' "$MSG" | grep -q ', tier STANDARD$' && grep -qxF '  - `wrappers/a/main.tf`' "$O/comment.md"; }
+render "$NONE" "" "" "$(runf noplan-compact "$NOPLAN")"
+check "budget: the control run without skipped files is COMPACT" "$([ "$ST" = 0 ] && printf '%s' "$MSG" | grep -q ', tier COMPACT$'; echo $?)"
+t_skipped_clean; check "budget: skipped files beside a COMPACT cause are inconclusive and STANDARD" $?
+render "$NONE" "" "" "$(runf skipped-hostile '.skipped_files = ["a b.tf", "$(touch x).tf", "@user.tf", "c\\d.tf", "ok.tf"]')"
+check "budget: a skipped name outside the allowlist, a backslash included, is withheld, never a bare mention" "$([ "$ST" = 0 ] && [ "$(grep -cxF '  - name withheld' "$O/comment.md")" = 4 ] && grep -qxF '  - `ok.tf`' "$O/comment.md" && ! grep -qF '@user' "$O/comment.md"; echo $?)"
+render "$NONE" "" "" "$(runf skipped-many '.skipped_files = [range(130) | "f\(.).tf"]')"
+check "budget: 130 skipped files list the first 100 and the count of the rest" "$([ "$ST" = 0 ] && [ "$(grep -c '^  - `f[0-9]*\.tf`$' "$O/comment.md")" = 100 ] && grep -qxF -- '- 130 changed files were over the review budget and were not reviewed:' "$O/comment.md" && grep -qxF -- '  - and 30 more.' "$O/comment.md"; echo $?)"
+ladder "a known MEDIUM beside skipped files still blocks" "block REQUEST_CHANGES" 6 "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "" "" "$TMP/run-skipped.json"
+refused "a run file with an empty skipped list" "$G" "" "" "$(runf skipped-empty '.skipped_files = []')"
+refused "a run file with a skipped path that is not plain" "$G" "" "" "$(runf skipped-ctl '.skipped_files = ["a\nb.tf"]')"
+refused "a run file with a skipped path twice" "$G" "" "" "$(runf skipped-dup '.skipped_files = ["a.tf", "a.tf"]')"
 printf 'Caf\303\251 change.\n' > "$TMP/a-utf8.txt"; refused "a non-ASCII assessment" "$G" "" "" "" "$TMP/a-utf8.txt"
 printf '  \n' > "$TMP/a-blank.txt"; refused "a blank assessment" "$G" "" "" "" "$TMP/a-blank.txt"
 head -c 5000 /dev/zero | tr '\0' a > "$TMP/a-big.txt"; refused "an assessment over the cap" "$G" "" "" "" "$TMP/a-big.txt"
@@ -1069,6 +1100,9 @@ t_unreg() { render "$(one structure.third-party-promotion HIGH a.tf 3 "S." "F.")
 mutate "unregistered rules read by the ladder" 's/\(\$in\.findings \| map\(select\(ladder_read\(\$in\.registry\)\)\)\) as \$known/\$in.findings as \$known/' t_unreg
 mutate "an unregistered LOW held as an unknown" 's/def ladder_read\(\$reg\): registered\(\$reg\) or \.severity == "LOW";/def ladder_read(\$reg): registered(\$reg);/' t_unreg_low
 mutate "the unregistered line dropped from section 5" 's/\[\$unreg_all\[\] \| tx\(/[empty | tx(/' t_unreg
+mutate "skipped files not counted as gaps" 's/\(\$in\.run \| skipped_gap\) \+ //' t_skipped
+mutate "skipped files dropped from section 5" 's/\+ skipped_lines\(\$in\.run\); /; /' t_skipped
+mutate "skipped files no cause outside the COMPACT table" 's/ or \$l\.skipped > 0\)\}/)}/' t_skipped_clean
 mutate "unregistered rules not counted as gaps" 's/ \+ \(\$unreg \| length\) \+ \(\$in\.run/ + (\$in.run/' t_unreg
 mutate "the registry read from every table row" 's/\| if \$h == null then \[\] else/| if true then [\$l[] | capture("^\\\\| `(?<id>" + rule_pat + ")` \\\\|") | .id] else/' t_bad_fenced
 mutate_hp() { # name, perl substitution on host-pass.sh and incremental.jq, case function

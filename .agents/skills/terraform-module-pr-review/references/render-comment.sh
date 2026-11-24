@@ -35,6 +35,9 @@
 #                 section 5 line and a gap, each refuted state blocks at rule 2, and it adds the
 #                 evidence line under the rationale. A claim.* finding with no refuted state is refused.
 #                 Without the key, outside a triage run, the step counts as not run by the host.
+#                 One optional key more, "skipped_files": the changed files over the review budget
+#                 (review-run-details.md, Review Budget), a non-empty list of distinct paths with
+#                 no control character or backtick, else refused; one rule 4 unknown, each listed.
 #                 One optional key more, "depth": the depth.json object depth.sh wrote (depth.md),
 #                 known keys and values only, its binding head_sha equal to --head and its
 #                 merge_base to host.json's, else refused. An example out of scope by it is no

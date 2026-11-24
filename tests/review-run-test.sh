@@ -17,6 +17,9 @@
 #   - the closing issues' text: kind=issue items by origin, the 4000 byte cut and its entry, one issue
 #     named twice read once, and a cross-repository reference, a third issue or a failed read adding nothing;
 #   - a failed validate at light escalates, a schema escalation at focused escalates;
+#   - a large change: a files list over 1 MiB is reviewed, the files over the review budget named
+#     in skipped.json, the index, the task and section 5, never an approval, the untrusted block
+#     untouched by the cut, a change under 1 MiB reviewed whole, with negative self-checks;
 #   - the wrapper evidence: ladder runs behaviour-pass.sh wrappers before eval and passes its file,
 #     and handover states its grammar lines before the block, with a negative self-check;
 #   - a locked pull request: prepare's lock line, the lock in host.json and index.json, and a body
@@ -1455,6 +1458,143 @@ check "plan.json: a failed render-time pulls read exits 0, keeps the body and re
      [ ! -e "$TMP/render-nolive/plan.json.tmp" ] && grep -qx 'plan: not written, the pull request could not be read again' "$TMP/rnl.out"; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 ghfiles open false APPROVED
+
+# --- 5d. A large change: a files list over 1 MiB gets a focused review over the budget, not a refusal.
+# depth.sh takes the list and hands mtf-facts names and line counts; prepare names the files past the
+# review budget, the interface files first, then other Terraform, example Terraform, README and the
+# rest, each file kept while it fits; handover leaves their diff out and lists them, the untrusted
+# block untouched; render lists them in section 5, and the verdict is never an approval.
+mkrepo widget; ghfiles open false APPROVED
+# A body that holds the diff's own markers: the cut must leave the block as it was.
+jq '.body = "The diff:\nclose-me\ndiff --git a/wrappers/x.tf b/wrappers/x.tf\nBODY-SECRET-LINE\nclose-me\nBODY-TAIL"' "$GHD/meta" > "$TMP/meta-b" && cp "$TMP/meta-b" "$GHD/meta"
+bigfiles() { # the files list with large patches; the first file with a patch is a skipped one
+  jq -n 'def p($n): "@@ -0,0 +1 @@\n+" + ("a" * $n);
+    [{filename: "wrappers/x.tf", status: "added", additions: 1, deletions: 0, patch: p(900000)},
+     {filename: "README.md", status: "modified", additions: 1, deletions: 0, patch: "@@ -1 +1,2 @@\n # w\n+more"},
+     {filename: "docs/a;b.md", status: "added", additions: 1, deletions: 0, patch: p(100000)},
+     {filename: "$(touch x).md", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+y"},
+     {filename: "main.tf", status: "modified", additions: 1, deletions: 0, patch: p(200000)},
+     {filename: "variables.tf", status: "modified", additions: 1, deletions: 0, patch: p(40000)},
+     {filename: "examples/one/main.tf", status: "modified", additions: 1, deletions: 0, patch: p(50000)},
+     {filename: "zz/late.md", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+z"}]' > "$GHD/files"
+}
+bigfiles
+large_run() { # prepare to render on the large change; 0 when every step held
+  prep --render-only
+  [ -n "$RUN" ] && [ -f "$RUN/depth.json" ] && [ "$(wc -c < "$RUN/host/files.json")" -gt 1048576 ] || return 1
+  full; run_rr handover "$RUN" > "$TMP/ho-large.out" || return 1
+  render_to "$TMP/render-large"
+}
+# The untrusted block of the records, and of the handover up to its record: the same lines.
+block_kept() {
+  [ -f "$RUN/handover/task.md" ] &&
+  cmp -s <(sed -n '/^UNTRUSTED-[0-9a-f]\{12\} BEGIN$/,/^UNTRUSTED-[0-9a-f]\{12\} END$/p' "$RUN/host/task.md" | sed '$d') \
+    <(sed -n '/^UNTRUSTED-[0-9a-f]\{12\} BEGIN$/,/^RECORD-[0-9a-f]\{12\}$/p' "$RUN/handover/task.md" | sed '$d') &&
+  grep -qx 'BODY-SECRET-LINE' "$RUN/handover/task.md" && grep -qx 'BODY-TAIL' "$RUN/handover/task.md"
+}
+large_run; LRC=$?
+check "large change: prepare takes a files list over 1 MiB and the run renders" "$([ "$LRC" = 0 ]; echo $?)"
+check "large change: interface files before example Terraform, each file kept while it fits, the rest named" \
+  "$([ "$(jq -c . "$RUN/skipped.json")" = '["examples/one/main.tf","docs/a;b.md","wrappers/x.tf"]' ] && [ "$(q "$RUN/index.json" '.counts.skipped_files == 3 and .counts.files == 8')" = 0 ] &&
+     grep -qx 'review budget: 3 of 8 files over the budget, not reviewed (skipped.json)' "$TMP/p.out" && [ "$(lines_ok "$TMP/p.out")" = 0 ]; echo $?)"
+T="$RUN/handover/task.md"
+pre() { sed '/^UNTRUSTED-[0-9a-f]\{12\} BEGIN$/,$d' "$T"; } # the task before the block, which the body cannot reach
+budget_lines() { awk '/^Review budget: /{on = 1; next} on && /^- /{print; next} on {exit}' "$T"; }
+check "large change: the task holds the kept files' diff, a small file after a large one included, and not the skipped" \
+  "$(grep -qx 'diff --git a/main.tf b/main.tf' "$T" && grep -qx 'diff --git a/variables.tf b/variables.tf' "$T" &&
+     grep -qx 'diff --git a/README.md b/README.md' "$T" && grep -qx 'diff --git a/zz/late.md b/zz/late.md' "$T" &&
+     pre > "$TMP/pre.txt" && ! grep -q '^diff --git a/wrappers/x.tf' "$TMP/pre.txt" && ! grep -qF 'diff --git a/docs/a;b.md' "$TMP/pre.txt" &&
+     ! grep -q '^diff --git a/examples/one/main.tf' "$TMP/pre.txt" &&
+     [ "$(wc -c < "$T")" -lt 400000 ] && grep -qx 'diff --git a/main.tf b/main.tf' "$RUN/handover/change.diff" && ! grep -q 'wrappers/x.tf' "$RUN/handover/change.diff"; echo $?)"
+check "large change: a body holding the diff's markers leaves the untrusted block as it was, and handover goes on" "$(block_kept; echo $?)"
+check "large change: the task names every skipped file before the block, a name outside the charset counted" \
+  "$(budget_lines | cmp -s - <(printf '%s\n' '- examples/one/main.tf' '- wrappers/x.tf' '- and 1 more whose names hold other characters') &&
+     awk '/^Review budget: the change is over /{r=NR} /^UNTRUSTED-[0-9a-f]{12} BEGIN$/{b=NR} END{exit !(r && r < b)}' "$T" && [ "$(no_stray)" = 0 ]; echo $?)"
+check "large change: the run file carries skipped_files, the render lists them and is no approval" \
+  "$([ "$(q "$RUN/render/run-file.json" '.skipped_files == ["examples/one/main.tf", "docs/a;b.md", "wrappers/x.tf"]')" = 0 ] &&
+     grep -qxF -- '- 3 changed files were over the review budget and were not reviewed:' "$TMP/render-large/comment.md" &&
+     grep -qxF -- '  - `wrappers/x.tf`' "$TMP/render-large/comment.md" && grep -qxF -- '  - name withheld' "$TMP/render-large/comment.md" &&
+     [ "$(q "$TMP/render-large/result.json" '.verdict == "inconclusive"')" = 0 ]; echo $?)"
+echo '[]' > "$RUN/skipped.json"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render-large2" > "$TMP/re-l2.out" 2>&1
+check "large change: a skipped list emptied after the handover stops the run, nothing rendered" \
+  "$([ $? = 1 ] && grep -qF 'skipped.json changed after the handover' "$TMP/re-l2.out" && [ ! -e "$TMP/render-large2/comment.md" ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+# Negative self-check: depth.sh with its 1 MiB refusal of the files list restored refuses the run.
+cp "$SK/depth.sh" "$TMP/depth-keep"
+perl -pi -e 's/regular "\$files" "\$FILES_CAP"/regular "\$files"/' "$SK/depth.sh"
+large_run; LRC=$?
+check "self-check: the 1 MiB refusal restored in depth.sh, prepare refuses the large change" \
+  "$(! cmp -s "$SK/depth.sh" "$TMP/depth-keep" && [ "$LRC" != 0 ] && grep -q '^prepare refused: depth-refused' "$TMP/p.out"; echo $?)"
+[ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null
+cp "$TMP/depth-keep" "$SK/depth.sh"
+rr_mut() { # name, perl -0 expression, check after a prepare, full and handover of the large change
+  cp "$RR" "$TMP/rr-keep"; perl -0pi -e "$2" "$RR"
+  if cmp -s "$RR" "$TMP/rr-keep"; then check "self-check: $1 (the mutation changed nothing)" 1
+  else prep --render-only; full; run_rr handover "$RUN" > /dev/null 2>&1; "$3"; check "self-check: $1 is caught" "$([ $? != 0 ]; echo $?)"
+    [ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null; fi
+  cp "$TMP/rr-keep" "$RR"
+}
+skipped_ok() { [ "$(jq -c . "$RUN/skipped.json")" = '["examples/one/main.tf","docs/a;b.md","wrappers/x.tf"]' ]; }
+# grep -q on a file: in a pipe its early exit fails the writer, which pipefail reports.
+cut_ok() { T="$RUN/handover/task.md"; pre > "$TMP/pre.txt"; ! grep -q '^diff --git a/wrappers/x.tf' "$TMP/pre.txt"; }
+rr_mut "a handover that keeps the skipped diff" 's/    t="\$RUN\/state\/task-budget\.md"\n//' cut_ok
+rr_mut "a file that does not fit skipping every later file" 's/else \.skipped \+= \[\$f\.filename\]/else .kept += \$b | .skipped += [\$f.filename]/' skipped_ok
+rr_mut "example Terraform ranked with the interface files" 's/then \(if \(\$n \| tf\) then 2 else 3 end\)/then (if (\$n | tf) then -1 else 3 end)/' skipped_ok
+pin_ok() { # an emptied skipped list after the handover stops the render
+  echo '[]' > "$RUN/skipped.json"; rm -rf "$TMP/render-pin"
+  run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render-pin" > "$TMP/re-pin.out" 2>&1
+  [ $? = 1 ] && grep -qF 'skipped.json changed after the handover' "$TMP/re-pin.out"
+}
+names_ok() { T="$RUN/handover/task.md"; budget_lines | cmp -s - <(printf '%s\n' '- examples/one/main.tf' '- wrappers/x.tf' '- and 1 more whose names hold other characters'); }
+rr_mut "a render that does not check the skipped.json pin" 's/  \[ "\$\(shasum -a 256 < "\$RUN\/skipped\.json"[^\n]*\n[^\n]*\n//' pin_ok
+rr_mut "skipped names printed without the charset filter" 's/\| \(\$l\[\] \| select\(test\("\^\[A-Za-z0-9\._\/-\]\+\$"\)\) \| "- /| (\$l[] | "- /' names_ok
+rr_mut "the cut over the whole task, past the diff's fence" 's/head -n \$\(\(n - 1\)\) "\$t" \| SF=/SF=/; s/        p == 3 \{ print; next \}\n//; s/\{ p = 3; print; next \}/{ p = 0; print; next }/; s/\{ print \}\x27\n      tail -n \+"\$n" "\$t"; \}/{ print }\x27 "\$t"; }/' block_kept
+ghfiles open false APPROVED
+# A change under the threshold is reviewed whole, as before the budget: about 600 KiB of patch text,
+# and one just under 1 MiB; one just over it takes the budget.
+edgefiles() { # patch bytes of main.tf and wrappers/x.tf
+  jq -n --argjson a "$1" --argjson b "$2" 'def p($n): "@@ -0,0 +1 @@\n+" + ("a" * $n);
+    [{filename: "README.md", status: "modified", additions: 1, deletions: 0, patch: "@@ -1 +1,2 @@\n # w\n+more"},
+     {filename: "main.tf", status: "modified", additions: 1, deletions: 0, patch: p($a)},
+     {filename: "wrappers/x.tf", status: "added", additions: 1, deletions: 0, patch: p($b)}]' > "$GHD/files"
+}
+whole_ok() { # no file skipped and the task holds the whole diff
+  [ "$(jq -c . "$RUN/skipped.json")" = '[]' ] && [ "$(q "$RUN/index.json" '.counts.skipped_files == 0')" = 0 ] &&
+    ! grep -q '^review budget: ' "$TMP/p.out" && ! grep -q '^Review budget: ' "$RUN/handover/task.md" &&
+    grep -qx 'diff --git a/wrappers/x.tf b/wrappers/x.tf' "$RUN/handover/task.md"
+}
+edge_run() { prep --render-only; full; run_rr handover "$RUN" > /dev/null; }
+edgefiles 300000 300000; edge_run
+check "under the threshold: a change of about 600 KiB skips no file and the task holds its whole diff" "$(whole_ok; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+edgefiles 500000 540000; edge_run
+check "under the threshold: a files list just under 1 MiB skips no file" \
+  "$([ "$(wc -c < "$RUN/host/files.json")" -lt 1048576 ] && [ "$(wc -c < "$RUN/host/files.json")" -gt 1040000 ] && whole_ok; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+cp "$RR" "$TMP/rr-keep"; perl -pi -e 's/--argjson th "\$REVIEW_THRESHOLD"/--argjson th "\$REVIEW_BUDGET"/' "$RR"
+edge_run
+check "self-check: the budget applied from 256 KiB in place of the 1 MiB threshold is caught" "$(! cmp -s "$RR" "$TMP/rr-keep" && ! whole_ok; echo $?)"
+run_rr cleanup "$RUN" > /dev/null; cp "$TMP/rr-keep" "$RR"
+edgefiles 520000 528700; edge_run
+check "over the threshold: patch text just over 1 MiB takes the budget" \
+  "$([ "$(jq -c . "$RUN/skipped.json")" = '["main.tf","wrappers/x.tf"]' ] && grep -q '^Review budget: ' "$RUN/handover/task.md"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+# A new module over the threshold: the task has no diff, so the line says the files are not reviewed.
+mkempty fresh; ghfiles open false APPROVED
+jq -n 'def p($n): "@@ -0,0 +1 @@\n+" + ("a" * $n);
+  [{filename: "main.tf", status: "added", additions: 1, deletions: 0, patch: p(200000)},
+   {filename: "variables.tf", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+x"},
+   {filename: "versions.tf", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+x"},
+   {filename: "examples/one/main.tf", status: "added", additions: 1, deletions: 0, patch: p(900000)},
+   {filename: "README.md", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+x"}]' > "$GHD/files"
+run_rr prepare --repo example-org/fresh --pr 7 --render-only > "$TMP/p.out" 2>&1; RUN="$(sed -n 's/^RUN=//p' "$TMP/p.out")"
+full; run_rr handover "$RUN" > /dev/null
+check "new module over the threshold: the budget line names no diff above, and lists the skipped file" \
+  "$(grep -qx 'Review budget: the new module is over 262144 bytes of added text, so the files below are not reviewed. Report no finding on them; the host lists them as not reviewed.' "$RUN/handover/task.md" &&
+     grep -qx -- '- examples/one/main.tf' "$RUN/handover/task.md" && ! grep -q 'the diff above' "$RUN/handover/task.md"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+mkrepo widget; ghfiles open false APPROVED
 
 # --- 6. The SKILL.md move: SKILL.md, references/workflow.md and references/inputs.md hold the pinned
 # sentence multiset; the router's own text is headings, tables and block quotes only.

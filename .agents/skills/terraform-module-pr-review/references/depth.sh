@@ -10,7 +10,8 @@
 #       and writes --out whole or not at all. A missing, failing, late or refused mtf-facts gives
 #       deep with deep-classifier-unavailable; a missing classifier output deep with
 #       deep-classifier-unavailable; a missing or empty affected output deep with
-#       deep-affected-fallback.
+#       deep-affected-fallback. --files may be up to 8 MiB, the host records' cap on files.json;
+#       mtf-facts gets a copy with the names and line counts only, never a patch.
 #   depth.sh verify <depth.json> --clone <dir>
 #       Recomputes the binding from the clone; exit 1 on any difference.
 #   depth.sh escalate <depth.json> <reason>
@@ -28,6 +29,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_DIFF_OPTS GIT_EXTERNAL_DIFF GIT_C
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 CAP=1048576
+FILES_CAP=8388608 # the host records' cap on files.json (host-pass.sh CAP_RECORDS)
 sha_re='^[0-9a-f]{40}$'
 deadline="${DEPTH_TIMEOUT:-120}"
 die() { echo "depth.sh: $1" >&2; exit 2; }
@@ -37,7 +39,7 @@ abort() { echo "depth.sh: $1; the run aborts" >&2; exit 1; }
 RJ() { jq -L "$HERE" "$@"; }
 abs() { case "$1" in /?*) ;; *) die "$2 must be an absolute path" ;; esac; }
 canon() { (cd -- "$1" 2> /dev/null && pwd -P); }
-regular() { [ -f "$1" ] && [ ! -L "$1" ] && [ "$(wc -c < "$1")" -le "$CAP" ]; }
+regular() { [ -f "$1" ] && [ ! -L "$1" ] && [ "$(wc -c < "$1")" -le "${2:-$CAP}" ]; } # file [cap]
 # git with no hook, monitor, pager or colour, so the diff bytes depend on the trees alone
 g() { git -C "$1" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat -c color.ui=never \
   -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.relative=false -c diff.renames=true \
@@ -91,7 +93,7 @@ compute() {
   [ -z "$affected" ] || abs "$affected" --affected
   [ -z "$owner" ] || [ "$owner" = deep ] || die "--owner-depth takes deep only"
   [[ "$base" =~ $sha_re ]] || die "--base must be a 40 character SHA"
-  regular "$files" || die "--files must name a regular file of at most 1 MiB"
+  regular "$files" "$FILES_CAP" || die "--files must name a regular file of at most 8 MiB"
   local C B R
   C="$(canon "$clone")" && [ -n "$C" ] || die "--clone is not a directory"
   B="$(canon "$btree")" && [ -n "$B" ] || die "--base-tree is not a directory"
@@ -109,7 +111,9 @@ compute() {
   W="$(mktemp -d "${TMPDIR:-/tmp}/depth.XXXXXX")" || die "no temporary directory"
   trap 'rm -rf -- "$W"' EXIT
   facts="$(find_facts "$C" "$B" "$R")"
-  set -- depth --head "$C" --base "$B" --files "$files"
+  # Names and line counts, the fields mtf-facts depth reads; a list that does not trim is no list.
+  jq '[.[] | {filename, status, previous_filename, additions, deletions}]' "$files" > "$W/files.json" 2> /dev/null || facts=""
+  set -- depth --head "$C" --base "$B" --files "$W/files.json"
   [ -n "$classify" ] && regular "$classify" && set -- "$@" --classify "$classify"
   [ -n "$affected" ] && regular "$affected" && set -- "$@" --affected "$affected"
   if [ -n "$facts" ]; then

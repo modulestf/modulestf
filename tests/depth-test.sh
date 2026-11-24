@@ -1,7 +1,7 @@
 #!/bin/bash
 # Self-check for references/depth.sh of terraform-module-pr-review: the binding (head, base, merge
 # base, diff hash), verify on a moved head or a changed hash, escalate, the owner raise, hostile file
-# names kept as data, the merge base ambiguity abort, and mtf-facts missing, failing, late, refused
+# names kept as data, a files list over 1 MiB taken and handed on as names and line counts only, the merge base ambiguity abort, and mtf-facts missing, failing, late, refused
 # or on a path under the clone. mtf-facts is a stub that prints fixture JSON in the shape of
 # `mtf-facts depth`. A negative self-check mutates temp copies and confirms each one is caught.
 # No network. Needs bash, git, jq and perl.
@@ -52,11 +52,12 @@ echo '{}' > "$RUN/affected-empty.json"
 cat > "$TMP/bin/mtf-facts" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$@" > "$STUB_ARGS"
+prev=""; for a in "$@"; do [ "$prev" != --files ] || cp "$a" "$STUB_FILES"; prev="$a"; done
 case "${STUB_MODE:-ok}" in fail) exit 1 ;; slow) sleep 5 ;; junk) echo nope; exit 0 ;; esac
 cat "$STUB_OUT"
 EOF
 chmod +x "$TMP/bin/mtf-facts"
-export STUB_ARGS="$TMP/args.txt"
+export STUB_ARGS="$TMP/args.txt" STUB_FILES="$TMP/stub-files.json"
 # The caller's PATH less every entry holding an mtf-facts, so only the stub can be found.
 PATH0="$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r d; do [ -x "$d/mtf-facts" ] || printf '%s:' "$d"; done)"
 PATH0="${PATH0%:}"
@@ -79,9 +80,9 @@ export STUB_OUT="$LIGHT"
 oc=0
 # compute [extra args...]: one run into a fresh out file. Sets OUT, ST and MSG.
 compute() {
-  oc=$((oc + 1)); OUT="$RUN/depth-$oc.json"; rm -f "$STUB_ARGS"
+  oc=$((oc + 1)); OUT="$RUN/depth-$oc.json"; rm -f "$STUB_ARGS" "$STUB_FILES"
   MSG="$(cd "$TMP/cwd" && "$SH" "$DS" compute --clone "$C" --base-tree "$RUN/base" --base "$BASE" \
-    --files "$RUN/files.json" --classify "$RUN/classify.json" --affected "$RUN/affected.json" --out "$OUT" "$@" 2>&1)"; ST=$?
+    --files "${FILES:-$RUN/files.json}" --classify "$RUN/classify.json" --affected "$RUN/affected.json" --out "$OUT" "$@" 2>&1)"; ST=$?
 }
 dj() { jq -r "$1" "$OUT" 2> /dev/null; }
 
@@ -94,12 +95,29 @@ t_bind() {
 }
 t_bind; check "binding: head, base, merge base and the diff hash of git diff --binary" $?
 L1="$OUT"
-check "binding: mtf-facts got both trees and the files list as single arguments" "$(printf '%s\n' depth --head "$(cd "$C" && pwd -P)" --base "$(cd "$RUN/base" && pwd -P)" --files "$RUN/files.json" --classify "$RUN/classify.json" --affected "$RUN/affected.json" | cmp -s - "$STUB_ARGS"; echo $?)"
+# The files list reaches mtf-facts as a copy in depth.sh's own temporary directory.
+check "binding: mtf-facts got both trees and the files list as single arguments" "$(printf '%s\n' depth --head "$(cd "$C" && pwd -P)" --base "$(cd "$RUN/base" && pwd -P)" --files FILES --classify "$RUN/classify.json" --affected "$RUN/affected.json" | cmp -s - <(sed '7s|^.*/depth\.[^/]*/files\.json$|FILES|' "$STUB_ARGS"); echo $?)"
+check "binding: the copy holds every entry of the list, hostile names as data" "$(jq -e --slurpfile f "$RUN/files.json" '. == [$f[0][] | {filename, status, previous_filename: null, additions, deletions}]' "$STUB_FILES" > /dev/null; echo $?)"
 check "binding: the result line" "$([ "$MSG" = "depth: light (light-docs-only)" ]; echo $?)"
 MSG="$("$SH" "$DS" compute --clone "$C" --base-tree "$RUN/base" --base "$BASE" --files "$RUN/files.json" --out "$L1" 2>&1)"
 check "binding: compute refuses to overwrite" "$([ $? = 2 ] && jq -e '.depth == "light"' "$L1" > /dev/null; echo $?)"
 STUB_OUT="$FOCUSED" compute; F1="$OUT"
 check "binding: a focused object with schema tokens is kept" "$([ "$ST" = 0 ] && [ "$(dj .depth)" = focused ] && [ "$(dj '.schema_locks[0]')" = examples/complete:hashicorp/aws=5.1.0 ]; echo $?)"
+
+# --- A large change: a files list over 1 MiB, its patches included, is taken; mtf-facts gets the
+# names and line counts of every entry and no patch. Over 8 MiB the list is refused.
+jq -n '("+" * 300000) as $p | [range(5) | {filename: "m\(.).tf", status: "modified",
+  previous_filename: (if . == 0 then "old.tf" else null end), additions: 1, deletions: 0, patch: $p, sha: "x"}]' > "$RUN/large.json"
+t_large() {
+  FILES="$RUN/large.json" compute
+  [ "$(wc -c < "$RUN/large.json")" -gt 1048576 ] && [ "$ST" = 0 ] && [ "$(dj .depth)" = light ] &&
+    jq -e '. == [range(5) | {filename: "m\(.).tf", status: "modified", previous_filename: (if . == 0 then "old.tf" else null end),
+      additions: 1, deletions: 0}]' "$STUB_FILES" > /dev/null
+}
+t_large; check "large change: a list over 1 MiB is taken, mtf-facts gets names and line counts only" $?
+jq -n '("+" * 1800000) as $p | [range(5) | {filename: "m\(.).tf", status: "modified", additions: 1, deletions: 0, patch: $p}]' > "$RUN/huge.json"
+FILES="$RUN/huge.json" compute
+check "large change: a list over 8 MiB is refused, nothing written" "$([ "$ST" = 2 ] && [ ! -e "$OUT" ] && printf '%s' "$MSG" | grep -qF 'at most 8 MiB'; echo $?)"
 
 # --- Hostile names: nothing ran, nothing was written outside the out file.
 check "hostile names: no command substitution ran anywhere" "$([ -z "$(find "$TMP" -name pwned)" ]; echo $?)"
@@ -272,6 +290,8 @@ mutate "a missing classifier not raised" 's/\|\| raise="\$\(jq -c .\. \+ \["deep
 mutate "an empty affected output accepted" 's/ and \. != \{\}//' t_affempty
 mutate "a failed git diff hashed" 's/> "\$f" 2> \/dev\/null && h=/> "\$f" 2> \/dev\/null; h=/' t_brokendiff
 mutate "a token dropped from the list" 's/"deep-policy", //' t_tokens
+mutate "the 1 MiB refusal of the files list restored" 's/regular "\$files" "\$FILES_CAP"/regular "\$files"/' t_large
+mutate "the whole files list, patches included, handed to mtf-facts" 's/--files "\$W\/files\.json"/--files "\$files"/' t_large
 
 echo
 if [ "$fails" -eq 0 ]; then echo "depth: all checks hold"; else echo "depth: $fails failed"; exit 1; fi
