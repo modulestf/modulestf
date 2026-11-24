@@ -530,6 +530,7 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `rule-unregistered-low` | - `{rule_id}` at {location}: rule not in the registry; this LOW finding counts as any LOW finding. |
 | `rule-unregistered` | - `{rule_id}` at {location}: rule not in the registry, so this {severity} finding does not decide the verdict. |
 | `behaviour-floor-judged` | Provider floor changes judged by Check A, which no behaviour level verifies: {count}. |
+| `behaviour-undemonstrated` | Changes no planned example reaches, each named by an examples.feature-undemonstrated finding: {count}. |
 | `behaviour-evidence` | Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified. |
 | `thread-match` | - {location}: this review has a finding at the same path and line. |
 | `thread-no-match` | - {location}: this review has no finding at the same path and line. |

@@ -235,19 +235,33 @@ evaluate() {
   # kept or discarded, and nothing else.
   jq -e --slurpfile b "$out/behaviour.json" --argjson c "$cf" "$JQ_DEFS"' valid_eval($b[0]; $c)' \
     "$out/eval.raw" > /dev/null 2>&1 || not_run "output refused"
-  jq -n --slurpfile b "$out/behaviour.json" --slurpfile e "$out/eval.raw" --argjson c "$cf" --argjson w "$wj" "$JQ_DEFS"'
-    $b[0] as $b
+  jq -n --slurpfile b "$out/behaviour.json" --slurpfile e "$out/eval.raw" --slurpfile l "$ladder" --argjson c "$cf" --argjson w "$wj" "$JQ_DEFS"'
+    $b[0] as $b | $l[0] as $l
     # An unverifiable trigger at a wrapper versions.tf the host found equal to its generator output
     # is inert, with no outstanding difference: the wrapper is the module file, as the hook writes it.
     | ($e[0] | .triggers |= map(.id as $id | (first($b.triggers[] | select(.id == $id)) | .file) as $f
         | if .state == "unverifiable" and ($w[$f] // "" | IN("derived", "copied"))
           then {id, state: "inert", wrapper: $w[$f]} else . end)) as $e
     | def kstate($id): first($e.claims[] | select(.claim_id == $id) | .state) // "discarded";
+    # Contract 6, unexercised (behaviour-pass.md, The Run Object): an unverifiable trigger whose only
+    # level is the plan coverage, with an address, when every selected example planned and no
+    # planned address is that address, in the example itself or under a module call to its directory.
+    def at($t; $e): ($t.file | if test("/") then sub("/[^/]*$"; "") else "." end) as $d
+      | any($e.addresses[]?; . as $a
+          | if $e.dir == $d then $a == $t.address or ($t.address | startswith("module.")) and ($a | startswith($t.address + "."))
+            else ($a | capture("^module\\.(?<c>[^.]+)\\.(?<r>.+)$")? // null) as $m
+              | $m != null and ($e.module_calls // {} | .[$m.c]) == $d
+              and ($m.r == $t.address or ($t.address | startswith("module.")) and ($m.r | startswith($t.address + "."))) end);
+    def unexercised($t; $s): $s == "unverifiable" and $t.levels == ["L4"] and ($t.address | type == "string")
+      and $l.coverage.class == "complete" and ($l.coverage.examples | type == "array" and length > 0)
+      and all($l.coverage.examples[]; .head | IN("planned", "planned-no-changes"))
+      and (any($l.coverage.examples[]; at($t; .)) | not);
     {run: {status: "ran", reason: null,
        triggers: [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
                   | {id: $t.id, file: $t.file, line: $t.line, category: $t.category, state: $et.state}
                     + ($t | with_entries(select(.key == "also_categories")))
-                    + ($et | with_entries(select(.key | IN("complete", "outstanding", "evidence_digest"))))],
+                    + ($et | with_entries(select(.key | IN("complete", "outstanding", "evidence_digest"))))
+                    + (if unexercised($t; $et.state) then {unexercised: true} else {} end)],
        claims: [$c.claims[] | {claim_id, state: (kstate(.claim_id) | if . == "discarded" then "unverifiable" else . end)}],
        capped: $b.capped},
      record: (["behaviour: ran, \($b.triggers | length) triggers, \($b.capped) over the cap\(if $b.inert then ", inert" else "" end)"]
@@ -255,6 +269,7 @@ evaluate() {
           | "trigger \($t.id) `\($t.file)`\(if $t.line == null then "" else " line \($t.line)" end) \($t.category): \($et.state)"
             + (if $et.wrapper != null then ", wrapper \($et.wrapper)" else "" end)
             + (if $et.complete == true then ", complete" else "" end)
+            + (if unexercised($t; $et.state) then ", unexercised" else "" end)
             + (if ($et.outstanding // []) != [] and $et.evidence_digest != null
                then ", outstanding \($et.outstanding | length), digest \($et.evidence_digest)" else "" end)]
        # Each base and head difference claims-eval found, for the compatibility judgement; no input crosses.

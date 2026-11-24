@@ -112,7 +112,7 @@ def valid_behaviour:
   type == "object" and keys == ["capped", "claims", "reason", "status", "triggers"]
   and (.capped | nat)
   and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object"
-        and (keys - ["also_categories", "complete", "evidence_digest", "outstanding"]) == ["category", "file", "id", "line", "state"]
+        and (keys - ["also_categories", "complete", "evidence_digest", "outstanding", "unexercised"]) == ["category", "file", "id", "line", "state"]
         and (.id | type == "string" and test("^T-[0-9]{3}$"))
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0))
         and (.category | IN(behaviour_categories[]))
@@ -127,7 +127,10 @@ def valid_behaviour:
         and ((has("complete") | not) or (.complete | type == "boolean"))
         and (.id as $id | (has("outstanding") | not) or (.outstanding | type == "array" and length <= 256
               and all(.[]; diff_id and startswith($id + "|")) and . == unique))
-        and ((has("evidence_digest") | not) or ((.evidence_digest | digest) and (.outstanding // []) != [])))
+        and ((has("evidence_digest") | not) or ((.evidence_digest | digest) and (.outstanding // []) != []))
+        # Contract 6: behaviour-pass.sh's mark of a trigger no plan of a whole selection reaches.
+        and ((has("unexercised") | not) or (.unexercised == true and .state == "unverifiable"
+              and (has("complete") or has("outstanding") or has("evidence_digest") | not))))
         and (map(.id) | length == (unique | length)))
   and (.claims | type == "array" and length <= 48 and all(.[]; type == "object"
         and keys == ["claim_id", "state"] and (.claim_id | type == "string" and test("^C-[0-9]+$"))
@@ -151,12 +154,14 @@ def behaviour_of($run):
 def ci_gated: .ci == true;
 # A provider floor trigger Check A judged (mark_floors): no gap, as a ci_gated trigger.
 def floor_ok: .floor == true;
+# A trigger an examples.feature-undemonstrated finding names (mark_undemonstrated): no gap either.
+def demo_ok: .demo == true;
 # A workflow that never started a job ran no test, so with one the trigger stays a gap.
 def mark_ci($checks): if . == null or .status != "ran" or (($checks.runs // 0) == 0) or (($checks.jobless // []) != []) then .
   else .triggers |= map(if .category == "non-hcl-dependency" and .state == "unverifiable" then . + {ci: true} else . end) end;
 def behaviour_gaps: if . == null then 0 elif .status == "not-run" then 1
   # The changes over the classifier cap are one cause, so one gap however many they are.
-  else ([(.triggers[] | select((ci_gated or floor_ok) | not)), .claims[] | select(.state == "unverifiable")] | length)
+  else ([(.triggers[] | select((ci_gated or floor_ok or demo_ok) | not)), .claims[] | select(.state == "unverifiable")] | length)
     + (if .capped > 0 then 1 else 0 end) end;
 def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select(.state == "refuted")] | length end;
 
@@ -421,6 +426,25 @@ def mark_floors($findings; $run; $h):
                       | $e != [] and all($e[]; .read))))
           then . + {floor: true} else . end)
   end;
+
+# Features no example demonstrates (verdict.md, Undemonstrated features). A trigger behaviour-pass.sh
+# marked unexercised has the plan coverage as its only level, and no plan of a whole selection holds
+# its address and changed attribute. It leaves the gaps when an examples.feature-undemonstrated
+# finding names its file, so the review says at LOW that no example shows it. Fail closed: every
+# selected example planned and none out of scope, no triage run, each category one that is no
+# compat.* break, and no compat.* finding above LOW at the trigger's file.
+def demo_categories: ["unclassified-change", "unknown-propagation-candidate", "literal-argument-change", "dynamic-block-change"];
+def mark_undemonstrated($findings; $run):
+  if . == null or .status != "ran" then . else
+    (($run.triage | not) and $run.plan_ran and $run.coverage.class == "complete"
+     and (($run.depth.examples_out_of_scope // []) == [])) as $whole
+    | .triggers |= map(. as $t
+        | if $whole and .state == "unverifiable" and .unexercised == true
+             and ([.category, (.also_categories // [])[]] - demo_categories == [])
+             and any($findings[]; .rule_id == "examples.feature-undemonstrated" and .file == $t.file)
+             and (any($findings[]; .file == $t.file and (.rule_id | startswith("compat.")) and .severity != "LOW") | not)
+          then . + {demo: true} else . end)
+  end;
 # A location is a code span; under --links (link_base set) a link to the file at the head when
 # the path is in the allowed set, and is not the module root `.`, so the URL holds no character the pull request could choose.
 def link_base: $ARGS.named.link_base // "";
@@ -574,6 +598,7 @@ def texts: {
   "rule-unregistered": "- `{rule_id}` at {location}: rule not in the registry, so this {severity} finding does not decide the verdict.",
   "rule-unregistered-low": "- `{rule_id}` at {location}: rule not in the registry; this LOW finding counts as any LOW finding.",
   "behaviour-floor-judged": "Provider floor changes judged by Check A, which no behaviour level verifies: {count}.",
+  "behaviour-undemonstrated": "Changes no planned example reaches, each named by an examples.feature-undemonstrated finding: {count}.",
   "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "thread-match": "- {location}: this review has a finding at the same path and line.",
   "thread-no-match": "- {location}: this review has no finding at the same path and line.",
@@ -973,7 +998,7 @@ def gap_lines($h; $run; $b; $p; $cov):
   | (if $invalid then "-invalid" else "" end) as $why
   | $b | if . == null then []
      elif .status == "not-run" then [tx("behaviour-not-run"; {reason})]
-     else [ ([.triggers[] | select(.state == "unverifiable" and ((ci_gated or floor_ok) | not))]
+     else [ ([.triggers[] | select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok) | not))]
              | if length <= 5 then .[] | tx("behaviour-trigger" + $why; trigger_at($p))
                # More than five: one line counting them per category; the locations are noise.
                else tx("behaviour-trigger-groups" + $why; {count: length, categories: (group_by(.category)
@@ -1004,6 +1029,7 @@ def evidence_lines($b):
     + ([$b.triggers[] | select(ci_gated)] | length
        | if . > 0 then ["Changes outside Terraform left to the repository's own tests, which the Checks signal reads: \(.)."] else [] end)
     + ([$b.triggers[] | select(floor_ok)] | length | if . > 0 then [tx("behaviour-floor-judged"; {count: .})] else [] end)
+    + ([$b.triggers[] | select(demo_ok)] | length | if . > 0 then [tx("behaviour-undemonstrated"; {count: .})] else [] end)
   end;
 
 # The test pass's line under the evidence line, when it marked a trigger tested or refuted.
@@ -1266,7 +1292,7 @@ def render($in):
   | ($in.findings | map(select(ladder_read($in.registry) | not))) as $unreg
   | ($in.findings | map(select(registered($in.registry) | not))) as $unreg_all
   | (behaviour_of($in.run) | with_reported($known) | mark_tests($in.run.tests) | mark_ci($in.checks)
-     | mark_floors($known; $in.run; $in.host)) as $b
+     | mark_floors($known; $in.run; $in.host) | mark_undemonstrated($known; $in.run)) as $b
   | def ledger($in): {findings: $known, unregistered: $unreg, unregistered_all: $unreg_all, signals: (signals_of($h) + {checks: checks_signal($in.checks)}),
      unresolved: ($h.unresolved_threads | length), triage: $in.run.triage, refuted: ($b | behaviour_refuted),
      jobless: (if $in.checks.accepted then $in.checks.jobless // [] else [] end),

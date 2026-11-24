@@ -184,6 +184,52 @@ evalp --ladder "$TMP/ladder.json"
 cmp -s "$TMP/ladder.json" "$TMP/ladder-seen.json"; check "a ladder record is passed through" $?
 ! grep -q -- '--claims' "$TMP/facts.log"; check "no claims file, no --claims" $?
 
+# --- Unexercised (behaviour-pass.md, The Run Object): a trigger whose only level is the plan
+# coverage, with an address, is marked when every selected example planned and no planned address
+# is that address, in the example or under a module call to its directory.
+jq '.entries = [{path: "main.tf", change_kind: "modified", inert: false, trigger_ids: ["T-001", "T-002"]}]
+  | .triggers |= map(.category = "unclassified-change" | .line = (if .id == "T-001" then 266 else 267 end)
+      | .address = "aws_lb_listener.secondary" | .attribute = "idle_timeout" | .levels = ["L4"] | del(.cases))' \
+  "$TMP/behaviour-556.json" > "$TMP/behaviour-unex.json"
+printf '{"schema_version":1,"capped":0,"triggers":[{"id":"T-001","state":"unverifiable","reason":"x"},{"id":"T-002","state":"unverifiable","reason":"x"}],"claims":[],"discarded_claims":[]}\n' > "$TMP/eval-unex.json"
+jq -n --arg h "$HEAD" --arg b "$BASE" '{schema_version: 1, head_sha: $h, base_sha: $b, terraform_version: "1.9.8", pins: [], runs: [],
+  coverage: {class: "complete", examples: [
+   {dir: "examples/complete", head: "planned", base: null, addresses: ["module.lb.aws_lb_listener.this", "aws_lb_listener.secondary"], module_calls: {lb: "."}},
+   {dir: "examples/minimal", head: "planned-no-changes", base: null, addresses: [], module_calls: {lb: "."}}]}}' > "$TMP/ladder-unex.json"
+# unex [ladder jq update] [behaviour jq update]: eval on the unexercised fixture; sets O.
+unex() {
+  setup; jq "${2:-.}" "$TMP/behaviour-unex.json" > "$TMP/behaviour.out"; cp "$TMP/eval-unex.json" "$TMP/eval.out"
+  jq "${1:-.}" "$TMP/ladder-unex.json" > "$TMP/ladder-u.json"; classify; evalp --ladder "$TMP/ladder-u.json"
+}
+unmarked() { [ "$(q '.status == "ran" and all(.triggers[]; has("unexercised") | not)')" = 0 ] && ! grep -q unexercised "$O/record.txt"; }
+t_unex() {
+  unex && [ "$(q '[.triggers[] | .unexercised] == [true, true]')" = 0 ] \
+    && grep -qxF 'trigger T-001 `main.tf` line 266 unclassified-change: unverifiable, unexercised' "$O/record.txt"
+}
+t_unex; check "unexercised: an L4-only trigger no planned example reaches is marked, in the run object and the record" $?
+t_unex_planned() { unex '.coverage.examples[0].addresses += ["module.lb.aws_lb_listener.secondary"]' && unmarked; }
+t_unex_planned; check "unexercised: an example that plans the address through a call to its directory leaves it unmarked" $?
+t_unex_own() { unex '.coverage.examples[1] |= (.dir = "." | .addresses = ["aws_lb_listener.secondary"])' && unmarked; }
+t_unex_own; check "unexercised: an example in the trigger's own directory that plans the address leaves it unmarked" $?
+t_unex_failed() { unex '.coverage.examples[1].head = "code-error"' && unmarked; }
+t_unex_failed; check "unexercised: an example whose plan failed leaves it unmarked" $?
+t_unex_partial() { unex '.coverage.class = "partial"' && unmarked; }
+t_unex_partial; check "unexercised: coverage that is not complete leaves it unmarked" $?
+t_unex_levels() { unex . '.triggers[0].levels = ["L1", "L4"] | .triggers[1].levels = ["L1", "L4"]' && unmarked; }
+t_unex_levels; check "unexercised: a trigger with a level besides L4 is unmarked" $?
+t_unex_addr() { unex . '.triggers |= map(.address = null)' && unmarked; }
+t_unex_addr; check "unexercised: a trigger with no address is unmarked" $?
+t_unex_empty() { unex '.coverage.examples = []' && unmarked; }
+t_unex_empty; check "unexercised: no planned example at all leaves it unmarked" $?
+t_unex_none() { setup; cp "$TMP/behaviour-unex.json" "$TMP/behaviour.out"; cp "$TMP/eval-unex.json" "$TMP/eval.out"; classify; evalp; unmarked; }
+t_unex_none; check "unexercised: with no ladder record nothing is marked" $?
+t_unex_mod() { unex '.coverage.examples[0].addresses += ["module.lb.module.inner.aws_lb_listener.x"]' '.triggers |= map(.address = "module.inner")' && unmarked; }
+t_unex_mod; check "unexercised: a module call trigger with a planned address under it is unmarked" $?
+t_unex_state() { setup; cp "$TMP/behaviour-unex.json" "$TMP/behaviour.out"; jq '.triggers |= map(.state = "refuted")' "$TMP/eval-unex.json" > "$TMP/eval.out"
+  cp "$TMP/ladder-unex.json" "$TMP/ladder-u.json"; classify; evalp --ladder "$TMP/ladder-u.json"; unmarked; }
+t_unex_state; check "unexercised: a refuted trigger is unmarked" $?
+t_unex_cases() { t_unex && t_unex_planned && t_unex_own && t_unex_failed && t_unex_partial && t_unex_levels && t_unex_addr && t_unex_empty && t_unex_mod && t_unex_state; }
+
 # --- Inert: no trigger, the record says so and the run object is empty.
 setup
 printf '{"schema_version":1,"inert":true,"entries":[{"path":"README.md","change_kind":"modified","inert":true,"trigger_ids":[]}],"triggers":[],"capped":0}\n' > "$TMP/behaviour.out"
@@ -743,6 +789,13 @@ wmutate "the space after id: not required" 's/id:\[ \\t\]\+\(/id:[ \\t]*(/' t_wr
 wmutate "the partial clone check dropped" 's/    elif safe_git_partial; then all="unknown partial clone"\n//' t_wr_partial
 wmutate "the sub component cap dropped" 's/\{0,63\}/*/g' t_wr_long
 wmutate "the wrappers file grammar not checked" 's/if length <= 256 and all\(\.\[\]; test\(\$re\)\) then/if true then/' t_wr_eval_malformed
+wmutate "unexercised: the plan coverage alone not required" 's/ and \$t\.levels == \["L4"\]//' t_unex_cases
+wmutate "unexercised: a failed plan accepted" 's/all\(\$l\.coverage\.examples\[\]; \.head \| IN\("planned", "planned-no-changes"\)\)/true/' t_unex_cases
+wmutate "unexercised: partial coverage accepted" 's/\$l\.coverage\.class == "complete" and //' t_unex_cases
+wmutate "unexercised: the module call match dropped" 's/\$m != null and \(\$e\.module_calls/false and ($e.module_calls/' t_unex_cases
+wmutate "unexercised: the example's own directory not read" 's/if \$e\.dir == \$d then \$a == \$t\.address/if false then false/' t_unex_cases
+wmutate "unexercised: the state not checked" 's/def unexercised\(\$t; \$s\): \$s == "unverifiable" and/def unexercised(\$t; \$s): true and/' t_unex_cases
+wmutate "unexercised: no example at all accepted" 's/ and \(\$l\.coverage\.examples \| type == "array" and length > 0\)//' t_unex_cases
 wmutate "derive in the shared file returning its input" 's/  return \$o;\n\}/  return \$s;\n}/' t_wr_derived wrapper-derive.pl
 
 echo
