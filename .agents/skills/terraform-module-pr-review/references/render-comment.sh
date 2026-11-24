@@ -75,14 +75,15 @@
 #   "covered_skips", the "covered" list skip-coverage.sh prints, [{"dir", "gate": "G1|G2|G3|role|docker",
 #   "path", "witnesses": [{"attribute", "example", "address"}]}] with an optional "downloaded":
 #   true when the covering hit is in a downloaded module (skip-coverage.md), role and docker the
-#   recorded exceptions of a runner-mode pass, and "skip_head_sha" and
+#   recorded exceptions of a runner-mode pass, or a design skip in either mode, {"dir", "gate":
+#   "design", "reason": "access-denied", "witnesses"} with no path, and "skip_head_sha" and
 #   "skip_base_sha", its head_sha and base_sha, 40 lowercase hex. dir, path and example are
 #   relative paths in one spelling (no leading or trailing slash, no empty, "." or ".."
 #   segment), no dir twice, attribute matches ^[a-z0-9_]{1,128}$, and address is 1 to 300
 #   characters with no control character or backtick; any other shape is refused. The list takes
 #   the skipped examples off ladder rule 4 only when every condition of verdict.md, Covered
 #   safety-gate skips, holds for every one of them, gates G1 to G3 only after a laptop pass and
-#   role and docker only after a runner pass, skip_head_sha equal to --head, skip_base_sha
+#   role and docker only after a runner pass, design after either, skip_head_sha equal to --head, skip_base_sha
 #   to host.json's merge_base and at most 100 distinct witnesses among them; else it is ignored. A
 #   host.json prose-truncated entry
 #   may carry "item" (body, title, thread or issue) and "omitted" (bytes); only a cut of the body, the

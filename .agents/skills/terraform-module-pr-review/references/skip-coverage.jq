@@ -94,6 +94,29 @@ def witness_part($cls; $blocks; $addr; $head):
 def dir_changed($paths; $d; $h; $b):
   any($paths[]; . as $p | any(([$d] + [($h.lines?, $b.lines?) | .[]? | select(startswith("real ")) | .[5:]])[]; . as $r | $p | startswith($r + "/")));
 
+# --- Design skips (skip-coverage.md, Design skips): an example that cannot plan by design, its
+# plan class an environment reason of this closed list, a property of the example and the review
+# role, never of the run. A transient reason (timeout, output-cap, network, throttling) is not here.
+def design_kind: {"environment (access-denied)": "access-denied"}[.] // null;
+# One design-skipped directory in either mode: {covered} or {uncovered}. $x holds the directory's
+# reasons, record block and head gate record, and what the whole change gave.
+def design_entry($x):
+  ($x.rs[0] | design_kind) as $k
+  | (if ($x.rs | length) > 1 then "not-sole-reason"
+     elif ($x.headok | not) then "head-mismatch"
+     elif ($x.files | length) != $x.nchanged or ($x.cls | length) != ($x.files | length) then "files-incomplete"
+     elif $x.blk == null or $x.blk.plan != $x.rs[0] or ($x.d | safe_path | not) then "plan-record-unusable"
+     # a changed data source can change what the plan reads, and so what the role is denied
+     elif ($x.wp.allowed | not) or any($x.cls[].attrs[]; .address | startswith("data.")) then "change-not-allowed"
+     elif dir_changed($x.paths; $x.d; $x.h; null) then "dir-changed"
+     elif ($x.base | sha | not) then "merge-base-unresolved"
+     # the head gate record gives the real directory; a gate hit there means the record does not match the clone
+     elif $x.h == null or $x.h.done != true or any($x.h.lines[]; startswith("hit ")) then "hit-set-differs"
+     elif $x.wp.nowit != null then $x.wp.nowit
+     else null end) as $why
+  | if $why == null then {covered: {dir: $x.d, gate: "design", reason: $k, witnesses: $x.wp.wits}}
+    else {uncovered: {dir: $x.d, why: $why}} end;
+
 def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $headok; $nchanged):
   ($rec | record_blocks) as $blocks
   | witness_part($cls; $blocks; $addr; $head) as $wp
@@ -110,7 +133,11 @@ def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $head
       | (if $blk == null then [] elif ($blk.hits | length) == 0 then [$blk.hit] else $blk.hits end) as $hits
       | ($H[$d]? // null) as $h
       | ($B[$d]? // null) as $b
-      | (if ($rs | length) > 1 then "not-sole-reason"
+      | if ($rs[0] | type == "string" and design_kind != null) then
+          design_entry({rs: $rs, d: $d, blk: $blk, h: $h, wp: $wp, cls: $cls, files: $files, paths: $paths,
+                        headok: $headok, nchanged: $nchanged, base: $base})
+        else
+        (if ($rs | length) > 1 then "not-sole-reason"
          elif $g == null then "wrong-gate-class"
          elif ($headok | not) then "head-mismatch"
          elif ($files | length) != $nchanged or ($cls | length) != ($files | length) then "files-incomplete"
@@ -130,7 +157,7 @@ def skip_coverage($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $head
          elif $nowit != null then $nowit
          else null end) as $why
       | if $why == null then {covered: ({dir: $d, gate: $g.g, path: $blk.hit.path} + (if $dl then {downloaded: true} else {} end) + {witnesses: $wits})}
-        else {uncovered: {dir: $d, why: $why}} end)
+        else {uncovered: {dir: $d, why: $why}} end end)
   | {format: 1, head_sha: $head, base_sha: (if $base | sha then $base else null end),
      covered: [.[] | .covered // empty], uncovered: [.[] | .uncovered // empty]};
 
@@ -168,7 +195,11 @@ def skip_coverage_runner($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base
       | ($B[$d]? // null) as $b
       | [($h.lines? // [])[] | select(startswith("hit X"))] as $xh
       | ($xh | sort | .[0] // "" | sub("^hit X[a-z]+ "; "")) as $path
-      | (if ($rs | length) > 1 then "not-sole-reason"
+      | if ($rs[0] | type == "string" and design_kind != null) then
+          design_entry({rs: $rs, d: $d, blk: $blk, h: $h, wp: $wp, cls: $cls, files: $files, paths: $paths,
+                        headok: $headok, nchanged: $nchanged, base: $base})
+        else
+        (if ($rs | length) > 1 then "not-sole-reason"
          elif $k == null then "wrong-gate-class"
          elif ($headok | not) then "head-mismatch"
          elif ($files | length) != $nchanged or ($cls | length) != ($files | length) then "files-incomplete"
@@ -185,6 +216,6 @@ def skip_coverage_runner($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base
          elif $wp.nowit != null then $wp.nowit
          else null end) as $why
       | if $why == null then {covered: {dir: $d, gate: $k, path: $path, witnesses: $wp.wits}}
-        else {uncovered: {dir: $d, why: $why}} end)
+        else {uncovered: {dir: $d, why: $why}} end end)
   | {format: 1, head_sha: $head, base_sha: (if $base | sha then $base else null end),
      covered: [.[] | .covered // empty], uncovered: [.[] | .uncovered // empty]};
