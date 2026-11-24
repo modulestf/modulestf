@@ -1,3 +1,12 @@
+## [0.12.16](https://github.com/modulestf/modulestf/compare/v0.12.15...v0.12.16) (2026-11-24)
+
+
+### Bug Fixes
+
+* **reviewer:** Calibrate five rules against maintainer outcomes and repair the .gitignore template ([#196](https://github.com/modulestf/modulestf/issues/196)) ([5f0717b](https://github.com/modulestf/modulestf/commit/5f0717b60c2f45b4d3b571e4e54e1baba81c2622))
+
+
+
 ## [0.12.15](https://github.com/modulestf/modulestf/compare/v0.12.14...v0.12.15) (2026-11-24)
 
 
