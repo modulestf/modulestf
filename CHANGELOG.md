@@ -1,3 +1,12 @@
+## [0.12.22](https://github.com/modulestf/modulestf/compare/v0.12.21...v0.12.22) (2026-11-24)
+
+
+### Bug Fixes
+
+* **pr-review:** Cover an example that cannot plan by design when a planned example witnesses the change ([#206](https://github.com/modulestf/modulestf/issues/206)) ([e416c63](https://github.com/modulestf/modulestf/commit/e416c6396fd7b45071c3bbd43d1a7435d9d17a50))
+
+
+
 ## [0.12.21](https://github.com/modulestf/modulestf/compare/v0.12.20...v0.12.21) (2026-11-24)
 
 
