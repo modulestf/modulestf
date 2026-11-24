@@ -1,3 +1,12 @@
+## [0.12.20](https://github.com/modulestf/modulestf/compare/v0.12.19...v0.12.20) (2026-11-24)
+
+
+### Bug Fixes
+
+* **pr-review:** Read one copy of a generated family first and group the skipped list ([#199](https://github.com/modulestf/modulestf/issues/199)) ([16bbf35](https://github.com/modulestf/modulestf/commit/16bbf3594895e87ae987be3e4a04d5413ea97ba0))
+
+
+
 ## [0.12.19](https://github.com/modulestf/modulestf/compare/v0.12.18...v0.12.19) (2026-11-24)
 
 
