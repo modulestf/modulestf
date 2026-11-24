@@ -51,6 +51,7 @@ WRITE_SHORT='Write short: a `summary` of at most 200 characters and a `suggested
 # A line of behaviour-pass.sh wrappers (behaviour-pass.md, Wrapper Versions).
 WRAP_LINE_RE='^wrappers/([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/)?versions\.tf (derived|copied|differs|unknown [a-z0-9 .-]{1,60})$'
 # A provenance line of schema-pass.md, Focused Mode: mirror, release tag, schema file SHA-256.
+LNM_RE='^schema pass: latest_not_mirrored [a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63} [0-9]{1,5}[.][0-9]{1,5}[.][0-9]{1,5}$'
 SOURCE_RE='^schema pass: source [A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100} [a-z0-9][a-z0-9-]{0,63}_[a-z0-9][a-z0-9-]{0,63}-v[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5} [0-9a-f]{64}$'
 # A line of readme-regions.sh (readme-regions.md): a module-relative README.md and its result.
 REGION_LINE_RE='^([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/){0,8}README\.md (generated|differs|unknown [a-z0-9 .-]{1,60})$'
@@ -474,7 +475,7 @@ cmd_schema() {
       "$RUN/host/files.json" > /dev/null 2>&1; then
     note schema skipped; echo "schema: not run, no .tf, .tf.json or .hcl file changed"; return 0
   fi
-  rm -rf "$RUN/schema-work" "$RUN/schema-handoff" "$RUN/state/schema-sources.txt"
+  rm -rf "$RUN/schema-work" "$RUN/schema-handoff" "$RUN/state/schema-sources.txt" "$RUN/state/schema-lnm.txt"
   local line rc r="" mbs ins=""
   # The handoff's commits and inputs: the head and the merge base the depth was bound to.
   # Without both, schema-pass.sh gives no handoff and says why; inputs that could not be
@@ -492,10 +493,14 @@ cmd_schema() {
     if grep -qvE "$SOURCE_RE" "$RUN/state/schema-sources.tmp"; then r=source-line
     else
       mv "$RUN/state/schema-sources.tmp" "$RUN/state/schema-sources.txt"
+      # A latest the mirror lacked: each line names the provider and the version, in this grammar
+      # alone, and reaches the record and the task as a fact line.
+      grep -E "$LNM_RE" "$RUN/state/schema.out" | LC_ALL=C sort -u | head -n 32 > "$RUN/state/schema-lnm.txt"
       note schema ok
       grep -m 1 -E '^schema pass: (handoff written|no handoff)' "$RUN/state/schema.out" | sed 's/^schema pass: /schema: /'
       echo "schema: ${line:0:200}"
       echo "schema: $(grep -c . "$RUN/state/schema-sources.txt") source lines recorded"
+      sed 's/^schema pass: /schema: /' "$RUN/state/schema-lnm.txt"
       return 0
     fi
   fi
@@ -828,6 +833,7 @@ record_lines() {
   [ ! -f "$RUN/state/plan" ] || grep -E '^(plan pass mode:|example:|plan:|scope:|modules:|base:|plan summary:)' "$(plan_record)"
   jq -r '"plan coverage: \(.class)", (.unplanned[] | "not planned: \(.dir): \(.reason)")' "$RUN/coverage.json"
   [ ! -f "$RUN/state/schema-sources.txt" ] || cat "$RUN/state/schema-sources.txt"
+  [ ! -s "$RUN/state/schema-lnm.txt" ] || cat "$RUN/state/schema-lnm.txt"
   cat "$RUN/behaviour/record.txt"
   [ ! -f "$RUN/tests.json" ] || jq -r '"tests: " + (if .dir then .dir + ": " else "" end) + .result' "$RUN/tests.json"
 }
@@ -1051,6 +1057,9 @@ cmd_handover() {
     [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || [ ! -d "$RUN/facts" ] || printf 'Provider fact sheets: %s\n' "$RUN/facts"
     [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || [ ! -f "$RUN/schema-handoff/schema-handoff.json.gz" ] ||
       printf 'Schema handoff: %s\n' "$RUN/schema-handoff/schema-handoff.json.gz"
+    # A latest the mirror lacked: the latest schema of these providers was not read.
+    [ "$(cat "$RUN/state/schema" 2> /dev/null)" != ok ] || [ ! -s "$RUN/state/schema-lnm.txt" ] ||
+      sed 's/^schema pass: latest_not_mirrored /Latest not mirrored: /' "$RUN/state/schema-lnm.txt"
     [ "$nm" = true ] || printf 'Diff: %s\n' "$out/change.diff"
     [ -z "$mbl" ] || printf 'Merge base: %s\n' "$mbl"
     # The host's wrapper evidence as its own fact lines, read as eval reads it: every line in the

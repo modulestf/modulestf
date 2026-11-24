@@ -64,6 +64,8 @@ case "${SCHEMA_STUB:-overflow}" in
     echo "schema pass: focused, mirror stub, 1 sheets, 10 bytes"; exit 0 ;;
   deeppartial) mkdir -p "$1"; echo '{"format": 1, "reasons": ["page"], "missing": []}' > "$1/missing.json"; echo "$src"
     echo "schema pass: deep partial page, 1 sheets, 10 bytes, 1 types without a sheet"; exit 0 ;;
+  lag) mkdir -p "$1"; echo "$src"; echo "schema pass: latest_not_mirrored hashicorp/aws 6.74.0"
+    echo "schema pass: latest_not_mirrored x/y 1.0.0 \$(touch x)"; echo "schema pass: focused, mirror stub, 1 sheets, 10 bytes"; exit 0 ;;
   badsource) mkdir -p "$1"; echo "$src"; echo "schema pass: source modulestf/m x \$(touch x)"; echo "schema pass: focused"; exit 0 ;;
   floorsmany) mkdir -p "$1"; jq -n '{format: 1, directories: ([range(0; 257) | {key: "modules/m\(.)", value: {"hashicorp/aws": {minimum: "6.44.0", old_floor: "6.42.0"}}}] | from_entries)}' > "$1/versions.json"
     echo "$src"; echo "schema pass: deep, mirror stub, 0 sheets, 0 bytes"; exit 0 ;;
@@ -767,6 +769,18 @@ check "schema at deep: a deep partial line is a success, its source lines record
      [ "$(grep -c . "$RUN/state/schema-sources.txt")" = 1 ]; echo $?)"
 full; run_rr handover "$RUN" > /dev/null
 check "schema at deep: partial sheets are named in the handover" "$(grep -qx "Provider fact sheets: $RUN/facts" "$RUN/handover/task.md"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+
+DEPTH_STUB=focused prep
+SCHEMA_STUB=lag with_tf run_rr schema "$RUN" > "$TMP/s.out"
+check "schema: a latest the mirror lacked is recorded in its grammar alone, a line outside it is not" \
+  "$(grep -qE '^schema: latest_not_mirrored hashicorp/aws 6[.]74[.]0( \([0-9]+s\))?$' "$TMP/s.out" && [ "$(grep -c 'latest_not_mirrored' "$TMP/s.out")" = 1 ] &&
+     [ "$(cat "$RUN/state/schema")" = ok ] && [ "$(cat "$RUN/state/schema-lnm.txt")" = 'schema pass: latest_not_mirrored hashicorp/aws 6.74.0' ]; echo $?)"
+full; run_rr handover "$RUN" > /dev/null
+check "schema: the latest not mirrored is a fact line of the task, before the untrusted block, and a line of the record" \
+  "$(grep -qx 'Latest not mirrored: hashicorp/aws 6.74.0' "$RUN/handover/task.md" && [ "$(grep -c '^Latest not mirrored: ' "$RUN/handover/task.md")" = 1 ] &&
+     [ "$(grep -n '^Latest not mirrored: ' "$RUN/handover/task.md" | head -n 1 | cut -d: -f1)" -lt "$(grep -nE '^UNTRUSTED-[0-9a-f]{12} BEGIN$' "$RUN/handover/task.md" | head -n 1 | cut -d: -f1)" ] &&
+     grep -qx 'schema pass: latest_not_mirrored hashicorp/aws 6.74.0' "$RUN/handover/record.txt"; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=focused prep
