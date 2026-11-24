@@ -1,3 +1,12 @@
+## [0.12.12](https://github.com/modulestf/modulestf/compare/v0.12.11...v0.12.12) (2026-11-24)
+
+
+### Bug Fixes
+
+* **reviewer:** Rate four rules by what the maintainers enforce ([#186](https://github.com/modulestf/modulestf/issues/186)) ([e13def8](https://github.com/modulestf/modulestf/commit/e13def8adf7aac07c1dcde50fd7554a98f742230))
+
+
+
 ## [0.12.11](https://github.com/modulestf/modulestf/compare/v0.12.10...v0.12.11) (2026-11-24)
 
 
