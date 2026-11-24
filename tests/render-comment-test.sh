@@ -2858,7 +2858,7 @@ mutate "judged triggers counted as gaps" 's/select\(\(ci_gated or floor_ok or de
 # --- Undemonstrated features (verdict.md, Undemonstrated features): a trigger behaviour-pass.sh
 # marked unexercised is undemonstrated coverage, as a covered skip is: approve with nits at best,
 # listed as information, with no finding needed. Anything else keeps it an unknown.
-UT='{id: "T-001", file: "main.tf", line: 266, category: "literal-argument-change", state: "unverifiable", unexercised: true}'
+UT='{id: "T-001", file: "main.tf", line: 266, category: "unclassified-change", state: "unverifiable", unexercised: true}'
 RUX() { runf "ux-$1" '.plan_ran = true | .behaviour.triggers = ['"$UT"', ('"$UT"' | .id = "T-002" | .line = 267 | .category = "dynamic-block-change")] | '"${2:-.}"; }
 UXL="$(f examples.feature-undemonstrated LOW examples/complete/main.tf 3 "No example sets idle_timeout." "In examples/complete/main.tf, in module \"lb\", set idle_timeout = 60." | list uxl)"
 cmpx() { f "$1" "$2" "$3" 266 "The change alters what callers of the secondary listener get." "needs decision: (a) keep (b) revert." | list "uxc$oc"; }
@@ -2867,7 +2867,7 @@ UXRAT='No finding is open, and a change sets a resource no planned example creat
 cat > "$TMP/want-ux.txt" <<'WANT'
 ### Changes no example creates
 
-- Not demonstrated: `main.tf:266` (literal-argument-change): no planned example creates this resource, so no plan shows the change.
+- Not demonstrated: `main.tf:266` (unclassified-change): no planned example creates this resource, so no plan shows the change.
 - Not demonstrated: `main.tf:267` (dynamic-block-change): no planned example creates this resource, so no plan shows the change.
 WANT
 uxsec() { awk '/^### Changes no example creates$/ { on = 1 } on && /^### / && !/no example creates/ { exit } on' "$O/comment.md" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'; }
@@ -2896,6 +2896,8 @@ t_ux_scope() { t_ux_keep ".depth = $(dep focused)"; }
 t_ux_scope; check "undemonstrated: an example out of scope leaves the triggers unknowns" $?
 t_ux_cat() { t_ux_keep '.behaviour.triggers |= map(.category = "default-change")'; }
 t_ux_cat; check "undemonstrated: a category off the list stays an unknown" $?
+t_ux_lit() { t_ux_keep '.behaviour.triggers |= map(.category = "literal-argument-change")'; }
+t_ux_lit; check "undemonstrated: a literal argument change stays an unknown" $?
 t_ux_also() { t_ux_keep '.behaviour.triggers |= map(.also_categories = ["type-validation-change"])'; }
 t_ux_also; check "undemonstrated: a merged category off the list stays an unknown" $?
 t_ux_triage() { render "$NONE" "" "" "$(RUX t '.triage = true')"; [ "$(rule)" = 4 ] && ! grep -qF 'no planned example creates' "$O/comment.md"; }
@@ -2918,6 +2920,7 @@ mutate "the plan pass not required" 's/ and \$run\.plan_ran and / and /' t_ux_no
 mutate "partial coverage accepted" 's/ and \$run\.coverage\.class == "complete"\n/\n/' t_ux_partial
 mutate "an example out of scope accepted" 's/\n     and \(\(\$run\.depth\.examples_out_of_scope \/\/ \[\]\) == \[\]\)\) as \$whole/) as \$whole/' t_ux_scope
 mutate "any category cleared" 's/and \(\[\.category, \(\.also_categories \/\/ \[\]\)\[\]\] - demo_categories == \[\]\)/and true/' t_ux_cat
+mutate "a literal argument change cleared" 's/def demo_categories: \["dynamic-block-change"/def demo_categories: ["literal-argument-change", "dynamic-block-change"/' t_ux_lit
 mutate "the merged categories not read" 's/\[\.category, \(\.also_categories \/\/ \[\]\)\[\]\] - demo_categories/[.category] - demo_categories/' t_ux_also
 mutate "a triage run accepted" 's/\(\(\$run\.triage \| not\) and \$run\.plan_ran/(\$run.plan_ran/' t_ux_triage
 mutate "a compat finding at LOW ignored" 's/\(\.rule_id \| startswith\("compat\."\)\) and \(\.file \| file_dir\)/(.rule_id | startswith("compat.")) and .severity != "LOW" and (.file | file_dir)/' t_ux_compat_low

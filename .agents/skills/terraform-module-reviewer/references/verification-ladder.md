@@ -134,7 +134,7 @@ The host makes one more state, `reported`, from an `unverifiable` trigger that i
 | `inert`, `verified`, `covered` | None | Pass |
 | `reported` | The findings that explain its differences | The findings' own rung |
 | `provider-version-floor-change`, `unverifiable`, judged by Check A: a `compat.provider-floor-raised` finding names its file, or Check A ran and the schema pass read both floors | The `compat.provider-floor-raised` finding, when one names it | Pass, and the finding's own rung |
-| `unverifiable` and marked `unexercised`, undemonstrated: an argument or block the change adds to a managed resource no planned example can create, with the whole selection planned and no `compat.*` finding in its directory | None needed; an `examples.feature-undemonstrated` finding is an ordinary LOW | Approve with nits at best, rule 7, as a covered skip |
+| `unverifiable` and marked `unexercised`, undemonstrated: an argument or null-guarded block the change adds to a managed resource no planned example can create, passing only a variable the change adds with a null default, with the whole selection planned and no `compat.*` finding in its directory | None needed; an `examples.feature-undemonstrated` finding is an ordinary LOW | Approve with nits at best, rule 7, as a covered skip |
 | `refuted`, a trigger or a claim | Blocks by itself; Check G words it: `claim.fix-not-effective` for a refuted claim at `head` on a trigger, `claim.refuted` for any other | Block, rule 2 |
 | `unverifiable`, over the cap, or the step not run | None: the host lists it | Inconclusive, rule 4, unless a known MEDIUM blocker or a rung above it fires |
 

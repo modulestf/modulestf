@@ -131,6 +131,35 @@ run_facts() {
   elif [ "$(wc -c < "$f")" -gt "$CAP" ]; then echo big; elif [ "$rc" != 0 ]; then echo fail; else echo ok; fi
 }
 
+# null_vars: <out>/nullvars.json, the variables the change adds whose head block has exactly one
+# top-level `default = null` and no `nullable`, read from the clone as text, never run. A block this
+# strict reader cannot delimit, a link, a file outside the module root or over 1 MiB gives no name.
+null_vars() {
+  local root list=""
+  root="$(cd "$dir" && pwd -P)" || return 0
+  while IFS=$'\t' read -r name file line; do
+    local f="$dir/$file" real
+    [ -f "$f" ] && [ ! -L "$f" ] && [ "$(wc -c < "$f")" -le "$CAP" ] || continue
+    real="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")" || continue
+    case "$real" in "$root"/*) ;; *) continue ;; esac
+    perl -e '
+      my ($name, $at) = (shift, shift); my @l = <STDIN>; my $i = $at - 1;
+      exit 1 unless defined $l[$i] && $l[$i] =~ /^variable\s+"\Q$name\E"\s*\{\s*$/;
+      my ($d, $n) = (0, 0);
+      for my $j ($i + 1 .. $#l) {
+        my $s = $l[$j];
+        exit 1 if $s =~ /<</ || $j - $i > 200;
+        if ($s =~ /^\}\s*$/) { exit(($n == 1 && $d == 1) ? 0 : 1) }
+        exit 1 if $s =~ /^\s*nullable\s*=/;
+        if ($s =~ /^\s*default\s*=/) { $n++; $d = 1 if $s =~ /^\s*default\s*=\s*null\s*$/ }
+      }
+      exit 1' "$name" "$line" < "$f" && list="$list$name"$'\n'
+  done < <(jq -r '.triggers[] | select(.change_kind == "added" and (.address | type == "string" and test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$"))
+      and (.line | type == "number") and (.file | test("^[A-Za-z0-9_./-]+\\.tf$")) and (.file | split("/") | all(. != "..")))
+      | [(.address | ltrimstr("var.")), .file, (.line | tostring)] | @tsv' "$out/behaviour.json")
+  printf '%s' "$list" | jq -R -s -c 'split("\n") | map(select(. != ""))' > "$out/nullvars.json"
+}
+
 classify() {
   abs "$dir" --dir; [ -d "$dir" ] || die "--dir is not a directory"
   [ ! -e "$out/behaviour.json" ] && [ ! -e "$out/status" ] || die "--out already holds a classification"
@@ -163,6 +192,7 @@ classify() {
       ok) if jq -e --slurpfile d "$cover" "$JQ_DEFS"' valid_behaviour
              and ($d == [] or covers($d[0]))' "$out/behaviour.raw" > /dev/null 2>&1; then
             mv -- "$out/behaviour.raw" "$out/behaviour.json"
+            null_vars
           else echo "output refused" > "$out/status"; fi ;;
     esac
     rm -f -- "$out/behaviour.raw"
@@ -235,7 +265,9 @@ evaluate() {
   # kept or discarded, and nothing else.
   jq -e --slurpfile b "$out/behaviour.json" --argjson c "$cf" "$JQ_DEFS"' valid_eval($b[0]; $c)' \
     "$out/eval.raw" > /dev/null 2>&1 || not_run "output refused"
-  jq -n --slurpfile b "$out/behaviour.json" --slurpfile e "$out/eval.raw" --slurpfile l "$ladder" --argjson c "$cf" --argjson w "$wj" "$JQ_DEFS"'
+  local nv='[]'
+  [ -f "$out/nullvars.json" ] && nv="$(jq -c 'if type == "array" and all(.[]; type == "string") then . else [] end' "$out/nullvars.json" 2> /dev/null)" || nv='[]'
+  jq -n --slurpfile b "$out/behaviour.json" --slurpfile e "$out/eval.raw" --slurpfile l "$ladder" --argjson c "$cf" --argjson w "$wj" --argjson nv "${nv:-[]}" "$JQ_DEFS"'
     $b[0] as $b | $l[0] as $l
     # An unverifiable trigger at a wrapper versions.tf the host found equal to its generator output
     # is inert, with no outstanding difference: the wrapper is the module file, as the hook writes it.
@@ -247,7 +279,16 @@ evaluate() {
     # change adds to a managed resource that no planned example can create. When in doubt, no mark.
     # The categories: an added argument or block of a managed resource, never a removal or a type,
     # default, address, lifecycle or wrapper change, which take their own categories or kinds.
-    def unex_cats: ["literal-argument-change", "dynamic-block-change", "unclassified-change"];
+    def unex_cats: ["dynamic-block-change", "unclassified-change"];
+    # The value reads one variable the change adds with a null default ($nv), and nothing else: an
+    # argument is exactly var.<name>; a dynamic block is null-guarded to no block. A literal, another
+    # variable, a local, a resource or any function changes what existing callers get: never marked.
+    def null_pass($t): ($t.contextual_refs == []) and ($t.head_expr | type == "string")
+      and ($t.referenced_inputs | type == "array" and length == 1 and (.[0].name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]*$")))
+      and ($t.referenced_inputs[0].name as $n | ($n | IN($nv[]))
+        and (if $t.category == "dynamic-block-change"
+             then ($t.head_expr | test("^var\\.\($n) == null \\? \\[\\] : \\[[^?:]*\\]$") or test("^var\\.\($n) != null \\? \\[[^?:]*\\] : \\[\\]$"))
+             else $t.head_expr == "var.\($n)" end));
     # Meta-arguments change how a resource is created, not what it sets: never marked.
     def meta_args: ["provider", "count", "for_each", "depends_on", "lifecycle", "provisioner", "connection"];
     # A managed resource address, [module.<call>[<key>].]...<type>.<name>[<key>], with no keyword root.
@@ -264,15 +305,26 @@ evaluate() {
       | ($t.address | type == "string" and managed) and $et.state == "unverifiable" and ($et | has("complete") or has("outstanding") or has("evidence_digest") | not)
       and $t.levels == ["L4"] and $t.change_kind == "added"
       and ([$t.category, ($t.also_categories // [])[]] - unex_cats == [])
+      and null_pass($t)
       and ($t.attribute | type == "string" and (sub("^dynamic\\."; "") | split(".")[0] | IN(meta_args[]) | not))
       and plans_known
       and (any($l.coverage.examples[].addresses[]; bare | . == $a or endswith("." + $a)) | not);
+    def etof($id): first($e.triggers[] | select(.id == $id));
+    # The ids marked above, then the added variable they pass through: its own trigger takes no
+    # level and follows them, so it is marked only when it is a null-default variable the change
+    # adds and every trigger it follows is marked.
+    ([$b.triggers[] as $t | select(unexercised($t; etof($t.id))) | $t.id]) as $m
+    | def unex($t; $et): unexercised($t; $et)
+        or ($t.address | type == "string" and test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$") and (ltrimstr("var.") | IN($nv[])))
+           and $t.change_kind == "added" and $t.category == "unclassified-change" and (($t.also_categories // []) == [])
+           and $t.levels == [] and $et.state == "unverifiable" and ($et | has("complete") or has("outstanding") or has("evidence_digest") | not)
+           and ($t.follows | type == "array" and length > 0 and all(.[]; IN($m[])));
     {run: {status: "ran", reason: null,
        triggers: [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
                   | {id: $t.id, file: $t.file, line: $t.line, category: $t.category, state: $et.state}
                     + ($t | with_entries(select(.key == "also_categories")))
                     + ($et | with_entries(select(.key | IN("complete", "outstanding", "evidence_digest"))))
-                    + (if unexercised($t; $et) then {unexercised: true} else {} end)],
+                    + (if unex($t; $et) then {unexercised: true} else {} end)],
        claims: [$c.claims[] | {claim_id, state: (kstate(.claim_id) | if . == "discarded" then "unverifiable" else . end)}],
        capped: $b.capped},
      record: (["behaviour: ran, \($b.triggers | length) triggers, \($b.capped) over the cap\(if $b.inert then ", inert" else "" end)"]
@@ -280,7 +332,7 @@ evaluate() {
           | "trigger \($t.id) `\($t.file)`\(if $t.line == null then "" else " line \($t.line)" end) \($t.category): \($et.state)"
             + (if $et.wrapper != null then ", wrapper \($et.wrapper)" else "" end)
             + (if $et.complete == true then ", complete" else "" end)
-            + (if unexercised($t; $et) then ", unexercised" else "" end)
+            + (if unex($t; $et) then ", unexercised" else "" end)
             + (if ($et.outstanding // []) != [] and $et.evidence_digest != null
                then ", outstanding \($et.outstanding | length), digest \($et.evidence_digest)" else "" end)]
        # Each base and head difference claims-eval found, for the compatibility judgement; no input crosses.

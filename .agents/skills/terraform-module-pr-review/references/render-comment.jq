@@ -433,7 +433,7 @@ def mark_floors($findings; $run; $h):
 # planned example can create. It leaves the gaps for rule 7 at best when the whole selection was
 # planned, it is no triage run, its categories are on the list, and no compat.* finding, at any
 # severity, sits in its directory.
-def demo_categories: ["literal-argument-change", "dynamic-block-change", "unclassified-change"];
+def demo_categories: ["dynamic-block-change", "unclassified-change"];
 def mark_undemonstrated($findings; $run):
   if . == null or .status != "ran" then . else
     (($run.triage | not) and $run.plan_ran and $run.coverage.class == "complete"
