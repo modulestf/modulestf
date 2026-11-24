@@ -1,3 +1,12 @@
+## [0.12.23](https://github.com/modulestf/modulestf/compare/v0.12.22...v0.12.23) (2026-11-24)
+
+
+### Bug Fixes
+
+* **pr-review:** Read a change no example can plan as undemonstrated coverage, approve with nits at best ([#208](https://github.com/modulestf/modulestf/issues/208)) ([fa73f3e](https://github.com/modulestf/modulestf/commit/fa73f3e9de217cb6f99c805501e2b074fac49981))
+
+
+
 ## [0.12.22](https://github.com/modulestf/modulestf/compare/v0.12.21...v0.12.22) (2026-11-24)
 
 
