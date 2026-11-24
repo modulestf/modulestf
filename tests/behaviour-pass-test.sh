@@ -201,6 +201,22 @@ classify; evalp --claims "$TMP/claims-556.json"
 check "capped: the run object carries the count" "$(q '.capped == 3 and .status == "ran"')"
 check "capped: the record head line" "$([ "$(head -n 1 "$O/record.txt")" = "behaviour: ran, 2 triggers, 3 over the cap" ]; echo $?)"
 
+# --- Over the cap the tool lists a file with the triggers it cut: 45 changed files, 40 triggers, 5 entries
+# with no trigger id and not inert, 5 over the cap. It classifies as ran; at capped 0 the same entry is refused.
+t_big45() {
+  setup
+  jq -n '[range(45) | {filename: "f\(. + 10).tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"}]' > "$TMP/files-45.json"
+  jq -n --argjson cap "${1:-5}" '{schema_version: 1, inert: false, capped: $cap,
+    entries: [range(45) | {path: "f\(. + 10).tf", change_kind: "modified", inert: false,
+      trigger_ids: (if . < 40 then ["T-\("00\(. + 1)" | .[-3:])"] else [] end)}],
+    triggers: [range(40) | {id: "T-\("00\(. + 1)" | .[-3:])", file: "f\(. + 10).tf", line: 1, category: "literal-argument-change", change_kind: "modified"}]}' > "$TMP/behaviour.out"
+  DIFF="$TMP/files-45.json" classify
+  if [ "${1:-5}" = 0 ]; then grep -qF 'not run: output refused' "$O/classify.txt"
+  else [ "$(head -n 1 "$O/classify.txt")" = "behaviour: ran, 40 triggers, 5 over the cap" ]; fi
+}
+t_big45; check "capped: 45 changed files, 5 entries without a trigger, classify runs: 40 triggers, 5 over the cap" $?
+t_big45 0; check "capped: the same entries at capped 0 are refused" $?
+
 # --- Refusals, each failing closed to not-run with its fixed reason.
 setup; F="$TMP/bin/absent" classify; F="$TMP/bin/absent" evalp
 notrun "no mtf-facts" "mtf-facts not installed"
@@ -227,6 +243,8 @@ refuse_b "33 required cases" '.triggers[0].cases = [range(33) | {id: "c\(.)", in
 refuse_b "a required case twice" '.triggers[0].cases = [{id: "empty", inputs: {}}, {id: "empty", inputs: {}}]'
 refuse_b "an entry naming a trigger that does not exist" '.entries[0].trigger_ids += ["T-009"]'
 refuse_b "a changed file of the diff with no entry" '.entries = []'
+refuse_b "an entry with no trigger that is not inert" '.entries += [{path: "x.tf", change_kind: "modified", inert: false, trigger_ids: []}]'
+refuse_b "an entry with no trigger and no inert flag" '.entries += [{path: "x.tf", change_kind: "modified", trigger_ids: []}]'
 setup; printf 'not json' > "$TMP/behaviour.out"; classify; evalp
 notrun "behaviour refused: not JSON" "output refused"
 setup; head -c 1048577 /dev/zero | tr '\0' ' ' > "$TMP/behaviour.out"; classify; evalp
@@ -681,6 +699,13 @@ wmutate() { # name, perl substitution, case function [, file mutated, behaviour-
   BP="$keep"; fails="$before"
   check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
+t_untriggered() { # an entry with no trigger and not inert is refused
+  setup; jq '.entries += [{path: "x.tf", change_kind: "modified", inert: false, trigger_ids: []}]' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
+  classify; evalp --claims "$TMP/claims-556.json"
+  jq -e '. == {status: "not-run", reason: "output refused", triggers: [], claims: [], capped: 0}' "$O/run-behaviour.json" > /dev/null 2>&1
+}
+wmutate "an untriggered entry that is not inert accepted" 's/\(\(\.trigger_ids \| length\) > 0 or \.inert == true or \$cap > 0\)/true/' t_untriggered
+wmutate "the cap exception dropped" 's/ or \.inert == true or \$cap > 0\)/ or .inert == true)/' t_big45
 wmutate "the derive comparison dropped" 's/cmp -s "\$out\/wrap\/e" "\$out\/wrap\/w" && r=derived \|\| r=differs/r=derived/' t_wr_differs
 wmutate "the copy comparison dropped" 's/cmp -s "\$out\/wrap\/m" "\$out\/wrap\/w" && r=copied \|\| r=differs/r=copied/' t_wr_copied
 wmutate "the derive version boundary moved" 's/000010010600000/000010010500000/' t_wr_copied
