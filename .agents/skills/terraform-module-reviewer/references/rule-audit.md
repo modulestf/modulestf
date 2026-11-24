@@ -56,7 +56,7 @@ Three rows change `scope` after the facts engine review found them:
 
 ## Severities that needed a reading
 
-- `compat.variable-removed`, `compat.variable-now-required`, `compat.type-narrowed`, `compat.resource-address-changed`, `compat.version-constraint-raised`, `compat.generated-policy-narrowed`: CRITICAL undeclared, HIGH declared with no migration path. Check A gives the declared break with a migration path no level, so it is not a finding of these rules.
+- `compat.variable-removed`, `compat.variable-now-required`, `compat.type-narrowed`, `compat.resource-address-changed`, `compat.version-constraint-raised`, `compat.generated-policy-narrowed`: CRITICAL undeclared, HIGH declared with no migration path. Check A gives the declared break with a migration path no level, so it is not a finding of these rules. The LOW band of `compat.generated-policy-narrowed` is in its rule text, inactive; LOW joins the registry with the host step that supplies its reference.
 - `compat.default-changed` adds MEDIUM, the Check A band "a default whose effect is cosmetic", and LOW, its bands for a default moved from a rejected value to null and for a new input's default that a service announced.
 - `coverage.attribute-not-output`: HIGH for an output wrong in a supported mode, MEDIUM for a computed attribute with no output.
 - `structure.input-ignored-in-branch`: CRITICAL, HIGH, MEDIUM and LOW, all four named in its Check C bullets.
@@ -67,7 +67,7 @@ Three rows change `scope` after the facts engine review found them:
 - `structure.insecure-default`: CRITICAL, the only level Check C gives a weakened secure default.
 - `examples.stale-reference`: HIGH. The Check D block names no level for it; an example that "can no longer initialize" is broken by the change before apply, the HIGH bullet.
 - `profile.layout-divergence`: MEDIUM for a `LICENSE` that is not Apache 2.0 ("at the severity of a missing required file") and LOW when cosmetic.
-- `profile.commit-type-mismatch`: MEDIUM for a type that releases the change wrongly, LOW for `feat` on a fix only.
+- `profile.commit-type-mismatch`: MEDIUM for a type that releases the change wrongly, LOW for `fix` on an added input that is the means of the fix and for `feat` on a fix.
 - `profile.template-drift`: MEDIUM, and LOW when the divergence is cosmetic.
 - `review.quoted-claim-unverifiable`: `none`. An unconfirmed claim "produces no finding" and is only counted in the summary line, so the registry name never carries a severity.
 
@@ -78,7 +78,7 @@ These rules left a value open. Each value in the table is the reading above; a r
 - `structure.sibling-block-asymmetry`: Check C's **Severity** block gives HIGH for a field a variable description, README or example of the change documents and MEDIUM for a field only a sibling block sets.
 - Check C's MEDIUM for "missing tag propagation" and its **Fails when** bullet on tags have no `rule_id` in the registry. No row takes them; a finding of that kind is minted under [findings-schema.md](findings-schema.md).
 - Check D's bullet on invented input names has no `rule_id` of its own. It is left with the per-example rules, without a row change.
-- Check C does not say whether its rules run in example areas. `area_kinds` adds `example` only where a rule names examples: `structure.docs-contradict-code` ("an example comment"), `structure.version-floor-understated` ("an example against the module it calls") and `structure.comment-unsourced` (LOW "in an example"). `structure.multi-provider` excludes examples in its own text.
+- Check C does not say whether its rules run in example areas. `area_kinds` adds `example` only where a rule names examples: `structure.docs-contradict-code` ("an example comment"), `structure.version-floor-understated` ("an example against the module it calls") and `structure.comment-unsourced` ("in an example alike"). `structure.multi-provider` excludes examples in its own text.
 - `structure.copied-content-unattributed` adds `example` to `area_kinds` too: its LOW band names a value in an example.
 - `examples.example-broken-at-base` is `cross_area` `no`: the cross-area pass names `examples.example-broken` for untouched examples, not its base variant.
 - `examples.feature-undemonstrated`, `examples.argument-undemonstrated` and `examples.submodule-missing` take the module's area kinds, because the cross-area pass anchors where the rule's text puts the finding and otherwise at the caller, and these rules judge a module feature.
