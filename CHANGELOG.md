@@ -1,3 +1,12 @@
+## [0.12.11](https://github.com/modulestf/modulestf/compare/v0.12.10...v0.12.11) (2026-11-24)
+
+
+### Bug Fixes
+
+* **pr-review:** Read a change whose behaviour triggers are all inert as inert for plan coverage ([#181](https://github.com/modulestf/modulestf/issues/181)) ([8c655d0](https://github.com/modulestf/modulestf/commit/8c655d040c413ab3f1693a6ae2b713ecbae306c1))
+
+
+
 ## [0.12.10](https://github.com/modulestf/modulestf/compare/v0.12.9...v0.12.10) (2026-11-23)
 
 
