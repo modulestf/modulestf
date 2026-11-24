@@ -701,6 +701,15 @@ t_plan_edited() { # a kept comment edited after read_at refuses, naming its item
 }
 t_plan_edited; check "items --plan: a comment edited after the review refuses naming its item id" $?
 
+t_plan_nl() { # a comment time with a trailing newline is outside the form: the comment counts as later
+  fx_default; stamp_all
+  stamp repos/o/r/issues/7/comments $'2026-11-10T09:00:00Z\n' $'2026-11-10T09:00:00Z\n'
+  plan_run || { cat "$TMP/pi.out"; return 1; }
+  grep -qx 'comments after the review, not items of this run: 1' "$TMP/pi.out" && ! jq -e 'any(.[]; .id == "C-701")' "$RUN/items.json" > /dev/null || { cat "$TMP/pi.out"; return 1; }
+  fr cleanup "$RUN" > /dev/null
+}
+t_plan_nl; check "items --plan: a comment time with a trailing newline counts as later" $?
+
 t_plan_args() { # --plan excludes --review; an unknown field, kind or schema of the plan is refused; the profile and prefix come from the plan
   fx_default; stamp_all
   new_run; round0 "$OUT"; mkplan "$TMP/plan-x"; fr clone "$RUN" > /dev/null 2>&1 || return 1
@@ -2185,6 +2194,7 @@ mutate() { # name, perl substitution, case function
   FR="$keep"; fails="$before"
   check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
+mutate "the plan timestamp anchor loose" 's/Z\\\\z"\);\n  \[\.comments\[\] \| select\(\(\.created_at/Z\$");\n  [.comments[] | select((.created_at/' t_plan_nl
 mutate "the edited-comment check of a plan dropped" 's/\[ -z "\$x" \] \|\| fail "a comment changed after the review: \$x; review again"/true/' t_plan_edited
 mutate "the pin check of a plan dropped" 's/\[ -z "\$x" \] \|\| fail "the plan is of another pull request state: \$x differs"/true/' t_plan_pin
 mutate "the git wrapper without env -i" 's/^  env -i PATH="\$PATH" HOME="\$RUN\/home" GIT_CONFIG_GLOBAL/  env PATH="\$PATH" HOME="\$RUN\/home" GIT_CONFIG_GLOBAL/m' t_e2e

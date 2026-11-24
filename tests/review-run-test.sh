@@ -14,7 +14,7 @@
 #   - the baseline defects: the Write short line, mergeability not-applicable on a merged
 #     pull request, the posting login's own review left out of a render-only run, several
 #     module roots resolved by the prefix rule or refused with a fixed reason;
-#   - the closing issues' text: kind=issue items by origin, the 4000 byte cut and its entry, one issue
+#   - the closing issues' text: kind=issue items by origin, the 8000 byte cut and its entry, one issue
 #     named twice read once, and a cross-repository reference, a third issue or a failed read adding nothing;
 #   - a failed validate at light escalates, a schema escalation at focused escalates;
 #   - a large change: a files list over 1 MiB is reviewed, the files over the review budget named
@@ -1126,7 +1126,7 @@ check "defect: several module roots resolve to the one holding every changed pat
 check "host-pass: an empty login is refused without --render-only" \
   "$(GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login "" --out "$TMP/hp2" > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
 # The closing issues' text (github-io.md, Issue Text): the first two in this repository, as
-# kind=issue items after the body, origin by numeric id, 4000 bytes each; a reference to another
+# kind=issue items after the body, origin by numeric id, 8000 bytes each; a reference to another
 # repository, a third issue and a failed read add nothing and fail nothing.
 closing() { jq -n '{data: {repository: {pullRequest: {closingIssuesReferences: {pageInfo: {hasNextPage: false},
   nodes: [$ARGS.positional[] | split("#") | {number: (.[1] | tonumber), repository: {nameWithOwner: .[0]}}]}}}}}' \
@@ -1134,7 +1134,7 @@ closing() { jq -n '{data: {repository: {pullRequest: {closingIssuesReferences: {
 issue() { jq -n --argjson n "$1" --argjson id "$2" --arg body "$3" '{number: $n, title: "Issue \($n) $(touch z)",
   body: $body, user: {login: "u\($id)", id: $id, type: "User"}}' > "$GHD/issue-$1"; }
 issue 1303 11 'Repro: apply twice. Workaround: aws_ec2_tag.'
-issue 1304 12 "$(printf 'line %04d\n' $(seq 600))"
+issue 1304 12 "$(printf 'line %04d\n' $(seq 1000))"
 issue 1305 12 'third'
 closing example-org/widget#1303 other-org/widget#1303 Example-Org/Widget#1304 example-org/widget#1305
 GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/hp3" > /dev/null 2>&1
@@ -1146,10 +1146,16 @@ check "issues: an item starts with the number and title, then the body" \
   "$(awk -v s="ITEM-$S3 kind=issue origin=change-author" '$0 == s {getline a; getline b; getline c; exit !(a ~ /^#1303 Issue 1303 / && b == "" && c ~ /^Repro: /)}' "$T3"; echo $?)"
 check "issues: a cross-repository reference and the third issue add nothing" \
   "$([ "$(grep -c '^#1303 \|^#1304 \|^#1305 ' "$T3")" = 2 ] && ! grep -q '^#1305 \|^third$' "$T3"; echo $?)"
-check "issues: an issue over 4000 bytes is cut and recorded" \
+check "issues: an issue over 8000 bytes is cut and recorded" \
   "$(grep -qx "\[truncated-$S3: 2030 bytes omitted\]" "$T3" &&
      [ "$(q "$TMP/hp3/host.json" '[.could_not_run[] | select(.kind == "prose-truncated")] == [{kind: "prose-truncated", item: "issue", omitted: 2030}]')" = 0 ]; echo $?)"
 check "issues: the records pass their own check" "$(GH_TOKEN=x bash "$HP" check "$TMP/hp3" --head "$HEADC" | grep -qx 'records accepted'; echo $?)"
+# An issue of 6030 bytes (a real closing issue was over 4000) travels whole: nothing cut, nothing recorded.
+issue 1304 12 "$(printf 'line %04d\n' $(seq 600))"
+GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/hp3b" > /dev/null 2>&1
+check "issues: an issue of 6030 bytes is not cut and nothing is recorded" \
+  "$(! grep -q '^\[truncated-' "$TMP/hp3b/task.md" && grep -qx 'line 0600' "$TMP/hp3b/task.md" &&
+     [ "$(q "$TMP/hp3b/host.json" '.could_not_run == []')" = 0 ]; echo $?)"
 rm -f "$GHD/issue-1304"
 closing example-org/widget#1304 example-org/widget#1303
 GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/hp4" > /dev/null 2>&1
@@ -1179,6 +1185,74 @@ check "issues: without GraphQL, a closed pull request still reads its closing is
      [ "$(grep -c ' kind=issue ' "$TMP/hp7/task.md")" = 1 ]; echo $?)"
 mv "$TMP/threads.keep" "$GHD/threads"; cp "$TMP/meta.keep" "$GHD/meta"
 closing
+
+# An unresolved thread is no open objection when its opener raised it, the pull request author
+# replied and the opener then approved the head (github-io.md, Discussion); `answered` has its
+# cases in plan-pass-test.sh, here the run: the query's fields, the reviews, the head and the login.
+cp "$GHD/threads" "$TMP/threads.keep2"; cp "$GHD/reviews" "$TMP/reviews.keep2"
+thread() { # opener id, reply published at, reply drafted at: one unresolved thread, the reply by the author (id 11)
+  jq -n --argjson a "$1" --arg t "$2" --arg c "${3:-$2}" '{data: {repository: {pullRequest: {reviewThreads: {pageInfo: {hasNextPage: false}, nodes: [
+    {isResolved: false, isOutdated: false, path: "main.tf", line: 3, resolvedBy: null,
+     comments: {pageInfo: {hasNextPage: false}, nodes: [
+       {author: {__typename: "User", login: "u\($a)", databaseId: $a}, createdAt: "2026-01-01T10:00:00Z", publishedAt: "2026-01-01T10:00:00Z",
+        pullRequestReview: {databaseId: 900}, body: "please change"},
+       {author: {__typename: "User", login: "author1", databaseId: 11}, createdAt: $c, publishedAt: $t, pullRequestReview: null, body: "done"}]}}]}}}}}' > "$GHD/threads"
+}
+review() { # user id, state, association, time, commit, login
+  jq -n --argjson u "$1" --arg s "$2" --arg a "$3" --arg t "$4" --arg c "${5:-$HEADC}" --arg l "${6:-u$1}" \
+    '{id: 501, user: {login: $l, id: $u}, state: $s, author_association: $a, submitted_at: $t, commit_id: $c}'
+}
+unresolved_after() { # out dir, [host-pass.sh], [login]: the unresolved thread count of the run, reviews on stdin
+  jq -s '.' > "$GHD/reviews"
+  GH_TOKEN=x bash "${2:-$HP}" run --repo example-org/widget --pr 7 --login "${3-octo-reviewer}" ${4-} --out "$1" > /dev/null 2>&1
+  jq -r '.unresolved_threads | length' "$1/host.json" 2> /dev/null
+}
+thread 20 2026-01-02T10:00:00Z
+n="$({ review 20 APPROVED MEMBER 2026-01-03T10:00:00Z; } | unresolved_after "$TMP/th1")"
+check "threads: the opener's approval after the author's reply leaves no open thread, signal pass" \
+  "$([ "$n" = 0 ] && [ "$(q "$TMP/th1/host.json" '.signals.threads == "pass"')" = 0 ] &&
+     [ "$(grep -c ' kind=thread ' "$TMP/th1/task.md")" = 2 ]; echo $?)"
+check "threads: the host records with a closed thread pass their own check" \
+  "$(GH_TOKEN=x bash "$HP" check "$TMP/th1" --head "$HEADC" | grep -qx 'records accepted'; echo $?)"
+n="$({ review 20 APPROVED MEMBER 2026-01-01T12:00:00Z; } | unresolved_after "$TMP/th2")"
+check "threads: an approval before the reply leaves the thread open" "$([ "$n" = 1 ]; echo $?)"
+n="$({ review 20 APPROVED MEMBER 2026-01-03T10:00:00Z "$BASEC"; } | unresolved_after "$TMP/th3")"
+check "threads: an approval of an earlier commit leaves the thread open" "$([ "$n" = 1 ]; echo $?)"
+n="$({ review 20 APPROVED MEMBER 2026-01-03T10:00:00Z; review 20 CHANGES_REQUESTED MEMBER 2026-01-04T10:00:00Z; } | unresolved_after "$TMP/th4")"
+check "threads: a later CHANGES_REQUESTED of the opener leaves the thread open" "$([ "$n" = 1 ]; echo $?)"
+thread 20 2026-01-04T10:00:00Z 2026-01-02T09:00:00Z
+n="$({ review 20 APPROVED MEMBER 2026-01-03T10:00:00Z; } | unresolved_after "$TMP/th5")"
+check "threads: a reply drafted before the approval and published after it leaves the thread open" "$([ "$n" = 1 ]; echo $?)"
+thread 5 2026-01-02T10:00:00Z
+n="$({ review 5 APPROVED MEMBER 2026-01-03T10:00:00Z "$HEADC" octo-reviewer; } | unresolved_after "$TMP/th6" "$HP" Octo-Reviewer)"
+check "threads: the posting login's own approval, in another letter case, leaves the thread open" "$([ "$n" = 1 ]; echo $?)"
+n="$({ review 5 APPROVED MEMBER 2026-01-03T10:00:00Z "$HEADC" octo-reviewer; } | unresolved_after "$TMP/th7" "$HP" "" --render-only)"
+check "threads: with an empty login in a render-only run no review is left out" "$([ "$n" = 0 ]; echo $?)"
+thread 20 2026-01-02T10:00:00Z
+mv "$GHD/reviews" "$TMP/reviews.gone"
+GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/th8" > /dev/null 2>&1
+check "threads: a reviews list that could not be read leaves the thread open" \
+  "$([ "$(q "$TMP/th8/host.json" '.unresolved_threads | length == 1 and .[0].path == "main.tf"')" = 0 ] &&
+     [ "$(q "$TMP/th8/host.json" '.signals.review_decision == "unknown"')" = 0 ]; echo $?)"
+mv "$TMP/reviews.gone" "$GHD/reviews"
+# Negative self-check: copies of the reader that skip a field of the run are caught by these cases.
+th_mut() { # name, perl expression on host-pass.sh, the case that must change: closed (th1) or open (th3, th5)
+  local d="$TMP/th-mut-$1"; cp -R "$SK" "$d"
+  perl -0pi -e "$2" "$d/host-pass.sh"
+  if cmp -s "$d/host-pass.sh" "$SK/host-pass.sh"; then check "self-check: thread mutation $1 changes the file" 1; return; fi
+  thread 20 2026-01-02T10:00:00Z
+  a="$({ review 20 APPROVED MEMBER 2026-01-03T10:00:00Z; } | unresolved_after "$TMP/thm-a-$1" "$d/host-pass.sh")"
+  b="$({ review 20 APPROVED MEMBER 2026-01-03T10:00:00Z "$BASEC"; } | unresolved_after "$TMP/thm-b-$1" "$d/host-pass.sh")"
+  thread 20 2026-01-04T10:00:00Z 2026-01-02T09:00:00Z
+  c="$({ review 20 APPROVED MEMBER 2026-01-03T10:00:00Z; } | unresolved_after "$TMP/thm-c-$1" "$d/host-pass.sh")"
+  check "self-check: thread mutation $1 is caught" "$([ "$a $b $c" != "0 1 1" ]; echo $?)"
+}
+th_mut no-head 's/\$meta\[0\]\.user\.id; \$head\)/\$meta[0].user.id; "")/'
+check "threads: the query asks for publishedAt and the review of each comment, as github-io.md states it" \
+  "$(grep -q 'nodes{author{__typename login ... on User{databaseId}} publishedAt pullRequestReview{databaseId} body}' "$SK/host-pass.sh" &&
+     grep -q 'nodes{author{__typename login ... on User{databaseId}} publishedAt pullRequestReview{databaseId} body}' "$SK/github-io.md"; echo $?)"
+th_mut no-author-id 's/\$meta\[0\]\.user\.id; \$head\)/0; \$head)/'
+cp "$TMP/threads.keep2" "$GHD/threads"; cp "$TMP/reviews.keep2" "$GHD/reviews"
 
 # --- 5. usage and run directory refusals --------------------------------------------------------------
 check "usage: a run directory outside the pattern is refused" "$(run_rr verify /tmp > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
