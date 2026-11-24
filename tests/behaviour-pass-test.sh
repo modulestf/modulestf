@@ -407,6 +407,12 @@ t_unex_defname() { printf '%s\n' 'variable "default_idle" {' '  default = null' 
     elif .id == "T-017" then .address = "var.default_idle" else . end)'
   UMOD="$keep"; [ "$(marked)" = '["T-008","T-014"]' ] && [ "$(cat "$O/nullvars.json")" = '[{"dir":".","name":"default_idle"}]' ]; }
 t_unex_defname; check "unexercised: a variable whose name holds default is read" $?
+t_unex_escq() { blkok 'variable "new_idle" {' '  description = "a \"}\" b"' '  default     = null' '}'; }
+t_unex_escq; check "unexercised: an escaped quote before a brace inside a string is read as one string" $?
+t_unex_escbs() { blkok 'variable "new_idle" {' '  description = "a\\"' '  default     = null' '}'; }
+t_unex_escbs; check "unexercised: a string that ends in an escaped backslash is read" $?
+t_unex_esc3000() { blk 'variable "new_idle" {' '  type        = any' '  description = "\"" == { "\"a" = 1' '  default = null' '  "\"b" = 2 } == "\"" ? "a" : "b"' '  sensitive   = "\"" == "(" ? false : "\"" == "x"' '  default     = 3000' '  nullable    = "\"" == ")" ? true : "\"" != "x"' '}'; }
+t_unex_esc3000; check "unexercised: escaped quotes around brackets, with the real default 3000, are not read as null" $?
 t_unex_obj() { blk 'variable "new_idle" {' '  type        = number' '  description = (' '{' 'default = null' '}' '  ).default == null ? "a" : "b"' '  default     = 3000' '}'; }
 t_unex_obj; check "unexercised: a default = null inside a nested object, with the real default after it, is not read" $?
 t_unex_b8() { blk 'variable "new_idle" {' '  type = object({ m = optional(map(string), {' '  default = null' '}' ') })' '  default = {}' '}'; }
@@ -448,8 +454,10 @@ udirs() { # [behaviour jq update] [eval jq update]: classify on the two director
   setup; jq "${1:-.}" "$TMP/behaviour-dirs.json" > "$TMP/behaviour.out"
   jq '{schema_version: 1, capped: 0, triggers: [.triggers[] | {id, state: "unverifiable", reason: "x"}], claims: [], discarded_claims: []}' "$TMP/behaviour.out" > "$TMP/eval.out"
   local SCHEMA="${SCHEMA-$TMP/schema-u.json}" keep="$MOD"; MOD="${UDIR:-$UMOD2}"; DIFF="$TMP/files-dirs.json" classify; MOD="$keep"
-  evalp --ladder "$TMP/ladder-unex.json"
+  evalp --ladder "${ULAD:-$TMP/ladder-dirs.json}"
 }
+# The examples of the two-directory runs call the root and modules/a directly, so both are loaded.
+jq '.coverage.examples[0].module_calls += {a: "modules/a"}' "$TMP/ladder-unex.json" > "$TMP/ladder-dirs.json"
 t_unex_dirs() { udirs && [ "$(marked)" = '["T-002","T-003"]' ] && [ "$(cat "$O/nullvars.json")" = '[{"dir":"modules/a","name":"deletion_protection"}]' ] \
   && case "$(urender '.id == "T-001"')" in "rendered inconclusive (ladder rule 4),"*) ;; *) false ;; esac; }
 t_unex_dirs; check "unexercised: a root pass-through of a variable that defaults to true is not marked when a submodule adds the same name with a null default" $?
@@ -462,6 +470,17 @@ t_unex_dirs_both_with() { cp "$UMOD2/variables.tf" "$TMP/vars-keep"; printf 'var
 t_unex_dirs_both; check "unexercised: the change adding the name at the root with default true and in a submodule with null marks only the submodule's" $?
 t_unex_dirs_follow() { t_unex_dirs_both_with '["T-002"]'; }
 t_unex_dirs_follow; check "unexercised: a root variable that defaults to true is not marked even when the trigger it follows is" $?
+# A change in a directory no planned example loads: terraform never read it, so a type error there,
+# such as map(string) passed to a number, would plan nowhere. Nothing is marked.
+t_unex_unloaded() { printf 'variable "deletion_protection" {\n  type    = map(string)\n  default = null\n}\n' > "$UMOD2/modules/a/variables.tf"
+  ULAD="$TMP/ladder-unex.json" udirs; local r=$?
+  printf 'variable "deletion_protection" {\n  default = null\n}\n' > "$UMOD2/modules/a/variables.tf"
+  [ "$r" = 0 ] && [ "$(marked)" = '[]' ] && [ "$(cat "$O/nullvars.json")" = '[{"dir":"modules/a","name":"deletion_protection"}]' ] \
+    && case "$(urender '.id | IN("T-002", "T-003")')" in "rendered inconclusive (ladder rule 4),"*) ;; *) false ;; esac; }
+t_unex_unloaded; check "unexercised: a change in a directory no planned example loads is not marked and renders inconclusive" $?
+t_unex_loaded() { udirs && [ "$(marked)" = '["T-002","T-003"]' ] \
+    && case "$(urender '.id | IN("T-002", "T-003")')" in "rendered approve with nits (ladder rule 7),"*) ;; *) false ;; esac; }
+t_unex_loaded; check "unexercised: the same change in a directory a planned example calls is marked, approve with nits" $?
 t_unex_outside() { local d="$TMP/unex-out-$c"; rm -rf "$d"; mkdir -p "$d/modules" "$TMP/far-$c"; cp "$UMOD2/main.tf" "$UMOD2/variables.tf" "$d/"
   cp "$UMOD2/modules/a/"* "$TMP/far-$c/"; ln -s "$TMP/far-$c" "$d/modules/a"
   UDIR="$d" udirs; [ "$(marked)" = '[]' ] && [ "$(cat "$O/nullvars.json")" = '[]' ]; }
@@ -473,7 +492,7 @@ t_unex_prefix() { setup; cp "$TMP/behaviour-unex.json" "$TMP/behaviour.out"; cp 
   evalp --ladder "$TMP/ladder-unex-p.json" --prefix modules/x; [ "$(marked)" = '["T-008","T-014"]' ]; }
 t_unex_prefix; check "unexercised: under a module root prefix the pass-through and the guarded block are marked" $?
 t_unex_required() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","required":true},"port":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","min_items":1,"block":{"attributes":{}}}}}}}}}}' > "$TMP/schema-req.json"
-  SCHEMA="$TMP/schema-req.json" unex && [ "$(marked)" = '[]' ] && [ "$(cat "$O/required.json")" = '["aws_lb_listener.default_action","aws_lb_listener.idle_timeout"]' ]; }
+  SCHEMA="$TMP/schema-req.json" unex && [ "$(marked)" = '[]' ] && grep -qF '"aws_lb_listener.default_action"' "$O/required.json" && grep -qF '"aws_lb_listener.idle_timeout"' "$O/required.json"; }
 t_unex_required; check "unexercised: an attribute the schema requires, or a block with min_items, is not marked" $?
 t_unex_optional() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","block":{"attributes":{}}}}}}}}}}' > "$TMP/schema-opt.json"
   SCHEMA="$TMP/schema-opt.json" unex && [ "$(marked)" = '["T-008","T-014"]' ]; }
@@ -492,6 +511,13 @@ t_unex_nested_req() { printf '%s' '{"format_version":"1.0","provider_schemas":{"
   SCHEMA="$TMP/schema-nreq.json" unex . '.triggers |= map(if .id == "T-008" then .attribute = "default_action.target_group_arn" else . end)' \
     && [ "$(marked)" = '["T-014"]' ] && grep -qF '"aws_lb_listener.default_action.target_group_arn"' "$O/required.json"; }
 t_unex_nested_req; check "unexercised: an attribute the schema requires inside a block is not marked" $?
+t_unex_nested_dyn() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","block":{"attributes":{},"block_types":{"inner":{"nesting_mode":"list","min_items":1,"block":{"attributes":{}}}}}}}}}}}}}' > "$TMP/schema-ndyn.json"
+  SCHEMA="$TMP/schema-ndyn.json" unex . '.triggers |= map(if .id == "T-014" then .attribute = "default_action.dynamic.inner" else . end)' \
+    && [ "$(marked)" = '["T-008"]' ] && grep -qF '"aws_lb_listener.default_action.inner"' "$O/required.json"; }
+t_unex_nested_dyn; check "unexercised: a dynamic block inside a block meets its required path" $?
+t_unex_lacktype() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_db_instance":{"version":0,"block":{"attributes":{}}}}}}}' > "$TMP/schema-lack.json"
+  SCHEMA="$TMP/schema-lack.json" unex && [ "$(marked)" = '[]' ] && grep -qF '"aws_lb_listener.*"' "$O/required.json"; }
+t_unex_lacktype; check "unexercised: a schema that lacks the trigger's resource type marks nothing" $?
 t_unex_nullattr() { unex . '.triggers |= map(if .id == "T-008" then .attribute = null else . end)' && [ "$(q '.status == "ran"')" = 0 ] && [ "$(marked)" = '["T-014"]' ]; }
 t_unex_nullattr; check "unexercised: a trigger with no attribute is unmarked and the step still runs" $?
 t_unex_reader() { t_unex_typedef && t_unex_desc && t_unex_obj && t_unex_b8 && t_unex_list && t_unex_twodef; }
@@ -1070,7 +1096,6 @@ wmutate "unexercised: unknown module calls accepted" 's/and \(\.module_calls \| 
 wmutate "unexercised: a nested module address not matched" 's/ or endswith\("\." \+ \$a\)//' t_unex_cases
 wmutate "unexercised: the state not checked" 's/and \$et\.state == "unverifiable" and \(\$et/and true and (\$et/' t_unex_cases
 wmutate "unexercised: sweep evidence accepted" 's/and \$et\.state == "unverifiable" and \(\$et \| has\("complete"\) or has\("outstanding"\) or has\("evidence_digest"\) \| not\)\n/and \$et.state == "unverifiable"\n/' t_unex_cases
-wmutate "unexercised: no example at all accepted" 's/ and \(\$l\.coverage\.examples \| type == "array" and length > 0\)//' t_unex_cases
 wmutate "unexercised: the value not read" 's/\n      and null_pass\(\$t\)//' t_unex_true
 wmutate "unexercised: a literal value marked" 's/\n      and null_pass\(\$t\)//; s/def unex_cats: \["dynamic-block-change"/def unex_cats: ["literal-argument-change", "dynamic-block-change"/' t_unex_force
 wmutate "unexercised: an existing variable accepted" 's/\| \(\{dir: \(\$t\.file \| tdir\), name: \$n\} \| IN\(\$nv\[\]\)\)/| true/' t_unex_old
@@ -1103,13 +1128,19 @@ wmutate "unexercised: a string left open accepted" 's/ \|\| \$s =~ \/"\///' t_un
 wmutate "unexercised: brackets and parentheses not counted" 's/\[\\\{\\\[\\\(\]/[\\{]/; s/\[\\\}\\\]\\\)\]/[\\}]/' t_unex_list
 wmutate "unexercised: a default deeper in the type counted" 's/if \(\$depth == 1\) \{/if (1) {/' t_unex_typedef
 wmutate "unexercised: the block ended at the first column-0 brace, defaults counted at any depth" 's/if \(\$depth == 1\) \{/if (1) {/; s/        for my \$k \(0 \.\. length\(\$s\) - 1\) \{/        exit((\$n == 1 \&\& \$d == 1) ? 0 : 1) if \$s =~ \/^\\}\/;\n        for my \$k (0 .. length(\$s) - 1) {/' t_unex_b8
-wmutate "unexercised: a required attribute marked" 's/\| \(\("\*" \| IN\(\$rq\[\]\)\) or \(\$ta \| IN\(\$rq\[\]\)\)\) \| not\);/| true);/' t_unex_required
+wmutate "unexercised: a required attribute marked" 's/or \(\$ta \| IN\(\$rq\[\]\)\)\) \| not\);/or false) | not);/' t_unex_required
 wmutate "unexercised: a block with min_items not read as required" 's/select\(\(\.value\.min_items \/\/ 0\) > 0\)/select(false)/' t_unex_required
 wmutate "unexercised: a nested required attribute not read" 's/\(\.key as \$b \| \.value\.block \| req\("\\\(\$p\)\.\\\(\$b\)"\)\)/empty/' t_unex_nested_req
 wmutate "unexercised: no schema read as no requirement" 's/rq=\x27\["\*"\]\x27/rq=\x27[]\x27/' t_unex_noschema
 wmutate "unexercised: an unreadable schema read as no requirement" 's/printf \x27\["\*"\]\\n\x27 > "\$out\/required\.json"/printf \x27[]\\n\x27 > "\$out\/required.json"/' t_unex_badschema
 wmutate "unexercised: a malformed required list read as none" 's/then \. else \["\*"\] end/then . else [] end/' t_unex_badreq
 wmutate "unexercised: a null attribute not guarded" 's/def not_required\(\$t\): \(\$t\.attribute \| type == "string"\)\n      and /def not_required(\$t): /' t_unex_nullattr
+wmutate "unexercised: an unloaded directory marked" 's/ and plans_known and loaded\(\$t\)/ and plans_known/' t_unex_unloaded
+wmutate "unexercised: an unloaded variable trigger marked" 's/and all\(\.\[\]; IN\(\$m\[\]\)\)\) and loaded\(\$t\);/and all(.[]; IN(\$m[])));/; s/ and plans_known and loaded\(\$t\)/ and plans_known/' t_unex_unloaded
+wmutate "unexercised: a directly called directory not seen as loaded" 's/\.dir == \$d or \(\(\.module_calls \/\/ \{\}\) \| to_entries \| any\(\.value == \$d\)\)/.dir == \$d/' t_unex_loaded
+wmutate "unexercised: strings matched without escapes" 's/s\/"\(\(\?:\[\^"\\\\\]\|\\\\\.\)\*\)"\//s\/"([^"]*)"\//' t_unex_escq
+wmutate "unexercised: a nested dynamic segment kept" 's/split\("\."\) \| map\(select\(\. != "dynamic"\)\) \| join\("\."\)/sub("^dynamic\\\\."; "")/' t_unex_nested_dyn
+wmutate "unexercised: a type the schema lacks requires nothing" 's/,\n         \(\$ty\[\] \| select\(IN\(\$have\[\]\) \| not\) \| "\\\(\.\)\.\*"\)//' t_unex_lacktype
 wmutate "derive in the shared file returning its input" 's/  return \$o;\n\}/  return \$s;\n}/' t_wr_derived wrapper-derive.pl
 
 echo

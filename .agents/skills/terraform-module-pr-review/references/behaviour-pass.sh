@@ -185,7 +185,10 @@ null_vars() {
       ([$b[0].triggers[].address | strings | gsub("\\[[^\\]]*\\]"; "") | split(".") | select(length >= 2) | .[-2] | select(test("^[a-z][a-z0-9]*_[a-z0-9_]+$"))] | unique) as $ty
       | def req($p): ((.attributes // {}) | to_entries[] | select(.value.required == true) | "\($p).\(.key)"),
           ((.block_types // {}) | to_entries[] | ((select((.value.min_items // 0) > 0) | "\($p).\(.key)"), (.key as $b | .value.block | req("\($p).\($b)"))));
-      [.provider_schemas[]?.resource_schemas // {} | to_entries[] | select(.key | IN($ty[])) | .key as $k | .value.block | req($k)] | unique' \
+      ([.provider_schemas[]?.resource_schemas // {} | keys[]]) as $have
+      # A type the schema does not hold requires everything of it.
+      | [(.provider_schemas[]?.resource_schemas // {} | to_entries[] | select(.key | IN($ty[])) | .key as $k | .value.block | req($k)),
+         ($ty[] | select(IN($have[]) | not) | "\(.).*")] | unique' \
       "$schema" > "$out/required.json" 2> /dev/null || printf '["*"]\n' > "$out/required.json"
   fi
 }
@@ -333,13 +336,19 @@ evaluate() {
     def managed: test("^(module\\.[A-Za-z0-9_-]+(\\[[^\\]]*\\])?\\.)*[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*(\\[[^\\]]*\\])?$");
     def bare: gsub("\\[[^\\]]*\\]"; "");
     # A required attribute or block takes no null: the schema says so when there is one.
+    # The path drops every dynamic segment, so a dynamic block at any depth meets its schema path.
     def not_required($t): ($t.attribute | type == "string")
-      and ((($t.address | bare | split(".") | .[-2]) + "." + ($t.attribute | sub("^dynamic\\."; ""))) as $ta
-           | (("*" | IN($rq[])) or ($ta | IN($rq[]))) | not);
+      and (($t.address | bare | split(".") | .[-2]) as $ty
+           | ($ty + "." + ($t.attribute | split(".") | map(select(. != "dynamic")) | join("."))) as $ta
+           | (("*" | IN($rq[])) or (($ty + ".*") | IN($rq[])) or ($ta | IN($rq[]))) | not);
     # The plan side: every example planned, with its addresses read whole (none empty, none at the
     # 1000 cap) and its module calls known, and no planned address that could be the resource at any
     # module depth: equal, or ending in "." and the address, whatever module calls lead to it.
-    def plans_known: $l.coverage.class == "complete" and ($l.coverage.examples | type == "array" and length > 0)
+    # Terraform read the directory of the trigger at the head: a planned example is that directory, or calls
+    # it directly. A directory loaded only through another module is not seen, so it is not marked.
+    def loaded($t): ($t.file | tdir) as $d
+      | any($l.coverage.examples[]; .dir == $d or ((.module_calls // {}) | to_entries | any(.value == $d)));
+    def plans_known: $l.coverage.class == "complete" and ($l.coverage.examples | type == "array")
       and all($l.coverage.examples[]; (.head | IN("planned", "planned-no-changes"))
             and (.addresses | type == "array" and length > 0 and length < 1000)
             and (.module_calls | type == "object" and length > 0));
@@ -349,7 +358,7 @@ evaluate() {
       and ([$t.category, ($t.also_categories // [])[]] - unex_cats == [])
       and null_pass($t) and not_required($t)
       and ($t.attribute | type == "string" and (sub("^dynamic\\."; "") | split(".")[0] | IN(meta_args[]) | not))
-      and plans_known
+      and plans_known and loaded($t)
       and (any($l.coverage.examples[].addresses[]; bare | . == $a or endswith("." + $a)) | not);
     def etof($id): first($e.triggers[] | select(.id == $id));
     # The ids marked above, then the added variable they pass through: its own trigger takes no
@@ -361,7 +370,7 @@ evaluate() {
             and ({dir: ($t.file | tdir), name: ltrimstr("var.")} | IN($nv[])))
            and $t.change_kind == "added" and $t.category == "unclassified-change" and (($t.also_categories // []) == [])
            and $t.levels == [] and $et.state == "unverifiable" and ($et | has("complete") or has("outstanding") or has("evidence_digest") | not)
-           and ($t.follows | type == "array" and length > 0 and all(.[]; IN($m[])));
+           and ($t.follows | type == "array" and length > 0 and all(.[]; IN($m[]))) and loaded($t);
     {run: {status: "ran", reason: null,
        triggers: [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
                   | {id: $t.id, file: $t.file, line: $t.line, category: $t.category, state: $et.state}
