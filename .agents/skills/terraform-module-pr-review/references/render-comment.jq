@@ -155,7 +155,9 @@ def floor_ok: .floor == true;
 def mark_ci($checks): if . == null or .status != "ran" or (($checks.runs // 0) == 0) or (($checks.jobless // []) != []) then .
   else .triggers |= map(if .category == "non-hcl-dependency" and .state == "unverifiable" then . + {ci: true} else . end) end;
 def behaviour_gaps: if . == null then 0 elif .status == "not-run" then 1
-  else ([(.triggers[] | select((ci_gated or floor_ok) | not)), .claims[] | select(.state == "unverifiable")] | length) + .capped end;
+  # The changes over the classifier cap are one cause, so one gap however many they are.
+  else ([(.triggers[] | select((ci_gated or floor_ok) | not)), .claims[] | select(.state == "unverifiable")] | length)
+    + (if .capped > 0 then 1 else 0 end) end;
 def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select(.state == "refuted")] | length end;
 
 # A change whose behaviour triggers all ended inert is an inert change for plan coverage (verdict.md,
@@ -537,8 +539,13 @@ def texts: {
   "unplanned-more": "- {count} more examples that were not planned are not listed.",
   "skipped-files-one": "- 1 changed file was over the review budget and was not reviewed:",
   "skipped-files-many": "- {count} changed files were over the review budget and were not reviewed:",
-  "skipped-name": "  - {path}",
-  "skipped-more": "  - and {count} more.",
+  "skipped-group-one": "  - {dir}: 1 file",
+  "skipped-group-many": "  - {dir}: {count} files",
+  "skipped-root": "the module root",
+  "skipped-outside": "outside the module root",
+  "skipped-name": "    - {path}",
+  "skipped-more": "    - and {count} more.",
+  "skipped-groups-more": "  - {count} more files in other top-level directories.",
   "unplanned-no-examples": "- The module has no example directory, so no example could be planned.",
   "unplanned-inert": "- The change reaches no Terraform configuration, so the examples below that were not planned leave nothing unknown.",
   "unplanned-triggers-inert": "- Every behaviour change is inert, so the examples below that were not planned leave nothing unknown.",
@@ -551,7 +558,10 @@ def texts: {
   "behaviour-trigger-groups": "- {count} behaviour changes not verified: {categories}.",
   "behaviour-trigger-invalid": "- Behaviour change at {location} ({category}): not verified (the head does not validate in any example).",
   "behaviour-trigger-groups-invalid": "- {count} behaviour changes not verified (the head does not validate in any example): {categories}.",
+  "behaviour-capped-one": "- 1 more behaviour change over the classifier cap: not verified.",
   "behaviour-capped": "- {count} more behaviour changes over the classifier cap: not verified.",
+  "behaviour-evidence-capped-one": "1 change is over the classifier cap and was not classified, one unknown listed below.",
+  "behaviour-evidence-capped": "{count} changes are over the classifier cap and were not classified, one unknown listed below.",
   "behaviour-claim": "- Claim {claim_id} from the description: not verified.",
   "rule-unregistered": "- `{rule_id}` at {location}: rule not in the registry, so this {severity} finding does not decide the verdict.",
   "rule-unregistered-low": "- `{rule_id}` at {location}: rule not in the registry; this LOW finding counts as any LOW finding.",
@@ -871,13 +881,34 @@ def scoped_run: if has("depth") | not then . else .depth.examples_out_of_scope a
   | if .depth.depth == "light" then .coverage.unplanned = [] else . end
   | if .coverage.unplanned == [] then .coverage.class = "complete" else . end end;
 
-# The files over the review budget: the count, then the first 100 names, in a code span when every
-# character is allowlisted, else withheld, then the count of the rest.
-def skipped_lines($run): ($run.skipped_files // []) as $s
+# The files over the review budget: the count, then one line per top-level directory under the
+# module root with its count, the module root's own files first and the files outside it last, at
+# most 20 directories unless every file can be named, the files of the rest counted. Under each
+# directory its named files, in a code span when every character is allowlisted, else withheld, and
+# the count of the rest: the 100 names go round the directories, so each shows its first files.
+def skipped_lines($run; $p): ($run.skipped_files // []) as $s
   | if $s == [] then [] else
-      [tx(if ($s | length) == 1 then "skipped-files-one" else "skipped-files-many" end; {count: ($s | length)})]
-      + [$s[:100][] | tx("skipped-name"; {path: nm(allowed)})]
-      + (($s | length) - 100 | if . > 0 then [tx("skipped-more"; {count: .})] else [] end) end;
+      ($s | map({f: ., g: (if $p != "" and (startswith($p + "/") | not) then [2, null]
+                           else (if $p == "" then . else .[($p | length) + 1:] end) as $r
+                             | if $r | contains("/") then [1, ($r | split("/")[0])] else [0, null] end end)})
+         | group_by(.g)) as $groups
+      # The files outside the module root always have their own line, after the directories shown.
+      | ([$groups[] | select(.[0].g[0] != 2)]) as $inner
+      | (if ($s | length) <= 100 then $inner else $inner[:20] end) as $kept
+      | ($kept + [$groups[] | select(.[0].g[0] == 2)]) as $shown
+      | ([$shown | to_entries[] | .key as $gi | .value | to_entries[] | {gi: $gi, i: .key, f: .value.f}]
+         | sort_by(.i, .gi) | .[:100]) as $named
+      | [$shown | to_entries[] | .key as $gi | .value as $m
+         | [tx(if ($m | length) == 1 then "skipped-group-one" else "skipped-group-many" end;
+              {dir: ({"0": tx("skipped-root"), "2": tx("skipped-outside")}[$m[0].g[0] | tostring] // ($m[0].g[1] + "/" | nm(allowed))),
+               count: ($m | length)}),
+           ([$named[] | select(.gi == $gi) | .f] as $ns
+            | ($ns[] | tx("skipped-name"; {path: nm(allowed)})),
+              (($m | length) - ($ns | length) | select(. > 0) | tx("skipped-more"; {count: .})))]] as $lines
+      | [tx(if ($s | length) == 1 then "skipped-files-one" else "skipped-files-many" end; {count: ($s | length)})]
+      + ($lines[:($kept | length)] | add // [])
+      + ($inner[($kept | length):] | map(length) | add // 0 | if . > 0 then [tx("skipped-groups-more"; {count: .})] else [] end)
+      + ($lines[($kept | length):] | add // []) end;
 
 def covered_lines($key; $cov; $run):
   [ ($cov[] as $c
@@ -930,7 +961,7 @@ def gap_lines($h; $run; $b; $p; $cov):
                # More than five: one line counting them per category; the locations are noise.
                else tx("behaviour-trigger-groups" + $why; {count: length, categories: (group_by(.category)
                       | sort_by(-length, .[0].category) | map("\(length) \(.[0].category)") | join(", "))}) end),
-            (.capped | select(. > 0) | tx("behaviour-capped"; {count: .})),
+            (.capped | select(. > 0) | tx(if . == 1 then "behaviour-capped-one" else "behaviour-capped" end; {count: .})),
             (.claims[] | select(.state == "unverifiable") | tx("behaviour-claim"; {claim_id})) ] end);
 
 # The one evidence line under the rationale, when the behaviour step ran and a trigger or claim
@@ -944,13 +975,15 @@ def evidence_lines($b):
     [tx(if n($b.triggers; "tested") > 0 then "behaviour-evidence-tested"
         elif n($b.triggers; "reported") > 0 then "behaviour-evidence-reported" else "behaviour-evidence" end;
        def one_many($k; $n): tx($k + (if $n == 1 then "-one" else "-many" end); {count: $n});
-       {changes: one_many("behaviour-changes"; ($b.triggers | length) + $b.capped),
+       {changes: one_many("behaviour-changes"; $b.triggers | length),
        claim_count: one_many("behaviour-claims"; $b.claims | length), reported: n($b.triggers; "reported"),
        tested: n($b.triggers; "tested"),
        verified: n($b.triggers; "verified"), covered: n($b.triggers; "covered"), inert: n($b.triggers; "inert"),
-       refuted: n($b.triggers; "refuted"), unverifiable: (n($b.triggers; "unverifiable") + $b.capped),
+       refuted: n($b.triggers; "refuted"), unverifiable: n($b.triggers; "unverifiable"),
        claims_verified: n($b.claims; "verified"),
-       claims_refuted: n($b.claims; "refuted"), claims_unverifiable: n($b.claims; "unverifiable")})]
+       claims_refuted: n($b.claims; "refuted"), claims_unverifiable: n($b.claims; "unverifiable")})
+     # The changes over the classifier cap, reported once beside the classified ones.
+     + (if $b.capped > 0 then " " + tx(if $b.capped == 1 then "behaviour-evidence-capped-one" else "behaviour-evidence-capped" end; {count: $b.capped}) else "" end)]
     + ([$b.triggers[] | select(ci_gated)] | length
        | if . > 0 then ["Changes outside Terraform left to the repository's own tests, which the Checks signal reads: \(.)."] else [] end)
     + ([$b.triggers[] | select(floor_ok)] | length | if . > 0 then [tx("behaviour-floor-judged"; {count: .})] else [] end)
@@ -1257,7 +1290,7 @@ def render($in):
      + section(if $cov != [] then "Examples not planned" else "Checks that could not run" end; gap_lines($h; $in.run; $b; $p; $cov)
        + [$unreg_all[] | tx(if .severity == "LOW" then "rule-unregistered-low" else "rule-unregistered" end;
                             {rule_id, severity, location: loc($p)})]
-       + skipped_lines($in.run); "\n")
+       + skipped_lines($in.run; $p); "\n")
      + section("Review depth"; depth_lines($in.run); "\n\n")
      + section("Profile"; profile_lines($in.run); "\n\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")

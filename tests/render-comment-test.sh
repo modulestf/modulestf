@@ -701,7 +701,7 @@ t_skipped() {
   [ "$ST" = 0 ] && [ "$(verdict)" = "inconclusive COMMENT" ] && [ "$(rule)" = 4 ] &&
     grep -qxF -- "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-skipped"]')" "$O/comment.md" &&
     awk '/^### Checks that could not run$/ { on = 1; next } on && /^### / { exit } on' "$O/comment.md" |
-      cmp -s - <(printf '%s\n' '' '- 2 changed files were over the review budget and were not reviewed:' '  - `modules/a/main.tf`' '  - `wrappers/a/main.tf`')
+      cmp -s - <(printf '%s\n' '' '- 2 changed files were over the review budget and were not reviewed:' '  - `modules/`: 1 file' '    - `modules/a/main.tf`' '  - `wrappers/`: 1 file' '    - `wrappers/a/main.tf`')
 }
 t_skipped; check "budget: skipped files with a LOW finding are inconclusive at rule 4, section 5 golden" $?
 # Beside an unread thread resolution, the What to do section counts the list as one gap.
@@ -711,14 +711,43 @@ check "budget: the skipped list counts once among the gaps of What to do" "$([ "
 # the body is STANDARD and section 5 lists them. Without them the same run is COMPACT.
 NOPLAN='.examples = {count: 1, skipped: 0, validated: 1} | .coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}'
 t_skipped_clean() { render "$NONE" "" "" "$(runf skipped-clean "$NOPLAN | .skipped_files = $SKIPPED")"
-  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && printf '%s' "$MSG" | grep -q ', tier STANDARD$' && grep -qxF '  - `wrappers/a/main.tf`' "$O/comment.md"; }
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && printf '%s' "$MSG" | grep -q ', tier STANDARD$' && grep -qxF '    - `wrappers/a/main.tf`' "$O/comment.md"; }
 render "$NONE" "" "" "$(runf noplan-compact "$NOPLAN")"
 check "budget: the control run without skipped files is COMPACT" "$([ "$ST" = 0 ] && printf '%s' "$MSG" | grep -q ', tier COMPACT$'; echo $?)"
 t_skipped_clean; check "budget: skipped files beside a COMPACT cause are inconclusive and STANDARD" $?
 render "$NONE" "" "" "$(runf skipped-hostile '.skipped_files = ["a b.tf", "$(touch x).tf", "@user.tf", "c\\d.tf", "ok.tf"]')"
-check "budget: a skipped name outside the allowlist, a backslash included, is withheld, never a bare mention" "$([ "$ST" = 0 ] && [ "$(grep -cxF '  - name withheld' "$O/comment.md")" = 4 ] && grep -qxF '  - `ok.tf`' "$O/comment.md" && ! grep -qF '@user' "$O/comment.md"; echo $?)"
+check "budget: a skipped name outside the allowlist, a backslash included, is withheld, never a bare mention" "$([ "$ST" = 0 ] && [ "$(grep -cxF '    - name withheld' "$O/comment.md")" = 4 ] && grep -qxF '    - `ok.tf`' "$O/comment.md" && grep -qxF '  - the module root: 5 files' "$O/comment.md" && ! grep -qF '@user' "$O/comment.md"; echo $?)"
 render "$NONE" "" "" "$(runf skipped-many '.skipped_files = [range(130) | "f\(.).tf"]')"
-check "budget: 130 skipped files list the first 100 and the count of the rest" "$([ "$ST" = 0 ] && [ "$(grep -c '^  - `f[0-9]*\.tf`$' "$O/comment.md")" = 100 ] && grep -qxF -- '- 130 changed files were over the review budget and were not reviewed:' "$O/comment.md" && grep -qxF -- '  - and 30 more.' "$O/comment.md"; echo $?)"
+check "budget: 130 skipped files list the first 100 and the count of the rest" "$([ "$ST" = 0 ] && [ "$(grep -c '^    - `f[0-9]*\.tf`$' "$O/comment.md")" = 100 ] && grep -qxF -- '- 130 changed files were over the review budget and were not reviewed:' "$O/comment.md" && grep -qxF -- '    - and 30 more.' "$O/comment.md"; echo $?)"
+# By top-level directory: 22 directories of 6 files; 20 shown, the 100 names going round them, so
+# each shows 5 and the count of its last; the files of the other two are counted.
+t_skipped_groups() {
+  render "$NONE" "" "" "$(runf skipped-groups '.skipped_files = [range(22) as $d | range(6) as $i | "d\($d + 10)/f\($i).tf"]')"
+  [ "$ST" = 0 ] && [ "$(grep -c '^  - `d[0-9]*/`: 6 files$' "$O/comment.md")" = 20 ] &&
+    [ "$(grep -c '^    - `d[0-9]*/f[0-9]\.tf`$' "$O/comment.md")" = 100 ] && [ "$(grep -cxF '    - and 1 more.' "$O/comment.md")" = 20 ] &&
+    grep -qxF '    - `d29/f4.tf`' "$O/comment.md" && ! grep -qF 'd30/' "$O/comment.md" &&
+    grep -qxF -- '  - 12 more files in other top-level directories.' "$O/comment.md"
+}
+# At most 100 files: every directory and every file named, past 20 directories too.
+render "$NONE" "" "" "$(runf skipped-dirs '.skipped_files = [range(25) | "d\(. + 10)/f.tf"]')"
+check "budget: 25 skipped files in 25 directories are all named" \
+  "$([ "$ST" = 0 ] && [ "$(grep -c '^  - `d[0-9]*/`: 1 file$' "$O/comment.md")" = 25 ] && [ "$(grep -c '^    - `d[0-9]*/f\.tf`$' "$O/comment.md")" = 25 ] &&
+     ! grep -qF 'other top-level directories' "$O/comment.md"; echo $?)"
+t_skipped_groups; check "budget: the skipped list by top-level directory, 20 shown with a count each, the 100 names going round them" $?
+# Past 20 directories the files outside the module root keep their own line, after the count of the rest.
+t_skipped_outside_cap() {
+  render "$NONE" "$(host skipped-ocap '.prefix = "m/x"')" "" "$(runf skipped-ocap '.skipped_files = ([range(25) as $d | range(5) as $i | "m/x/d\($d + 10)/f\($i).tf"] + ["m/x/main.tf", ".github/workflows/release.yml", "m/y/main.tf"])')"
+  [ "$ST" = 0 ] && awk '/^### Checks that could not run$/ { on = 1; next } on && /^### / { exit } on' "$O/comment.md" | grep -v '^$' | tail -n 4 |
+    cmp -s - <(printf '%s\n' '  - 30 more files in other top-level directories.' '  - outside the module root: 2 files' '    - `.github/workflows/release.yml`' '    - `m/y/main.tf`')
+}
+t_skipped_outside_cap; check "budget: past 20 directories the files outside the module root keep their own line" $?
+render "$NONE" "$(host skipped-prefix '.prefix = "modules/x"')" "" "$(runf skipped-prefix '.skipped_files = ["sub/b.tf", "modules/x/sub/a.tf", "modules/x/main.tf"]')"
+t_skipped_prefix() { render "$NONE" "$(host skipped-prefix '.prefix = "modules/x"')" "" "$TMP/run-skipped-prefix.json"
+  awk '/^### Checks that could not run$/ { on = 1; next } on && /^### / { exit } on' "$O/comment.md" |
+    cmp -s - <(printf '%s\n' '' '- 3 changed files were over the review budget and were not reviewed:' '  - the module root: 1 file' '    - `modules/x/main.tf`' '  - `sub/`: 1 file' '    - `modules/x/sub/a.tf`' '  - outside the module root: 1 file' '    - `sub/b.tf`'); }
+check "budget: with a module root prefix the directories are under the module root, its own files first, a file outside it in its own group last" \
+  "$([ "$ST" = 0 ] && awk '/^### Checks that could not run$/ { on = 1; next } on && /^### / { exit } on' "$O/comment.md" |
+     cmp -s - <(printf '%s\n' '' '- 3 changed files were over the review budget and were not reviewed:' '  - the module root: 1 file' '    - `modules/x/main.tf`' '  - `sub/`: 1 file' '    - `modules/x/sub/a.tf`' '  - outside the module root: 1 file' '    - `sub/b.tf`'); echo $?)"
 ladder "a known MEDIUM beside skipped files still blocks" "block REQUEST_CHANGES" 6 "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "" "" "$TMP/run-skipped.json"
 refused "a run file with an empty skipped list" "$G" "" "" "$(runf skipped-empty '.skipped_files = []')"
 refused "a run file with a skipped path that is not plain" "$G" "" "" "$(runf skipped-ctl '.skipped_files = ["a\nb.tf"]')"
@@ -1101,7 +1130,16 @@ mutate "unregistered rules read by the ladder" 's/\(\$in\.findings \| map\(selec
 mutate "an unregistered LOW held as an unknown" 's/def ladder_read\(\$reg\): registered\(\$reg\) or \.severity == "LOW";/def ladder_read(\$reg): registered(\$reg);/' t_unreg_low
 mutate "the unregistered line dropped from section 5" 's/\[\$unreg_all\[\] \| tx\(/[empty | tx(/' t_unreg
 mutate "skipped files not counted as gaps" 's/\(\$in\.run \| skipped_gap\) \+ //' t_skipped
-mutate "skipped files dropped from section 5" 's/\+ skipped_lines\(\$in\.run\); /; /' t_skipped
+mutate "skipped files dropped from section 5" 's/\+ skipped_lines\(\$in\.run; \$p\); /; /' t_skipped
+mutate "the skipped names not taken round the directories" 's/sort_by\(\.i, \.gi\)/sort_by(.gi, .i)/' t_skipped_groups
+mutate "the 20 directory cap moved" 's/else \$inner\[:20\] end/else \$inner[:21] end/' t_skipped_groups
+mutate "the files of the directories past the cap not counted" 's/if \. > 0 then \[tx\("skipped-groups-more"/if false then [tx("skipped-groups-more"/' t_skipped_groups
+mutate "the module root not first" 's/else \[0, null\] end end/else [3, null] end end/' t_skipped_prefix
+mutate "the files outside the module root cut with the directories past 20" 's/\| \(\$kept \+ \[\$groups\[\] \| select\(\.\[0\]\.g\[0\] == 2\)\]\) as \$shown/| \$kept as \$shown/' t_skipped_outside_cap
+mutate "a file outside the module root grouped by its own first directory" 's/then \[2, null\]/then [1, (split("\/")[0])]/' t_skipped_prefix
+mutate "the classifier cap not counted" 's/\+ \(if \.capped > 0 then 1 else 0 end\) end;/+ 0 end;/' t_capped_alone
+mutate "the classifier cap counted per change" 's/\+ \(if \.capped > 0 then 1 else 0 end\) end;/+ .capped end;/' t_capped
+mutate "the classifier cap counted among the changes not verified" 's/unverifiable: n\(\$b\.triggers; "unverifiable"\),/unverifiable: (n(\$b.triggers; "unverifiable") + \$b.capped),/' t_capped
 mutate "skipped files no cause outside the COMPACT table" 's/ or \$l\.skipped > 0\)\}/)}/' t_skipped_clean
 mutate "unregistered rules not counted as gaps" 's/ \+ \(\$unreg \| length\) \+ \(\$in\.run/ + (\$in.run/' t_unreg
 mutate "the registry read from every table row" 's/\| if \$h == null then \[\] else/| if true then [\$l[] | capture("^\\\\| `(?<id>" + rule_pat + ")` \\\\|") | .id] else/' t_bad_fenced
@@ -1211,6 +1249,22 @@ render "$LOWF" "" "" "$(brun one-uv "[$(bt T-001 wrapper-change verified)]" '[{c
 t_one_change() { render "$LOWF" "" "" "$(brun one-uv "[$(bt T-001 wrapper-change verified)]" '[{claim_id: "C-1", state: "verified"}, {claim_id: "C-2", state: "unverifiable"}]')"
   grep -qxF 'Behaviour evidence: 1 change classified: 1 verified, 0 covered by a plan, 0 inert, 0 refuted, 0 not verified; 2 claims: 1 verified, 0 refuted, 1 not verified.' "$O/comment.md"; }
 t_one_change; check "behaviour: one unverified claim beside passing triggers keeps the evidence line, 1 change in the one form" $?
+# The classifier cap: one cause, so one gap and one clause of the evidence line, however many changes.
+t_capped() {
+  render "$NONE" "$(host capped-tu '.signals.threads = "unknown"')" "" "$(brun capped "[$(bt T-001 wrapper-change covered)]" '[]' 10019)"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] &&
+    grep -qxF 'Behaviour evidence: 1 change classified: 0 verified, 1 covered by a plan, 0 inert, 0 refuted, 0 not verified; 0 claims: 0 verified, 0 refuted, 0 not verified. 10019 changes are over the classifier cap and were not classified, one unknown listed below.' "$O/comment.md" &&
+    grep -qxF -- '- 10019 more behaviour changes over the classifier cap: not verified.' "$O/comment.md" &&
+    grep -qxF -- '- 1 check could not run; see Checks that could not run.' "$O/comment.md"
+}
+t_capped; check "behaviour: the changes over the classifier cap reported once and counted as one gap" $?
+# The cap alone holds rule 4, and every trigger capped reads with no "more" and the one forms.
+t_capped_alone() { render "$NONE" "" "" "$(brun cap-alone "[$(bt T-001 wrapper-change covered)]" '[]' 3)"; [ "$ST" = 0 ] && [ "$(rule)" = 4 ]; }
+t_capped_alone; check "behaviour: the classifier cap alone keeps the review inconclusive (rule 4)" $?
+render "$NONE" "" "" "$(brun cap-one '[]' '[]' 1)"
+check "behaviour: one change over the cap and nothing classified, in the one forms" \
+  "$([ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qxF 'Behaviour evidence: 0 changes classified: 0 verified, 0 covered by a plan, 0 inert, 0 refuted, 0 not verified; 0 claims: 0 verified, 0 refuted, 0 not verified. 1 change is over the classifier cap and was not classified, one unknown listed below.' "$O/comment.md" &&
+     grep -qxF -- '- 1 more behaviour change over the classifier cap: not verified.' "$O/comment.md"; echo $?)"
 ladder "an inert change" "approve APPROVE" 8 "$NONE" "" "" "$(brun inert '[]' '[]')"
 ! grep -q 'Behaviour evidence' "$O/comment.md"; check "behaviour: nothing classified renders no evidence line" $?
 # Triggers that all ended inert (a derived wrapper's among them) make the change inert for plan
