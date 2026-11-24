@@ -241,7 +241,9 @@ band_note() { # rule, severity: 0 when the checker notes the severity as outside
 }
 for c in structure.schema-shape-flattened/LOW/no structure.schema-shape-flattened/MEDIUM/yes \
   structure.sibling-block-asymmetry/LOW/no structure.sibling-block-asymmetry/MEDIUM/yes \
-  structure.input-ignored-in-branch/LOW/no profile.release-config-changed/MEDIUM/yes; do
+  structure.input-ignored-in-branch/LOW/no profile.release-config-changed/MEDIUM/yes \
+  structure.schema-shape-flattened/HIGH/no structure.sibling-block-asymmetry/HIGH/no \
+  structure.input-ignored-in-branch/HIGH/no structure.input-ignored-in-branch/MEDIUM/no; do
   IFS=/ read -r r s want <<< "$c"
   band_note "$r" "$s"; got=$([ $? = 0 ] && echo yes || echo no)
   [ "$got" = "$want" ]; check "$r at $s: note $want" $?
