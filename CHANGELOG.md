@@ -1,3 +1,12 @@
+## [0.12.18](https://github.com/modulestf/modulestf/compare/v0.12.17...v0.12.18) (2026-11-24)
+
+
+### Bug Fixes
+
+* **reviewer:** Check findings against the render's limits before returning them ([#193](https://github.com/modulestf/modulestf/issues/193)) ([704e751](https://github.com/modulestf/modulestf/commit/704e75149fe2a21f59e20a85a36f88719129f384))
+
+
+
 ## [0.12.17](https://github.com/modulestf/modulestf/compare/v0.12.16...v0.12.17) (2026-11-24)
 
 
