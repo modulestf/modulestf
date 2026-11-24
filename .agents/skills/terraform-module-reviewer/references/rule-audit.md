@@ -61,7 +61,7 @@ Three rows change `scope` after the facts engine review found them:
 - `coverage.attribute-not-output`: HIGH for an output wrong in a supported mode, MEDIUM for a computed attribute with no output.
 - `structure.input-ignored-in-branch`: CRITICAL, HIGH, MEDIUM and LOW, all four named in its Check C bullets.
 - `structure.docs-contradict-code`: HIGH, MEDIUM and LOW, by what a caller who follows the text gets, all three named in its Check C bullet.
-- `structure.schema-shape-flattened`: HIGH for a flattened or re-nested shape, and for a declared field that reaches no argument while the provider has a control the caller would set through it; LOW for a renamed key every field of which reaches its argument, and for a field with no argument and no such control.
+- `structure.schema-shape-flattened`: HIGH for a flattened or re-nested shape, and for a declared field that reaches no argument while the provider has a control the caller would set through it; HIGH also for a base key the head renames or a base field it stops feeding; LOW for a key the change adds under a name unlike the provider's, every field of which reaches its argument, and for a field the change adds with no argument and no such control.
 - `structure.sibling-block-asymmetry`: HIGH and LOW, by the effect of the missing field, whether a description documents it or a sibling sets it.
 - `structure.passthrough-default-drift`: HIGH, MEDIUM and LOW; its CRITICAL case is reported as `structure.insecure-default`, so CRITICAL is not in its set.
 - `structure.passthrough-field-drift`: HIGH and MEDIUM.
