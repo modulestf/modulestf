@@ -2902,8 +2902,8 @@ COVD='[{dir: "examples/vpc-endpoint", gate: "design", reason: "access-denied", w
 R556D() { R556 "$1" '.plan_mode = "laptop" | .coverage.unplanned = [{dir: "examples/vpc-endpoint", reason: "environment (access-denied)"}]
   | .coverage += {covered_skips: '"$COVD"', skip_head_sha: "'"$HEAD"'", skip_base_sha: "'"$BASE"'"} | '"${2:-.}"; }
 cat > "$TMP/want-556d.txt" <<'WANT'
-**Good to merge, with nits.** `validate` passed in all 9 examples; 8 were planned. 1 of 9 examples cannot plan under the review role by design; the changed code was planned in `examples/autoscaling` (see notes).
-- Not planned: `examples/vpc-endpoint` (`environment (access-denied)`, a limit of the review role that the example meets by design).
+**Good to merge, with nits.** `validate` passed in all 9 examples; 8 were planned. 1 of 9 examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned in `examples/autoscaling` (see notes).
+- Not planned: `examples/vpc-endpoint` (the review role was denied a data source read, `environment (access-denied)`, at head 0123456 and at base 89abcde).
 - Covered by: `vpc_security_group_ids` planned in `examples/autoscaling` as `module.aurora.aws_rds_cluster.this` at 0123456.
 WANT
 t_cov_des() {
@@ -2911,8 +2911,8 @@ t_cov_des() {
   [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] \
     && grep -E '^\*\*Good|^- (Not planned|Covered by): ' "$O/comment.md" | cmp -s - "$TMP/want-556d.txt" || return 1
   rc "$(F556C)" "$(R556D dstd)" "$H556N" --standard
-  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qxF -- '- Not planned: `examples/vpc-endpoint` (`environment (access-denied)`, a limit of the review role that the example meets by design).' "$O/comment.md" \
-    && grep -qF '1 of 9 examples cannot plan under the review role by design; the changed code was planned in `examples/autoscaling`, as listed below.' "$O/comment.md" \
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qxF -- '- Not planned: `examples/vpc-endpoint` (the review role was denied a data source read, `environment (access-denied)`, at head 0123456 and at base 89abcde).' "$O/comment.md" \
+    && grep -qF '1 of 9 examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned in `examples/autoscaling`, as listed below.' "$O/comment.md" \
     && grep -qxF '### Examples not planned' "$O/comment.md" && ! grep -qF 'could not run' "$O/comment.md"
 }
 t_cov_des; check "covered: a design skip with a witness is approve with nits at rule 7, named with its reason token" $?
@@ -2934,6 +2934,15 @@ t_cov_des_wit() { unch x "$(F556C)" "$(R556D dw '.coverage.covered_skips[0].witn
 t_cov_des_wit; check "covered: a design skip witnessed by itself is ignored" $?
 t_cov_des_tok() { render "$(F556C)" "$H556N" "" "$(R556D dbad '.coverage.unplanned[0].reason = "environment (timeout)" | .coverage.covered_skips[0].reason = "timeout"')" "$TMP/assess-556.txt"; [ "$ST" = 2 ] && empty_out; }
 t_cov_des_tok; check "refused: a design entry with a transient reason" $?
+t_cov_des_nomode() { unch x "$(F556C)" "$(R556D dnm 'del(.plan_mode)')"; }
+t_cov_des_nomode; check "covered: a design entry in a run file with no plan mode is ignored" $?
+t_cov_des_exc() { # runner mode: a design skip beside a covered recorded exception
+  rc "$(F556C)" "$(R556D dx '.plan_mode = "runner" | .coverage.unplanned += [{dir: "examples/outpost", reason: "exception: example assumes a role in another account"}]
+    | .coverage.covered_skips += [{dir: "examples/outpost", gate: "role", path: "main.tf", witnesses: ['"$W1"']}]')" "$H556N"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qF '2 of 9 examples were not planned, for the reasons in the notes;' "$O/comment.md" \
+    && grep -qF '(recorded exception, it needs a role in another account' "$O/comment.md" && grep -qF '`environment (access-denied)`' "$O/comment.md"
+}
+t_cov_des_exc; check "covered: a design skip beside a covered recorded exception after a runner pass is approve with nits" $?
 refused "a design entry with a path" "$(F556C)" "$H556N" "" "$(R556D dbadp '.coverage.covered_skips[0].path = "main.tf"')" "$TMP/assess-556.txt"
 refused "a gate entry with a reason" "$(F556C)" "$H556N" "" "$(R556K kbadr '.coverage.covered_skips[0].reason = "access-denied"')" "$TMP/assess-556.txt"
 mutate "design skips never covered" 's/def entry_reason: if \.gate == "design" then "environment \(\\\(\.reason\)\)" else/def entry_reason: if false then "" else/' t_cov_des
@@ -2941,6 +2950,7 @@ mutate "a transient reason accepted for a design entry" 's/def design_reasons: \
 mutate "a design entry taken for another reason" 's/and \.reason == \(\$x \| entry_reason\)/and true/; s/any\(\$cs\[\]; \.dir == \$x\.dir and entry_reason == \$x\.reason\)/any(\$cs[]; .dir == \$x.dir)/' t_cov_des_trans
 mutate "the design lines dropped" 's/if \$c\.gate == "design" then "-design" elif/if false then "" elif/' t_cov_des
 mutate "the design sentence dropped" 's/\[\$cov\[\] \| if \.gate == "design" then "-design" elif/[\$cov[] | if false then "" elif/' t_cov_des
+mutate "a design skip taken with no plan mode" 's/       and \(\$run\.plan_mode \| IN\("laptop", "runner"\)\)\n//' t_cov_des_nomode
 mutate "a design skip held to the plan mode" 's/and all\(\$cs\[\]; \.gate == "design" or \(/and all(\$cs[]; (/' t_cov_des_runner
 
 # --- Review follow-ups: a job-less list at host-pass.sh's cap may have lost an entry, so it stays
@@ -3021,6 +3031,7 @@ acc_case "covered gate skips with no finding, approve with nits" t_cov_rule8
 acc_case "a covered recorded exception, approve with nits" t_cov_exc
 acc_case "a covered design skip, approve with nits" t_cov_des
 acc_case "a covered design skip beside a covered gate skip, approve with nits" t_cov_des_mixed
+acc_case "a covered design skip beside a covered recorded exception, approve with nits" t_cov_des_exc
 acc_case "a MEDIUM review.path-missing beside an unknown, inconclusive" t_pm_unknown
 acc_case "a MEDIUM review.verification-incomplete, inconclusive" t_bvi
 acc_case "an unregistered MEDIUM alone, inconclusive" t_unreg_alone

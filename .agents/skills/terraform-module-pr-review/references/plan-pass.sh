@@ -859,6 +859,27 @@ class_of() { # exit status, output file, init or plan
   grep -q 'No value for required variable' "$2.block" && { echo 'needs input'; return; }
   echo code-error
 }
+# The denial evidence of a design skip (skip-coverage.md, Design skips): the data addresses of a
+# plan output whose every Error: block is an AWS SDK access denial on a data source read, named
+# by the block's own "with data...." line, sorted and once each; exit 1 for any other output: no
+# block, another error, a denial with no data address, or more than 50 addresses. The class
+# alone is a substring of the first block, which the head's values can hold.
+DENIED_PL='
+my @l = map { s/\A[^\x00-\x7f]+ ?//r =~ s/\s+\z//r } <STDIN>;
+my (@b, %a);
+for (@l) { if (/\A(?:Error|Warning): /) { push @b, [$_] } elsif (@b) { push @{$b[-1]}, $_ } }
+@b = grep { $_->[0] =~ /\AError: / } @b;
+exit 1 unless @b;
+for my $k (@b) {
+  $k->[0] =~ /\AError: [^\n]*: operation error [A-Za-z0-9 .-]+: [A-Za-z0-9]+, https response error StatusCode: 4[0-9][0-9], RequestID: [A-Za-z0-9-]+, (?:HostID: [A-Za-z0-9+\/=]+, )?api error (?:AccessDenied|AccessDeniedException|UnauthorizedOperation): / or exit 1;
+  my @w = grep { /\A  with / } @$k;
+  exit 1 unless @w == 1 && $w[0] =~ /\A  with ((?:module\.[A-Za-z0-9_-]+(?:\[(?:[0-9]+|"[A-Za-z0-9_.\/-]*")\])?\.)*data\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\[(?:[0-9]+|"[A-Za-z0-9_.\/-]*")\])?),\z/;
+  (my $x = $1) =~ s/\[[^\]]*\]//g;
+  $a{$x} = 1;
+}
+exit 1 if keys(%a) > 50;
+print join(" ", sort keys %a), "\n";
+'
 EVID_PL='
 my $b = do { local $/; <STDIN> }; my $p = $ENV{PROFILE};
 $b =~ s/arn:aws[a-z-]*:[^\s"\x27`]*/<arn>/g;
@@ -950,7 +971,8 @@ pe_init() { # absolute example directory, key, root (the clone or the base workt
     if [ -n "$h" ]; then exc_or_gate "$h"; else CLASS=ready; fi
   fi
 }
-pe_plan() { # key: the credentials and the plan, then the kept line
+pe_plan() { # key: the credentials and the plan, then the kept line and the denial evidence
+  DENIED=
   if [ "$CLASS" = ready ]; then
     if ! get_creds; then CLASS='plan pass ended: credentials'
     else
@@ -963,6 +985,7 @@ pe_plan() { # key: the credentials and the plan, then the kept line
   case "$CLASS" in
     planned) KEPT="$(grep -E -m 1 '^Plan: .* to destroy\.$' "$out" | kept)" ;;
     code-error) KEPT="$(kept < "$out.block")" ;;
+    'environment (access-denied)') DENIED="$(perl -e "$DENIED_PL" < "$out")" || DENIED= ;;
   esac
   # Laptop mode: the head plan's addresses, read by a terraform process of its own after the
   # plan has ended, with no credentials (plan-pass.md, Saved plans and addresses). run_capped
@@ -1003,7 +1026,7 @@ base_ready() { # the base worktree for a re-run, added once with its G0 saved fi
   g0 "$(cd "$RUN/base" && pwd -P)" > "$RUN/g0-base.txt"
 }
 
-NPLAN=0; NEXC=0; EXN=0; HROOT=$CROOT # plan_example moves CROOT to the base worktree for a re-run
+DENIED=; NPLAN=0; NEXC=0; EXN=0; HROOT=$CROOT # plan_example moves CROOT to the base worktree for a re-run
 PHEAD=; PEX= # the head commit and the example directory for the addresses files, laptop mode only
 if [ "$PHASE" = init ]; then
   # No credentials and no plan here. The merge base is prepared later, only for an example
@@ -1045,8 +1068,9 @@ if [ "$PHASE" = plan ]; then
   [ "$CLASS" = 'plan pass ended: credentials' ] && echo "credentials: $CREDWHY"
   [ -n "$SCOPE" ] && echo "scope: ${SCOPE% }"
   [ -n "$VERSIONS" ] && echo "modules: ${VERSIONS%;}"
+  [ -n "$DENIED" ] && echo "denied: $DENIED"
   # The merge base re-run is a later phase, so only an example that needs it pays for it
-  if [ "$CLASS" = code-error ]; then
+  if [ "$CLASS" = code-error ] || [ -n "$DENIED" ]; then
     if [ -n "$BASESHA" ]; then echo "base: deferred"; else echo "base: not available"; fi
   fi
   exit 0
@@ -1072,6 +1096,7 @@ if [ "$PHASE" = base-plan ]; then
       planned|planned-no-changes) echo "base: new under this change" ;;
       *) echo "base: $CLASS" ;;
     esac
+    [ -n "$DENIED" ] && echo "base-denied: $DENIED"
     [ "$CLASS" = 'plan pass ended: credentials' ] && echo "credentials: $CREDWHY"
   else
     echo "base: not available"
@@ -1093,7 +1118,9 @@ for rel_ex in "$@"; do
   case "$CLASS" in planned|planned-no-changes) NPLAN=$((NPLAN + 1)) ;; exception:*) NEXC=$((NEXC + 1)) ;; esac
   [ -n "$SCOPE" ] && echo "scope: ${SCOPE% }"
   [ -n "$VERSIONS" ] && echo "modules: ${VERSIONS%;}"
-  if [ "$CLASS" = code-error ]; then
+  # A denial on data source reads alone is re-run at the merge base too (Design skips)
+  [ -n "$DENIED" ] && echo "denied: $DENIED"
+  if [ "$CLASS" = code-error ] || [ -n "$DENIED" ]; then
     if base_ready; then
       if [ -d "$RUN/base/$rel_ex" ]; then
         plan_example "$(cd "$RUN/base" && pwd -P)/$rel_ex" "$key-base" "$(cd "$RUN/base" && pwd -P)" "$RUN/g0-base.txt"
@@ -1102,6 +1129,7 @@ for rel_ex in "$@"; do
           planned|planned-no-changes) echo "base: new under this change" ;;
           *) echo "base: $CLASS" ;;
         esac
+        [ -n "$DENIED" ] && echo "base-denied: $DENIED"
       else
         echo "base: new under this change (absent at base)"
       fi

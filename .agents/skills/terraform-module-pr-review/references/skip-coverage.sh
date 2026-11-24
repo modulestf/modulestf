@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016 # the perl and jq programs below are single-quoted on purpose
-# The covered skip of terraform-module-pr-review: which examples skipped by a plan gate are
-# covered by the plan of other examples, as one file. Rules and reasons: skip-coverage.md.
+# The covered skip of terraform-module-pr-review: which examples skipped by a plan gate, kept
+# by a recorded exception or denied a data source read under the review role (a design skip)
+# are covered by the plan of other examples, as one file. Rules and reasons: skip-coverage.md.
 # Runs the same under bash and zsh. Invoke it by an absolute path in the skill as installed,
 # never from the head or the workspace:
 #
@@ -18,7 +19,8 @@
 #       Prints one JSON object: the covered and the uncovered unplanned directories
 #       (skip-coverage.md, Output). Never runs terraform and never reads the network.
 #   --mode runner covers the recorded exceptions of a runner-mode pass instead of the laptop gate
-#   skips (skip-coverage.md, Recorded exceptions); laptop is the default.
+#   skips (skip-coverage.md, Recorded exceptions); laptop is the default. Both modes decide the
+#   design skips (skip-coverage.md, Design skips).
 #
 # <run-dir> is the absolute run directory Workspace printed, "<root>/pr-review.XXXXXX", holding
 # the clone at head at <run-dir>/clone. Exit 2 is a usage error or a refused input.
@@ -375,6 +377,36 @@ while IFS= read -r row; do
        attrs: [$l[] | select(startswith("attr ")) | split(" ") | {address: .[1], attribute: .[2]}]}' >> "$W/classes.jsonl"
 done < "$W/files.jsonl"
 
+# The changed attributes some .tf file of the clone reads (skip-coverage.md, Design skips): per
+# "<address> <attribute>" pair, the pair once when any mention of the resource, outside a .git or
+# .terraform directory, is not followed by an index or splat and then another attribute's name.
+# Conservative: a comment, the whole object or the changed attribute itself counts as a read.
+REFS_PL='
+use strict; use warnings; use File::Find;
+open(my $pf, "<", $ARGV[1]) or die; chomp(my @pl = <$pf>); close $pf;
+my @pairs = map { [split / /] } grep { /\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ [a-z0-9_]+\z/ } @pl;
+my @files; find({no_chdir => 1, wanted => sub {
+  if (-d $_ && /\/(?:\.git|\.terraform)\z/) { $File::Find::prune = 1; return }
+  push @files, $_ if /\.tf\z/ && -f $_ && !-l $_ }}, $ARGV[0]);
+my %hit;
+for my $f (@files) {
+  open(my $h, "<", $f) or next; local $/; my $t = <$h>; close $h;
+  for my $p (@pairs) {
+    my ($a, $at) = @$p;
+    while ($t =~ /(?<![A-Za-z0-9_.-])\Q$a\E(?![A-Za-z0-9_-])((?:\[[^\]\n]*\]|\.\*)*)(\.([A-Za-z0-9_-]+))?/g) {
+      $hit{"$a $at"} = 1 if !defined $3 || $3 eq $at;
+    }
+  }
+}
+print "$_\n" for sort keys %hit;
+'
+: > "$W/refs.txt"
+jq -r '.attrs[] | "\(.address) \(.attribute)"' "$W/classes.jsonl" | sort -u > "$W/pairs.txt"
+if [ -s "$W/pairs.txt" ]; then
+  # a scan that fails names every pair, so no design skip is covered
+  perl -e "$REFS_PL" "$CLONE" "$W/pairs.txt" > "$W/refs.txt" 2> /dev/null || cp "$W/pairs.txt" "$W/refs.txt"
+fi
+
 # The witness records: addresses-<n>.json from --addresses, data only, as the plan coverage reads them
 : > "$W/addr.jsonl"
 if [ -n "$ADDRS" ] && [ -d "$ADDRS" ] && [ ! -L "$ADDRS" ]; then
@@ -394,11 +426,12 @@ if [ -n "$BGATES" ] && [ -f "$BGATES" ] && [ ! -L "$BGATES" ] && [ "$(wc -c < "$
 fi
 
 jq -n -L "$HERE" --slurpfile cov "$COV" --slurpfile cls "$W/classes.jsonl" --slurpfile a "$W/addr.jsonl" \
-  --rawfile rec "$PLANREC" --arg hg "$HEADGATES" --arg bg "$BASEGATES" --arg mode "$MODE" \
+  --rawfile rec "$PLANREC" --rawfile refs "$W/refs.txt" --arg hg "$HEADGATES" --arg bg "$BASEGATES" --arg mode "$MODE" \
   --arg head "$HEADSHA" --arg base "$BASESHA" --argjson headok "$HEADOK" --argjson nchanged "$NCHANGED" \
   --slurpfile files "$FILES" '
   include "skip-coverage";
-  if $mode == "runner" then skip_coverage_runner($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged)
-  else skip_coverage($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged) end
+  ($refs | split("\n") | map(select(length > 0))) as $r
+  | if $mode == "runner" then skip_coverage_runner($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged; $r)
+  else skip_coverage($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged; $r) end
 ' || die "cannot evaluate"
 exit 0

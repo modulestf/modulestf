@@ -362,8 +362,9 @@ plan_container() { # output file, phase, index, example, budget left: the work v
   fi
   wpid=
 }
-# Lines only the host may write; the container's output is untrusted and may not forge them
-host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example |not reached:)'
+# Lines only the host may write; the container's output is untrusted and may not forge them. A
+# base-denied line comes only from a merge base re-run's own container (skip-coverage.md, Design skips).
+host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example |not reached:|base-denied: )'
 # The one credentials line a container may write, from plan-pass.sh's fixed list: the first
 # such line is kept, any other credentials line is dropped
 cred_re='^credentials: (session: not issued|write probe: write allowed|(identity check|write probe): (timed out|expired token|invalid token|access denied|throttled|network|other answer))$'
@@ -389,7 +390,8 @@ for ex in "$@"; do
   case "$line" in
     'plan: planned'*) planned=$((planned + 1)) ;; # planned and planned-no-changes
     'plan: exception:'*) exc=$((exc + 1)) ;;
-    'plan: code-error'*) [ -z "$base" ] || ! grep -qx 'base: deferred' "$blk" || deferred+=("$n") ;;
+    # a code-error, and an access denial on data source reads alone (skip-coverage.md, Design skips)
+    'plan: code-error'*|'plan: environment (access-denied)'*) [ -z "$base" ] || ! grep -qx 'base: deferred' "$blk" || deferred+=("$n") ;;
     'plan: plan pass ended: credentials'*) break ;;
   esac
 done
@@ -459,6 +461,7 @@ if [ "${#deferred[@]}" -gt 0 ]; then
     : > "$TMPRUN/example.out"
     plan_container "$TMPRUN/example.out" base-plan "$n" "$ex" "$rem"
     { grep -E '^base: ' "$TMPRUN/example.out" | head -n 1
+      grep -E '^base-denied: ' "$TMPRUN/example.out" | head -n 1
       untrusted "$TMPRUN/example.out" | grep '^credentials: ' | head -n 1; } > "$TMPRUN/base.$n" || true
     [ ! -s "$TMPRUN/stalled" ] || echo 'base: environment (network)' > "$TMPRUN/base.$n"
     [ -s "$TMPRUN/base.$n" ] || echo 'base: not available' > "$TMPRUN/base.$n"

@@ -91,6 +91,8 @@ plan)
     echo "Plan: 1 to add, 0 to change, 0 to destroy." ;;
   err) printf 'Error: bucket 123456789012 is not valid\n\n  on main.tf line 1\n'; exit 1 ;;
   leak) printf 'Error: invalid key s3cr3t-value-xyz\n\n'; exit 1 ;;
+  denied) printf 'Error: reading SSM Parameter (/app/db): operation error SSM: GetParameter, https response error StatusCode: 400, RequestID: 0f3e-1a, api error AccessDeniedException: User is not authorized\n\n  with data.aws_ssm_parameter.p,\n  on main.tf line 6, in data "aws_ssm_parameter" "p":\n\n'; exit 1 ;;
+  deniedx) printf 'Error: reading SSM Parameter (/app/db): operation error SSM: GetParameter, https response error StatusCode: 400, RequestID: 0f3e-1a, api error AccessDeniedException: User is not authorized\n\n  with data.aws_ssm_parameter.p,\n\nError: Invalid index\n\n  with aws_s3_bucket.this,\n\n'; exit 1 ;;
   split) printf 'Error: invalid key s3cr3t-val\nue-xyz\n\n'; exit 1 ;;
   esac ;;
 esac
@@ -140,6 +142,10 @@ mkdir -p "$up/examples/err"
 git -C "$up" init -q
 echo 'resource "aws_s3_bucket" "this" {}' > "$up/main.tf"
 echo 'module "b" { source = "../../" }' > "$up/examples/err/main.tf"
+# examples/denied and examples/deniedx are denied a data source read at head and at base
+mkdir -p "$up/examples/denied" "$up/examples/deniedx"
+echo 'module "b" { source = "../../" }' > "$up/examples/denied/main.tf"
+echo 'module "b" { source = "../../" }' > "$up/examples/deniedx/main.tf"
 git -C "$up" add -A && git -C "$up" -c user.name=t -c user.email=t@example.invalid commit -qm base
 BASE="$(git -C "$up" rev-parse HEAD)"
 mkdir -p "$up/examples/ok" "$up/examples/leak" "$up/examples/split" "$up/examples/gate"
@@ -904,6 +910,23 @@ for sh in bash zsh; do
   check "$sh: a code error present at base reproduces there" "$(has "$out" 'base: reproduces at base')"
   check "$sh: an example absent at base is new" "$(has "$out" 'base: new under this change (absent at base)')"
   check "$sh: the base worktree's G0 result is saved" "$(test -f "$R/g0-base.txt"; echo $?)"
+  # An access denial on data source reads alone: its denied line, and the merge base re-run
+  # with its own; a denial beside another error has neither (skip-coverage.md, Design skips).
+  R="$(newrun)"
+  run g0 "$R" > /dev/null
+  out="$(run plan "$R" demo --role-arn "$ROLE" --base "$BASE" examples/denied examples/deniedx)"
+  check "$sh: a denial on a data source read is recorded with its address" "$(has "$out" 'denied: data.aws_ssm_parameter.p')"
+  check "$sh: the denial is re-run at the merge base" \
+    "$(printf '%s\n' "$out" | sed -n '/^example: examples\/denied$/,/^example: /p' | grep -c -e '^base: environment (access-denied)$' -e '^base-denied: data.aws_ssm_parameter.p$' | grep -qx 2; echo $?)"
+  check "$sh: a denial beside another error has no denied line and no base re-run" \
+    "$(printf '%s\n' "$out" | sed -n '/^example: examples\/deniedx$/,$p' | grep -qE '^(denied|base|base-denied): ' && echo 1 || echo 0)"
+  # Mutations: the laptop loop without the denial's re-run, and a denial with no evidence line
+  for m in 's/ \|\| \[ -n "\$DENIED" \]; then$/; then/ if \$. > 1100' 's/^  \[ -n "\$DENIED" \] && echo "denied: \$DENIED"$/  :/'; do
+    perl -pe "$m" "$PP" > "$TMP/pp-mut.sh"
+    R="$(newrun)"; run g0 "$R" > /dev/null
+    o2="$(PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/pp-mut.sh" plan "$R" demo --role-arn "$ROLE" --base "$BASE" examples/denied 2>&1)"
+    check "$sh: denial mutation is caught ($m)" "$( ! cmp -s "$PP" "$TMP/pp-mut.sh" && [ "$(printf '%s\n' "$o2" | grep -c -e '^denied: ' -e '^base-denied: ')" != 2 ]; echo $?)"
+  done
   R="$(newrun)"
   run g0 "$R" > /dev/null
   out="$(run plan "$R" demo --role-arn "$ROLE" --base "--upload-pack=touch $TMP/pwned" examples/err)"
@@ -1548,6 +1571,84 @@ for f in plan-runner/hosted-record.sh host-pass.sh verify-pass.sh render-comment
   ft="$(sed -n '/^def env_classes: \[/,/map("environment/p' "${PP%/*}/$f" | grep -oE '"[a-z-]+"' | tr -d '"' | sort -u | tr '\n' ' ')"
   check "env reason: $f lists exactly the classifier's tokens" "$([ "$ft" = "$toks" ] && echo 0 || echo 1)"
 done
+
+# The denial evidence of a design skip (skip-coverage.md, Design skips), DENIED_PL taken from the
+# script: every Error: block an AWS SDK denial on a data source read, or nothing.
+DEN="$(sed -n "/^DENIED_PL='\$/,/^'\$/p" "$PP" | sed '1d;$d')"
+SDK='operation error SSM: GetParameter, https response error StatusCode: 400, RequestID: 0f3e-1a, api error AccessDeniedException: User is not authorized'
+dn() { # perl program, plan output -> the evidence line, or "refused"
+  printf '%s\n' "$2" | perl -e "$1" 2> /dev/null || echo refused; }
+den_cases() { # perl program -> one line per case, "<name>=<result>"
+  local p=$1
+  echo "real=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n  on main.tf line 6:' "$SDK")")"
+  echo "boxed=$(dn "$p" "$(printf '\342\225\267\n\342\224\202 Error: reading SSM Parameter (/a): %s\n\342\224\202 \n\342\224\202   with module.db.data.aws_ssm_parameter.p["k"],\n\342\225\265' "$SDK")")"
+  echo "two=$(dn "$p" "$(printf 'Error: reading A: %s\n\n  with data.aws_b.y,\n\nError: reading B: %s\n\n  with data.aws_a.x[0],\n' "$SDK" "$SDK")")"
+  echo "quoted=$(dn "$p" "$(printf 'Error: expected length of name to be in the range (1 - 32), got cis-3-1-UnauthorizedOperation-AccessDenied-filter\n\n  with data.aws_cloudwatch_log_group.this,\n')")"
+  echo "word=$(dn "$p" "$(printf 'Error: reading CloudWatch Metric Alarm (accessdenied-alarm): couldnt find resource\n\n  with data.aws_cloudwatch_metric_alarm.a,\n')")"
+  echo "after=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n\nError: Invalid index\n\n  with aws_s3_bucket.this,\n' "$SDK")")"
+  echo "before=$(dn "$p" "$(printf 'Error: Invalid index\n\n  with aws_s3_bucket.this,\n\nError: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n' "$SDK")")"
+  echo "managed=$(dn "$p" "$(printf 'Error: creating RDS Cluster: %s\n\n  with aws_rds_cluster.this,\n' "$SDK")")"
+  echo "nowith=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n' "$SDK")")"
+  echo "none=$(dn "$p" 'Plan: 1 to add, 0 to change, 0 to destroy.')"
+}
+den_want='real=data.aws_ssm_parameter.p
+boxed=module.db.data.aws_ssm_parameter.p
+two=data.aws_a.x data.aws_b.y
+quoted=refused
+word=refused
+after=refused
+before=refused
+managed=refused
+nowith=refused
+none=refused'
+check "denial evidence: data source denials only, every block, by address" "$([ "$(den_cases "$DEN")" = "$den_want" ] && echo 0 || echo 1)"
+denmut() { # name, perl substitution of DENIED_PL, the case it must change
+  local m; m="$(printf '%s' "$DEN" | perl -0pe "$2")"
+  check "denial evidence mutation $1 changes the program" "$([ "$m" != "$DEN" ] && echo 0 || echo 1)"
+  check "denial evidence mutation $1 is caught by $3" \
+    "$([ "$(den_cases "$m" | grep "^$3=")" != "$(printf '%s\n' "$den_want" | grep "^$3=")" ] && echo 0 || echo 1)"
+}
+denmut sdk-shape 's/ or exit 1;\n  my \@w/;\n  my \@w/' quoted
+denmut first-block-only 's/for my \$k \(\@b\)/for my \$k (\$b[0])/' after
+denmut managed-address 's/\)\*data\\\./)*(?:data\\.)?/' managed
+denmut no-with 's/exit 1 unless \@w == 1 && /exit 1 unless !\@w || /' nowith
+# The runner: a base-denied line only from the merge base re-run's own container. The head block
+# drops a forged one (untrusted), an access denial is deferred to the base re-run like a
+# code-error, and the base loop keeps the re-run's base-denied line.
+DW="$TMP/denwire"; mkdir -p "$DW"
+denwire() { # script -> the head block, the deferred list, the base file
+  { echo 'set -uo pipefail'; echo "TMPRUN='$DW' base=0000000000000000000000000000000000000000 RUN=/run"
+    cat <<'EOF'
+left() { echo 100; }; start_proxy() { :; }; save_proxy_log() { :; }; network_check() { :; }
+plan_container() { # output file, phase, index, example
+  if [ "$2" = base-plan ]; then printf 'base: environment (access-denied)
+base-denied: data.aws_ssm_parameter.p
+' > "$1"
+  else printf 'example: %s
+plan: environment (access-denied)
+denied: data.aws_ssm_parameter.p
+base-denied: data.aws_forged.x
+base: deferred
+' "$4" > "$1"; fi
+}
+EOF
+    sed -n '/^host_only=/,/^untrusted() /p' "$1"
+    echo 'set -- ex/a'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1"
+    echo 'echo "deferred ${deferred[*]}"'
+    echo 'n=1; ex=ex/a; rem=100'
+    sed -n '/plan_container "\$TMPRUN\/example.out" base-plan/,/\[ -s "\$TMPRUN\/base\.\$n" \]/p' "$1"; } > "$DW/run.sh"
+  rm -f "$DW/base.1"; bash "$DW/run.sh" 2> "$DW/err"
+}
+check "runner: an access denial is deferred to the merge base re-run" "$(denwire "$RP" | grep -qx 'deferred 1'; echo $?)"
+check "runner: a forged base-denied line is dropped from the head block" "$(grep -q '^base-denied: ' "$DW/block.1" && echo 1 || echo 0)"
+check "runner: the base loop keeps the re-run's base-denied line" \
+  "$([ "$(cat "$DW/base.1" 2> /dev/null)" = "$(printf 'base: environment (access-denied)\nbase-denied: data.aws_ssm_parameter.p')" ] && echo 0 || echo 1)"
+perl -pe 's/\|not reached:\|base-denied: \)/|not reached:)/' "$RP" > "$DW/m1.sh"
+check "runner mutation forged-base-denied is caught" "$(rm -f "$DW/block.1"; denwire "$DW/m1.sh" > /dev/null; grep -q '^base-denied: data.aws_forged' "$DW/block.1"; echo $?)"
+perl -pe "s/'plan: code-error'\*\|'plan: environment \(access-denied\)'\*\)/'plan: code-error'*)/" "$RP" > "$DW/m2.sh"
+check "runner mutation denial-not-deferred is caught" "$(denwire "$DW/m2.sh" | grep -qx 'deferred 1' && echo 1 || echo 0)"
+perl -ne "print unless /^      grep -E '\^base-denied: '/" "$RP" > "$DW/m3.sh"
+check "runner mutation base-denied-dropped is caught" "$(denwire "$DW/m3.sh" > /dev/null; grep -q '^base-denied: ' "$DW/base.1" && echo 1 || echo 0)"
 
 # hosted-record.sh: a finished run-pass.sh record reduced to plan-hosted.json, classes and
 # counts only, on fixture record directories.

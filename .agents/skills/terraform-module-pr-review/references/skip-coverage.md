@@ -18,7 +18,7 @@ The script is [skip-coverage.sh](skip-coverage.sh), with the decision in [skip-c
     [--mode laptop|runner]
 ```
 
-`--mode` is `laptop` by default, the gate skips of a laptop pass. `runner` covers the recorded exceptions of a runner-mode pass instead ([Recorded exceptions](#recorded-exceptions)); any other value is a usage error.
+`--mode` is `laptop` by default, the gate skips of a laptop pass. `runner` covers the recorded exceptions of a runner-mode pass instead ([Recorded exceptions](#recorded-exceptions)); any other value is a usage error. Both modes decide [design skips](#design-skips).
 
 `gates` writes the base gate record, [Gate records](#gate-records), for every directory in the coverage's `unplanned` list. It refuses, exit 2 and nothing written, unless `--tree` is an absolute path to a git tree whose `HEAD` is the `--base` commit; a step that fails writes nothing either. `check` prints one JSON object, [Output](#output), on standard output.
 
@@ -50,7 +50,7 @@ With no base tree, or no record, every candidate directory is `base-record-missi
 
 A directory is covered only when every check below holds, in this order; the first that fails gives its reason.
 
-1. It appears once in `unplanned` (else `not-sole-reason`), with the reason `plan gate G1`, `plan gate G2` or `plan gate G3` (else `wrong-gate-class`: G0, a failed plan, no profile, anything else).
+1. It appears once in `unplanned` (else `not-sole-reason`), with the reason `plan gate G1`, `plan gate G2` or `plan gate G3` (else `wrong-gate-class`: G0, a failed plan, no profile, anything else). A reason of [Design skips](#design-skips) is decided there.
 2. The clone is at `--head` (else `head-mismatch`), and the files list holds `--changed-files` entries and every entry was classified (else `files-incomplete`): a list cut short by paging could hide a change.
 3. The plan record is a laptop record with a block for the directory whose `plan:` line names the same gate and a first hit (else `plan-record-unusable`). The hit is read as `<path>` with an optional `:<suffix>`: a clone hit is then matched by its path alone, and a downloaded hit needs a numeric line ([Downloaded hits](#downloaded-hits)). A runner record never covers a skip.
 4. The whole change passes [The allow-list](#the-allow-list) and changes at least one attribute (else `change-not-allowed`).
@@ -61,7 +61,7 @@ A directory is covered only when every check below holds, in this order; the fir
 9. No head hit is G0, and no recorded hit either when the first hit is downloaded (else `wrong-gate-class`).
 10. Every changed attribute has a witness, [Witnesses](#witnesses) (else `witness-sensitive` when every attribute without one had a candidate that failed only on its sensitive bit, otherwise `no-witness`).
 
-Checks 2, 4, 6 and 10 and the files count are about the whole change, so they give every directory the same reason.
+Checks 2, 4, 6 and 10 and the files count are about the whole change, so they give every gate skip the same reason; a design skip reads conditions 3, 4 and 6 its own way ([Design skips](#design-skips)).
 
 ## Gate records
 
@@ -142,11 +142,11 @@ The v1 limit: the address's module path is exactly one `module.<call>` level, ca
 
 Every directory of `unplanned` appears once, in its order, in `covered` or in `uncovered`. `gate` is `G1`, `G2` or `G3` in laptop mode and `role` or `docker` in runner mode, or `design` in either mode for a [design skip](#design-skips), which carries `reason` in place of `path`. `path` is the file of the record's first hit, without its line, or in runner mode the first exception hit of the head gate record. `downloaded` is present, and true, only when that hit is in a downloaded module ([Downloaded hits](#downloaded-hits)); a consumer that does not show it may ignore it. `witnesses` holds one entry per changed attribute, the same for every covered directory. `base_sha` is null only for `--base unresolved` or a base commit the clone does not hold, and `covered` is then empty.
 
-The reasons, a closed list: `not-sole-reason`, `wrong-gate-class`, `head-mismatch`, `files-incomplete`, `plan-record-unusable`, `change-not-allowed`, `dir-changed`, `merge-base-unresolved`, `base-record-missing`, `hit-set-differs`, `witness-sensitive`, `no-witness`.
+The reasons, a closed list: `not-sole-reason`, `wrong-gate-class`, `head-mismatch`, `files-incomplete`, `plan-record-unusable`, `denial-unproven`, `change-not-allowed`, `attribute-referenced`, `dir-changed`, `merge-base-unresolved`, `base-not-denied`, `base-record-missing`, `hit-set-differs`, `witness-sensitive`, `no-witness`.
 
 ## Design skips
 
-Some examples can never plan under a plan-only review role, whatever the change: a data source whose read the [session policy](plan-pass.md#credentials) denies by name, for one. Such an example ends with an environment class whose reason is a property of the example and the role, never of the run. In either mode, `check` decides an example whose coverage reason is one of these classes, the closed list:
+Some examples can never plan under a plan-only review role, whatever the change: a data source whose read the [session policy](plan-pass.md#credentials) denies by name, for one. In either mode, `check` decides an example whose coverage reason is one of these classes, the closed list:
 
 | Class | Reason token |
 |-------|--------------|
@@ -154,16 +154,19 @@ Some examples can never plan under a plan-only review role, whatever the change:
 
 Every other class stays an unknown, `wrong-gate-class`, the transient ones above all: `timeout`, `output-cap`, `network` and `throttling` say something about this run, and `credentials`, `sandbox`, `registry` and `plugin` about the machine. `network` is not on the list even where the runner wrote it for a host its plan proxy refused by design ([Refused hosts](plan-runner/README.md#refused-hosts)), since the same token also stands for a stalled connection. The needs of a Docker daemon and of a role in another account are [Recorded exceptions](#recorded-exceptions) already.
 
+The class alone proves nothing: it is a substring match on the first diagnostic, and a value the head chose can hold the word. The plan pass therefore records its own evidence ([plan-pass.md](plan-pass.md#per-example)): a `denied: <address> ...` line, only when every `Error:` diagnostic of the plan is an AWS SDK access denial (`api error AccessDenied:`, `AccessDeniedException:` or `UnauthorizedOperation:` in the SDK's response error form) on a data source read, named by the diagnostic's own `with data....` line, and then a merge base re-run of the example, as for a `code-error`, which prints `base: <class>` and, for such a denial at the base, `base-denied: <address> ...`. The runner drops a `base-denied` line from the head's own output; only its base re-run writes one.
+
 A design skip is covered under the conditions of a gate skip with these differences, all or nothing:
 
 - Condition 1: the reason is on the list, and the directory appears once in `unplanned` (else `not-sole-reason`).
-- Condition 3: the directory's block of the plan record, laptop or runner as `--mode` says, has that class as its `plan:` class (else `plan-record-unusable`).
-- Condition 4: the change passes the allow-list, and no changed attribute belongs to a `data` block (else `change-not-allowed`): a changed data source argument can change what the plan reads, and so what the role is denied.
+- Condition 3: the directory's block of the plan record, laptop or runner as `--mode` says, has that class as its `plan:` class (else `plan-record-unusable`), and exactly one `denied:` line of one to 50 distinct data addresses (else `denial-unproven`).
+- Condition 4: the change passes the allow-list, and no changed attribute belongs to a `data` block (else `change-not-allowed`): a changed data source argument can change what the plan reads, and so what the role is denied. No `.tf` file of the clone reads a changed attribute (else `attribute-referenced`): a mention of the resource address, outside a `.git` or `.terraform` directory, not followed by an index or splat and then the name of another attribute counts as a read, so the whole object and a comment count too. A value that reaches no expression reaches no local, `count`, `for_each` or data source.
 - Condition 5: no changed file lies under the directory or under its real directory, which the head gate record gives (else `dir-changed`).
-- Conditions 7 to 9: there is no hit to compare at the base, so the base gate record is not read. The head gate record must hold the directory with its `done` line and no hit at all (else `hit-set-differs`): a gate or exception hit there means the pass would have recorded a gate or an exception, so the record does not match the clone.
+- Condition 6: `--base` is a SHA (else `merge-base-unresolved`), and the block holds exactly one `base:` line, `base: environment (access-denied)`, and one `base-denied:` line equal to the `denied:` line (else `base-not-denied`): the example, planned at the merge base the same way, was denied the same reads. A base that planned, failed another way or was not available, and a second `base:` line, leave the skip an unknown.
+- Conditions 7 to 9: there is no gate hit to compare at the base, so the base gate record is not read. The head gate record must hold the directory with its `done` line and no hit at all (else `hit-set-differs`): a gate or exception hit there means the pass would have recorded a gate or an exception, so the record does not match the clone.
 - Condition 10: the witnesses are the same as for a gate skip, from planned examples only.
 
-The covered element is `{"dir": "...", "gate": "design", "reason": "<token>", "witnesses": [...]}`, with no `path`. A design skip may stand beside the gate skips of a laptop pass or the exceptions of a runner pass. The head plan alone says the example was denied: the base was never planned. The allow-list keeps every block and every data source argument as it was, so the change adds no read; a changed resource attribute that a data source's `count` or arguments read could still change what is read, which this check does not trace.
+Conditions 3, 4 and 6 differ by directory here, unlike a gate skip's: a changed `data` attribute gives a design skip `change-not-allowed` beside a covered gate skip. The covered element is `{"dir": "...", "gate": "design", "reason": "<token>", "witnesses": [...]}`, with no `path`. A design skip may stand beside the gate skips of a laptop pass or the exceptions of a runner pass. The `denied:` line is evidence the head could shape, as any line of the plan record is ([plan-pass.md](plan-pass.md#saved-plans-and-addresses)); the base lines come from the base's own code.
 
 ## Recorded exceptions
 

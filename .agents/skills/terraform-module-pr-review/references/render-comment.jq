@@ -560,7 +560,7 @@ def texts: {
   "unplanned-covered-downloaded": "- Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it).",
   "unplanned-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
   "unplanned-covered-exception": "- Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}).",
-  "unplanned-covered-design": "- Not planned: {dir} (`environment ({reason})`, a limit of the review role that the example meets by design).",
+  "unplanned-covered-design": "- Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}).",
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
   "behaviour-trigger": "- Behaviour change at {location} ({category}): not verified.",
   "behaviour-trigger-groups": "- {count} behaviour changes not verified: {categories}.",
@@ -641,17 +641,17 @@ def texts: {
   "compact-covered-exception-many": "{count} of {total} examples were not planned because of a recorded exception of the plan pass; the changed code was planned {where} (see notes).",
   "rationale-covered-exception-one": "1 of {total} examples was not planned because of a recorded exception of the plan pass; the changed code was planned {where}, as listed below.",
   "rationale-covered-exception-many": "{count} of {total} examples were not planned because of a recorded exception of the plan pass; the changed code was planned {where}, as listed below.",
-  "compact-covered-design-one": "1 of {total} examples cannot plan under the review role by design; the changed code was planned {where} (see notes).",
-  "compact-covered-design-many": "{count} of {total} examples cannot plan under the review role by design; the changed code was planned {where} (see notes).",
-  "rationale-covered-design-one": "1 of {total} examples cannot plan under the review role by design; the changed code was planned {where}, as listed below.",
-  "rationale-covered-design-many": "{count} of {total} examples cannot plan under the review role by design; the changed code was planned {where}, as listed below.",
+  "compact-covered-design-one": "1 of {total} examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where} (see notes).",
+  "compact-covered-design-many": "{count} of {total} examples were not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where} (see notes).",
+  "rationale-covered-design-one": "1 of {total} examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where}, as listed below.",
+  "rationale-covered-design-many": "{count} of {total} examples were not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where}, as listed below.",
   "compact-covered-mixed-many": "{count} of {total} examples were not planned, for the reasons in the notes; the changed code was planned {where} (see notes).",
   "rationale-covered-mixed-many": "{count} of {total} examples were not planned, for the reasons listed below; the changed code was planned {where}.",
   "evidence-covered": "- Not planned: {dir} ({gate} hit in {path}, same at base {base}).",
   "evidence-covered-downloaded": "- Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it).",
   "evidence-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
   "evidence-covered-exception": "- Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}).",
-  "evidence-covered-design": "- Not planned: {dir} (`environment ({reason})`, a limit of the review role that the example meets by design).",
+  "evidence-covered-design": "- Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}).",
   "evidence-reported": "Behaviour change at {location} reported: judged in {findings} ({count} differences).",
   "evidence-claims-one": "1 claim verified.",
   "evidence-claims-many": "{count} claims verified.",
@@ -928,7 +928,7 @@ def skipped_lines($run; $p): ($run.skipped_files // []) as $s
 def covered_lines($key; $cov; $run):
   [ ($cov[] as $c
      | tx($key + (if $c.gate == "design" then "-design" elif $c.downloaded then "-downloaded" elif ($c.gate | skip_mode) == "runner" then "-exception" else "" end);
-         {dir: ($c.dir | nm(allowed)), gate: $c.gate, path: (($c.path // "") | nm(allowed)), base: $run.coverage.skip_base_sha[:7], reason: $c.reason,
+         {dir: ($c.dir | nm(allowed)), gate: $c.gate, path: (($c.path // "") | nm(allowed)), base: $run.coverage.skip_base_sha[:7], head: $run.coverage.skip_head_sha[:7], reason: $c.reason,
           exception: ({"role": "a role in another account", "docker": "a Docker daemon"}[$c.gate] // "")})),
     (witnesses($cov)[]
      | tx($key + "-by"; {attribute, example: (.example | nm(allowed)),
@@ -1234,7 +1234,8 @@ def covered_of($in; $l; $b):
   | if $cs != [] and $cv.skip_head_sha == $in.host.head_sha and $cv.skip_base_sha == $in.host.merge_base
        and $run.plan_ran and ($cv.inert | not)
        # one mode for the whole run: laptop gate skips, or runner-mode recorded exceptions; a design
-       # skip, a property of the example and the review role, stands beside either
+       # skip stands beside either, and needs a mode too
+       and ($run.plan_mode | IN("laptop", "runner"))
        and all($cs[]; .gate == "design" or (.gate | skip_mode == $run.plan_mode))
        # the witness lines stay bounded, and at least one example was planned
        and (witnesses($cs) | length) <= 100 and ($u | length) < ($run.examples.count // 0)

@@ -72,7 +72,7 @@
 #   `validate`, which COMPACT needs, and "plan_mode",
 #   "laptop" or "runner", the plan pass mode of the plan record; a gate hit is a cause COMPACT
 #   admits only after a laptop-mode pass. coverage may carry three keys more, all or none:
-#   "covered_skips", the "covered" list skip-coverage.sh prints, [{"dir", "gate": "G1|G2|G3|role|docker",
+#   "covered_skips", the "covered" list skip-coverage.sh prints, [{"dir", "gate": "G1|G2|G3|role|docker|design",
 #   "path", "witnesses": [{"attribute", "example", "address"}]}] with an optional "downloaded":
 #   true when the covering hit is in a downloaded module (skip-coverage.md), role and docker the
 #   recorded exceptions of a runner-mode pass, or a design skip in either mode, {"dir", "gate":
@@ -83,7 +83,7 @@
 #   characters with no control character or backtick; any other shape is refused. The list takes
 #   the skipped examples off ladder rule 4 only when every condition of verdict.md, Covered
 #   safety-gate skips, holds for every one of them, gates G1 to G3 only after a laptop pass and
-#   role and docker only after a runner pass, design after either, skip_head_sha equal to --head, skip_base_sha
+#   role and docker only after a runner pass, design after either, always with a plan_mode, skip_head_sha equal to --head, skip_base_sha
 #   to host.json's merge_base and at most 100 distinct witnesses among them; else it is ignored. A
 #   host.json prose-truncated entry
 #   may carry "item" (body, title, thread or issue) and "omitted" (bytes); only a cut of the body, the

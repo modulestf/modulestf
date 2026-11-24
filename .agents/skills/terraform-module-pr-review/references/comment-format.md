@@ -516,7 +516,7 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `unplanned-covered-downloaded` | - Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it). |
 | `unplanned-covered-by` | - Covered by: `{attribute}` planned in {example} as {address} at {head}. |
 | `unplanned-covered-exception` | - Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}). |
-| `unplanned-covered-design` | - Not planned: {dir} (`environment ({reason})`, a limit of the review role that the example meets by design). |
+| `unplanned-covered-design` | - Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}). |
 | `behaviour-not-run` | - Behaviour check: {reason}, so no change was classified or verified. |
 | `behaviour-trigger` | - Behaviour change at {location} ({category}): not verified. |
 | `behaviour-trigger-groups` | - {count} behaviour changes not verified: {categories}. |
@@ -597,17 +597,17 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `compact-covered-exception-many` | {count} of {total} examples were not planned because of a recorded exception of the plan pass; the changed code was planned {where} (see notes). |
 | `rationale-covered-exception-one` | 1 of {total} examples was not planned because of a recorded exception of the plan pass; the changed code was planned {where}, as listed below. |
 | `rationale-covered-exception-many` | {count} of {total} examples were not planned because of a recorded exception of the plan pass; the changed code was planned {where}, as listed below. |
-| `compact-covered-design-one` | 1 of {total} examples cannot plan under the review role by design; the changed code was planned {where} (see notes). |
-| `compact-covered-design-many` | {count} of {total} examples cannot plan under the review role by design; the changed code was planned {where} (see notes). |
-| `rationale-covered-design-one` | 1 of {total} examples cannot plan under the review role by design; the changed code was planned {where}, as listed below. |
-| `rationale-covered-design-many` | {count} of {total} examples cannot plan under the review role by design; the changed code was planned {where}, as listed below. |
+| `compact-covered-design-one` | 1 of {total} examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where} (see notes). |
+| `compact-covered-design-many` | {count} of {total} examples were not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where} (see notes). |
+| `rationale-covered-design-one` | 1 of {total} examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where}, as listed below. |
+| `rationale-covered-design-many` | {count} of {total} examples were not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where}, as listed below. |
 | `compact-covered-mixed-many` | {count} of {total} examples were not planned, for the reasons in the notes; the changed code was planned {where} (see notes). |
 | `rationale-covered-mixed-many` | {count} of {total} examples were not planned, for the reasons listed below; the changed code was planned {where}. |
 | `evidence-covered` | - Not planned: {dir} ({gate} hit in {path}, same at base {base}). |
 | `evidence-covered-downloaded` | - Not planned: {dir} ({gate} hit in a downloaded module; the pull request cannot change it). |
 | `evidence-covered-by` | - Covered by: `{attribute}` planned in {example} as {address} at {head}. |
 | `evidence-covered-exception` | - Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}). |
-| `evidence-covered-design` | - Not planned: {dir} (`environment ({reason})`, a limit of the review role that the example meets by design). |
+| `evidence-covered-design` | - Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}). |
 | `evidence-reported` | Behaviour change at {location} reported: judged in {findings} ({count} differences). |
 | `evidence-claims-one` | 1 claim verified. |
 | `evidence-claims-many` | {count} claims verified. |

@@ -17,7 +17,8 @@
 #                                        by the user's authorization, the not-run-environment ones
 #   review-run.sh plan <run>            the plan pass (deep, focused, with a profile), then the
 #                                        plan coverage at every depth
-#   review-run.sh skip-coverage <run>   skip-coverage.sh after a laptop pass with gate skips
+#   review-run.sh skip-coverage <run>   skip-coverage.sh after a pass with gate skips, recorded
+#                                        exceptions or design skips
 #   review-run.sh ladder <run>          ladder-pass.sh run (not at light), then behaviour-pass.sh eval
 #   review-run.sh tests <run>           the test pass (test-pass.md) in the runner, with a
 #                                        non-hcl-dependency trigger
