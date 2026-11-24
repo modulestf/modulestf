@@ -132,13 +132,17 @@ run_facts() {
 }
 
 # null_vars: <out>/nullvars.json, {dir, name} of each variable the change adds whose head block, read
-# from the clone as text at the classifier's line and never run, has one line holding "default", that
-# line exactly `default = null`, no `nullable` line, no comment (`#`, `//`, `/*`, `*/`) and no heredoc
-# on any line, and ends within 200 lines. A link, a file that resolves outside the module root or is
-# over 1 MiB, or a block this strict reader cannot delimit gives no entry. A variable is one of its
-# module directory, so the directory is part of the key.
-# <out>/required.json, "<type>.<attribute>" for each attribute or block the given provider schema
-# requires (`required`, or a block with min_items above 0) on a type a trigger names.
+# from the clone as text at the classifier's line and never run, a small tokenizer accepts: each
+# line has its quoted strings removed first (escape-aware; a string holding `${` or `%{`, or one
+# left open, refuses), then refuses on `${`, `%{`, `<<`, `#`, `//`, `/*` or `*/`; depth is counted
+# over {}, [] and (), the block ends where it returns to zero within 200 lines, and the block must
+# hold exactly one `default` attribute at depth 1, whose value is exactly `null`, and no `nullable`
+# attribute at depth 1. A `default` deeper in is part of the type and ignored. Anything else, a
+# link, a file that resolves outside the module root or is over 1 MiB gives no entry. A variable is
+# one of its module directory, so the directory is part of the key.
+# <out>/required.json, "<type>.<path>" for each attribute the given provider schema requires and
+# each block with min_items above 0, at every block depth, on a type a trigger names; a schema this
+# cannot read gives ["*"], which requires everything.
 null_vars() {
   local root list="" rmax=200
   root="$(cd "$dir" && pwd -P)" || return 0
@@ -149,14 +153,26 @@ null_vars() {
     case "$real" in "$root"/*) ;; *) continue ;; esac
     perl -e '
       my ($name, $at, $max) = (shift, shift, shift); my @l = <STDIN>; my $i = $at - 1;
-      exit 1 unless defined $l[$i] && $l[$i] =~ /^variable\s+"\Q$name\E"\s*\{\s*$/;
-      my ($d, $n) = (0, 0);
-      for my $j ($i .. $#l) {
-        my $s = $l[$j];
-        exit 1 if $s =~ /<<|#|\/\/|\/\*|\*\// || $j - $i > $max;
-        if ($j > $i && $s =~ /^\}\s*$/) { exit(($n == 1 && $d == 1) ? 0 : 1) }
-        exit 1 if $s =~ /^\s*nullable\s*=/;
-        if ($s =~ /default/) { $n++; $d = 1 if $s =~ /^\s*default\s*=\s*null\s*\r?$/ }
+      exit 1 unless defined $l[$i] && $l[$i] =~ /^variable\s+"\Q$name\E"\s*\{\s*\r?$/;
+      my ($depth, $n, $d) = (1, 0, 0);
+      for my $j ($i + 1 .. $#l) {
+        exit 1 if $j - $i > $max;
+        my $s = $l[$j]; $s =~ s/\r?\n\z//;
+        my $bad = 0;
+        $s =~ s/"((?:[^"\\]|\\.)*)"/$bad = 1 if $1 =~ m{[\$%]\{}; "0"/ge;
+        exit 1 if $bad || $s =~ /"/ || $s =~ m{<<|#|//|/\*|\*/|[\$%]\{};
+        if ($depth == 1) {
+          if ($s =~ /^\s*default\b/) { $n++; $d = 1 if $s =~ /^\s*default\s*=\s*null\s*$/ }
+          exit 1 if $s =~ /^\s*nullable\b/;
+        }
+        for my $k (0 .. length($s) - 1) {
+          my $c = substr($s, $k, 1);
+          if ($c =~ /[\{\[\(]/) { $depth++ }
+          elsif ($c =~ /[\}\]\)]/) {
+            $depth--;
+            if ($depth == 0) { exit(($c eq "}" && substr($s, $k + 1) =~ /^\s*$/ && $n == 1 && $d == 1) ? 0 : 1) }
+          }
+        }
       }
       exit 1' "$name" "$line" "$rmax" < "$f" \
       && list="$list$(dirname "$file")"$'\t'"$name"$'\n'
@@ -167,9 +183,9 @@ null_vars() {
   if [ -n "$schema" ]; then
     jq -c --slurpfile b "$out/behaviour.json" '
       ([$b[0].triggers[].address | strings | gsub("\\[[^\\]]*\\]"; "") | split(".") | select(length >= 2) | .[-2] | select(test("^[a-z][a-z0-9]*_[a-z0-9_]+$"))] | unique) as $ty
-      | [.provider_schemas[]?.resource_schemas // {} | to_entries[] | select(.key | IN($ty[])) | .key as $k
-         | ((.value.block.attributes // {}) | to_entries[] | select(.value.required == true) | "\($k).\(.key)"),
-           ((.value.block.block_types // {}) | to_entries[] | select((.value.min_items // 0) > 0) | "\($k).\(.key)")] | unique' \
+      | def req($p): ((.attributes // {}) | to_entries[] | select(.value.required == true) | "\($p).\(.key)"),
+          ((.block_types // {}) | to_entries[] | ((select((.value.min_items // 0) > 0) | "\($p).\(.key)"), (.key as $b | .value.block | req("\($p).\($b)"))));
+      [.provider_schemas[]?.resource_schemas // {} | to_entries[] | select(.key | IN($ty[])) | .key as $k | .value.block | req($k)] | unique' \
       "$schema" > "$out/required.json" 2> /dev/null || printf '["*"]\n' > "$out/required.json"
   fi
 }
@@ -279,7 +295,8 @@ evaluate() {
   # kept or discarded, and nothing else.
   jq -e --slurpfile b "$out/behaviour.json" --argjson c "$cf" "$JQ_DEFS"' valid_eval($b[0]; $c)' \
     "$out/eval.raw" > /dev/null 2>&1 || not_run "output refused"
-  local nv='[]' rq='[]'
+  # No provider schema, or none classify could read, requires everything: nothing is marked.
+  local nv='[]' rq='["*"]'
   if [ -f "$out/nullvars.json" ]; then
     nv="$(jq -c 'if type == "array" and all(.[]; type == "object" and (.dir | type == "string") and (.name | type == "string")) then . else [] end' "$out/nullvars.json" 2> /dev/null)" || nv='[]'
   fi
@@ -316,8 +333,9 @@ evaluate() {
     def managed: test("^(module\\.[A-Za-z0-9_-]+(\\[[^\\]]*\\])?\\.)*[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*(\\[[^\\]]*\\])?$");
     def bare: gsub("\\[[^\\]]*\\]"; "");
     # A required attribute or block takes no null: the schema says so when there is one.
-    def not_required($t): (($t.address | bare | split(".") | .[-2]) + "." + ($t.attribute | sub("^dynamic\\."; "") | split(".")[0])) as $ta
-      | (("*" | IN($rq[])) or ($ta | IN($rq[]))) | not;
+    def not_required($t): ($t.attribute | type == "string")
+      and ((($t.address | bare | split(".") | .[-2]) + "." + ($t.attribute | sub("^dynamic\\."; ""))) as $ta
+           | (("*" | IN($rq[])) or ($ta | IN($rq[]))) | not);
     # The plan side: every example planned, with its addresses read whole (none empty, none at the
     # 1000 cap) and its module calls known, and no planned address that could be the resource at any
     # module depth: equal, or ending in "." and the address, whatever module calls lead to it.
