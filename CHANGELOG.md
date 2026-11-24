@@ -1,3 +1,12 @@
+## [0.12.15](https://github.com/modulestf/modulestf/compare/v0.12.14...v0.12.15) (2026-11-24)
+
+
+### Bug Fixes
+
+* **pr-review:** Let the runner's plan reach Step Functions validation and EMR release labels ([#197](https://github.com/modulestf/modulestf/issues/197)) ([c13f559](https://github.com/modulestf/modulestf/commit/c13f559758db88f014f69ae42bf7e14e7b504e84))
+
+
+
 ## [0.12.14](https://github.com/modulestf/modulestf/compare/v0.12.13...v0.12.14) (2026-11-24)
 
 
