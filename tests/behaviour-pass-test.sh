@@ -94,7 +94,7 @@ setup() {
   rm -f "$TMP/behaviour.rc" "$TMP/eval.rc" "$TMP/behaviour.sleep" "$TMP/eval.sleep" "$TMP/facts.log" "$TMP/ladder-seen.json" "$TMP/diff-seen.json"
   cp "$TMP/behaviour-556.json" "$TMP/behaviour.out"; cp "$TMP/eval-556.json" "$TMP/eval.out"
 }
-classify() { bash "$BP" classify --facts "${F:-$FACTS}" --dir "$MOD" --diff "${DIFF:-$TMP/files.json}" ${PFX:+--prefix "$PFX"} --out "$O" > "$O/classify.txt" 2>&1; }
+classify() { bash "$BP" classify --facts "${F:-$FACTS}" --dir "$MOD" --diff "${DIFF:-$TMP/files.json}" ${PFX:+--prefix "$PFX"} ${SCHEMA:+--schema "$SCHEMA"} --out "$O" > "$O/classify.txt" 2>&1; }
 evalp() { bash "$BP" eval --facts "${F:-$FACTS}" --out "$O" --head "$HEAD" --base-sha "$BASE" "$@" > "$O/eval.txt" 2>&1; }
 q() { jq -e "$1" "$O/run-behaviour.json" > /dev/null 2>&1; echo $?; }
 notrun() { # name, reason
@@ -183,6 +183,346 @@ jq -n --arg h "$HEAD" --arg b "$BASE" '{schema_version: 1, head_sha: $h, base_sh
 evalp --ladder "$TMP/ladder.json"
 cmp -s "$TMP/ladder.json" "$TMP/ladder-seen.json"; check "a ladder record is passed through" $?
 ! grep -q -- '--claims' "$TMP/facts.log"; check "no claims file, no --claims" $?
+
+# --- Unexercised (behaviour-pass.md, The Run Object): only an argument the change adds to a managed
+# resource as exactly var.<name>, or a dynamic block null-guarded on it, where <name> is a variable
+# the change adds with a null default, with the plan coverage as its only level, and then that
+# variable's own trigger when every trigger it follows is marked; and only when every example planned
+# with its addresses read whole and its module calls known, and no planned address could be that
+# resource at any module depth. The classifier output is recorded from mtf-facts behaviour on the
+# head files below and their base: an engine and storage_encrypted literal flip, a removed argument, a
+# provider meta-argument change, a removed nested block, a removed variable, a nullable change, two
+# terraform block changes, and on another resource an added force_destroy = true, an added argument
+# from a new null variable, from a new variable defaulting to true and from an existing variable, and
+# a dynamic block null-guarded on the new null variable.
+UMOD="$TMP/unex-head"; mkdir -p "$UMOD"
+cat > "$UMOD/main.tf" <<'EOF2'
+resource "aws_db_instance" "this" {
+  count             = var.create ? 1 : 0
+  engine            = "postgres"
+  storage_encrypted = false
+  provider          = aws.replica
+}
+resource "aws_lb_listener" "secondary" {
+  port             = 80
+  force_destroy    = true
+  idle_timeout     = var.new_idle
+  ssl_policy       = var.new_on
+  alpn_policy      = var.old_existing
+  dynamic "default_action" {
+    for_each = var.new_idle == null ? [] : [1]
+    content {
+      type = "forward"
+    }
+  }
+}
+EOF2
+cat > "$UMOD/variables.tf" <<'EOF2'
+variable "create" {
+  default = true
+}
+variable "kms" {
+  default  = null
+  nullable = false
+}
+variable "old_existing" {
+  default = null
+}
+variable "new_idle" {
+  type    = number
+  default = null
+}
+variable "new_on" {
+  type    = bool
+  default = true
+}
+EOF2
+cat > "$UMOD/versions.tf" <<'EOF2'
+terraform {
+  required_providers {
+    aws    = { source = "example/aws", version = ">= 6.0" }
+    random = { source = "hashicorp/random" }
+  }
+}
+EOF2
+cat > "$TMP/behaviour-unex.json" <<'EOF2'
+{"schema_version":1,"inert":false,"capped":0,"entries":[{"path":"main.tf","change_kind":"modified","inert":false,"trigger_ids":["T-001","T-002","T-003","T-004","T-005","T-006","T-007","T-008","T-009","T-010","T-011","T-012","T-013","T-014"]},{"path":"variables.tf","change_kind":"modified","inert":false,"trigger_ids":["T-015","T-016","T-017","T-018"]},{"path":"versions.tf","change_kind":"modified","inert":false,"trigger_ids":["T-019","T-020"]}],"triggers":[{"id":"T-001","file":"main.tf","line":3,"category":"literal-argument-change","change_kind":"modified","address":"aws_db_instance.this","attribute":"engine","base_expr":"\"mysql\"","head_expr":"\"postgres\"","levels":["L4"],"referenced_inputs":[],"contextual_refs":[],"reason":null},{"id":"T-002","file":"main.tf","line":4,"category":"literal-argument-change","change_kind":"modified","address":"aws_db_instance.this","attribute":"storage_encrypted","base_expr":"true","head_expr":"false","levels":["L4"],"referenced_inputs":[],"contextual_refs":[],"reason":null},{"id":"T-003","file":"main.tf","line":5,"category":"unclassified-change","change_kind":"removed","address":"aws_db_instance.this","attribute":"kms_key_id","base_expr":"var.kms","head_expr":null,"levels":["L4"],"referenced_inputs":[{"name":"kms","type":"any"}],"contextual_refs":[],"reason":null},{"id":"T-004","file":"main.tf","line":5,"category":"unclassified-change","change_kind":"modified","address":"aws_db_instance.this","attribute":"provider","base_expr":"aws","head_expr":"aws.replica","levels":["L4"],"referenced_inputs":[],"contextual_refs":["aws","aws.replica"],"reason":null},{"id":"T-005","file":"main.tf","line":5,"category":"unknown-propagation-candidate","change_kind":"removed","address":"aws_db_instance.this","attribute":"kms_key_id","base_expr":"var.kms","head_expr":null,"levels":["L1","L3"],"referenced_inputs":[{"name":"kms","type":"any"}],"contextual_refs":[],"reason":null},{"id":"T-006","file":"main.tf","line":7,"category":"unclassified-change","change_kind":"removed","address":"aws_db_instance.this","attribute":"timeouts","base_expr":null,"head_expr":null,"levels":["L4"],"referenced_inputs":[],"contextual_refs":[],"reason":null},{"id":"T-007","file":"main.tf","line":9,"category":"literal-argument-change","change_kind":"added","address":"aws_lb_listener.secondary","attribute":"force_destroy","base_expr":null,"head_expr":"true","levels":["L4"],"referenced_inputs":[],"contextual_refs":[],"reason":null},{"id":"T-008","file":"main.tf","line":10,"category":"unclassified-change","change_kind":"added","address":"aws_lb_listener.secondary","attribute":"idle_timeout","base_expr":null,"head_expr":"var.new_idle","levels":["L4"],"referenced_inputs":[{"name":"new_idle","type":"number"}],"contextual_refs":[],"reason":null},{"id":"T-009","file":"main.tf","line":10,"category":"unknown-propagation-candidate","change_kind":"added","address":"aws_lb_listener.secondary","attribute":"idle_timeout","base_expr":null,"head_expr":"var.new_idle","levels":["L1","L3"],"referenced_inputs":[{"name":"new_idle","type":"number"}],"contextual_refs":[],"reason":null},{"id":"T-010","file":"main.tf","line":11,"category":"unclassified-change","change_kind":"added","address":"aws_lb_listener.secondary","attribute":"ssl_policy","base_expr":null,"head_expr":"var.new_on","levels":["L4"],"referenced_inputs":[{"name":"new_on","type":"bool"}],"contextual_refs":[],"reason":null},{"id":"T-011","file":"main.tf","line":11,"category":"unknown-propagation-candidate","change_kind":"added","address":"aws_lb_listener.secondary","attribute":"ssl_policy","base_expr":null,"head_expr":"var.new_on","levels":["L1","L3"],"referenced_inputs":[{"name":"new_on","type":"bool"}],"contextual_refs":[],"reason":null},{"id":"T-012","file":"main.tf","line":12,"category":"unclassified-change","change_kind":"added","address":"aws_lb_listener.secondary","attribute":"alpn_policy","base_expr":null,"head_expr":"var.old_existing","levels":["L4"],"referenced_inputs":[{"name":"old_existing","type":"any"}],"contextual_refs":[],"reason":null},{"id":"T-013","file":"main.tf","line":12,"category":"unknown-propagation-candidate","change_kind":"added","address":"aws_lb_listener.secondary","attribute":"alpn_policy","base_expr":null,"head_expr":"var.old_existing","levels":["L1","L3"],"referenced_inputs":[{"name":"old_existing","type":"any"}],"contextual_refs":[],"reason":null},{"id":"T-014","file":"main.tf","line":13,"category":"dynamic-block-change","change_kind":"added","address":"aws_lb_listener.secondary","attribute":"dynamic.default_action","base_expr":null,"head_expr":"var.new_idle == null ? [] : [1]","levels":["L4"],"referenced_inputs":[{"name":"new_idle","type":"number"}],"contextual_refs":[],"reason":null},{"id":"T-015","file":"variables.tf","line":6,"category":"type-validation-change","change_kind":"added","address":"var.kms","attribute":"nullable","base_expr":null,"head_expr":"false","levels":["L1"],"referenced_inputs":[],"contextual_refs":[],"reason":null},{"id":"T-016","file":"variables.tf","line":7,"category":"unclassified-change","change_kind":"removed","address":"var.old","attribute":null,"base_expr":null,"head_expr":null,"levels":["L4"],"referenced_inputs":[],"contextual_refs":[],"reason":null},{"id":"T-017","file":"variables.tf","line":11,"category":"unclassified-change","change_kind":"added","address":"var.new_idle","attribute":null,"base_expr":null,"head_expr":null,"levels":[],"referenced_inputs":[],"contextual_refs":[],"reason":null,"follows":["T-008","T-009","T-014"]},{"id":"T-018","file":"variables.tf","line":15,"category":"unclassified-change","change_kind":"added","address":"var.new_on","attribute":null,"base_expr":null,"head_expr":null,"levels":[],"referenced_inputs":[],"contextual_refs":[],"reason":null,"follows":["T-010","T-011"]},{"id":"T-019","file":"versions.tf","line":3,"category":"unclassified-change","change_kind":"modified","address":"terraform","attribute":"required_providers.aws","base_expr":"{ source = \"hashicorp/aws\", version = \">= 6.0\" }","head_expr":"{ source = \"example/aws\", version = \">= 6.0\" }","levels":["L4"],"referenced_inputs":[],"contextual_refs":[],"reason":null},{"id":"T-020","file":"versions.tf","line":4,"category":"unclassified-change","change_kind":"added","address":"terraform","attribute":"required_providers.random","base_expr":null,"head_expr":"{ source = \"hashicorp/random\" }","levels":["L4"],"referenced_inputs":[],"contextual_refs":[],"reason":null}]}
+EOF2
+jq '{schema_version: 1, capped: 0, triggers: [.triggers[] | {id, state: (if .id == "T-015" then "verified" else "unverifiable" end), reason: "x"}],
+  claims: [], discarded_claims: []}' "$TMP/behaviour-unex.json" > "$TMP/eval-unex.json"
+printf '[{"filename":"main.tf","status":"modified"},{"filename":"variables.tf","status":"modified"},{"filename":"versions.tf","status":"modified"}]\n' > "$TMP/files-unex.json"
+jq -n --arg h "$HEAD" --arg b "$BASE" '{schema_version: 1, head_sha: $h, base_sha: $b, terraform_version: "1.9.8", pins: [], runs: [],
+  coverage: {class: "complete", examples: [
+   {dir: "examples/complete", head: "planned", base: null, addresses: ["module.db.aws_db_subnet_group.this", "module.db.aws_lb.this"], module_calls: {db: "."}},
+   {dir: "examples/minimal", head: "planned-no-changes", base: null, addresses: ["module.db.aws_db_subnet_group.this"], module_calls: {db: "."}}]}}' > "$TMP/ladder-unex.json"
+# The provider schema of these runs: every attribute optional, no block with min_items. With no
+# schema nothing is marked (t_unex_noschema).
+printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{
+ "aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","optional":true},"port":{"type":"number","optional":true}},
+  "block_types":{"default_action":{"nesting_mode":"list","block":{"attributes":{"target_group_arn":{"type":"string","optional":true}}}}}}},
+ "aws_db_instance":{"version":0,"block":{"attributes":{"deletion_protection":{"type":"bool","optional":true}}}}}}}}' > "$TMP/schema-u.json"
+# unex [ladder jq update] [behaviour jq update] [eval jq update]: classify on the head files, eval; sets O.
+unex() {
+  local SCHEMA="${SCHEMA-$TMP/schema-u.json}"
+  setup; jq "${2:-.}" "$TMP/behaviour-unex.json" > "$TMP/behaviour.out"; jq "${3:-.}" "$TMP/eval-unex.json" > "$TMP/eval.out"
+  jq "${1:-.}" "$TMP/ladder-unex.json" > "$TMP/ladder-u.json"
+  local keep="$MOD"; MOD="$UMOD"; DIFF="$TMP/files-unex.json" classify; MOD="$keep"
+  [ -z "${UREQ-}" ] || printf '%s\n' "$UREQ" > "$O/required.json"
+  evalp --ladder "$TMP/ladder-u.json"
+}
+marked() { jq -c '[.triggers[] | select(.unexercised == true) | .id]' "$O/run-behaviour.json" 2> /dev/null; }
+unmarked() { [ "$(q '.status == "ran"')" = 0 ] && [ "$(marked)" = '[]' ] && ! grep -q unexercised "$O/record.txt"; }
+t_unex() {
+  unex && [ "$(marked)" = '["T-008","T-014"]' ] && [ "$(cat "$O/nullvars.json")" = '[{"dir":".","name":"new_idle"}]' ] \
+    && grep -qxF 'trigger T-008 `main.tf` line 10 unclassified-change: unverifiable, unexercised' "$O/record.txt" \
+    && [ "$(grep -c ', unexercised$' "$O/record.txt")" = 2 ]
+}
+t_unex; check "unexercised: only the pass-through of a new null variable and the block null-guarded on it are marked" $?
+t_unex_force() { unex && jq -e '.triggers[] | select(.id == "T-007") | has("unexercised") | not' "$O/run-behaviour.json" > /dev/null; }
+t_unex_force; check "unexercised: an added force_destroy = true is not marked" $?
+t_unex_true() { unex && jq -e '.triggers[] | select(.id == "T-010") | has("unexercised") | not' "$O/run-behaviour.json" > /dev/null; }
+t_unex_true; check "unexercised: an added argument from a new variable that defaults to true is not marked" $?
+t_unex_old() { unex && jq -e '.triggers[] | select(.id == "T-012") | has("unexercised") | not' "$O/run-behaviour.json" > /dev/null; }
+t_unex_old; check "unexercised: an added argument from an existing variable is not marked" $?
+t_unex_keep() { unex && jq -e '[.triggers[] | select(.id | IN("T-001", "T-002", "T-003", "T-004", "T-005", "T-006", "T-009", "T-015", "T-016", "T-018", "T-019", "T-020")) | has("unexercised")] | any | not' "$O/run-behaviour.json" > /dev/null; }
+t_unex_keep; check "unexercised: a literal flip, a removed argument or block, a meta-argument, a removed variable, the terraform block and an L1 or L3 trigger are never marked" $?
+t_unex_follow() { unex . '.triggers |= map(if .id == "T-017" then .follows = ["T-008", "T-014"] else . end)' && [ "$(marked)" = '["T-008","T-014","T-017"]' ]; }
+t_unex_follow; check "unexercised: the new null variable's own trigger is marked when every trigger it follows is" $?
+t_unex_follow_open() { unex && jq -e '.triggers[] | select(.id == "T-017") | has("unexercised") | not' "$O/run-behaviour.json" > /dev/null; }
+t_unex_follow_open; check "unexercised: the variable's trigger stays unmarked while it follows an unmarked trigger" $?
+t_unex_wrap() { unex . '.triggers |= map(if .id == "T-008" then .head_expr = "coalesce(var.new_idle, 60)" else . end)' && [ "$(marked)" = '["T-014"]' ]; }
+t_unex_wrap; check "unexercised: a function around the new variable is not marked" $?
+t_unex_ctx() { unex . '.triggers |= map(if .id == "T-008" then .contextual_refs = ["local.x"] else . end)' && [ "$(marked)" = '["T-014"]' ]; }
+t_unex_ctx; check "unexercised: a value that also reads a local or resource is not marked" $?
+t_unex_two() { unex . '.triggers |= map(if .id == "T-008" then .referenced_inputs += [{name: "new_on", type: "bool"}] else . end)' && [ "$(marked)" = '["T-014"]' ]; }
+t_unex_two; check "unexercised: a value that reads a second variable is not marked" $?
+t_unex_guard() { unex . '.triggers |= map(if .id == "T-014" then .head_expr = "var.new_idle == null ? [1] : []" else . end)' && [ "$(marked)" = '["T-008"]' ]; }
+t_unex_guard; check "unexercised: a dynamic block that makes a block when the variable is null is not marked" $?
+nvcase() { # head variables.tf sed expression -> T-008 unmarked
+  local keep="$UMOD"; UMOD="$TMP/unex-head-$c"; rm -rf "$UMOD"; cp -R "$keep" "$UMOD"; sed -i.bak "$1" "$UMOD/variables.tf"
+  unex; UMOD="$keep"; [ "$(marked)" = '[]' ] && [ "$(cat "$O/nullvars.json")" = '[]' ]
+}
+t_unex_nodefault() { nvcase '/^variable "new_idle"/,/^}/{/default/d;}'; }
+t_unex_nodefault; check "unexercised: a new variable with no default is not marked" $?
+t_unex_nullable() { nvcase '/^variable "new_idle"/a\
+  nullable = false'; }
+t_unex_nullable; check "unexercised: a new null variable with a nullable line is not marked" $?
+t_unex_heredoc() { nvcase '/^variable "new_idle"/a\
+  description = <<EOT'; }
+t_unex_heredoc; check "unexercised: a variable block with a heredoc is not read" $?
+t_unex_moved() { nvcase '1i\
+# moved'; }
+t_unex_moved; check "unexercised: a variable block not at the trigger's line is not read" $?
+t_unex_link() { local keep="$UMOD"; UMOD="$TMP/unex-head-l$c"; rm -rf "$UMOD"; cp -R "$keep" "$UMOD"; mv "$UMOD/variables.tf" "$TMP/vars-out-$c.tf"
+  ln -s "$TMP/vars-out-$c.tf" "$UMOD/variables.tf"; unex; UMOD="$keep"; [ "$(marked)" = '[]' ]; }
+t_unex_link; check "unexercised: a variables file that is a link is not read" $?
+t_unex_meta() { unex . '.triggers |= map(if .id == "T-008" then .attribute = "provider" elif .id == "T-014" then .attribute = "dynamic.lifecycle" else . end)' && [ "$(marked)" = '[]' ]; }
+t_unex_meta; check "unexercised: an added meta-argument is never marked" $?
+t_unex_cat() { unex . '.triggers |= map(if .id == "T-008" then .category = "default-change" elif .id == "T-014" then .also_categories = ["lifecycle-change"] else . end)' && [ "$(marked)" = '[]' ]; }
+t_unex_cat; check "unexercised: another category, or a merged one, is never marked" $?
+t_unex_kind() { unex . '.triggers |= map(if .id == "T-008" then .change_kind = "modified" else . end)' && [ "$(marked)" = '["T-014"]' ]; }
+t_unex_kind; check "unexercised: a modified argument is never marked" $?
+t_unex_levels() { unex . '.triggers |= map(if .id == "T-008" then .levels = ["L1", "L4"] else . end)' && [ "$(marked)" = '["T-014"]' ]; }
+t_unex_levels; check "unexercised: a trigger with a level besides L4 is never marked" $?
+t_unex_addr() { unex . '.triggers |= map(if .id == "T-008" then .address = "data.aws_lb.secondary" elif .id == "T-014" then .address = "module.lb" else . end)' && [ "$(marked)" = '[]' ]; }
+t_unex_addr; check "unexercised: a data source or module call address is never marked" $?
+t_unex_idx() { unex . '.triggers |= map(.address |= sub("aws_lb_listener.secondary"; "aws_lb_listener.secondary[0]"))' && [ "$(marked)" = '["T-008","T-014"]' ]; }
+t_unex_idx; check "unexercised: a managed address with an index key is marked" $?
+t_unex_planned() { unex '.coverage.examples[1].addresses += ["module.db.aws_lb_listener.secondary"]' && unmarked; }
+t_unex_planned; check "unexercised: an example that plans the resource leaves it unmarked" $?
+t_unex_nested() { unex '.coverage.examples[0].addresses += ["module.db.module.inner.aws_lb_listener.secondary"]' && unmarked; }
+t_unex_nested; check "unexercised: the resource planned two module calls deep leaves it unmarked" $?
+t_unex_own() { unex '.coverage.examples[1] |= (.dir = "." | .addresses += ["aws_lb_listener.secondary"])' && unmarked; }
+t_unex_own; check "unexercised: an example that plans it in its own directory leaves it unmarked" $?
+t_unex_failed() { unex '.coverage.examples[1].head = "code-error"' && unmarked; }
+t_unex_failed; check "unexercised: an example whose plan failed leaves it unmarked" $?
+t_unex_partial() { unex '.coverage.class = "partial"' && unmarked; }
+t_unex_partial; check "unexercised: coverage that is not complete leaves it unmarked" $?
+t_unex_noaddr() { unex '.coverage.examples[1].addresses = []' && unmarked; }
+t_unex_noaddr; check "unexercised: an example with no addresses read leaves it unmarked" $?
+t_unex_cap() { unex '.coverage.examples[0].addresses = [range(1000) | "module.db.aws_s3_object.o\(.)"]' && unmarked; }
+t_unex_cap; check "unexercised: an example whose addresses are at the cap leaves it unmarked" $?
+t_unex_hosted() { unex '.coverage.examples[0].module_calls = {}' && unmarked; }
+t_unex_hosted; check "unexercised: an example with no module calls, as a hosted record, leaves it unmarked" $?
+t_unex_empty() { unex '.coverage.examples = []' && unmarked; }
+t_unex_empty; check "unexercised: no planned example at all leaves it unmarked" $?
+t_unex_none() { setup; cp "$TMP/behaviour-unex.json" "$TMP/behaviour.out"; cp "$TMP/eval-unex.json" "$TMP/eval.out"
+  local SCHEMA="$TMP/schema-u.json" keep="$MOD"; MOD="$UMOD"; DIFF="$TMP/files-unex.json" classify; MOD="$keep"; evalp; unmarked; }
+t_unex_none; check "unexercised: with no ladder record nothing is marked" $?
+t_unex_state() { unex . . '.triggers |= map(.state = "refuted")' && unmarked; }
+t_unex_state; check "unexercised: a refuted trigger is unmarked" $?
+t_unex_sweep() { unex . . '.triggers |= map(. + {complete: false})' && unmarked; }
+t_unex_sweep; check "unexercised: a trigger with sweep evidence is unmarked" $?
+# The render: the reproduced breaks and the unmarked additions stay inconclusive, and the marked
+# pass-through alone is approve with nits, never approve.
+urender() { # behaviour jq select -> the render message
+  jq --slurpfile b "$O/run-behaviour.json" '.plan_ran = true | .behaviour = ($b[0] | .triggers |= map(select('"$1"')))' "$TMP/run.json" > "$TMP/run-u.json"
+  rm -rf "$TMP/render-u"; mkdir -p "$TMP/render-u"; printf '[]\n' > "$TMP/findings-u.json"
+  bash "$RCU" --head "$HEAD" --findings "$TMP/findings-u.json" --host "$TMP/host.json" --checks "$TMP/checks" \
+    --run "$TMP/run-u.json" --assessment "$TMP/assess.txt" --run-dir "$TMP/rundir" --out "$TMP/render-u" 2>&1
+}
+t_unex_render() {
+  unex . '.triggers |= map(if .id == "T-017" then .follows = ["T-008", "T-014"] else . end)' || return 1
+  for id in T-001 T-002 T-003 T-004 T-006 T-007 T-010 T-012 T-016 T-019 T-020; do
+    case "$(urender ".id == \"$id\"")" in "rendered inconclusive (ladder rule 4),"*) ;; *) echo "$id"; return 1 ;; esac
+  done
+  case "$(urender '.id | IN("T-008", "T-014", "T-017")')" in "rendered approve with nits (ladder rule 7), proposed event COMMENT, tier STANDARD") ;; *) return 1 ;; esac
+}
+t_unex_render; check "unexercised: each reproduced break and unmarked addition renders inconclusive, the marked pass-through alone approve with nits" $?
+t_unex_cases() { t_unex && t_unex_force && t_unex_true && t_unex_old && t_unex_keep && t_unex_follow && t_unex_follow_open && t_unex_wrap && t_unex_ctx \
+  && t_unex_two && t_unex_guard && t_unex_meta && t_unex_cat && t_unex_kind && t_unex_levels && t_unex_addr && t_unex_planned && t_unex_nested && t_unex_own \
+  && t_unex_failed && t_unex_partial && t_unex_noaddr && t_unex_cap && t_unex_hosted && t_unex_empty && t_unex_state && t_unex_sweep; }
+# nvblock <file of the new_idle block>: the head with that block in place of the recorded one, at the
+# trigger's line 11; T-008 and T-014 stay unmarked and no variable is read.
+nvblock() {
+  local keep="$UMOD"; UMOD="$TMP/unex-head-b$c"; rm -rf "$UMOD"; cp -R "$keep" "$UMOD"
+  { head -n 10 "$keep/variables.tf"; cat "$1"; tail -n +15 "$keep/variables.tf"; } > "$UMOD/variables.tf"
+  unex; UMOD="$keep"; [ "$(marked)" = '[]' ] && [ "$(cat "$O/nullvars.json")" = '[]' ]
+}
+blk() { printf '%s\n' "$@" > "$TMP/blk-$c"; nvblock "$TMP/blk-$c"; }
+t_unex_cmt_lead() { blk 'variable "new_idle" {' '  type = bool' '  /* x */ default = true' '  # default = null' '  /*' '  default = null' '  */' '}'; }
+t_unex_cmt_lead; check "unexercised: a default behind a block comment, with default = null in comments, is not read" $?
+t_unex_cmt_hide() { blk 'variable "new_idle" {' '  /*' '  default = null' '  */' '  /* */ default = 3000' '}'; }
+t_unex_cmt_hide; check "unexercised: a block comment that holds default = null beside a real default is not read" $?
+t_unex_cmt_brace() { blk 'variable "new_idle" {' '  /*' '  default = null' '}' '  */' '  default = 3000' '}'; }
+t_unex_cmt_brace; check "unexercised: a closing brace inside a block comment is not read as the end" $?
+t_unex_cmt_hash() { blk 'variable "new_idle" {' '  # the idle timeout' '  default = null' '}'; }
+t_unex_cmt_hash; check "unexercised: a block with a # comment is not read" $?
+t_unex_cmt_slash() { blk 'variable "new_idle" {' '  // the idle timeout' '  default = null' '}'; }
+t_unex_cmt_slash; check "unexercised: a block with a // comment is not read" $?
+t_unex_twodef() { blk 'variable "new_idle" {' '  default = null' '  default = null' '}'; }
+t_unex_twodef; check "unexercised: two default attributes at the block's own depth are not read" $?
+# honest blocks the tokenizer reads: blkok <block lines> -> new_idle read, T-008 and T-014 marked
+blkok() { printf '%s\n' "$@" > "$TMP/blk-$c"; local keep="$UMOD"; UMOD="$TMP/unex-head-k$c"; rm -rf "$UMOD"; cp -R "$keep" "$UMOD"
+  { head -n 10 "$keep/variables.tf"; cat "$TMP/blk-$c"; tail -n +15 "$keep/variables.tf"; } > "$UMOD/variables.tf"
+  unex; UMOD="$keep"; [ "$(marked)" = '["T-008","T-014"]' ] && [ "$(cat "$O/nullvars.json")" = '[{"dir":".","name":"new_idle"}]' ]; }
+t_unex_typedef() { blkok 'variable "new_idle" {' '  type = object({' '    default = optional(number)' '  })' '  default = null' '}'; }
+t_unex_typedef; check "unexercised: a default inside an object type is part of the type and the block is read" $?
+t_unex_desc() { blkok 'variable "new_idle" {' '  description = "The default, see https://example.com/#idle and \"quoted\" text"' '  default     = null' '}'; }
+t_unex_desc; check "unexercised: a description holding default, a URL, a # and escaped quotes is read" $?
+t_unex_defname() { printf '%s\n' 'variable "default_idle" {' '  default = null' '}' > "$TMP/blk-$c"; local keep="$UMOD"; UMOD="$TMP/unex-head-d$c"; rm -rf "$UMOD"; cp -R "$keep" "$UMOD"
+  { head -n 10 "$keep/variables.tf"; cat "$TMP/blk-$c"; tail -n +15 "$keep/variables.tf"; } > "$UMOD/variables.tf"
+  unex . '.triggers |= map(if .id == "T-008" then .head_expr = "var.default_idle" | .referenced_inputs[0].name = "default_idle"
+    elif .id == "T-014" then .head_expr = "var.default_idle == null ? [] : [1]" | .referenced_inputs[0].name = "default_idle"
+    elif .id == "T-017" then .address = "var.default_idle" else . end)'
+  UMOD="$keep"; [ "$(marked)" = '["T-008","T-014"]' ] && [ "$(cat "$O/nullvars.json")" = '[{"dir":".","name":"default_idle"}]' ]; }
+t_unex_defname; check "unexercised: a variable whose name holds default is read" $?
+t_unex_escq() { blkok 'variable "new_idle" {' '  description = "a \"}\" b"' '  default     = null' '}'; }
+t_unex_escq; check "unexercised: an escaped quote before a brace inside a string is read as one string" $?
+t_unex_escbs() { blkok 'variable "new_idle" {' '  description = "a\\"' '  default     = null' '}'; }
+t_unex_escbs; check "unexercised: a string that ends in an escaped backslash is read" $?
+t_unex_esc3000() { blk 'variable "new_idle" {' '  type        = any' '  description = "\"" == { "\"a" = 1' '  default = null' '  "\"b" = 2 } == "\"" ? "a" : "b"' '  sensitive   = "\"" == "(" ? false : "\"" == "x"' '  default     = 3000' '  nullable    = "\"" == ")" ? true : "\"" != "x"' '}'; }
+t_unex_esc3000; check "unexercised: escaped quotes around brackets, with the real default 3000, are not read as null" $?
+t_unex_obj() { blk 'variable "new_idle" {' '  type        = number' '  description = (' '{' 'default = null' '}' '  ).default == null ? "a" : "b"' '  default     = 3000' '}'; }
+t_unex_obj; check "unexercised: a default = null inside a nested object, with the real default after it, is not read" $?
+t_unex_b8() { blk 'variable "new_idle" {' '  type = object({ m = optional(map(string), {' '  default = null' '}' ') })' '  default = {}' '}'; }
+t_unex_b8; check "unexercised: a column-0 closing brace of a nested type does not end the block" $?
+t_unex_list() { blk 'variable "new_idle" {' '  description = join("", [' 'default = null' '  ])' '}'; }
+t_unex_list; check "unexercised: a default = null inside a list or a call is not the block's default" $?
+t_unex_interp() { blk 'variable "new_idle" {' '  description = "idle ${var.port} seconds"' '  default     = null' '}'; }
+t_unex_interp; check "unexercised: a string with an interpolation is not read" $?
+t_unex_tmpl() { blk 'variable "new_idle" {' '  description = "idle %{ if true }x%{ endif }"' '  default     = null' '}'; }
+t_unex_tmpl; check "unexercised: a string with a template directive is not read" $?
+t_unex_open() { blk 'variable "new_idle" {' '  description = "open' '  default = null' '}'; }
+t_unex_open; check "unexercised: a string left open is not read" $?
+t_unex_long() { { echo 'variable "new_idle" {'; for _ in $(seq 205); do echo; done; echo '  default = null'; echo '}'; } > "$TMP/blk-$c"; nvblock "$TMP/blk-$c"; }
+t_unex_long; check "unexercised: a block past 200 lines is not read" $?
+t_unex_big() { { echo 'variable "new_idle" {'; echo '  default = null'; echo '}'; head -c 1100000 /dev/zero | tr '\0' ' '; echo; } > "$TMP/blk-$c"; nvblock "$TMP/blk-$c"; }
+t_unex_big; check "unexercised: a variables file over 1 MiB is not read" $?
+# The same name in two module directories (a root variable that defaults to true, a submodule that
+# adds it with a null default): only the submodule's pass-through and variable are marked.
+UMOD2="$TMP/unex-dirs"; mkdir -p "$UMOD2/modules/a"
+printf 'resource "aws_db_instance" "this" {\n  engine = "mysql"\n\n  deletion_protection = var.deletion_protection\n}\n' > "$UMOD2/main.tf"
+printf 'variable "deletion_protection" {\n  default = true\n}\n' > "$UMOD2/variables.tf"
+printf 'resource "aws_db_instance" "a" {\n  engine = "mysql"\n  deletion_protection = var.deletion_protection\n}\n' > "$UMOD2/modules/a/main.tf"
+printf 'variable "deletion_protection" {\n  default = null\n}\n' > "$UMOD2/modules/a/variables.tf"
+jq -n '{schema_version: 1, inert: false, capped: 0,
+  entries: [{path: "main.tf", change_kind: "modified", inert: false, trigger_ids: ["T-001"]},
+            {path: "modules/a/main.tf", change_kind: "modified", inert: false, trigger_ids: ["T-002"]},
+            {path: "modules/a/variables.tf", change_kind: "added", inert: false, trigger_ids: ["T-003"]}],
+  triggers: [
+   {id: "T-001", file: "main.tf", line: 4, category: "unclassified-change", change_kind: "added", address: "aws_db_instance.this",
+    attribute: "deletion_protection", base_expr: null, head_expr: "var.deletion_protection", levels: ["L4"],
+    referenced_inputs: [{name: "deletion_protection", type: "any"}], contextual_refs: [], reason: null},
+   {id: "T-002", file: "modules/a/main.tf", line: 3, category: "unclassified-change", change_kind: "added", address: "aws_db_instance.a",
+    attribute: "deletion_protection", base_expr: null, head_expr: "var.deletion_protection", levels: ["L4"],
+    referenced_inputs: [{name: "deletion_protection", type: "any"}], contextual_refs: [], reason: null},
+   {id: "T-003", file: "modules/a/variables.tf", line: 1, category: "unclassified-change", change_kind: "added", address: "var.deletion_protection",
+    attribute: null, base_expr: null, head_expr: null, levels: [], referenced_inputs: [], contextual_refs: [], follows: ["T-002"], reason: null}]}' > "$TMP/behaviour-dirs.json"
+printf '[{"filename":"main.tf","status":"modified"},{"filename":"modules/a/main.tf","status":"modified"},{"filename":"modules/a/variables.tf","status":"added"}]\n' > "$TMP/files-dirs.json"
+udirs() { # [behaviour jq update] [eval jq update]: classify on the two directories, eval; sets O.
+  setup; jq "${1:-.}" "$TMP/behaviour-dirs.json" > "$TMP/behaviour.out"
+  jq '{schema_version: 1, capped: 0, triggers: [.triggers[] | {id, state: "unverifiable", reason: "x"}], claims: [], discarded_claims: []}' "$TMP/behaviour.out" > "$TMP/eval.out"
+  local SCHEMA="${SCHEMA-$TMP/schema-u.json}" keep="$MOD"; MOD="${UDIR:-$UMOD2}"; DIFF="$TMP/files-dirs.json" classify; MOD="$keep"
+  evalp --ladder "${ULAD:-$TMP/ladder-dirs.json}"
+}
+# The examples of the two-directory runs call the root and modules/a directly, so both are loaded.
+jq '.coverage.examples[0].module_calls += {a: "modules/a"}' "$TMP/ladder-unex.json" > "$TMP/ladder-dirs.json"
+t_unex_dirs() { udirs && [ "$(marked)" = '["T-002","T-003"]' ] && [ "$(cat "$O/nullvars.json")" = '[{"dir":"modules/a","name":"deletion_protection"}]' ] \
+  && case "$(urender '.id == "T-001"')" in "rendered inconclusive (ladder rule 4),"*) ;; *) false ;; esac; }
+t_unex_dirs; check "unexercised: a root pass-through of a variable that defaults to true is not marked when a submodule adds the same name with a null default" $?
+t_unex_dirs_both() { t_unex_dirs_both_with '["T-001"]'; }
+t_unex_dirs_both_with() { cp "$UMOD2/variables.tf" "$TMP/vars-keep"; printf 'variable "deletion_protection" {\n  default = true\n}\n' > "$UMOD2/variables.tf"
+  udirs '.entries += [{path: "variables.tf", change_kind: "added", inert: false, trigger_ids: ["T-004"]}]
+    | .triggers += [{id: "T-004", file: "variables.tf", line: 1, category: "unclassified-change", change_kind: "added", address: "var.deletion_protection",
+      attribute: null, base_expr: null, head_expr: null, levels: [], referenced_inputs: [], contextual_refs: [], follows: '"$1"', reason: null}]'
+  local r=$?; cp "$TMP/vars-keep" "$UMOD2/variables.tf"; [ "$r" = 0 ] && [ "$(marked)" = '["T-002","T-003"]' ]; }
+t_unex_dirs_both; check "unexercised: the change adding the name at the root with default true and in a submodule with null marks only the submodule's" $?
+t_unex_dirs_follow() { t_unex_dirs_both_with '["T-002"]'; }
+t_unex_dirs_follow; check "unexercised: a root variable that defaults to true is not marked even when the trigger it follows is" $?
+# A change in a directory no planned example loads: terraform never read it, so a type error there,
+# such as map(string) passed to a number, would plan nowhere. Nothing is marked.
+t_unex_unloaded() { printf 'variable "deletion_protection" {\n  type    = map(string)\n  default = null\n}\n' > "$UMOD2/modules/a/variables.tf"
+  ULAD="$TMP/ladder-unex.json" udirs; local r=$?
+  printf 'variable "deletion_protection" {\n  default = null\n}\n' > "$UMOD2/modules/a/variables.tf"
+  [ "$r" = 0 ] && [ "$(marked)" = '[]' ] && [ "$(cat "$O/nullvars.json")" = '[{"dir":"modules/a","name":"deletion_protection"}]' ] \
+    && case "$(urender '.id | IN("T-002", "T-003")')" in "rendered inconclusive (ladder rule 4),"*) ;; *) false ;; esac; }
+t_unex_unloaded; check "unexercised: a change in a directory no planned example loads is not marked and renders inconclusive" $?
+t_unex_loaded() { udirs && [ "$(marked)" = '["T-002","T-003"]' ] \
+    && case "$(urender '.id | IN("T-002", "T-003")')" in "rendered approve with nits (ladder rule 7),"*) ;; *) false ;; esac; }
+t_unex_loaded; check "unexercised: the same change in a directory a planned example calls is marked, approve with nits" $?
+t_unex_outside() { local d="$TMP/unex-out-$c"; rm -rf "$d"; mkdir -p "$d/modules" "$TMP/far-$c"; cp "$UMOD2/main.tf" "$UMOD2/variables.tf" "$d/"
+  cp "$UMOD2/modules/a/"* "$TMP/far-$c/"; ln -s "$TMP/far-$c" "$d/modules/a"
+  UDIR="$d" udirs; [ "$(marked)" = '[]' ] && [ "$(cat "$O/nullvars.json")" = '[]' ]; }
+t_unex_outside; check "unexercised: a variables file that resolves outside the module root through a linked directory is not read" $?
+t_unex_prefix() { setup; cp "$TMP/behaviour-unex.json" "$TMP/behaviour.out"; cp "$TMP/eval-unex.json" "$TMP/eval.out"
+  jq 'map(.filename = "modules/x/" + .filename)' "$TMP/files-unex.json" > "$TMP/files-unex-p.json"
+  jq '.coverage.examples |= map(.module_calls = {db: "modules/x"})' "$TMP/ladder-unex.json" > "$TMP/ladder-unex-p.json"
+  local SCHEMA="$TMP/schema-u.json" keep="$MOD"; MOD="$UMOD"; PFX=modules/x DIFF="$TMP/files-unex-p.json" classify; MOD="$keep"
+  evalp --ladder "$TMP/ladder-unex-p.json" --prefix modules/x; [ "$(marked)" = '["T-008","T-014"]' ]; }
+t_unex_prefix; check "unexercised: under a module root prefix the pass-through and the guarded block are marked" $?
+t_unex_required() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","required":true},"port":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","min_items":1,"block":{"attributes":{}}}}}}}}}}' > "$TMP/schema-req.json"
+  SCHEMA="$TMP/schema-req.json" unex && [ "$(marked)" = '[]' ] && grep -qF '"aws_lb_listener.default_action"' "$O/required.json" && grep -qF '"aws_lb_listener.idle_timeout"' "$O/required.json"; }
+t_unex_required; check "unexercised: an attribute the schema requires, or a block with min_items, is not marked" $?
+t_unex_optional() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","block":{"attributes":{}}}}}}}}}}' > "$TMP/schema-opt.json"
+  SCHEMA="$TMP/schema-opt.json" unex && [ "$(marked)" = '["T-008","T-014"]' ]; }
+t_unex_optional; check "unexercised: an attribute the schema marks optional is marked" $?
+t_unex_name() { blk 'variable "new_idle_other" {' '  default = null' '}'; }
+t_unex_name; check "unexercised: a block of another variable at the trigger's line is not read" $?
+t_unex_nv() { t_unex_nodefault && t_unex_nullable && t_unex_heredoc && t_unex_moved && t_unex_link; }
+t_unex_noschema() { SCHEMA= unex && [ "$(marked)" = '[]' ] && [ ! -e "$O/required.json" ]; }
+t_unex_noschema; check "unexercised: with no provider schema nothing is marked, a dynamic block neither" $?
+t_unex_badschema() { printf '%s' '{"provider_schemas":{"x":{"resource_schemas":"bad"}}}' > "$TMP/schema-bad.json"
+  SCHEMA="$TMP/schema-bad.json" unex && [ "$(marked)" = '[]' ] && [ "$(cat "$O/required.json")" = '["*"]' ]; }
+t_unex_badschema; check "unexercised: a schema the required reader cannot read requires everything" $?
+t_unex_badreq() { UREQ='{"a": 1}' unex && [ "$(marked)" = '[]' ]; }
+t_unex_badreq; check "unexercised: a required list that is not a list of strings requires everything" $?
+t_unex_nested_req() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","block":{"attributes":{"target_group_arn":{"type":"string","required":true}}}}}}}}}}}' > "$TMP/schema-nreq.json"
+  SCHEMA="$TMP/schema-nreq.json" unex . '.triggers |= map(if .id == "T-008" then .attribute = "default_action.target_group_arn" else . end)' \
+    && [ "$(marked)" = '["T-014"]' ] && grep -qF '"aws_lb_listener.default_action.target_group_arn"' "$O/required.json"; }
+t_unex_nested_req; check "unexercised: an attribute the schema requires inside a block is not marked" $?
+t_unex_nested_dyn() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","block":{"attributes":{},"block_types":{"inner":{"nesting_mode":"list","min_items":1,"block":{"attributes":{}}}}}}}}}}}}}' > "$TMP/schema-ndyn.json"
+  SCHEMA="$TMP/schema-ndyn.json" unex . '.triggers |= map(if .id == "T-014" then .attribute = "default_action.dynamic.inner" else . end)' \
+    && [ "$(marked)" = '["T-008"]' ] && grep -qF '"aws_lb_listener.default_action.inner"' "$O/required.json"; }
+t_unex_nested_dyn; check "unexercised: a dynamic block inside a block meets its required path" $?
+t_unex_lacktype() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_db_instance":{"version":0,"block":{"attributes":{}}}}}}}' > "$TMP/schema-lack.json"
+  SCHEMA="$TMP/schema-lack.json" unex && [ "$(marked)" = '[]' ] && grep -qF '"aws_lb_listener.*"' "$O/required.json"; }
+t_unex_lacktype; check "unexercised: a schema that lacks the trigger's resource type marks nothing" $?
+t_unex_nullattr() { unex . '.triggers |= map(if .id == "T-008" then .attribute = null else . end)' && [ "$(q '.status == "ran"')" = 0 ] && [ "$(marked)" = '["T-014"]' ]; }
+t_unex_nullattr; check "unexercised: a trigger with no attribute is unmarked and the step still runs" $?
+t_unex_reader() { t_unex_typedef && t_unex_desc && t_unex_obj && t_unex_b8 && t_unex_list && t_unex_twodef; }
+t_unex_cmt() { t_unex_cmt_lead && t_unex_cmt_hide && t_unex_cmt_brace; }
+
 
 # --- Inert: no trigger, the record says so and the run object is empty.
 setup
@@ -743,6 +1083,64 @@ wmutate "the space after id: not required" 's/id:\[ \\t\]\+\(/id:[ \\t]*(/' t_wr
 wmutate "the partial clone check dropped" 's/    elif safe_git_partial; then all="unknown partial clone"\n//' t_wr_partial
 wmutate "the sub component cap dropped" 's/\{0,63\}/*/g' t_wr_long
 wmutate "the wrappers file grammar not checked" 's/if length <= 256 and all\(\.\[\]; test\(\$re\)\) then/if true then/' t_wr_eval_malformed
+wmutate "unexercised: the plan coverage alone not required" 's/ and \$t\.levels == \["L4"\] and / and /' t_unex_cases
+wmutate "unexercised: a removal or edit marked" 's/ and \$t\.change_kind == "added"\n      and \(\[/\n      and ([/' t_unex_cases
+wmutate "unexercised: any category marked" 's/and \(\[\$t\.category, \(\$t\.also_categories \/\/ \[\]\)\[\]\] - unex_cats == \[\]\)/and true/' t_unex_cases
+wmutate "unexercised: merged categories not read" 's/\[\$t\.category, \(\$t\.also_categories \/\/ \[\]\)\[\]\] - unex_cats/[\$t.category] - unex_cats/' t_unex_cases
+wmutate "unexercised: meta-arguments marked" 's/\| IN\(meta_args\[\]\) \| not\)/| IN([]) | not)/' t_unex_cases
+wmutate "unexercised: any address marked" 's/\(\$t\.address \| type == "string" and managed\)/(\$t.address | type == "string")/' t_unex_cases
+wmutate "unexercised: a failed plan accepted" 's/\(\.head \| IN\("planned", "planned-no-changes"\)\)\n/true\n/' t_unex_cases
+wmutate "unexercised: partial coverage accepted" 's/\$l\.coverage\.class == "complete" and //' t_unex_cases
+wmutate "unexercised: an empty or capped address list accepted" 's/and length > 0 and length < 1000\)/)/' t_unex_cases
+wmutate "unexercised: unknown module calls accepted" 's/and \(\.module_calls \| type == "object" and length > 0\)\)/)/' t_unex_cases
+wmutate "unexercised: a nested module address not matched" 's/ or endswith\("\." \+ \$a\)//' t_unex_cases
+wmutate "unexercised: the state not checked" 's/and \$et\.state == "unverifiable" and \(\$et/and true and (\$et/' t_unex_cases
+wmutate "unexercised: sweep evidence accepted" 's/and \$et\.state == "unverifiable" and \(\$et \| has\("complete"\) or has\("outstanding"\) or has\("evidence_digest"\) \| not\)\n/and \$et.state == "unverifiable"\n/' t_unex_cases
+wmutate "unexercised: the value not read" 's/\n      and null_pass\(\$t\)//' t_unex_true
+wmutate "unexercised: a literal value marked" 's/\n      and null_pass\(\$t\)//; s/def unex_cats: \["dynamic-block-change"/def unex_cats: ["literal-argument-change", "dynamic-block-change"/' t_unex_force
+wmutate "unexercised: an existing variable accepted" 's/\| \(\{dir: \(\$t\.file \| tdir\), name: \$n\} \| IN\(\$nv\[\]\)\)/| true/' t_unex_old
+wmutate "unexercised: a variable of another directory accepted" 's/\(\{dir: \(\$t\.file \| tdir\), name: \$n\} \| IN\(\$nv\[\]\)\)/(\$n | IN(\$nv[].name))/' t_unex_dirs
+wmutate "unexercised: the variable's trigger of another directory accepted" 's/and \(\{dir: \(\$t\.file \| tdir\), name: ltrimstr\("var\."\)\} \| IN\(\$nv\[\]\)\)/and (ltrimstr("var.") | IN(\$nv[].name))/' t_unex_dirs_follow
+wmutate "unexercised: the directory not written" 's/list="\$list\$\(dirname "\$file"\)"/list="\$list."/' t_unex_dirs
+wmutate "unexercised: a file outside the module root read" 's/    case "\$real" in "\$root"\/\*\) ;; \*\) continue ;; esac\n//' t_unex_outside
+wmutate "unexercised: the 1 MiB cap dropped" 's/ && \[ "\$\(wc -c < "\$f"\)" -le "\$CAP" \]//' t_unex_big
+wmutate "unexercised: the 200-line bound dropped" 's/rmax=200/rmax=100000/' t_unex_long
+wmutate "unexercised: a function around the variable accepted" 's/else \$t\.head_expr == "var\.\\\(\$n\)" end/else true end/' t_unex_wrap
+wmutate "unexercised: other references accepted" 's/def null_pass\(\$t\): \(\$t\.contextual_refs == \[\]\) and/def null_pass(\$t): true and/' t_unex_ctx
+wmutate "unexercised: a second variable accepted" 's/type == "array" and length == 1 and \(\.\[0\]\.name/type == "array" and length >= 1 and (.[0].name/' t_unex_two
+wmutate "unexercised: an unguarded dynamic block accepted" 's/then \(\$t\.head_expr \| test\([^\n]*\n/then true\n/' t_unex_guard
+wmutate "unexercised: the variable's trigger marked while it follows an unmarked one" 's/all\(\.\[\]; IN\(\$m\[\]\)\)/any(.[]; IN(\$m[]))/' t_unex_follow_open
+wmutate "unexercised: the variable's trigger never marked" 's/\$t\.levels == \[\] and \$et\.state/false and \$et.state/' t_unex_follow
+wmutate "unexercised: a link read" 's/\[ -f "\$f" \] && \[ ! -L "\$f" \] && /[ -f "\$f" ] \&\& /' t_unex_nv
+wmutate "unexercised: a variable that defaults to true read as null" 's/\$d = 1 if \$s =~ \/\^\\s\*default\\s\*=\\s\*null\\s\*\$\//\$d = 1/' t_unex_true
+wmutate "unexercised: a block comment read" 's/\|\/\\\*\|\\\*\/\|/|/' t_unex_cmt
+wmutate "unexercised: a # comment read" 's/<<\|#\|/<<|/' t_unex_cmt_hash
+wmutate "unexercised: a // comment read" 's/\|\/\/\|/|/' t_unex_cmt_slash
+wmutate "unexercised: a second default attribute read" 's/&& \$n == 1 && \$d == 1\)/\&\& \$d == 1)/' t_unex_twodef
+wmutate "unexercised: a variable with no default read as null" 's/ && \$n == 1 && \$d == 1\) \? 0 : 1\)/) ? 0 : 1)/' t_unex_nv
+wmutate "unexercised: a nullable attribute ignored" 's/          exit 1 if \$s =~ \/\^\\s\*nullable\\b\/;\n//' t_unex_nv
+wmutate "unexercised: a heredoc read" 's/m\{<<\|/m{/' t_unex_nv
+wmutate "unexercised: the block not anchored at the trigger line" 's/exit 1 unless defined \$l\[\$i\] && \$l\[\$i\] =~ [^;]*;/1;/' t_unex_name
+wmutate "unexercised: strings not removed" 's/        \$s =~ s\/"\(\(\?:[^\n]*\/ge;\n//' t_unex_desc
+wmutate "unexercised: an interpolation in a string accepted" 's/\$bad = 1 if \$1 =~ m\{\[\\\$%\]\\\{\}; //' t_unex_interp
+wmutate "unexercised: a template directive in a string accepted" 's/\[\\\$%\]/[\\\$]/' t_unex_tmpl
+wmutate "unexercised: a string left open accepted" 's/ \|\| \$s =~ \/"\///' t_unex_open
+wmutate "unexercised: brackets and parentheses not counted" 's/\[\\\{\\\[\\\(\]/[\\{]/; s/\[\\\}\\\]\\\)\]/[\\}]/' t_unex_list
+wmutate "unexercised: a default deeper in the type counted" 's/if \(\$depth == 1\) \{/if (1) {/' t_unex_typedef
+wmutate "unexercised: the block ended at the first column-0 brace, defaults counted at any depth" 's/if \(\$depth == 1\) \{/if (1) {/; s/        for my \$k \(0 \.\. length\(\$s\) - 1\) \{/        exit((\$n == 1 \&\& \$d == 1) ? 0 : 1) if \$s =~ \/^\\}\/;\n        for my \$k (0 .. length(\$s) - 1) {/' t_unex_b8
+wmutate "unexercised: a required attribute marked" 's/or \(\$ta \| IN\(\$rq\[\]\)\)\) \| not\);/or false) | not);/' t_unex_required
+wmutate "unexercised: a block with min_items not read as required" 's/select\(\(\.value\.min_items \/\/ 0\) > 0\)/select(false)/' t_unex_required
+wmutate "unexercised: a nested required attribute not read" 's/\(\.key as \$b \| \.value\.block \| req\("\\\(\$p\)\.\\\(\$b\)"\)\)/empty/' t_unex_nested_req
+wmutate "unexercised: no schema read as no requirement" 's/rq=\x27\["\*"\]\x27/rq=\x27[]\x27/' t_unex_noschema
+wmutate "unexercised: an unreadable schema read as no requirement" 's/printf \x27\["\*"\]\\n\x27 > "\$out\/required\.json"/printf \x27[]\\n\x27 > "\$out\/required.json"/' t_unex_badschema
+wmutate "unexercised: a malformed required list read as none" 's/then \. else \["\*"\] end/then . else [] end/' t_unex_badreq
+wmutate "unexercised: a null attribute not guarded" 's/def not_required\(\$t\): \(\$t\.attribute \| type == "string"\)\n      and /def not_required(\$t): /' t_unex_nullattr
+wmutate "unexercised: an unloaded directory marked" 's/ and plans_known and loaded\(\$t\)/ and plans_known/' t_unex_unloaded
+wmutate "unexercised: an unloaded variable trigger marked" 's/and all\(\.\[\]; IN\(\$m\[\]\)\)\) and loaded\(\$t\);/and all(.[]; IN(\$m[])));/; s/ and plans_known and loaded\(\$t\)/ and plans_known/' t_unex_unloaded
+wmutate "unexercised: a directly called directory not seen as loaded" 's/\.dir == \$d or \(\(\.module_calls \/\/ \{\}\) \| to_entries \| any\(\.value == \$d\)\)/.dir == \$d/' t_unex_loaded
+wmutate "unexercised: strings matched without escapes" 's/s\/"\(\(\?:\[\^"\\\\\]\|\\\\\.\)\*\)"\//s\/"([^"]*)"\//' t_unex_escq
+wmutate "unexercised: a nested dynamic segment kept" 's/split\("\."\) \| map\(select\(\. != "dynamic"\)\) \| join\("\."\)/sub("^dynamic\\\\."; "")/' t_unex_nested_dyn
+wmutate "unexercised: a type the schema lacks requires nothing" 's/,\n         \(\$ty\[\] \| select\(IN\(\$have\[\]\) \| not\) \| "\\\(\.\)\.\*"\)//' t_unex_lacktype
 wmutate "derive in the shared file returning its input" 's/  return \$o;\n\}/  return \$s;\n}/' t_wr_derived wrapper-derive.pl
 
 echo
