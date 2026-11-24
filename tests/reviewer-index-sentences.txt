@@ -483,3 +483,9 @@ references/check-a-compatibility.md references/check-g-behaviour.md references/e
 +	references/engine/check-a-compatibility.md	A pinned registry module whose `versions.tf` did not move reads no old floor's sheets: it needs the called module's floor, as its bullet below says.
 -	references/engine/check-e-profile.md	- Severity: MEDIUM when the divergence changes or adds behaviour; LOW when it is cosmetic (whitespace, order, comments) or in `.gitignore`, save a dropped state, variable or credential pattern.
 +	references/engine/check-e-profile.md	- Severity: MEDIUM when the divergence changes or adds behaviour; LOW when it is cosmetic (whitespace, order, comments) or in `.gitignore`, save a removed or weakened state, variable, `.terraform` or credential pattern.
++	SKILL.md	- A fourth addition: this skill's own [findings-check.sh](), run as [Checking the Findings]() says.
++	SKILL.md	It reads the findings it is given and the sibling rule-facts.md, and writes only to its output.
++	SKILL.md	6.
++	SKILL.md	Fix every violation it prints, redo steps 2 and 3 when a fix changed a rule, a severity or the number of findings, and run it again until it prints `findings-check: ok`, at most 3 runs; then return the list and the host render reports what is left.
++	SKILL.md	Run [findings-check.sh]() on the final ordered and numbered list, as [Checking the Findings]() says.
++	SKILL.md	The host render refuses a whole list over one of its limits and loses the run's comment and verdict.
