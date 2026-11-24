@@ -380,21 +380,25 @@ done < "$W/files.jsonl"
 # The changed attributes some .tf file of the clone reads (skip-coverage.md, Design skips): per
 # "<address> <attribute>" pair, the pair once when any mention of the resource, outside a .git or
 # .terraform directory, is not followed by an index or splat and then another attribute's name.
-# Conservative: a comment, the whole object or the changed attribute itself counts as a read.
+# Conservative: a comment, the whole object, the changed attribute itself, tags_all for tags, an
+# index of over 256 characters and a .tf file that is a link count as a read. The bound keeps a
+# line of unclosed indexes linear.
 REFS_PL='
 use strict; use warnings; use File::Find;
 open(my $pf, "<", $ARGV[1]) or die; chomp(my @pl = <$pf>); close $pf;
 my @pairs = map { [split / /] } grep { /\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ [a-z0-9_]+\z/ } @pl;
-my @files; find({no_chdir => 1, wanted => sub {
+my (%hit, $link, @files);
+find({no_chdir => 1, wanted => sub {
   if (-d $_ && /\/(?:\.git|\.terraform)\z/) { $File::Find::prune = 1; return }
-  push @files, $_ if /\.tf\z/ && -f $_ && !-l $_ }}, $ARGV[0]);
-my %hit;
+  if (/\.tf\z/ && -l $_) { $link = 1; return }
+  push @files, $_ if /\.tf\z/ && -f $_ }}, $ARGV[0]);
+if ($link) { $hit{"$_->[0] $_->[1]"} = 1 for @pairs }
 for my $f (@files) {
   open(my $h, "<", $f) or next; local $/; my $t = <$h>; close $h;
   for my $p (@pairs) {
     my ($a, $at) = @$p;
-    while ($t =~ /(?<![A-Za-z0-9_.-])\Q$a\E(?![A-Za-z0-9_-])((?:\[[^\]\n]*\]|\.\*)*)(\.([A-Za-z0-9_-]+))?/g) {
-      $hit{"$a $at"} = 1 if !defined $3 || $3 eq $at;
+    while ($t =~ /(?<![A-Za-z0-9_.])\Q$a\E(?![A-Za-z0-9_-])((?:\[[^\]\n]{0,256}\]|\.\*)*)(\.([A-Za-z0-9_-]+))?/g) {
+      $hit{"$a $at"} = 1 if !defined $3 || $3 eq $at || ($at eq "tags" && $3 eq "tags_all");
     }
   }
 }

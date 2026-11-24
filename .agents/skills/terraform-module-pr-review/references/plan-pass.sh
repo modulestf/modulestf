@@ -860,22 +860,37 @@ class_of() { # exit status, output file, init or plan
   echo code-error
 }
 # The denial evidence of a design skip (skip-coverage.md, Design skips): the data addresses of a
-# plan output whose every Error: block is an AWS SDK access denial on a data source read, named
-# by the block's own "with data...." line, sorted and once each; exit 1 for any other output: no
-# block, another error, a denial with no data address, or more than 50 addresses. The class
-# alone is a substring of the first block, which the head's values can hold.
+# plan output whose every Error: block has exactly the shape of an AWS SDK access denial on a data
+# source read, sorted and once each; exit 1 for any other output. From the first "Error:" line on,
+# every line must be one of: an "Error:" summary in the SDK's fixed form, a blank line, one
+# "  with data....," line, one "  on <file> line <n>, in data "<type>" "<name>":" line naming the
+# same data source, or a numbered snippet line. Anything else refuses: a "Warning:" header, text
+# after a crash, a second "with" line, or a line a value put into a summary. The class alone is a
+# substring of the first block, and Terraform prints a summary raw, line breaks included.
 DENIED_PL='
 my @l = map { s/\A[^\x00-\x7f]+ ?//r =~ s/\s+\z//r } <STDIN>;
+my ($i) = grep { $l[$_] =~ /\AError: / } 0 .. $#l;
+exit 1 unless defined $i;
+my $ix = q{(?:\[(?:[0-9]+|"[A-Za-z0-9_.\/-]*")\])?};
+my $mod = qr{(?:module\.[A-Za-z0-9_-]+$ix\.)*};
 my (@b, %a);
-for (@l) { if (/\A(?:Error|Warning): /) { push @b, [$_] } elsif (@b) { push @{$b[-1]}, $_ } }
-@b = grep { $_->[0] =~ /\AError: / } @b;
-exit 1 unless @b;
+for my $x (@l[$i .. $#l]) {
+  if ($x =~ /\AError: /) {
+    $x =~ /\AError: [^\n]*: operation error [A-Za-z0-9 .-]+: [A-Za-z0-9]+, https response error StatusCode: 4[0-9][0-9], RequestID: [A-Za-z0-9-]+, (?:HostID: [A-Za-z0-9+\/=]+, )?api error (?:AccessDenied|AccessDeniedException|UnauthorizedOperation): / or exit 1;
+    push @b, {w => [], o => []}; next;
+  }
+  next if $x eq "";
+  if ($x =~ /\A  with ($mod)data\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$ix,\z/) { push @{$b[-1]{w}}, [$1, $2, $3]; next }
+  if ($x =~ /\A  on [^ ]+ line [0-9]+, in data "([A-Za-z0-9_-]+)" "([A-Za-z0-9_-]+)":\z/) { push @{$b[-1]{o}}, [$1, $2]; next }
+  next if $x =~ /\A +[0-9]+: /;
+  exit 1;
+}
 for my $k (@b) {
-  $k->[0] =~ /\AError: [^\n]*: operation error [A-Za-z0-9 .-]+: [A-Za-z0-9]+, https response error StatusCode: 4[0-9][0-9], RequestID: [A-Za-z0-9-]+, (?:HostID: [A-Za-z0-9+\/=]+, )?api error (?:AccessDenied|AccessDeniedException|UnauthorizedOperation): / or exit 1;
-  my @w = grep { /\A  with / } @$k;
-  exit 1 unless @w == 1 && $w[0] =~ /\A  with ((?:module\.[A-Za-z0-9_-]+(?:\[(?:[0-9]+|"[A-Za-z0-9_.\/-]*")\])?\.)*data\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\[(?:[0-9]+|"[A-Za-z0-9_.\/-]*")\])?),\z/;
-  (my $x = $1) =~ s/\[[^\]]*\]//g;
-  $a{$x} = 1;
+  exit 1 unless @{$k->{w}} == 1 && @{$k->{o}} == 1;
+  my ($m, $t, $n) = @{$k->{w}[0]};
+  exit 1 unless $k->{o}[0][0] eq $t && $k->{o}[0][1] eq $n;
+  ($m = "${m}data.$t.$n") =~ s/\[[^\]]*\]//g;
+  $a{$m} = 1;
 }
 exit 1 if keys(%a) > 50;
 print join(" ", sort keys %a), "\n";

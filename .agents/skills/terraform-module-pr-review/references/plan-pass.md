@@ -267,7 +267,7 @@ The record lines per example are:
 - `plan: <class>`, with ` | <kept line>` for `planned` and for a `code-error` whose block passed the scan.
 - `scope: <directories>`: the directories the gates read, repository-relative with the root written `.`, the clone scope's directories and then the downloaded module directories. It is printed for every example that reached the per-file gates, whether they passed or not, so a clean gate result leaves its trace too.
 - `modules: <key> <source> <version>;...`: the registry modules `init` resolved, on success too.
-- `denied: <address> ...` for an `environment (access-denied)` plan whose every `Error:` diagnostic is an AWS SDK access denial on a data source read: the data addresses the diagnostics name in their `with` lines, index keys removed, sorted, at most 50. The evidence of a [design skip](skip-coverage.md#design-skips); any other output, a denial beside another error among them, prints no such line.
+- `denied: <address> ...` for an `environment (access-denied)` plan whose every diagnostic block from the first `Error:` line on has exactly the shape of an AWS SDK access denial on a data source read, with no `Warning:` header, crash text or other line among them: the data addresses the blocks name in their `with` lines, index keys removed, sorted, at most 50. The evidence of a [design skip](skip-coverage.md#design-skips); any other output, a denial beside another error among them, prints no such line.
 - `base: <result>` for a `code-error` or an example with a `denied:` line, below, and `base-denied: <address> ...` after it when the base plan is such a denial too.
 - `credentials: <step>: <reason>` after `plan pass ended: credentials`, as [Environment](#environment) lists.
 

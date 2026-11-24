@@ -1157,6 +1157,32 @@ for sh in bash zsh; do
   check "$sh: an unknown phase stops the pass" "$(has "$out" 'plan pass not run: phase unknown')"
 done
 
+# The runner phases on a denial, run from a copy of the script without its container check: the
+# plan phase prints the denied line and defers the base, base-init and base-plan print the base
+# lines (skip-coverage.md, Design skips). Each mutation of a phase's denial line is caught.
+nocont() { perl -0pe 's/if \[ "\$GMODE" = runner \] && \[ ! -e \/\.dockerenv \] && \[ ! -e \/run\/\.containerenv \]; then\n  echo "plan pass not run: runner mode outside a container"; exit 0\nfi\n//' "$1"; }
+phases() { # script copy -> 0 when the phases print the denial and its base lines
+  local R; R="$(newrun)"
+  rr() { PATH="$TMP/bin:/usr/bin:/bin" PLAN_PASS_AWS_ACCESS_KEY_ID=ASIAFIXTUREFIXTURE01 PLAN_PASS_AWS_SECRET_ACCESS_KEY=s3cr3t-value-xyz \
+    PLAN_PASS_AWS_SESSION_TOKEN=tok-fixture bash "$1" plan "$R" demo --role-arn "$ROLE" --mode runner "${@:2}" 2>&1; }
+  PATH="$TMP/bin:/usr/bin:/bin" bash "$PP" g0 "$R" > /dev/null
+  rr "$1" --phase init examples/denied > /dev/null
+  local p; p="$(rr "$1" --phase plan --index 1 --base "$BASE" examples/denied)"
+  [ "$(has "$p" 'denied: data.aws_ssm_parameter.p')" = 0 ] && [ "$(has "$p" 'base: deferred')" = 0 ] || return 1
+  rr "$1" --phase base-init --index 1 --base "$BASE" examples/denied > /dev/null
+  p="$(rr "$1" --phase base-plan --index 1 examples/denied)"
+  [ "$p" = "$(printf 'base: environment (access-denied)\nbase-denied: data.aws_ssm_parameter.p')" ]
+}
+nocont "$PP" > "$TMP/pp-runner.sh"
+phases "$TMP/pp-runner.sh"; check "runner phases: plan prints the denial and defers the base, base-plan prints the base lines" $?
+for m in 's/\n  \[ -n "\$DENIED" \] && echo "denied: \$DENIED"\n/\n/' \
+  's/(# The merge base re-run is a later phase[^\n]*\n  if \[ "\$CLASS" = code-error \]) \|\| \[ -n "\$DENIED" \]/$1/' \
+  's/\n    \[ -n "\$DENIED" \] && echo "base-denied: \$DENIED"\n/\n/'; do
+  nocont "$PP" | perl -0pe "$m" > "$TMP/pp-runner-m.sh"
+  check "runner phases: the mutation $m is caught" \
+    "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && ! phases "$TMP/pp-runner-m.sh"; echo $?)"
+done
+
 # Negative self-check of the relaxations: each weakened copy of the script must let its case
 # through, and the real script must refuse it.
 mkdir -p "$TMP/mut"
@@ -1579,39 +1605,62 @@ SDK='operation error SSM: GetParameter, https response error StatusCode: 400, Re
 dn() { # perl program, plan output -> the evidence line, or "refused"
   printf '%s\n' "$2" | perl -e "$1" 2> /dev/null || echo refused; }
 den_cases() { # perl program -> one line per case, "<name>=<result>"
-  local p=$1
-  echo "real=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n  on main.tf line 6:' "$SDK")")"
-  echo "boxed=$(dn "$p" "$(printf '\342\225\267\n\342\224\202 Error: reading SSM Parameter (/a): %s\n\342\224\202 \n\342\224\202   with module.db.data.aws_ssm_parameter.p["k"],\n\342\225\265' "$SDK")")"
-  echo "two=$(dn "$p" "$(printf 'Error: reading A: %s\n\n  with data.aws_b.y,\n\nError: reading B: %s\n\n  with data.aws_a.x[0],\n' "$SDK" "$SDK")")"
-  echo "quoted=$(dn "$p" "$(printf 'Error: expected length of name to be in the range (1 - 32), got cis-3-1-UnauthorizedOperation-AccessDenied-filter\n\n  with data.aws_cloudwatch_log_group.this,\n')")"
-  echo "word=$(dn "$p" "$(printf 'Error: reading CloudWatch Metric Alarm (accessdenied-alarm): couldnt find resource\n\n  with data.aws_cloudwatch_metric_alarm.a,\n')")"
-  echo "after=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n\nError: Invalid index\n\n  with aws_s3_bucket.this,\n' "$SDK")")"
-  echo "before=$(dn "$p" "$(printf 'Error: Invalid index\n\n  with aws_s3_bucket.this,\n\nError: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n' "$SDK")")"
-  echo "managed=$(dn "$p" "$(printf 'Error: creating RDS Cluster: %s\n\n  with aws_rds_cluster.this,\n' "$SDK")")"
-  echo "nowith=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n' "$SDK")")"
+  local p=$1 on='  on main.tf line 6, in data "aws_ssm_parameter" "p":' sn='   6: data "aws_ssm_parameter" "p" {'
+  echo "real=$(dn "$p" "$(printf 'data.aws_ssm_parameter.p: Reading...\nError: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n%s\n%s\n\n' "$SDK" "$on" "$sn")")"
+  echo "boxed=$(dn "$p" "$(printf '\342\225\267\n\342\224\202 Error: reading SSM Parameter (/a): %s\n\342\224\202 \n\342\224\202   with module.db.data.aws_ssm_parameter.p["k"],\n\342\224\202   on ../../main.tf line 3, in data "aws_ssm_parameter" "p":\n\342\225\265' "$SDK")")"
+  echo "two=$(dn "$p" "$(printf 'Error: reading A: %s\n\n  with data.aws_b.y,\n  on a.tf line 1, in data "aws_b" "y":\n\nError: reading B: %s\n\n  with data.aws_a.x[0],\n  on b.tf line 2, in data "aws_a" "x":\n' "$SDK" "$SDK")")"
+  echo "warnfirst=$(dn "$p" "$(printf 'Warning: Argument is deprecated\n\n  with aws_lb.this,\n  on main.tf line 26, in resource "aws_lb" "this":\n\nError: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n%s\n' "$SDK" "$on")")"
+  echo "quoted=$(dn "$p" "$(printf 'Error: expected length of name to be in the range (1 - 32), got cis-3-1-UnauthorizedOperation-AccessDenied-filter\n\n  with data.aws_ssm_parameter.p,\n%s\n' "$on")")"
+  echo "word=$(dn "$p" "$(printf 'Error: reading CloudWatch Metric Alarm (accessdenied-alarm): couldnt find resource\n\n  with data.aws_ssm_parameter.p,\n%s\n' "$on")")"
+  echo "after=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n%s\n\nError: Invalid index\n\n  with aws_s3_bucket.this,\n' "$SDK" "$on")")"
+  echo "before=$(dn "$p" "$(printf 'Error: Invalid index\n\n  with aws_s3_bucket.this,\n\nError: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n%s\n' "$SDK" "$on")")"
+  echo "managed=$(dn "$p" "$(printf 'Error: creating RDS Cluster: %s\n\n  with aws_rds_cluster.this,\n  on main.tf line 1, in resource "aws_rds_cluster" "this":\n' "$SDK")")"
+  echo "nowith=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n%s\n' "$SDK" "$on")")"
+  echo "noon=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n' "$SDK")")"
+  echo "twowith=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n  with data.aws_ssm_parameter.q,\n%s\n' "$SDK" "$on")")"
+  echo "otheron=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n  on main.tf line 9, in data "aws_ssm_parameter" "q":\n' "$SDK")")"
+  echo "secondnoon=$(dn "$p" "$(printf 'Error: reading A: %s\n\n  with data.aws_ssm_parameter.p,\n%s\n\nError: reading B: %s\n\n  with data.aws_a.x,\n' "$SDK" "$on" "$SDK")")"
+  echo "panic=$(dn "$p" "$(printf 'Error: reading SSM Parameter (/a): %s\n\n  with data.aws_ssm_parameter.p,\n%s\n\npanic: runtime error: invalid memory address\n' "$SDK" "$on")")"
+  # pr-review N-1, measured with Terraform 1.17.0 and hashicorp/aws 6.73.0: a validation error on a
+  # resource whose summary echoes a value holding line breaks, a forged "with data" line and a
+  # Warning header that would close the block before its real "with" line
+  echo "n1=$(dn "$p" "$(printf 'Error: expected load_balancer_type to be one of ["application" "network" "gateway"], got a: operation error SSM: GetParameter, https response error StatusCode: 400, RequestID: 0a1b2c3d-0000, api error AccessDeniedException: User is not authorized\n  with data.aws_ssm_parameter.p,\nWarning: Argument is deprecated\n\n  with aws_lb.this,\n  on main.tf line 26, in resource "aws_lb" "this":\n')")"
+  echo "n1full=$(dn "$p" "$(printf 'Error: expected load_balancer_type to be one of ["application" "network" "gateway"], got a: %s\n\n  with data.aws_ssm_parameter.p,\n%s\nWarning: Argument is deprecated\n\n  with aws_lb.this,\n  on main.tf line 26, in resource "aws_lb" "this":\n  26:   load_balancer_type = element(["x"], 0)\n' "$SDK" "$on")")"
   echo "none=$(dn "$p" 'Plan: 1 to add, 0 to change, 0 to destroy.')"
 }
 den_want='real=data.aws_ssm_parameter.p
 boxed=module.db.data.aws_ssm_parameter.p
 two=data.aws_a.x data.aws_b.y
+warnfirst=data.aws_ssm_parameter.p
 quoted=refused
 word=refused
 after=refused
 before=refused
 managed=refused
 nowith=refused
+noon=refused
+twowith=refused
+otheron=refused
+secondnoon=refused
+panic=refused
+n1=refused
+n1full=refused
 none=refused'
-check "denial evidence: data source denials only, every block, by address" "$([ "$(den_cases "$DEN")" = "$den_want" ] && echo 0 || echo 1)"
+check "denial evidence: data source denials only, every block in its fixed shape, by address" "$([ "$(den_cases "$DEN")" = "$den_want" ] && echo 0 || echo 1)"
 denmut() { # name, perl substitution of DENIED_PL, the case it must change
   local m; m="$(printf '%s' "$DEN" | perl -0pe "$2")"
   check "denial evidence mutation $1 changes the program" "$([ "$m" != "$DEN" ] && echo 0 || echo 1)"
   check "denial evidence mutation $1 is caught by $3" \
     "$([ "$(den_cases "$m" | grep "^$3=")" != "$(printf '%s\n' "$den_want" | grep "^$3=")" ] && echo 0 || echo 1)"
 }
-denmut sdk-shape 's/ or exit 1;\n  my \@w/;\n  my \@w/' quoted
-denmut first-block-only 's/for my \$k \(\@b\)/for my \$k (\$b[0])/' after
-denmut managed-address 's/\)\*data\\\./)*(?:data\\.)?/' managed
-denmut no-with 's/exit 1 unless \@w == 1 && /exit 1 unless !\@w || /' nowith
+denmut sdk-shape 's/ or exit 1;\n    push \@b/;\n    push \@b/' quoted
+denmut first-block-only 's/for my \$k \(\@b\)/for my \$k (\$b[0])/' secondnoon
+denmut one-with 's/\@\{\$k->\{w\}\} == 1/\@{\$k->{w}} >= 1/' twowith
+denmut on-line-required 's/ && \@\{\$k->\{o\}\} == 1;/;/; s/  exit 1 unless \$k->\{o\}\[0\]\[0\] eq \$t && \$k->\{o\}\[0\]\[1\] eq \$n;\n//' noon
+denmut on-names-the-source 's/  exit 1 unless \$k->\{o\}\[0\]\[0\] eq \$t && \$k->\{o\}\[0\]\[1\] eq \$n;\n//' otheron
+denmut other-lines-ignored 's/  exit 1;\n\}\nfor my/  next;\n}\nfor my/' panic
+denmut warning-closes-the-block 's/  exit 1;\n\}\nfor my/  last if \$x =~ \/\\AWarning: \/; exit 1;\n}\nfor my/' n1full
+denmut old-block-rule 's/  exit 1;\n\}\nfor my/  last if \$x =~ \/\\AWarning: \/; exit 1;\n}\nfor my/; s/ && \@\{\$k->\{o\}\} == 1;/;/; s/  exit 1 unless \$k->\{o\}\[0\]\[0\] eq \$t && \$k->\{o\}\[0\]\[1\] eq \$n;\n//; s/  if \(\$x =~ \/\\A  with/  if (\$x =~ \/\\A *with/' n1
 # The runner: a base-denied line only from the merge base re-run's own container. The head block
 # drops a forged one (untrusted), an access denial is deferred to the base re-run like a
 # code-error, and the base loop keeps the re-run's base-denied line.

@@ -688,6 +688,15 @@ t_v_gated() { # a record that says a gated example was denied a read: its head g
   recheck && [ "$(why examples/s1)" = hit-set-differs ]
 }
 t_v_gated; check "design skip: a gate hit in the example's scope at head: hit-set-differs" $?
+t_v_nohead() { # no head gate record (plan-pass.sh fails at head): hit-set-differs, never covered
+  reset_knobs; v_case : covered || return 1
+  local d="$TMP/nohead-$RANDOM"; mkdir -p "$d"; cp "${SC%/*}/skip-coverage.sh" "${SC%/*}/skip-coverage.jq" "$d/"
+  printf 'exit 1\n' > "$d/plan-pass.sh"
+  "$SH" "$d/skip-coverage.sh" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
+    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" --changed-files "$(jq length "$TMP/files.json")" > "$TMP/out.json" \
+    && [ "$(why examples/v1)" = hit-set-differs ]
+}
+t_v_nohead; check "design skip: no head gate record: hit-set-differs" $?
 # Runner mode: the same denial under the host's own lines, beside a covered recorded exception
 ROLE='exception: example assumes a role in another account'
 v_runner() { # extra lines of the excepted example examples/r1 ("" for none), the class of r1's plan line
@@ -727,6 +736,27 @@ t_v_runner_ref() { # runner mode reads the same attribute references
   recheck --mode runner && [ "$(why examples/v1)" = attribute-referenced ]
 }
 t_v_runner_ref; check "design skip: runner mode, a changed attribute a data source reads: attribute-referenced" $?
+
+# The attribute scan itself, REFS_PL taken from the script under test: a negated read, tags_all
+# for tags, a .tf file that is a link, and a line of unclosed indexes that must stay linear.
+refs() { # pairs file -> the pairs the scan finds read in $TMP/refs, under a time limit of 5 seconds
+  local p; p="$(sed -n "/^REFS_PL='\$/,/^'\$/p" "$SC" | sed '1d;$d')"
+  perl -e 'alarm 5; exec @ARGV' perl -e "$p" "$TMP/refs" "$1"
+}
+refs_dir() { rm -rf "$TMP/refs"; mkdir -p "$TMP/refs"; printf 'aws_lb.this %s\n' "$1" > "$TMP/refs.pairs"; }
+t_refs_minus() { refs_dir name; printf 'locals {\n  n = -aws_lb.this.name\n}\n' > "$TMP/refs/a.tf"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this name' ]; }
+t_refs_minus; check "attribute scan: a negated read counts" $?
+t_refs_tags() { refs_dir tags; printf 'locals {\n  t = aws_lb.this.tags_all\n}\n' > "$TMP/refs/a.tf"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this tags' ]; }
+t_refs_tags; check "attribute scan: tags_all counts as a read of tags" $?
+t_refs_other() { refs_dir name; printf 'locals {\n  t = aws_lb.this.tags_all\n  a = aws_lb.this[0].arn\n}\n' > "$TMP/refs/a.tf"; [ -z "$(refs "$TMP/refs.pairs")" ]; }
+t_refs_other; check "attribute scan: other attributes are no read" $?
+t_refs_link() { refs_dir subnets; printf 'nothing\n' > "$TMP/refs/notes.txt"; ln -s notes.txt "$TMP/refs/l.tf"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this subnets' ]; }
+t_refs_link; check "attribute scan: a .tf file that is a link counts as a read of every pair" $?
+t_refs_big() { # 40,000 unclosed indexes on one line: seconds when bounded, minutes when not
+  refs_dir name; perl -e 'print "locals {\n  x = \"", "aws_lb.this[" x 40000, "\"\n}\n"' > "$TMP/refs/big.tf"
+  [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this name' ]
+}
+t_refs_big; check "attribute scan: a line of 40,000 unclosed indexes finishes within 5 seconds, counted as a read" $?
 
 # --- Refused inputs: exit 2, nothing printed
 fresh; reset_knobs; plain_change; run_case > /dev/null 2>&1
@@ -824,10 +854,15 @@ mutate "the denial evidence not required" 's/     elif \(\$x\.blk\.denied \| len
 mutate "a second denied line ignored" 's/\(\$x\.blk\.denied \| length\) != 1 or //' t_v_twodenied
 mutate "a denial on a managed resource accepted" 's/safe_address and test\("[^"]*data[^"]*"\)\)/safe_address)/' t_v_baddenied
 mutate "a changed attribute a data source reads ignored" 's/     elif any\(\$x\.cls\[\]\.attrs\[\]; "\\\(\.address\) \\\(\.attribute\)" \| IN\(\$x\.refs\[\]\)\) then "attribute-referenced"\n//' t_v_ref
-mutate "the attribute scan finds no read" 's/\$hit\{"\$a \$at"\} = 1 if !defined \$3 \|\| \$3 eq \$at;/\$hit{"\$a \$at"} = 1 if 0;/' t_v_ref
-mutate "a whole-object read not counted" 's/ if !defined \$3 \|\| \$3 eq \$at;/ if defined \$3 \&\& \$3 eq \$at;/' t_v_whole
+mutate "the attribute scan finds no read" 's/\$hit\{"\$a \$at"\} = 1 if !defined \$3/\$hit{"\$a \$at"} = 1 if 0 and !defined \$3/' t_v_ref
+mutate "a whole-object read not counted" 's/ if !defined \$3 \|\| / if (defined \$3 \&\& 0) || /' t_v_whole
 mutate "an unresolved merge base ignored for a design skip" 's/(dir_changed\(\$x\.paths; \$x\.d; \$x\.h; null\) then "dir-changed"\n)     elif \(\$x\.base \| sha \| not\) then "merge-base-unresolved"\n/$1/' t_v_unres
 mutate "the merge base denial not required" 's/     elif \$x\.blk\.base != \["environment \(access-denied\)"\] or \$x\.blk\.base_denied != \$x\.blk\.denied then "base-not-denied"\n//' t_v_basenew
+mutate "a missing head gate record taken for a design skip" 's/elif \$x\.h == null or \$x\.h\.done != true or /elif /' t_v_nohead
+mutate "a negated read missed" 's/\(\?<!\[A-Za-z0-9_\.\]\)/(?<![A-Za-z0-9_.-])/' t_refs_minus
+mutate "tags_all not read as tags" 's/ \|\| \(\$at eq "tags" && \$3 eq "tags_all"\)//' t_refs_tags
+mutate "a linked .tf file skipped" 's/\{ \$link = 1; return \}/{ return }/' t_refs_link
+mutate "the index group unbounded" 's/\{0,256\}/*/' t_refs_big
 mutate "the base denied set not compared" 's/ or \$x\.blk\.base_denied != \$x\.blk\.denied//' t_v_baseother
 
 # --- Recorded exceptions (skip-coverage.md, Recorded exceptions): a runner-mode record, its
