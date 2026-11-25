@@ -85,7 +85,7 @@ The host validates the envelope, giving one repair turn whose reply replaces the
 
 ## On-Demand Reads
 
-Not in this prefix; read each when its case arises and apply it as the full variant does:
+Not in this prefix; read each when its case arises, as the full variant does:
 
 - Before a `suggested_fix`: the Suggested Fixes table of its check ([A](../check-a-compatibility.md#suggested-fixes), [B](../check-b-coverage.md#suggested-fixes), [C](../check-c-structure.md#suggested-fixes), [D](../check-d-examples.md#suggested-fixes), [E](../check-e-profile.md#suggested-fixes), [F](../check-f-scope.md#suggested-fixes)) and the [Suggested Fix Contract](../findings-schema.md#suggested-fix-contract).
 - Before reporting or dropping a `compat.*` finding, and whenever a commit in the change reverts another: Check A's **Reverts:** paragraph and the text after it, in [Reads, Fails When and Severity](../check-a-compatibility.md#reads-fails-when-and-severity).
@@ -97,8 +97,9 @@ Not in this prefix; read each when its case arises and apply it as the full vari
 - Check F, before judging a `scope.*` rule: [The suggested fix](../check-f-scope.md#the-suggested-fix), [The base revision](../check-f-scope.md#the-base-revision), [Renamed files](../check-f-scope.md#renamed-files), [Not evaluated](../check-f-scope.md#not-evaluated), [Where Check F yields](../check-f-scope.md#where-check-f-yields) and [Decisions](../check-f-scope.md#decisions).
 - Check F, a `scope.*` rule in a test helper directory or a case the sections above do not settle: [Worked Cases](../check-f-scope.md#worked-cases).
 - A change across several areas or over the large-change thresholds: [large-changes.md](../large-changes.md), before Step 1.
-- A claim in the accompanying prose: [quoted-claims.md](../quoted-claims.md).
+- A claim in the prose: [quoted-claims.md](../quoted-claims.md).
 - A verification record with `behaviour:` lines: [Check G](../check-g-behaviour.md).
+- Code outside Terraform the change edits: [Check H](../check-h-non-hcl.md).
 
 ## Skill: Terraform Module Reviewer
 
