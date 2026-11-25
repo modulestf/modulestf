@@ -1521,10 +1521,13 @@ common=() proxy_env=() base=0000000000000000000000000000000000000000 base_args=(
 proxy_plan=p runner=r
 EOF
     cat <<'EOF'
-issue_session() { :; }; left() { echo 100; }; start_proxy() { :; }; save_proxy_log() { :; }
+issue_session() { :; }; left() { if [ -e "$W/left0" ]; then echo 0; else echo 100; fi; }; start_proxy() { :; }; save_proxy_log() { :; }
 docker() {
   case $1 in
-    logs) echo poll >> "$W/calls"; if [ -e "$W/fail-first" ]; then rm -f "$W/fail-first"; return 1; fi; cat "$W/proxy.log" ;;
+    logs) echo poll >> "$W/calls"; if [ -e "$W/fail-first" ]; then rm -f "$W/fail-first"; return 1; fi
+      # a read that prints the log and then fails, once
+      if [ -e "$W/fail-once" ]; then rm -f "$W/fail-once"; cat "$W/proxy.log"; return 1; fi
+      cat "$W/proxy.log" ;;
     kill) [ -e "$W/running" ] && touch "$W/killed" ;;
   esac
 }
@@ -1533,19 +1536,32 @@ in_runner() { # output file, docker arguments; the last is the example
   case "$*" in *"--phase 'base-plan'"*) base_phase=1 ;; esac
   case "$*" in *"--phase validate"*)
     echo validate >> "$W/calls"
-    case "$ex" in */ssobad) echo 'validate: failed' >> "$outf" ;; *) echo 'validate: passed' >> "$outf" ;; esac; return 0 ;; esac
+    case "$ex" in */ssobad) echo 'validate: failed' >> "$outf" ;; */ssotwo) printf 'validate: passed\nvalidate: failed\n' >> "$outf" ;;
+      */ssonone) ;; *) echo 'validate: passed' >> "$outf" ;; esac; return 0 ;; esac
   touch "$W/running"; rm -f "$W/killed"
   case "$ex" in
     */forge)
       printf 'example: %s\nplan: environment (refused-host)\nrefused: sso.us-east-1.amazonaws.com:443\nvalidate: passed\nbase-refused: sso.us-east-1.amazonaws.com:443\nplan: planned | Plan: 1 to add, 0 to change, 0 to destroy.\n' "$ex" >> "$outf" ;;
-    */stall|*/sso|*/ssobad|*/ssomix)
-      # stall: a host off the closed list; sso: hosts refused by design; ssomix: both
+    */bforge) [ "$base_phase" = 1 ] && printf 'base: environment (refused-host)\nbase: reproduces at base\n' >> "$outf" ;;
+    */stall|*/sso*)
+      # stall: a host off the closed list; sso: hosts refused by design; ssomix: both; ssoloose:
+      # names that only contain a listed one; sso21: 21 listed hosts; ssocn: two partitions
       for h in $(case "$ex" in */stall) echo es.eu-west-1.amazonaws.com:443 ;; */ssomix) echo sso.us-east-1.amazonaws.com:443 es.eu-west-1.amazonaws.com:443 ;;
+                 */ssoloose) echo xsso.us-east-1.amazonaws.com:443 sso.us-east-1.amazonaws.com:443.x.example:443 ;;
+                 */sso21) for i in $(seq 1 21); do echo "sso.us-east-$i.amazonaws.com:443"; done ;;
+                 */ssocn) echo sso.us-east-1.amazonaws.com:443 sso.us-east-1.amazonaws.com.cn:443 ;;
                  *) echo sso.us-east-1.amazonaws.com:443 identitystore.us-east-1.amazonaws.com:443 ;; esac); do
         for i in 1 2 3 4; do printf 'NOTICE    Nov 23 22:33:12.%03d [1]: Proxying refused on filtered url "%s"\n' "$i" "$h" >> "$W/proxy.log"; done
       done
       [ "$base_phase" = 1 ] || printf 'example: %s\n' "$ex" >> "$outf"
-      for i in $(seq 1 40); do [ ! -e "$W/killed" ] || { rm -f "$W/running"; return 0; }; sleep 0.1; done
+      for i in $(seq 1 40); do
+        if [ -e "$W/killed" ]; then
+          rm -f "$W/running"
+          case "$ex" in */ssolog) touch "$W/fail-once" ;; */ssobudget) touch "$W/left0" ;; esac
+          return 0
+        fi
+        sleep 0.1
+      done
       if [ "$base_phase" = 1 ]; then echo 'base: not available' >> "$outf"; else echo 'plan: environment (timeout)' >> "$outf"; fi ;;
     */slow)
       sleep 2.5
@@ -1564,7 +1580,8 @@ EOF
       base) echo 'examples=(ex/stall ex/slow) deferred=(1 2)'; sed -n '/^  start_proxy "\$proxy_plan" plan.conf$/,/^  done$/p' "$1" ;;
       design) echo 'set -- ex/sso ex/ssomix ex/ssobad ex/forge'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1"
         echo 'echo "deferred ${deferred[*]:-}"' ;;
-      design-base) echo 'examples=(ex/sso ex/ssomix) deferred=(1 2)'; sed -n '/^  start_proxy "\$proxy_plan" plan.conf$/,/^  done$/p' "$1" ;;
+      design2) echo 'set -- ex/ssoloose ex/sso21 ex/ssotwo ex/ssonone ex/ssolog ex/ssocn ex/ssobudget'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1" ;;
+      design-base) echo 'examples=(ex/sso ex/ssomix ex/bforge) deferred=(1 2 3)'; sed -n '/^  start_proxy "\$proxy_plan" plan.conf$/,/^  done$/p' "$1" ;;
       baseline) echo 'set -- ex/slow'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1" ;;
     esac; } > "$d/run.sh"
   : > "$d/proxy.log"; : > "$d/calls"
@@ -1608,6 +1625,16 @@ wirerun "$RP" design-base
 check "refused host: a base plan refused only hosts on the closed list is environment (refused-host) with a base-refused line" \
   "$([ "$(cat "$SW/wire-design-base/base.1")" = "$(printf 'base: environment (refused-host)\nbase-refused: identitystore.us-east-1.amazonaws.com:443 sso.us-east-1.amazonaws.com:443')" ] \
      && [ "$(cat "$SW/wire-design-base/base.2")" = 'base: environment (network)' ] && echo 0 || echo 1)"
+check "refused host: a base container cannot forge the refused-host class" "$(head -n 1 "$SW/wire-design-base/base.3" | grep -qx 'base: reproduces at base'; echo $?)"
+wirerun "$RP" design2
+wb() { cat "$SW/wire-design2/block.$1"; }
+check "refused host: names that only contain a listed host are environment (network)" "$([ "$(wb 1)" = "$(printf 'example: ex/ssoloose\nplan: environment (network)')" ] && echo 0 || echo 1)"
+check "refused host: 21 listed hosts are environment (network)" "$([ "$(wb 2)" = "$(printf 'example: ex/sso21\nplan: environment (network)')" ] && echo 0 || echo 1)"
+check "refused host: two validate lines read as validate: not run" "$(wb 3 | grep -qx 'validate: not run'; echo $?)"
+check "refused host: no validate line reads as validate: not run" "$(wb 4 | grep -qx 'validate: not run'; echo $?)"
+check "refused host: a proxy log read that fails after the plan is environment (network)" "$([ "$(wb 5)" = "$(printf 'example: ex/ssolog\nplan: environment (network)')" ] && echo 0 || echo 1)"
+check "refused host: the hosts are sorted in codepoint order" "$(wb 6 | grep -qx 'refused: sso.us-east-1.amazonaws.com.cn:443 sso.us-east-1.amazonaws.com:443'; echo $?)"
+check "refused host: no budget left for validate reads as validate: not run" "$(wb 7 | grep -qx 'validate: not run'; echo $?)"
 wiremut() { # name, perl program, scenario, file, line the real script writes there
   perl -ne "$2" "$RP" > "$SW/$1.sh"
   check "mutation $1 changes the script" "$(cmp -s "$RP" "$SW/$1.sh"; test $? -eq 1; echo $?)"
@@ -1618,6 +1645,20 @@ wiremut stall-flag-kept 'print unless /^  rm -f "\$TMPRUN\/stalled"$/' head bloc
 wiremut stall-baseline-zero 's/stall_watch "\$lines"/stall_watch 0/; print' head block.2 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.'
 wiremut stall-no-head-line 's/printf .example: %s\\nplan: environment \(network\)\\n. "\$ex" > "\$blk"/:/; print' head block.1 'plan: environment (network)'
 wiremut stall-no-base-line 's/echo .base: environment \(network\). > "\$TMPRUN\/base\.\$n"/:/; print' base base.1 'base: environment (network)'
+wiremut refused-host-substring-host 's/grep -Evx "\$design_host_re"/grep -Ev "\$design_host_re"/; print' design2 block.1 'plan: environment (network)'
+wiremut refused-host-no-cap 's/ && \[ "\$\(printf .%s\\n. "\$t" \| wc -l\)" -le 20 \]//; print' design2 block.2 'plan: environment (network)'
+wiremut refused-host-first-validate "s/^  v=\"\\\$\\(grep -E '\\^validate: ' \"\\\$TMPRUN\/validate\.out\"\\)\" \\|\\| v=\$/  v=\"\\\$(grep -m 1 -E '^validate: (passed|failed)\\\$' \"\\\$TMPRUN\/validate.out\")\" || v=/; print" design2 block.3 'validate: not run'
+wiremut refused-host-failed-read-used 's/refused_targets \| LC_ALL=C sort -u\)" \|\| return 0/refused_targets | LC_ALL=C sort -u)"/; print' design2 block.5 'plan: environment (network)'
+wiremut refused-host-validate-no-budget 'print unless /^  \[ "\$rem" -gt 0 \] \|\| \{ echo .validate: not run.; return 0; \}$/' design2 block.7 'validate: not run'
+wiremut refused-host-base-forgeable 's/ \| grep -Ev .\^base: environment \\\(refused-host\\\). \|/ |/; print' design-base base.3 'base: reproduces at base'
+if [ "$(printf 'sso.us-east-1.amazonaws.com:443\nsso.us-east-1.amazonaws.com.cn:443\n' | LC_ALL=en_US.UTF-8 sort 2> /dev/null | head -n 1)" = sso.us-east-1.amazonaws.com:443 ]; then
+  perl -pe 's/refused_targets \| LC_ALL=C sort -u\)/refused_targets | sort -u)/' "$RP" > "$SW/refused-host-locale.sh"
+  check "mutation refused-host-locale changes the script" "$(cmp -s "$RP" "$SW/refused-host-locale.sh"; test $? -eq 1; echo $?)"
+  LC_ALL=en_US.UTF-8 wirerun "$SW/refused-host-locale.sh" design2
+  check "mutation refused-host-locale is caught" "$(grep -qx 'refused: sso.us-east-1.amazonaws.com.cn:443 sso.us-east-1.amazonaws.com:443' "$SW/wire-design2/block.6"; test $? -eq 1; echo $?)"
+else
+  echo "ok   mutation refused-host-locale: skipped, no en_US.UTF-8 locale here sorts these hosts apart from C"
+fi
 wiremut refused-host-any-host 'print unless /grep -Evx "\$design_host_re"/' design block.2 'plan: environment (network)'
 wiremut refused-host-no-validate 's/vline="\$\(validate_example "\$n" "\$ex"\)"/vline="validate: passed"/; print' design block.3 'validate: failed'
 wiremut refused-host-not-deferred "s/\\|'plan: environment \\(refused-host\\)'\\*//; print" design out 'deferred 1 3'

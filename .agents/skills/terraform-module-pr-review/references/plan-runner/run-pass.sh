@@ -316,20 +316,22 @@ refused_targets() { # tinyproxy log on stdin -> one line per refused CONNECT tar
 # port 443, a closed list. ../skip-coverage.jq holds the same pattern as design_host.
 design_host_re='(sso|identitystore|api\.ecr-public)\.[a-z]{2,4}(-[a-z]+){1,2}-[0-9]{1,2}\.(amazonaws\.com|amazonaws\.com\.cn|c2s\.ic\.gov|sc2s\.sgov\.gov|cloud\.adc-e\.uk|csp\.hci\.ic\.gov|amazonaws\.eu):443'
 # The refused targets of the plan container that started at proxy log line $1, on one line and
-# sorted, when there are 1 to 20 and every one is a host refused by design; nothing otherwise,
-# a log that cannot be read included (../skip-coverage.md, Design skips).
+# sorted in codepoint order, as skip-coverage.jq compares them, when there are 1 to 20 and every
+# one is a host refused by design; nothing otherwise, a log that cannot be read included
+# (../skip-coverage.md, Design skips).
 design_refusals() { # proxy log lines before the container
   local t
-  t="$(docker logs "$proxy_plan" 2>&1 | tail -n +"$(($1 + 1))" | refused_targets | sort -u)" || return 0
+  t="$(docker logs "$proxy_plan" 2>&1 | tail -n +"$(($1 + 1))" | refused_targets | LC_ALL=C sort -u)" || return 0
   [ -n "$t" ] && [ "$(printf '%s\n' "$t" | wc -l)" -le 20 ] || return 0
   [ -z "$(printf '%s\n' "$t" | grep -Evx "$design_host_re")" ] || return 0
   printf '%s\n' "$t" | paste -sd ' ' -
 }
 # The head's own terraform validate of one example, in a container with no network and no
 # credentials, as the show phase reads a saved plan: the evidence that a plan the runner ended
-# early hid no type error (../skip-coverage.md, Design skips). One fixed line.
+# early hid no type error (../skip-coverage.md, Design skips). One fixed line: the container's
+# one validate line when it printed exactly one and it is passed or failed, else not run.
 validate_example() { # index, example
-  local rem; rem=$(left)
+  local rem v; rem=$(left)
   [ "$rem" -gt 0 ] || { echo 'validate: not run'; return 0; }
   : > "$TMPRUN/validate.out"
   in_runner "$TMPRUN/validate.out" --network none "${common[@]}" -v "$volume":/work:ro \
@@ -337,7 +339,8 @@ validate_example() { # index, example
     --tmpfs "$RUN/plan/home:rw,size=64m,mode=1777" --entrypoint /bin/bash "$runner_image" -c \
     "exec bash /opt/plan-pass/plan-pass.sh plan '$RUN' '$pname' --mode runner --budget '$rem' --phase validate --index '$1' \"\$@\"" \
     plan-pass "$2"
-  grep -Ex -m 1 'validate: (passed|failed)' "$TMPRUN/validate.out" || echo 'validate: not run'
+  v="$(grep -E '^validate: ' "$TMPRUN/validate.out")" || v=
+  case "$v" in 'validate: passed'|'validate: failed') printf '%s\n' "$v" ;; *) echo 'validate: not run' ;; esac
 }
 # A plan whose provider keeps retrying a host the plan proxy refuses would wait for the plan's
 # time limit. While a plan container runs, stall_watch reads the plan proxy's log from the line

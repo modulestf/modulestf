@@ -56,7 +56,7 @@ done
 # gate, and what it writes on a base: line.
 # shellcheck disable=SC2016 # a jq program
 REDUCE='
-# plan-pass.sh ENV_REASONS, each as its class
+# plan-pass.sh ENV_REASONS, each as its class, and refused-host, which only the runner writes
 def env_classes: ["credentials", "access-denied", "throttling", "registry", "plugin", "sandbox", "network",
   "timeout", "output-cap", "refused-host"] | map("environment (\(.))");
 def classes: ["planned", "planned-no-changes", "code-error"] + env_classes + ["needs input",

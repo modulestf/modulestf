@@ -414,7 +414,16 @@ fi
 
 # The data source types the .tf files directly in each refused-host example directory declare
 # (skip-coverage.md, Design skips): one {dir: [type]} line per directory, from regular files only,
-# none for a directory reached through a link or one that climbs out
+# none for a directory reached through a link or one that climbs out. Heredoc bodies, block
+# comments and line comments are removed first; a file left with an open heredoc or block
+# comment declares none.
+TYPES_PL='
+s{<<-?([A-Za-z_][A-Za-z0-9_-]*)[^\n]*\n.*?^[ \t]*\1[ \t]*$}{}gms;
+s{/\*.*?\*/}{}gs;
+next if m{/\*|<<};
+s{(?:#|//)[^\n]*}{}g;
+print "$1\n" while /^[ \t]*data[ \t]+"([A-Za-z0-9_-]+)"[ \t]+"/mg;
+'
 : > "$W/types.jsonl"
 if [ "$MODE" = runner ]; then
   jq -r '.unplanned[] | select(.reason == "environment (refused-host)") | .dir
@@ -423,7 +432,7 @@ if [ "$MODE" = runner ]; then
     t=
     r="$(cd "$CLONE/$d" 2> /dev/null && pwd -P)" || r=
     if [ "$r" = "$CLONE/$d" ]; then
-      t="$(find "$CLONE/$d" -maxdepth 1 -type f -name '*.tf' -exec perl -ne 'print "$1\n" if /^\s*data\s+"([A-Za-z0-9_-]+)"\s+"/' {} + 2> /dev/null | sort -u)"
+      t="$(find "$CLONE/$d" -maxdepth 1 -type f -name '*.tf' -exec perl -0777 -ne "$TYPES_PL" {} + 2> /dev/null | sort -u)"
     fi
     printf '%s\n' "$t" | jq -R -s -c --arg d "$d" '{($d): (split("\n") | map(select(length > 0)))}' >> "$W/types.jsonl"
   done

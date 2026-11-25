@@ -155,10 +155,16 @@ printf '\ndata "aws_iam_policy_document" "by_lb" {\n  policy_id               = 
 # examples/h1 reads the account's Identity Center directory: the runner's plan proxy refuses its
 # hosts by design (skip-coverage.md, Design skips). examples/h2 reads none of the mapped types.
 mkdir -p "$C/examples/h1" "$C/examples/h2"
-printf 'data "aws_ssoadmin_instances" "this" {}\n\ndata "aws_identitystore_group" "g" {\n  identity_store_id = "d-1"\n}\n\nmodule "lb" {\n  source = "../../"\n}\n' > "$C/examples/h1/main.tf"
+printf '/* The directory read. */\ndata "aws_ssoadmin_instances" "this" {}\n\ndata "aws_identitystore_group" "g" {\n  identity_store_id = "d-1"\n}\n\nlocals {\n  note = <<-EOT\n    Example.\n  EOT\n}\n\nmodule "lb" {\n  source = "../../"\n}\n' > "$C/examples/h1/main.tf"
 printf 'module "lb" {\n  source = "../../"\n}\n' > "$C/examples/h2/main.tf"
 printf '# Example\n' > "$C/examples/h1/README.md"
 ln -s . "$C/examples/hl" # examples/hl/h1 is examples/h1 through a link
+# h5, h6 and h7 name a mapped type only where Terraform reads no block: a block comment, a
+# heredoc, and after a block comment that never closes.
+mkdir -p "$C/examples/h5" "$C/examples/h6" "$C/examples/h7"
+printf '/*\ndata "aws_ssoadmin_instances" "this" {}\n*/\n\nmodule "lb" {\n  source = "../../"\n}\n' > "$C/examples/h5/main.tf"
+printf 'locals {\n  doc = <<EOT\ndata "aws_identitystore_group" "g" {\nEOT\n}\n\nmodule "lb" {\n  source = "../../"\n}\n' > "$C/examples/h6/main.tf"
+printf 'module "lb" {\n  source = "../../"\n}\n/*\ndata "aws_ssoadmin_instances" "this" {}\n' > "$C/examples/h7/main.tf"
 G init -q && G add -A && G commit -qm base
 BASE="$(G rev-parse HEAD)"
 G worktree add -q --detach "$RUN/base" "$BASE"
@@ -812,6 +818,15 @@ t_h_dir() { h_reset; h_why change-not-allowed 'printf "provider \"aws\" {\n  reg
 t_h_dir; check "refused-host: a provider block added under the example: change-not-allowed" $?
 t_h_readme() { h_reset; h_why dir-changed 'printf "More.\n" >> examples/h1/README.md'; }
 t_h_readme; check "refused-host: any change under the example: dir-changed" $?
+t_h_baseplanned() { h_reset; HLINES="${HDEF/base: environment (refused-host)/base: new under this change}"; h_why base-not-denied; }
+t_h_baseplanned; check "refused-host: a merge base that planned beside an equal base-refused line: base-not-denied" $?
+SSO1='sso.eu-west-1.amazonaws.com:443' IDS1='identitystore.eu-west-1.amazonaws.com:443'
+t_h_comment() { h_reset; HEX=examples/h5; HLINES="${HDEF//$HOSTS/$SSO1}"; h_why denial-unproven; }
+t_h_comment; check "refused-host: a mapped type named only in a block comment: denial-unproven" $?
+t_h_heredoc() { h_reset; HEX=examples/h6; HLINES="${HDEF//$HOSTS/$IDS1}"; h_why denial-unproven; }
+t_h_heredoc; check "refused-host: a mapped type named only in a heredoc: denial-unproven" $?
+t_h_open() { h_reset; HEX=examples/h7; HLINES="${HDEF//$HOSTS/$SSO1}"; h_why denial-unproven; }
+t_h_open; check "refused-host: a file with a block comment that never closes declares no type: denial-unproven" $?
 t_h_nowit() { h_reset; ADDRJQ='.module_calls = {}'; h_why no-witness; }
 t_h_nowit; check "refused-host: no planned example witnesses the change: no-witness" $?
 
@@ -956,6 +971,12 @@ mutate "the refused hosts not matched to the example's data sources" 's/\n      
 mutate "the refused evidence not required" 's/\(\(\$x\.blk\.refused \| length\) != 1 or /((/' t_h_two
 mutate "validate not required" 's/     elif \$k == "refused-host" and \$x\.blk\.validate != \["passed"\] then "not-validated"\n//' t_h_novalid
 mutate "the merge base refusal not compared" 's/ or \$x\.blk\.base_refused != \$x\.blk\.refused//' t_h_basehosts
+mutate "the merge base class of a refused-host skip not compared" 's/\$k == "refused-host" and \(\$x\.blk\.base != \["environment \(refused-host\)"\] or /\$k == "refused-host" and ((/' t_h_baseplanned
+mutate "block comments read by the type scan" 's/^s\{\/\\\*\.\*\?\\\*\/\}\{\}gs;\n//m; s/^next if m\{\/\\\*\|<<\};\n//m' t_h_comment
+mutate "heredocs read by the type scan" 's/^s\{<<-\?\(\[A-Za-z_\][^\n]*\n//m; s/^next if m\{\/\\\*\|<<\};\n//m' t_h_heredoc
+mutate "the block comment strip dropped" 's/^s\{\/\\\*\.\*\?\\\*\/\}\{\}gs;\n//m' t_h
+mutate "the heredoc strip dropped" 's/^s\{<<-\?\(\[A-Za-z_\][^\n]*\n//m' t_h
+mutate "an open block comment read by the type scan" 's/^next if m\{\/\\\*\|<<\};\n//m' t_h_open
 mutate "the types read through a linked directory" 's/if \[ "\$r" = "\$CLONE\/\$d" \]; then/if [ -n "\$r" ]; then/' t_h_link
 
 # --- Recorded exceptions (skip-coverage.md, Recorded exceptions): a runner-mode record, its

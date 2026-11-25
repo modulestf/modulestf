@@ -88,7 +88,7 @@ def gap_reasons: ["terraform was not installed", "init failed", "not run: enviro
   "merge base not available", "merge base not run: environment", "not run: command limit", "not run: budget",
   "merge base not run: command limit", "merge base not run: budget"];
 
-# plan-pass.sh ENV_REASONS, each as its class
+# plan-pass.sh ENV_REASONS, each as its class, and refused-host, which only the runner writes
 def env_classes: ["credentials", "access-denied", "throttling", "registry", "plugin", "sandbox", "network",
   "timeout", "output-cap", "refused-host"] | map("environment (\(.))");
 

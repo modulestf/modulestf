@@ -20,7 +20,9 @@
 #       state and prints its record lines, with no summary. The runner runs each phase in its
 #       own container behind its own egress proxy (plan-pass.md, Modes). --phase show --index
 #       <n> <example-dir>, in a container with no network and no credentials, prints the saved
-#       plan's addresses as one "addresses-json:" line for the host to check.
+#       plan's addresses as one "addresses-json:" line for the host to check. --phase validate
+#       --index <n> <example-dir>, in the same kind of container, runs terraform validate on
+#       the example from the saved state and prints one "validate: passed|failed" line.
 #       Every plan is saved with -out under <run-dir>/plan/saved. In laptop mode the saved head
 #       plan of a planned example is read with terraform show -json after the plan has ended,
 #       and its addresses, attribute and sensitive names, local module calls, the head
