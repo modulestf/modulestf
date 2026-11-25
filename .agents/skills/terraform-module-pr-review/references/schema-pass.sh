@@ -3,7 +3,8 @@
 # fact sheets from a schema mirror. See schema-pass.md for the inputs, the layout and the
 # reason codes. Usage: schema-pass.sh <facts output directory> <work directory> [<handoff directory>]
 # Environment: SCHEMA_PROVIDERS, SCHEMA_TYPES (the gate's tokens), MODULESTF_SCHEMA_MIRROR,
-# and for the schema handoff SCHEMA_HEAD, SCHEMA_MERGE_BASE, SCHEMA_INPUTS and SCHEMA_ROOT.
+# and for the schema handoff SCHEMA_HEAD, SCHEMA_MERGE_BASE, SCHEMA_INPUTS and SCHEMA_ROOT;
+# SCHEMA_CACHE, an absolute directory, keeps checked mirror assets across runs.
 # SCHEMA_DEPTH, the path of a depth.json, selects its depth's mode: the tokens come from
 # it and the mirror is TRUSTED_MIRROR. At focused, any failure or overflow exits 3 with
 # "schema pass: escalate <reason>" and publishes nothing; at deep, it exits 0 with
@@ -50,6 +51,7 @@ CAP_GZ=8388608
 CAP_SCHEMA=134217728
 CAP_HANDOFF=134217728
 CAP_HANDOFF_GZ=16777216
+MAX_CACHE_ENTRIES=64 # provider versions kept in the mirror cache, the least recently used removed first
 MIRROR_HOSTS="github.com objects.githubusercontent.com release-assets.githubusercontent.com"
 REGISTRY_HOSTS="registry.terraform.io"
 
@@ -354,17 +356,34 @@ awk -v m="$MAX_TYPES" 'NR <= m' "$WORK/tall" > "$WORK/tkeep"
 cache_take() { # entry, directory, schema file name
   local f
   for f in manifest.json "$3"; do [ -f "$1/$f" ] && [ ! -L "$1/$f" ] || return 1; done
-  [ "$(wc -c < "$1/manifest.json")" -le "$CAP_MANIFEST" ] && [ "$(wc -c < "$1/$3")" -le "$CAP_GZ" ] || return 1
-  cp "$1/manifest.json" "$1/$3" "$2/" 2> /dev/null
+  if cp "$1/manifest.json" "$1/$3" "$2/" 2> /dev/null && [ "$(wc -c < "$2/manifest.json")" -le "$CAP_MANIFEST" ] &&
+    [ "$(wc -c < "$2/$3")" -le "$CAP_GZ" ]; then return 0; fi
+  # Both copies or neither: a copy cut part-way leaves nothing to stand in for a download.
+  rm -f "$2/manifest.json" "$2/$3"
+  return 1
 }
 # A checked manifest and schema stored as the entry, whole or not at all; a failure leaves the
 # run as it is.
 cache_put() { # entry, directory, schema file name
   local t
   t="$(mktemp -d "$CACHE/.put.XXXXXX" 2> /dev/null)" || return 0
-  if cp "$2/manifest.json" "$2/$3" "$t/" 2> /dev/null && rm -rf "$1" && mv "$t" "$1" 2> /dev/null; then return 0; fi
+  # One rename of the whole entry, only when none exists: an entry another run stored meanwhile is
+  # kept, and a rename that landed inside it is removed.
+  if cp "$2/manifest.json" "$2/$3" "$t/" 2> /dev/null && [ ! -e "$1" ] && mv "$t" "$1" 2> /dev/null; then
+    [ ! -e "$1/${t##*/}" ] || rm -rf "$1/${t##*/}"
+    cache_trim; return 0
+  fi
   rm -rf "$t"
 }
+# At most MAX_CACHE_ENTRIES entries, the least recently used removed first (a read marks its
+# entry used), and the temporary directory of a run killed part-way removed after an hour.
+cache_trim() {
+  find "$CACHE" -mindepth 1 -maxdepth 1 -type d -name '.put.*' -mmin +60 -exec rm -rf {} + 2> /dev/null
+  find "$CACHE" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -exec ls -1dt {} + 2> /dev/null |
+    tail -n +$((MAX_CACHE_ENTRIES + 1)) | while IFS= read -r x; do rm -rf "$x"; done
+}
+# A cache directory: not a symbolic link, owned by the user, writable by neither group nor others.
+private_dir() { [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -z "$(find "$1" -maxdepth 0 \( -perm -0020 -o -perm -0002 \))" ]; }
 
 # One provider version's schema from the mirror into an empty directory: the three assets,
 # the checksums, the manifest, the decompressed size and the JSON shape, as schema-pass.md
@@ -383,13 +402,14 @@ get_schema() { # provider, version, directory
       echo "$r"; return
     fi
     r="$(check_schema "$prov" "$ver" "$d" "$sf")"
-    [ -n "$r" ] || return 0
+    if [ -z "$r" ]; then touch "$e" 2> /dev/null; return 0; fi
     rm -rf "$e"
     rm -f "$d/manifest.json" "$d/$sf" "$d/sums" "$d/schema.json"
+  elif [ -n "$e" ]; then rm -rf "$e" # an entry not usable whole is dropped, so the download stores it again
   fi
   for a in "SHA256SUMS $CAP_SUMS" "manifest.json $CAP_MANIFEST" "$sf $CAP_GZ"; do
     f="${a% *}" cap="${a#* }"
-    [ ! -f "$d/$f" ] || continue # SHA256SUMS read for a cache entry that failed
+    [ "$f" != SHA256SUMS ] || [ ! -f "$d/$f" ] || continue # read for a cache entry that failed
     if ! r="$(fetch "$base/$f" "$d/$f" "$cap" "$MIRROR_HOSTS")"; then
       case "$r" in not_found) r=not_in_mirror ;; cap_exceeded) [ "$f" = "$sf" ] && r=schema_too_large ;; esac
       echo "$r"; return
@@ -428,14 +448,18 @@ if [[ -n "$MODULESTF_SCHEMA_MIRROR" && ! "$MODULESTF_SCHEMA_MIRROR" =~ $mirror_r
   echo "schema pass: MODULESTF_SCHEMA_MIRROR is not owner/name; no mirror"
   MODULESTF_SCHEMA_MIRROR=""
 fi
-# The mirror cache across runs (schema-pass.md, Mirror Cache): a directory the user owns, not a
-# link and writable by no one else, else not used and one line says so.
+# The mirror cache across runs (schema-pass.md, Mirror Cache): an absolute path with no trailing
+# slash, and it and its <owner>/<name> directories each private_dir, else not used and one line
+# says so. The directories under the root are made only once the root passed.
 CACHE=""
 if [ -n "$MODULESTF_SCHEMA_MIRROR" ] && [ -n "${SCHEMA_CACHE:-}" ]; then
-  case "$SCHEMA_CACHE" in /?*) mkdir -p -m 0700 "$SCHEMA_CACHE" 2> /dev/null ;; esac
-  if [[ "$SCHEMA_CACHE" == /?* ]] && [ -d "$SCHEMA_CACHE" ] && [ ! -L "$SCHEMA_CACHE" ] && [ -O "$SCHEMA_CACHE" ] && [ -z "$(find "$SCHEMA_CACHE" -maxdepth 0 \( -perm -0020 -o -perm -0002 \))" ]; then
-    CACHE="$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR"
-    mkdir -p "$CACHE" 2> /dev/null || CACHE=""
+  if [[ "$SCHEMA_CACHE" == /?* && "$SCHEMA_CACHE" != */ ]]; then
+    (umask 077 && mkdir -p "$SCHEMA_CACHE") 2> /dev/null
+    if private_dir "$SCHEMA_CACHE"; then
+      (umask 077 && mkdir -p "$SCHEMA_CACHE/${MODULESTF_SCHEMA_MIRROR%/*}") 2> /dev/null
+      private_dir "$SCHEMA_CACHE/${MODULESTF_SCHEMA_MIRROR%/*}" && (umask 077 && mkdir -p "$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR") 2> /dev/null &&
+        private_dir "$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR" && CACHE="$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR"
+    fi
   fi
   [ -n "$CACHE" ] || echo "schema pass: mirror cache not used"
 fi
