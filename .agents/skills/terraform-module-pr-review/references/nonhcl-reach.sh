@@ -52,40 +52,68 @@ trig="$(jq -r '[.triggers[]? | select(.category == "non-hcl-dependency") | .file
 changed="$(jq -r '.[] | .filename, (.previous_filename // empty)' "$files" 2> /dev/null)" || die
 [ "$(printf '%s\n' "$trig" | grep -c .)" -le 40 ] || die
 
+
 # The module profile's reach file (profile-format.md, Reach of changes outside Terraform): lines
-# "not-run <owner/name> <file> <example directory> root-calls <argument>=<literal>". A line outside
-# the grammar refuses the whole file.
+# "not-run <owner/name> <file> <example directory> root-calls <argument>=<literal> gated-by var.<name>".
+# A line outside the grammar, or a file and directory named twice, refuses the whole file.
 maps=""
 if [ -n "$reach" ] && [ -e "$reach" ]; then
   [ -f "$reach" ] && [ ! -L "$reach" ] && [ "$(wc -c < "$reach" | tr -d ' ')" -le 65536 ] || die
+  seen=""
   while IFS= read -r l || [ -n "$l" ]; do
     case "$l" in '' | '#'*) continue ;; esac
-    read -r k r f d gk ga x <<< "$l"
+    read -r k r f d gk ga bk bv x <<< "$l"
     [ "$k" = not-run ] && [ -z "${x-}" ] && [[ "$r" =~ $repo_re ]] && plain "$f" && plain "$d" &&
-      [ "$gk" = root-calls ] && [[ "${ga-}" =~ ^[a-z_][a-z0-9_]{0,63}=(false|true|null|[0-9]{1,9})$ ]] || die
-    [ "$r" != "$repo" ] || maps="$maps$f $d $ga"$'\n'
+      [ "$gk" = root-calls ] && [[ "${ga-}" =~ ^[a-z_][a-z0-9_]{0,63}=(false|true|null|[0-9]{1,9})$ ]] &&
+      [ "${bk-}" = gated-by ] && [[ "${bv-}" =~ ^var\.[a-z_][a-z0-9_]{0,63}$ ]] || die
+    case "$seen" in *"|$r $f $d|"*) die ;; esac
+    seen="$seen|$r $f $d|"
+    [ "$r" != "$repo" ] || maps="$maps$f $d $ga ${bv#var.}"$'\n'
   done < "$reach"
 fi
 
-# The module calls of one .tf file on stdin: "<name> <source> <value>" per module block, <value> the
-# literal the argument has at the block's own depth or "-" for none, or one line "stale" for any text
-# this reader does not take whole: a block comment, a nested quote in an interpolation, a heredoc
-# that does not end, a source that is no plain string, an unbalanced brace or a module block that
-# does not start a line. A heredoc's lines are a string and are skipped to their closing tag.
-calls() {
-  awk -v arg="$1" '
+# The reader of one .tf file on stdin. In "calls" mode it prints "<name> <source> <value>" per module
+# block, <value> the literal the argument -v arg has at the block's own depth, "-" for none or "?"
+# for any other value. In "blocks" mode it prints, per top-level block whose text names -v name or
+# calls fileset, "<header>\t<count or for_each line at the block's own depth, or empty>". Either mode
+# prints the one line "stale" for any text it does not take whole: a block comment, a quote or a
+# heredoc inside a template interpolation or directive, a line that ends inside a string, a template
+# sequence in a heredoc body, a heredoc that does not end, an unbalanced brace, a module block that
+# does not start a line, a source that is no plain string, or (blocks mode) a name outside a block.
+reader() { # mode, arg, name
+  awk -v mode="$1" -v arg="$2" -v name="$3" '
     function bad() { print "stale"; failed = 1; exit }
-    { line = $0 }
-    tag != "" { t = line; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t); if (t == tag) tag = ""; next }
-    line ~ /\$\{[^}]*"/ { bad() }
+    function names(s) { return (name != "" && index(s, name) > 0) || s ~ /fileset[[:space:]]*\(/ }
+    { line = $0; sub(/\r$/, "", line) }
+    tag != "" {
+      t = line; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
+      if (t == tag) { tag = ""; next }
+      if (line ~ /[$%]\{/) bad()
+      if (inblk && names(line)) hit = 1
+      if (depth == 0 && names(line)) bad()
+      next
+    }
     {
-      # Drop a comment outside a string, and every string body, so braces count as code only.
-      out = ""; q = 0
+      # Code only: comments dropped, string bodies emptied; inside a template sequence of a string
+      # ("${" or "%{") braces nest and a quote is refused.
+      out = ""; q = 0; lvl = 0
       for (i = 1; i <= length(line); i++) {
-        c = substr(line, i, 1)
-        if (q) { if (c == "\\") { i++; continue } if (c == "\"") { q = 0; out = out "\"" } continue }
+        c = substr(line, i, 1); n2 = substr(line, i + 1, 1)
+        if (q && lvl == 0) {
+          if (c == "\\") { i++; continue }
+          if ((c == "$" || c == "%") && n2 == c) { i++; continue }
+          if ((c == "$" || c == "%") && n2 == "{") { lvl = 1; i++; continue }
+          if (c == "\"") { q = 0; out = out "\"" }
+          continue
+        }
+        if (q) {
+          if (c == "\"" || (c == "<" && n2 == "<")) bad()
+          if (c == "{") lvl++
+          else if (c == "}") lvl--
+          continue
+        }
         if (c == "\"") { q = 1; out = out "\""; continue }
-        if (c == "#" || (c == "/" && substr(line, i + 1, 1) == "/")) break
+        if (c == "#" || (c == "/" && n2 == "/")) break
         out = out c
       }
       if (q) bad()
@@ -95,13 +123,18 @@ calls() {
         tag = substr(code, RSTART, RLENGTH); sub(/^<<-?/, "", tag); sub(/[[:space:]]+$/, "", tag)
         code = substr(code, 1, RSTART - 1)
       } else if (code ~ /<</) bad()
-      if (depth == 0 && code ~ /^[[:space:]]*module([[:space:]"]|$)/) {
+      if (depth == 0 && mode == "calls" && code ~ /^[[:space:]]*module([[:space:]"]|$)/) {
         if (line !~ /^module "[A-Za-z0-9_-]+" \{[[:space:]]*(#.*)?$/) bad()
-        name = line; sub(/^module "/, "", name); sub(/".*/, "", name)
+        bname = line; sub(/^module "/, "", bname); sub(/".*/, "", bname)
         inmod = 1; src = ""; val = "-"
-      } else if (inmod && depth == 1) {
+      } else if (depth == 0 && mode == "blocks" && code ~ /\{/) {
+        if (line !~ /^[a-z_]+( "[A-Za-z0-9_.-]+")* \{[[:space:]]*$/) bad()
+        header = line; sub(/[[:space:]]*\{[[:space:]]*$/, "", header)
+        inblk = 1; hit = 0; gate = ""
+      } else if (depth == 0 && mode == "blocks" && names(line)) bad()
+      if (inmod && depth == 1) {
         if (line ~ /^[[:space:]]*source[[:space:]]*=/) {
-          if (line !~ /^[[:space:]]*source[[:space:]]*=[[:space:]]*"[^"$]*"[[:space:]]*(#.*)?$/) bad()
+          if (line !~ /^[[:space:]]*source[[:space:]]*=[[:space:]]*"[^"$%\\]*"[[:space:]]*(#.*)?$/) bad()
           src = line; sub(/^[^"]*"/, "", src); sub(/".*/, "", src)
         }
         a = "^[[:space:]]*" arg "[[:space:]]*="
@@ -110,15 +143,20 @@ calls() {
           val = (v ~ /^(false|true|null|[0-9]+)$/) ? v : "?"
         }
       }
+      if (inblk && depth == 1 && line ~ /^[[:space:]]*(count|for_each)[[:space:]]*=/) {
+        g = line; gsub(/^[[:space:]]+|[[:space:]]+$/, "", g); gate = g
+      }
+      if (inblk && names(line)) hit = 1
       n = gsub(/\{/, "{", code); m = gsub(/\}/, "}", code)
       depth += n - m
       if (depth < 0) bad()
-      if (inmod && depth == 0) { if (src == "") bad(); print name " " src " " val; inmod = 0 }
+      if (inmod && depth == 0) { if (src == "") bad(); print bname " " src " " val; inmod = 0 }
+      if (inblk && depth == 0) { if (hit) print header "\t" gate; inblk = 0 }
     }
-    END { if (!failed && (depth != 0 || inmod || tag != "")) print "stale" }'
+    END { if (!failed && (depth != 0 || inmod || inblk || tag != "")) print "stale" }'
 }
-# Normalize <example dir>/<relative source> to a repository path; empty for a source that is no
-# relative path or climbs out.
+# Normalize <directory>/<relative source> to a repository path; empty for a source that is no
+# relative path or climbs out of the repository.
 resolve() {
   local d="$1" s="$2" p part out=()
   case "$s" in ./* | ../*) ;; *) return 0 ;; esac
@@ -129,28 +167,77 @@ resolve() {
   done
   [ "${#out[@]}" -gt 0 ] && printf '%s' "${out[*]}" || printf '.'
 }
-# The guard of one line at one revision: prints the sorted module calls "<name> <source>" when every
-# call whose source is the module root sets the argument to the literal, no .tf file of the example
-# names the changed file, and the example is a tree of regular files. Status 1 otherwise.
+# The entries of a tree, NUL-separated and never quoted: "<mode> <type> <path>" per line, every path
+# segment in the plain charset; status 1 for any other name. -r for the whole tree.
+entries() { # rev, dir [, -r]
+  local e meta path t="$2"
+  [ "$t" != . ] || t=""
+  while IFS= read -r -d '' e; do
+    meta="${e%%$'\t'*}"; path="${e#*$'\t'}"
+    plain "$path" || return 1
+    printf '%s %s %s\n' "${meta%% *}" "$(printf '%s' "$meta" | cut -d' ' -f2)" "$path"
+  done < <(g ls-tree -z ${3:-} "$1:$t" 2> /dev/null)
+}
+# The example guard at one revision: prints the sorted module calls "<name> <source>" when the
+# example is a tree of regular files of at most 1 MiB with no link or gitlink, every .tf file at its
+# top, no .tf.json or OpenTofu file, no file naming the changed file, no fileset call, at least one
+# module call, and every module call has the module root as its source and sets the argument to the
+# literal. Status 1 otherwise.
 guard_at() { # rev, dir, file, argument=literal
-  local rev="$1" d="$2" f="$3" arg="${4%%=*}" want="${4#*=}" root="${prefix:-.}" mode type name src val r t list=""
+  local rev="$1" d="$2" b="${3##*/}" arg="${4%%=*}" want="${4#*=}" root="${prefix:-.}" ents mode type path t r name src val list=""
   [ "$(g cat-file -t "$rev:$d" 2> /dev/null)" = tree ] || return 1
-  while read -r mode type _ name; do
-    case "$name" in *.tf.json) return 1 ;; *.tf) ;; *) continue ;; esac
-    [ "$mode" = 100644 ] && [ "$type" = blob ] || return 1
-    [ "$(g cat-file -s "$rev:$d/$name" 2> /dev/null)" -le 1048576 ] 2> /dev/null || return 1
-    t="$(g cat-file blob "$rev:$d/$name" 2> /dev/null)" || return 1
-    ! printf '%s\n' "$t" | grep -Fq -- "${f##*/}" || return 1
-    r="$(printf '%s\n' "$t" | calls "$arg")" || return 1
+  ents="$(entries "$rev" "$d" -r)" || return 1
+  while read -r mode type path; do
+    [ -n "$path" ] || continue
+    [ "$mode" = 100644 ] || [ "$mode" = 100755 ] || return 1
+    [ "$type" = blob ] || return 1
+    case "$path" in *.tf.json | *.tofu | *.tofu.json) return 1 ;; */*.tf) return 1 ;; esac
+    [ "$(g cat-file -s "$rev:$d/$path" 2> /dev/null)" -le 1048576 ] 2> /dev/null || return 1
+    t="$(g cat-file blob "$rev:$d/$path" 2> /dev/null)" || return 1
+    ! printf '%s\n' "$t" | grep -Fq -- "$b" || return 1
+    case "$path" in *.tf) ;; *) continue ;; esac
+    [ "$mode" = 100644 ] || return 1
+    ! printf '%s\n' "$t" | grep -Eq 'fileset[[:space:]]*\(' || return 1
+    r="$(printf '%s\n' "$t" | reader calls "$arg" "")" || return 1
     case "$r" in *stale*) return 1 ;; esac
     while read -r name src val; do
       [ -n "$name" ] || continue
-      [ "$(resolve "$d" "$src")" != "$root" ] || [ "$val" = "$want" ] || return 1
+      [ "$(resolve "$d" "$src")" = "$root" ] && [ "$val" = "$want" ] || return 1
       list="$list$name $src"$'\n'
     done <<< "$r"
-  done < <(g ls-tree "$rev:$d" 2> /dev/null)
+  done <<< "$ents"
+  [ -n "$list" ] || return 1
   printf '%s' "$list" | sort
 }
+# The root gate at one revision: prints the sorted "<file>\t<header>\t<gate>" of every top-level block
+# of the module root's .tf files that names the changed file or calls fileset, when each such block
+# has a count or for_each at its own depth that reads var.<name>, and at least one does. Status 1
+# otherwise: a link, a .tf.json or OpenTofu file that names it, or text the reader does not take.
+gate_at() { # rev, file, var name
+  local rev="$1" b="${2##*/}" v="$3" root="${prefix:-.}" ents mode type path t r h gl list=""
+  ents="$(entries "$rev" "$root")" || return 1
+  while read -r mode type path; do
+    case "$path" in *.tf | *.tf.json | *.tofu | *.tofu.json) ;; *) continue ;; esac
+    t="$(g cat-file blob "$rev:${prefix:+$prefix/}$path" 2> /dev/null)" || return 1
+    printf '%s\n' "$t" | grep -Fq -- "$b" || printf '%s\n' "$t" | grep -Eq 'fileset[[:space:]]*\(' || continue
+    [ "$mode" = 100644 ] && [ "$type" = blob ] || return 1
+    case "$path" in *.tf) ;; *) return 1 ;; esac
+    r="$(printf '%s\n' "$t" | reader blocks "" "$b")" || return 1
+    case "$r" in *stale*) return 1 ;; esac
+    while IFS=$'\t' read -r h gl; do
+      [ -n "$h" ] || continue
+      printf '%s\n' "$gl" | grep -Eq "^(count|for_each)[[:space:]]*=.*(^|[^A-Za-z0-9_.])var\.$v([^A-Za-z0-9_]|\$)" || return 1
+      list="$list$path"$'\t'"$h"$'\t'"$gl"$'\n'
+    done <<< "$r"
+  done <<< "$ents"
+  [ -n "$list" ] || return 1
+  printf '%s' "$list" | sort
+}
+
+# A change that edits a .tf file of the module root changes what the gate means: nothing is cleared.
+rootre="^${prefix:+$prefix/}[^/]+\.(tf|tf\.json|tofu|tofu\.json)$"
+root_changed=false
+! printf '%s\n' "$changed" | grep -Eq "$rootre" || root_changed=true
 
 out='[]'
 while IFS= read -r f; do
@@ -158,14 +245,17 @@ while IFS= read -r f; do
   plain "$f" || die
   r="$(rp "$f")"
   un='[]'
-  while read -r mf md ma; do
-    [ "$mf" = "$r" ] || continue
+  while read -r mf md ma mv; do
+    [ "$mf" = "$r" ] && [ "$root_changed" = false ] || continue
     # A directory that holds a changed file is the change's own business, never cleared.
     printf '%s\n' "$changed" | awk -v d="$md/" 'index($0, d) == 1 { f = 1 } END { exit !f }' && continue
-    # The guard at both revisions, and the same module calls at both: a new call makes the line stale.
+    # Both guards at both revisions, and the same module calls and gates at both.
     hc="$(guard_at "$head" "$md" "$r" "$ma")" || continue
     bc="$(guard_at "$base" "$md" "$r" "$ma")" || continue
     [ "$hc" = "$bc" ] || continue
+    hg="$(gate_at "$head" "$r" "$mv")" || continue
+    bg="$(gate_at "$base" "$r" "$mv")" || continue
+    [ "$hg" = "$bg" ] || continue
     un="$(jq -c --arg d "$md" '. + [$d] | unique' <<< "$un")"
   done <<< "$maps"
   out="$(jq -c --arg f "$f" --argjson u "$un" '. + [{file: $f, unreached: $u}]' <<< "$out")" || die

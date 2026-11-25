@@ -67,8 +67,8 @@
 #   One optional key more, "nonhcl": {"head_sha", "base_sha", "files": [{"file", "unreached"}]},
 #   the examples the module profile proves run no changed file outside Terraform, which
 #   nonhcl-reach.sh gives and review-run.sh writes; with its SHAs equal to --head and host.json's
-#   merge_base it clears those examples not planned. A change whose only behaviour triggers are
-#   outside Terraform is approve with nits at best (verdict.md, Changes outside Terraform). Any
+#   merge_base it clears those examples not planned. A change with a behaviour trigger outside
+#   Terraform is approve with nits at best (verdict.md, Changes outside Terraform). Any
 #   other shape is refused.
 #   The Checks signal reads as jobless when the accepted checks file's only unknown is workflows
 #   that ended action_required or failure without starting a job: approve with nits at best

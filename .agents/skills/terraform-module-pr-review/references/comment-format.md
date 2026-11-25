@@ -470,7 +470,7 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `rationale-7` | Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7). |
 | `rationale-7-undemonstrated` | No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7). |
 | `rationale-7-covered` | No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7). |
-| `rationale-7-nonhcl` | No finding is open, and every behaviour change is outside Terraform, where a plan does not show what the changed file does. With no test run of it read, approve with nits is the best verdict (ladder rule 7). |
+| `rationale-7-nonhcl` | No finding is open, and a behaviour change is outside Terraform, where a plan does not show what the changed file does. With such a change, approve with nits is the best verdict (ladder rule 7). |
 | `rationale-7-jobless` | No finding is open, and a workflow ended without starting a job, so the repository's CI did not run. While it has not run, approve with nits is the best verdict (ladder rule 7). |
 | `rationale-8` | No finding is open. With nothing open, the change is approved (ladder rule 8). |
 | `signal-name-checks` | checks |

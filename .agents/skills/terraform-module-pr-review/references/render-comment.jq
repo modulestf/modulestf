@@ -553,7 +553,7 @@ def texts: {
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
   "rationale-7-undemonstrated": "No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-covered": "No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7).",
-  "rationale-7-nonhcl": "No finding is open, and every behaviour change is outside Terraform, where a plan does not show what the changed file does. With no test run of it read, approve with nits is the best verdict (ladder rule 7).",
+  "rationale-7-nonhcl": "No finding is open, and a behaviour change is outside Terraform, where a plan does not show what the changed file does. With such a change, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-jobless": "No finding is open, and a workflow ended without starting a job, so the repository's CI did not run. While it has not run, approve with nits is the best verdict (ladder rule 7).",
   "rationale-8": "No finding is open. With nothing open, the change is approved (ladder rule 8).",
   "signal-name-checks": "checks",
@@ -1310,19 +1310,20 @@ def covered_of($in; $l; $b):
        and (any($l.findings[]; .rule_id | startswith("review.") and . != "review.tool-disputed") | not)
     then $cs else [] end;
 
-# --- Changes outside Terraform (verdict.md). A change whose behaviour triggers, inert ones aside,
-# are all non-hcl-dependency is capped at approve with nits: no plan shows what the changed file
-# does and no test run of it is read. With no other rule 4 unknown, each example not planned that
-# the module profile proves runs none of the changed files leaves rule 4, whatever its reason; every
-# other example not planned stays an unknown. Covered skips take precedence.
+# --- Changes outside Terraform (verdict.md). A change with any non-hcl-dependency trigger that is not
+# inert is capped at approve with nits: no plan shows what the changed file does. When every such
+# trigger is outside Terraform alone and no other rule 4 unknown is open, each example not planned
+# that the module profile proves runs none of the changed files leaves rule 4, whatever its reason;
+# every other example not planned stays an unknown. Covered skips take precedence.
 def nonhcl_only: .category == "non-hcl-dependency" and (((.also_categories // []) - ["non-hcl-dependency"]) == []);
 def nonhcl_triggers($b): [($b // {triggers: []}).triggers[] | select(.state != "inert")];
-def nonhcl_cap($b): $b != null and $b.status == "ran" and (nonhcl_triggers($b) as $t | $t != [] and all($t[]; nonhcl_only));
+def nonhcl_cap($b): $b != null and $b.status == "ran"
+  and any(nonhcl_triggers($b)[]; .category == "non-hcl-dependency" or any((.also_categories // [])[]; . == "non-hcl-dependency"));
 def nonhcl_of($in; $l; $b; $cov):
   $in.run as $run | ($run.nonhcl // null) as $n | $run.coverage.unplanned as $u | nonhcl_triggers($b) as $t
   | if $n != null and $cov == [] and $n.head_sha == $in.host.head_sha and $in.host.merge_base != null and $n.base_sha == $in.host.merge_base
        and ($run.triage | not) and $run.plan_ran and ($run.coverage.inert | not)
-       and nonhcl_cap($b) and $b.capped == 0
+       and $b != null and $b.status == "ran" and $t != [] and all($t[]; nonhcl_only) and $b.capped == 0
        and ($l | has_unknown | not)
     then
       ([$t[].file] | unique) as $fs

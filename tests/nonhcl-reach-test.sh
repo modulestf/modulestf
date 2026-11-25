@@ -1,24 +1,46 @@
 #!/bin/bash
 # Self-check for the pull request review skill's references/nonhcl-reach.sh, the evidence of a change
 # outside Terraform (verdict.md, Changes outside Terraform), on throwaway git repositories: the
-# module profile's reach file (its grammar, the repository it names, a link) and the guard of each
-# line at the head and the merge base (every module call whose source is the module root sets the
-# argument to the literal, the same module calls at both revisions, no .tf file naming the changed
-# file, a tree of regular .tf files, a directory absent or holding a changed file), the module call
-# reader (a heredoc skipped, a block comment, an interpolated source, a non-literal value), the module
-# root prefix, a partial clone, and a negative self-check on mutated copies. No network. Needs bash,
-# git, jq and perl.
+# module profile's reach file (its grammar, a file and directory named twice, the repository it
+# names, a link, the shipped file), the example guard at the head and the merge base (every module
+# call has the module root as its source and sets the literal, at least one call, the same calls at
+# both revisions, no other module, submodule, sibling example, registry or climbing source, no .tf
+# file below the top, no file naming the changed file, no fileset call, no .tf.json, OpenTofu file,
+# link or name outside the plain charset, a directory absent or holding a changed file), the root
+# gate (every block naming the file has a count or for_each reading the variable, the same at both
+# revisions, no edited root .tf file), the reader's refusals (a heredoc that does not end, a template
+# sequence in a heredoc, a quote or a brace inside an interpolation or directive, a block comment, an
+# interpolated source, a non-literal value), the module root prefix, a partial clone, and a negative
+# self-check on mutated copies. No network. Needs bash, git, jq and perl.
 # Run: tests/nonhcl-reach-test.sh
 set -uo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd -P)"
 NR="$SRC/.agents/skills/terraform-module-pr-review/references/nonhcl-reach.sh"
+SHIPPED="$SRC/.agents/skills/terraform-module-maintainer/profiles/terraform-aws-modules/nonhcl-reach.txt"
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/nonhcl-reach-test.XXXXXX")" && pwd -P)" && [ -n "$TMP" ] || { echo "FAIL no temporary directory"; exit 1; }
 [ -n "${KEEP:-}" ] || trap 'rm -rf "$TMP"' EXIT
 fails=0
 check() { if [ "$2" = 0 ]; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
 
-CI_TF='module "lambda_function" {
+PKG_TF='locals {
+  python = "python3"
+}
+
+data "external" "archive_prepare" {
+  count = var.create && var.create_package ? 1 : 0
+
+  program = [local.python, "${path.module}/package.py", "prepare"]
+}
+
+resource "null_resource" "archive" {
+  count = var.create && var.create_package ? 1 : 0
+
+  provisioner "local-exec" {
+    command = "python3 ${path.module}/package.py build"
+  }
+}'
+EX_TF='module "lambda_function" {
   source = "../../"
 
   function_name  = "x"
@@ -26,29 +48,24 @@ CI_TF='module "lambda_function" {
   image_uri      = "${path.module}/x"
 }
 
-module "docker_build" {
-  source = "../../modules/docker-build"
-}
-
 resource "aws_cloudwatch_event_rule" "r" {
   event_pattern = <<EOF
-{ "source": ["module \"x\" {"] }
+{ "source": ["module x {"] }
 EOF
 }'
-BP_TF='module "package_dir" {
+BUILD_TF='module "package_dir" {
   source = "../../"
-
-  source_path = "${path.module}/src"
 }'
 
 # repo name [, base setup [, head setup]] -> a repository with a base and a head commit; the head
 # edits package.py and runs its setup function. Sets R, B (base) and H (head).
 repo() {
-  R="$TMP/$1"; rm -rf "$R"; mkdir -p "$R/examples/container-image" "$R/examples/build-package"
+  R="$TMP/$1"; rm -rf "$R"; mkdir -p "$R/examples/ex" "$R/examples/build"
   git -C "$R" init -q -b master
   printf 'print("a")\n' > "$R/package.py"
-  printf '%s\n' "$CI_TF" > "$R/examples/container-image/main.tf"
-  printf '%s\n' "$BP_TF" > "$R/examples/build-package/main.tf"
+  printf '%s\n' "$PKG_TF" > "$R/package.tf"
+  printf '%s\n' "$EX_TF" > "$R/examples/ex/main.tf"
+  printf '%s\n' "$BUILD_TF" > "$R/examples/build/main.tf"
   [ -z "${2-}" ] || (cd "$R" && "$2")
   git -C "$R" add -A && git -C "$R" -c user.name=t -c user.email=t@example.com commit -qm base
   B="$(git -C "$R" rev-parse HEAD)"
@@ -57,10 +74,9 @@ repo() {
   git -C "$R" add -A && git -C "$R" -c user.name=t -c user.email=t@example.com commit -qm head
   H="$(git -C "$R" rev-parse HEAD)"
 }
+LINE='not-run example/terraform-aws-lambda package.py examples/ex root-calls create_package=false gated-by var.create_package'
 REACH="$TMP/nonhcl-reach.txt"
-printf '# comment\nnot-run example/terraform-aws-lambda package.py examples/container-image root-calls create_package=false
-not-run example/terraform-aws-lambda package.py examples/build-package root-calls create_package=false
-not-run other/repo package.py examples/build-package root-calls create_package=false\n' > "$REACH"
+printf '# comment\n%s\nnot-run example/terraform-aws-lambda package.py examples/build root-calls create_package=false gated-by var.create_package\nnot-run other/repo package.py examples/build root-calls create_package=false gated-by var.create_package\n' "$LINE" > "$REACH"
 jq -n '{schema_version: 1, capped: 0, triggers: [{id: "T-001", file: "package.py", line: 1, category: "non-hcl-dependency"}]}' > "$TMP/beh.json"
 jq -n '[{filename: "package.py", status: "modified"}]' > "$TMP/files.json"
 # run [extra args] -> OUT, ST
@@ -70,85 +86,171 @@ run() {
 }
 un() { jq -c '.files[0].unreached' <<< "$OUT"; }
 none() { run "$@"; [ "$ST" = 0 ] && [ "$(un)" = '[]' ]; }
+ex() { printf '%s\n' "$1" >> examples/ex/main.tf; }
 
 t_lambda() {
   repo lambda; run
-  [ "$ST" = 0 ] && [ "$(un)" = '["examples/container-image"]' ] \
+  [ "$ST" = 0 ] && [ "$(un)" = '["examples/ex"]' ] \
     && [ "$(jq -r '.head_sha + " " + .base_sha + " " + .files[0].file' <<< "$OUT")" = "$H $B package.py" ]
 }
-t_lambda; check "the guard holds at both revisions: the example is unreached; a root call without the literal is not" $?
+t_lambda; check "both guards hold at both revisions: the example is unreached; a root call without the literal is not" $?
+t_shipped() { repo shipped; RF="$SHIPPED" run; [ "$ST" = 0 ] && [ "$(un)" = '[]' ]; }
+t_shipped; check "the shipped reach file passes the grammar" $?
 t_noreach() { repo noreach; RF="$TMP/absent.txt" none; }
 t_noreach; check "no reach file: nothing unreached" $?
-bad_reach() { # name, line -> holds when the reach file is refused whole
-  repo "$1"; printf '%s\n' "$2" > "$TMP/$1.txt"; RF="$TMP/$1.txt" run; [ "$ST" = 1 ] && [ -z "$OUT" ]
+bad_reach() { # name, line... -> holds when the reach file is refused whole
+  local n="$1"; shift; repo "$n"; printf '%s\n' "$@" > "$TMP/$n.txt"; RF="$TMP/$n.txt" run; [ "$ST" = 1 ] && [ -z "$OUT" ]
 }
-t_badreach() { bad_reach badreach 'not-run example/terraform-aws-lambda package.py examples/container-image'; }
-t_badreach; check "a reach line with no guard refuses the whole file" $?
-t_badguard() { bad_reach badguard 'not-run example/terraform-aws-lambda package.py examples/container-image root-calls create_package=var.x'; }
+t_badreach() { bad_reach badreach 'not-run example/terraform-aws-lambda package.py examples/ex root-calls create_package=false'; }
+t_badreach; check "a reach line with no root gate refuses the whole file" $?
+t_badguard() { bad_reach badguard "${LINE/create_package=false/create_package=var.x}"; }
 t_badguard; check "a guard literal outside the grammar refuses the whole file" $?
-t_climb() { bad_reach climb 'not-run example/terraform-aws-lambda package.py examples/../x root-calls create_package=false'; }
+t_badgate() { bad_reach badgate "${LINE/gated-by var.create_package/gated-by local.x}"; }
+t_badgate; check "a root gate that is no variable refuses the whole file" $?
+t_climb() { bad_reach climb "${LINE/examples\/ex/examples/../x}"; }
 t_climb; check "a reach directory that climbs out refuses the whole file" $?
+t_twice() { bad_reach twice "$LINE" "${LINE/create_package=false/create_package=true}"; }
+t_twice; check "a file and directory named twice refuse the whole file" $?
 t_link() { repo link; ln -sf "$REACH" "$TMP/link.txt"; RF="$TMP/link.txt" run; [ "$ST" = 1 ]; }
 t_link; check "a reach file that is a link is refused" $?
 t_other() { repo other; REPO=other/thing none; }
 t_other; check "a reach line of another repository clears nothing" $?
-chg_ex() { printf '# x\n' >> examples/container-image/main.tf; }
+chg_ex() { ex '# x'; }
 t_changed() {
   repo changed "" chg_ex
-  jq -n '[{filename: "package.py", status: "modified"}, {filename: "examples/container-image/main.tf", status: "modified"}]' > "$TMP/f2.json"
+  jq -n '[{filename: "package.py", status: "modified"}, {filename: "examples/ex/main.tf", status: "modified"}]' > "$TMP/f2.json"
   FILES="$TMP/f2.json" none
 }
 t_changed; check "an example that holds a changed file is not unreached" $?
-rm_ex() { rm -rf examples/container-image; }
+rm_ex() { rm -rf examples/ex; }
 t_gone() { repo gone "" rm_ex; none; }
 t_gone; check "an example absent at the head is not unreached" $?
-flip() { perl -pi -e 's/create_package = false/create_package = true/' examples/container-image/main.tf; }
+flip() { perl -pi -e 's/create_package = false/create_package = true/' examples/ex/main.tf; }
+unflip() { perl -pi -e 's/create_package = true/create_package = false/' examples/ex/main.tf; }
 t_headtrue() { repo headtrue "" flip; none; }
-t_headtrue; check "a guard that fails at the head clears nothing" $?
-unflip() { perl -pi -e 's/create_package = true/create_package = false/' examples/container-image/main.tf; }
+t_headtrue; check "an example guard that fails at the head clears nothing" $?
 t_basetrue() { repo basetrue flip unflip; none; }
-t_basetrue; check "a guard that fails at the merge base clears nothing" $?
-add_call() { printf 'module "extra" {\n  source = "../../modules/other"\n}\n' >> examples/container-image/main.tf; }
-t_newcall() { repo newcall "" add_call; none; }
+t_basetrue; check "an example guard that fails at the merge base clears nothing" $?
+add_root() { ex 'module "again" {
+  source         = "../../"
+  create_package = false
+}'; }
+t_newcall() { repo newcall "" add_root; none; }
 t_newcall; check "a module call the head adds makes the line stale" $?
-var_val() { perl -pi -e 's/create_package = false/create_package = var.create_package/' examples/container-image/main.tf; }
+call_case() { # name, source -> holds when a second call of that source makes the line stale
+  SRCX="$2"; repo "$1" add_call; none
+}
+add_call() { ex "module \"other\" {
+  source         = \"$SRCX\"
+  create_package = false
+}"; }
+t_wrappers() { call_case wrappers ../../wrappers; }
+t_wrappers; check "a call of the wrappers makes the line stale" $?
+t_submod() { call_case submod ../../modules/sub; }
+t_submod; check "a call of a submodule makes the line stale" $?
+t_sibling() { call_case sibling ../build; }
+t_sibling; check "a call of a sibling example makes the line stale" $?
+t_registry() { call_case registry terraform-aws-modules/s3-bucket/aws; }
+t_registry; check "a call of a registry module makes the line stale" $?
+t_climbsrc() { call_case climbsrc ../../../outside; }
+t_climbsrc; check "a source that climbs out of the repository makes the line stale" $?
+no_calls() { printf 'locals {\n  x = 1\n}\n' > examples/ex/main.tf; }
+t_nocall() { repo nocall no_calls; none; }
+t_nocall; check "an example with no module call proves nothing" $?
+subdir() { mkdir -p examples/ex/inner && printf 'module "i" {\n  source         = "../../"\n  create_package = false\n}\n' > examples/ex/inner/main.tf; }
+t_subdir() { repo subdir subdir; none; }
+t_subdir; check "a .tf file below the top of the example makes the line stale" $?
+var_val() { perl -pi -e 's/create_package = false/create_package = var.create_package/' examples/ex/main.tf; }
 t_var() { repo var "" var_val; none; }
 t_var; check "a value that is no literal fails the guard" $?
-interp() { perl -pi -e 's|source = "../../"$|source = "\${path.module}/../../"|' examples/container-image/main.tf; }
+interp() { perl -pi -e 's|source = "../../"$|source = "./\${path.module}/../../../"|' examples/ex/main.tf; }
 t_interp() { repo interp interp; none; }
 t_interp; check "a source that is no plain string makes the line stale" $?
-blockc() { perl -0pi -e 's|  create_package = false\n|  /*\n  create_package = false\n  */\n|' examples/container-image/main.tf; }
+blockc() { perl -0pi -e 's|  create_package = false\n|  /*\n  create_package = false\n  */\n|' examples/ex/main.tf; }
 t_blockc() { repo blockc blockc; none; }
 t_blockc; check "a block comment makes the line stale" $?
-names() { printf 'locals {\n  p = "package.py"\n}\n' >> examples/container-image/main.tf; }
-t_names() { repo names names; none; }
-t_names; check "an example that names the changed file is not unreached" $?
-json() { printf '{}\n' > examples/container-image/extra.tf.json; }
+names_tf() { ex 'locals {
+  p = "package.py"
+}'; }
+t_names() { repo names names_tf; none; }
+t_names; check "an example .tf file that names the changed file is not unreached" $?
+names_sh() { printf 'python3 ../../package.py build\n' > examples/ex/build.sh; }
+t_namessh() { repo namessh names_sh; none; }
+t_namessh; check "any example file that names the changed file is not unreached" $?
+fset() { ex 'locals {
+  srcs = fileset("../..", "*.py")
+}'; }
+t_fileset() { repo fileset fset; none; }
+t_fileset; check "an example that calls fileset makes the line stale" $?
+json() { printf '{}\n' > examples/ex/extra.tf.json; }
 t_json() { repo json json; none; }
 t_json; check "a .tf.json file in the example makes the line stale" $?
-lnk() { ln -sf main.tf examples/container-image/alias.tf; }
+tofu() { printf 'locals {}\n' > examples/ex/extra.tofu; }
+t_tofu() { repo tofu tofu; none; }
+t_tofu; check "an OpenTofu file in the example makes the line stale" $?
+lnk() { ln -sf main.tf examples/ex/alias.tf; }
 t_lnk() { repo lnk lnk; none; }
 t_lnk; check "a .tf file that is a link makes the line stale" $?
-openhd() { printf 'x = <<EOT\nopen\n' >> examples/container-image/main.tf; }
+lnkany() { ln -sf ../build examples/ex/b; }
+t_lnkany() { repo lnkany lnkany; none; }
+t_lnkany; check "any link in the example makes the line stale" $?
+oddname() { printf 'module "u" {\n  source         = "../../"\n  create_package = false\n}\n' > "examples/ex/$(printf 'e\303\251').tf"; }
+t_oddname() { repo oddname oddname; none; }
+t_oddname; check "a file name outside the plain charset makes the line stale" $?
+openhd() { ex 'x = <<EOT
+open'; }
 t_openhd() { repo openhd openhd; none; }
 t_openhd; check "a heredoc that does not end makes the line stale" $?
+hdinterp() {
+  printf '%s\n' 'module "lambda_function" {' '  source = "../../"' '  description = <<EOT' '${[for x in ["a"] : x' 'EOT' '][0]}{' '  create_package = false' 'EOT' '}' > examples/ex/main.tf
+}
+t_hdinterp() { repo hdinterp hdinterp; none; }
+t_hdinterp; check "a template sequence in a heredoc body makes the line stale" $?
+nestq() { printf '%s\n' 'locals {' '  a = "${lookup({}, "{", "x")}"' '}' 'module "hidden" {' '  source = "../../"' '}' 'locals {' '  c = "${lookup({}, "}", "x")}"' '}' > examples/ex/extra.tf; }
+t_nestq() { repo nestq nestq; none; }
+t_nestq; check "a quote inside an interpolation after a brace makes the line stale" $?
+dirq() { printf '%s\n' 'locals {' '  a = "%{ if "x" == "{" }y%{ endif }"' '}' 'module "hidden" {' '  source = "../../"' '}' 'locals {' '  c = "%{ if "x" == "}" }y%{ endif }"' '}' > examples/ex/extra.tf; }
+t_dirq() { repo dirq dirq; none; }
+t_dirq; check "a quote inside a template directive makes the line stale" $?
+ungate() { perl -0pi -e 's/  count = var.create && var.create_package \? 1 : 0\n\n  program/  program/' package.tf; }
+t_ungated() { repo ungated ungate; none; }
+t_ungated; check "a root block that names the file with no count makes the line stale" $?
+othergate() { perl -pi -e 's/var.create && var.create_package/var.create/' package.tf; }
+t_othergate() { repo othergate othergate; none; }
+t_othergate; check "a root block whose count does not read the variable makes the line stale" $?
+gate_base() { perl -pi -e 's/var.create && var.create_package \? 1 : 0/var.create_package ? 1 : 0/' package.tf; }
+t_gatediff() { repo gatediff gate_base unbase; none; }
+unbase() { printf '%s\n' "$PKG_TF" > package.tf; }
+t_gatediff; check "a root gate that differs between the merge base and the head makes the line stale" $?
+rootfs() { printf 'locals {\n  srcs = fileset(path.module, "*.py")\n}\n' > files.tf; }
+t_rootfs() { repo rootfs rootfs; none; }
+t_rootfs; check "a root block that calls fileset with no gate makes the line stale" $?
+nopkg() { printf 'locals {}\n' > package.tf; }
+t_nogate() { repo nogate nopkg; none; }
+t_nogate; check "a module root with no block naming the file proves nothing" $?
+t_rootchg() {
+  repo rootchg
+  jq -n '[{filename: "package.py", status: "modified"}, {filename: "package.tf", status: "modified"}]' > "$TMP/f3.json"
+  FILES="$TMP/f3.json" none
+}
+t_rootchg; check "a change that edits a .tf file of the module root clears nothing" $?
 to_sub() {
-  mkdir sub && mv package.py sub/
-  perl -pi -e 's|source = "../../"$|source = "../../sub"|' examples/container-image/main.tf
+  mkdir sub && mv package.py package.tf sub/
+  perl -pi -e 's|source = "../../"$|source = "../../sub"|' examples/ex/main.tf
 }
 t_prefix() {
   repo prefix to_sub
-  printf 'not-run example/terraform-aws-lambda sub/package.py examples/container-image root-calls create_package=false\n' > "$TMP/sub.txt"
-  RF="$TMP/sub.txt" run --prefix sub; [ "$ST" = 0 ] && [ "$(un)" = '["examples/container-image"]' ] && [ "$(jq -r '.files[0].file' <<< "$OUT")" = package.py ]
+  printf '%s\n' "${LINE/ package.py / sub/package.py }" > "$TMP/sub.txt"
+  RF="$TMP/sub.txt" run --prefix sub; [ "$ST" = 0 ] && [ "$(un)" = '["examples/ex"]' ] && [ "$(jq -r '.files[0].file' <<< "$OUT")" = package.py ]
 }
 t_prefix; check "under a module root prefix the reach file names repository paths and the root is the prefix" $?
-to_sub_bare() { to_sub; perl -pi -e 's/^  create_package = false\n//' examples/container-image/main.tf; }
-t_prefixguard() {
-  repo prefixguard to_sub_bare
-  printf 'not-run example/terraform-aws-lambda sub/package.py examples/container-image root-calls create_package=false\n' > "$TMP/sub.txt"
+to_sub_root() { to_sub; perl -pi -e 's|source = "../../sub"$|source = "../../"|' examples/ex/main.tf; }
+t_prefixroot() {
+  repo prefixroot to_sub_root
+  printf '%s\n' "${LINE/ package.py / sub/package.py }" > "$TMP/sub.txt"
   RF="$TMP/sub.txt" none --prefix sub
 }
-t_prefixguard; check "under a prefix a call of the module root without the literal fails the guard" $?
+t_prefixroot; check "under a prefix a call of the repository root is no call of the module root" $?
 t_partial() { repo partial; git -C "$R" config extensions.partialclone origin; run; [ "$ST" = 1 ] && [ -z "$OUT" ]; }
 t_partial; check "a partial clone is refused" $?
 t_badsha() { repo badsha; OUT="$(bash "$NR" --git "$R" --head HEAD --base "$B" --repo a/b --behaviour "$TMP/beh.json" --files "$TMP/files.json")"; [ $? = 1 ] && [ -z "$OUT" ]; }
@@ -164,23 +266,37 @@ mutate() { # name, perl substitution, case function
   NR="$keep"; fails="$before"
   check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
-mutate "the guard not read at the head" 's/hc="\$\(guard_at "\$head"/hc="\$(guard_at "\$base"/' t_headtrue
-mutate "the guard not read at the merge base" 's/bc="\$\(guard_at "\$base" "\$md" "\$r" "\$ma"\)" \|\| continue/bc="\$hc"/' t_basetrue
+mutate "the example guard not read at the head" 's/hc="\$\(guard_at "\$head"/hc="\$(guard_at "\$base"/' t_headtrue
+mutate "the example guard not read at the merge base" 's/bc="\$\(guard_at "\$base" "\$md" "\$r" "\$ma"\)" \|\| continue/bc="\$hc"/' t_basetrue
 mutate "a new module call not compared" 's/\[ "\$hc" = "\$bc" \] \|\| continue/:/' t_newcall
-mutate "the literal not compared" 's/ \|\| \[ "\$val" = "\$want" \] \|\| return 1/ || true/' t_headtrue
+mutate "the literal not compared" 's/ && \[ "\$val" = "\$want" \] \|\| return 1/ || return 1/' t_headtrue
+mutate "a call of another module taken" 's/\[ "\$\(resolve "\$d" "\$src"\)" = "\$root" \] && //' t_wrappers
+mutate "an example with no module call taken" 's/\[ -n "\$list" \] \|\| return 1\n  printf .%s. "\$list" \| sort\n\}\n# The root gate/printf "%s" "\$list" | sort\n}\n# The root gate/' t_nocall
+mutate "a .tf file below the top taken" 's/ \*\/\*\.tf\) return 1 ;;//' t_subdir
 mutate "a non-literal value taken" 's/val = \(v ~ \/\^\(false\|true\|null\|\[0-9\]\+\)\$\/\) \? v : "\?"/val = v; sub(\/^var\\..*\/, "false", val)/' t_var
 mutate "the changed directory guard dropped" 's/index\(\$0, d\) == 1 \{ f = 1 \}/0 { f = 1 }/' t_changed
 mutate "the repository of a reach line not compared" 's/\[ "\$r" != "\$repo" \] \|\| maps=/maps=/' t_other
-mutate "a malformed reach line skipped" 's/\[\[ "\$\{ga-\}" =~ (\S+) \]\] \|\| die/[[ "\${ga-}" =~ $1 ]] || continue/' t_badreach
+mutate "a malformed reach line skipped" 's/\[\[ "\$\{bv-\}" =~ (\S+) \]\] \|\| die/[[ "\${bv-}" =~ $1 ]] || continue/' t_badreach
+mutate "a file and directory named twice taken" 's/case "\$seen" in \*"\|\$r \$f \$d\|"\*\) die ;; esac//' t_twice
 mutate "a reach link followed" 's/ && \[ ! -L "\$reach" \]//' t_link
-mutate "a name of the changed file not read" 's/! printf .%s\\n. "\$t" \| grep -Fq -- "\$\{f##\*\/\}" \|\| return 1/:/' t_names
-mutate "a .tf.json file taken" 's/\*\.tf\.json\) return 1 ;; //' t_json
-mutate "a linked .tf file taken" 's/\[ "\$mode" = 100644 \] && //' t_lnk
+mutate "a name of the changed file in another example file not read" 's/    ! printf .%s\\n. "\$t" \| grep -Fq -- "\$b" \|\| return 1\n    case "\$path" in \*\.tf\) ;; \*\) continue ;; esac/    case "\$path" in *.tf) ;; *) continue ;; esac/' t_namessh
+mutate "an example fileset taken" 's/    ! printf .%s\\n. "\$t" \| grep -Eq .fileset\[\[:space:\]\]\*\\\(. \|\| return 1\n//' t_fileset
+mutate "a .tf.json file taken" 's/case "\$path" in \*\.tf\.json \| \*\.tofu \| \*\.tofu\.json\) return 1 ;; \*\/\*\.tf\) return 1 ;; esac/case "\$path" in *.tofu | *.tofu.json) return 1 ;; *\/*.tf) return 1 ;; esac/' t_json
+mutate "an OpenTofu file taken" 's/case "\$path" in \*\.tf\.json \| \*\.tofu \| \*\.tofu\.json\) return 1 ;;/case "\$path" in *.tf.json) return 1 ;;/' t_tofu
+mutate "a link taken" 's/\[ "\$mode" = 100644 \] \|\| \[ "\$mode" = 100755 \] \|\| return 1/:/' t_lnkany
+mutate "a name outside the charset taken" 's/    plain "\$path" \|\| return 1\n//' t_oddname
 mutate "a block comment taken" 's/if \(code ~ \/\\\/\\\*\/\) bad\(\)//' t_blockc
-mutate "an interpolated source taken" 's/=\[\[:space:\]\]\*"\[\^"\$\]\*"/=[[:space:]]*"[^"]*"/' t_interp
-mutate "an open heredoc taken" 's/ \|\| tag != ""\)\) print "stale"/)) print "stale"/' t_openhd
-mutate "a heredoc read as code" 's/tag != "" \{ t = line;/0 { t = line;/' t_lambda
-mutate "the module root taken as the repository root under a prefix" 's/root="\$\{prefix:-\.\}"/root="."/' t_prefixguard
+mutate "an interpolated source taken" 's/=\[\[:space:\]\]\*"\[\^"\$%\\\\\]\*"/=[[:space:]]*"[^"]*"/' t_interp
+mutate "an open heredoc taken" 's/ \|\| inblk \|\| tag != ""\)\) print "stale"/ || inblk)) print "stale"/' t_openhd
+mutate "a template sequence in a heredoc body taken" 's/      if \(line ~ \/\[\$%\]\\\{\/\) bad\(\)\n//' t_hdinterp
+mutate "a quote inside a template sequence taken" 's/if \(c == "\\"" \|\| \(c == "<" && n2 == "<"\)\) bad\(\)/if (c == "\\"") { lvl = 0; q = 0; continue }/' t_nestq
+mutate "a template directive read as text" 's/if \(\(c == "\$" \|\| c == "%"\) && n2 == "\{"\) \{ lvl = 1; i\+\+; continue \}/if (c == "\$" \&\& n2 == "{") { lvl = 1; i++; continue }/' t_dirq
+mutate "the root gate not read at the head" 's/hg="\$\(gate_at "\$head"/hg="\$(gate_at "\$base"/' t_gatediff
+mutate "the root gate not compared" 's/\[ "\$hg" = "\$bg" \] \|\| continue/:/' t_gatediff
+mutate "an ungated root block taken" 's/printf .%s\\n. "\$gl" \| grep -Eq "\^\(count\|for_each\)\[\[:space:\]\]\*=\.\*\(\^\|\[\^A-Za-z0-9_\.\]\)var\\\.\$v\(\[\^A-Za-z0-9_\]\|\\\$\)" \|\| return 1/:/' t_ungated
+mutate "a module root with no naming block taken" 's/\[ -n "\$list" \] \|\| return 1\n  printf .%s. "\$list" \| sort\n\}\n\n# A change/printf "%s" "\$list" | sort\n}\n\n# A change/' t_nogate
+mutate "an edited root .tf file ignored" 's/\|\| root_changed=true/|| :/' t_rootchg
+mutate "the module root taken as the repository root under a prefix" 's/root="\$\{prefix:-\.\}" ents mode type path t r name/root="." ents mode type path t r name/' t_prefixroot
 mutate "a partial clone read" 's/\[ -z "\$\(g config --get extensions\.partialclone 2> \/dev\/null\)" \] \|\| die/:/' t_partial
 
 echo

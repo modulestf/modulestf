@@ -1460,8 +1460,8 @@ t_tests_ci; check "tests: beside a check run, the untested trigger is left to th
 refused "a tests result outside the grammar" "$NONE" "" "" "$(trun bad '{dir: "functions", result: "passed: all"}')"
 refused "a tests key with another field" "$NONE" "" "" "$(trun badk '{dir: "functions", result: "passed 1", log: "x"}')"
 refused "a tests directory that is not a plain path" "$NONE" "" "" "$(trun badd '{dir: "a b\nc", result: "passed 1"}')"
-# Changes outside Terraform (verdict.md): a change whose only behaviour triggers are outside HCL is
-# capped at approve with nits, every example planned or not; an example not planned leaves rule 4
+# Changes outside Terraform (verdict.md): a change with any behaviour trigger outside HCL is capped
+# at approve with nits, every example planned or not; an example not planned leaves rule 4
 # only when the module profile proves it runs none of the changed files, whatever its reason, and
 # every other example not planned stays an unknown.
 NHU='[{dir: "examples/container-image", reason: "exception: needs a Docker daemon"}, {dir: "examples/build-package", reason: "exception: needs a Docker daemon"}]'
@@ -1524,9 +1524,9 @@ t_nh_twofiles; check "outside Terraform: an example cleared for one changed file
 t_nh_hclcap() {
   render "$NONE" "" "$NHC" "$(nhrun hclcap '[]' '.coverage = {class: "complete", inert: false, unplanned: []} | del(.nonhcl)
     | .behaviour.triggers += [{id: "T-002", file: "main.tf", line: 2, category: "literal-argument-change", state: "verified"}]')"
-  [ "$(verdict)" = "approve APPROVE" ]
+  [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$NHR7" "$O/comment.md"
 }
-t_nh_hclcap; check "outside Terraform: a verified Terraform trigger beside it lifts the cap" $?
+t_nh_hclcap; check "outside Terraform: a verified Terraform trigger beside it keeps the cap" $?
 refused "a nonhcl key with another field" "$NONE" "" "" "$(nhrun badk '[]' '.nonhcl.note = "x"')"
 refused "a nonhcl entry with test evidence" "$NONE" "" "" "$(nhrun badt '[]' '.nonhcl.files[0].tested_by = ["tests/test_x.py"]')"
 refused "a nonhcl example that climbs out" "$NONE" "" "" "$(nhrun badp '["../x"]')"
@@ -1537,6 +1537,7 @@ mutate "the outside-Terraform evidence not bound to the merge base" 's/ and \$n\
 mutate "the outside-Terraform clearing beside a Terraform trigger" 's/all\(\$t\[\]; nonhcl_only\)/true/' t_nh_merged
 mutate "a changed file with no evidence entry ignored" 's/if \(\$e \| length\) != \(\$fs \| length\) then \[\]/if false then []/' t_nh_nofile
 mutate "the profile read for one changed file only" 's/select\(all\(\$e\[\]; any/select(any(\$e[]; any/' t_nh_twofiles
+mutate "the cap read only when every trigger is outside Terraform" 's/and any\(nonhcl_triggers\(\$b\)\[\];/and all(nonhcl_triggers(\$b)[];/' t_nh_hclcap
 mutate "the outside-Terraform rationale not used" 's/and \$in\.nonhcl_cap then tx\("rationale-7-nonhcl"\)/and false then tx("rationale-7-nonhcl")/' t_nh_all
 # Job-less workflow runs: CI that never ran. Ended action_required or failure with every read
 # complete and nothing else open, the signal is jobless: approve with nits at best, one line each,
