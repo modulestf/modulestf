@@ -31,7 +31,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `compat.break-unexplained` | none | - | - | never | llm | config-semantic | any-file-in-area | yes | root | tool-findings, candidates, interface-diff | MEDIUM | - | - |
 | `compat.claim-contradicts-analysis` | none | - | - | never | llm | config-semantic | any-file-in-area | yes | root | tool-findings, candidates, interface-diff | HIGH, MEDIUM, LOW | - | - |
 | `compat.default-changed` | page | documented defaults, prose-only notes: an argument whose change replaces the resource | The change adds an input whose default sets an argument of the type to a value the base did not send, or changes an existing input's default that the title or an upgrade note declares. | never | candidate | config-semantic | touched-expression | no | root, submodule | candidates, interface-diff | CRITICAL, HIGH, MEDIUM, LOW | lead | mid |
-| `compat.expression-behaviour-changed` | none | - | - | never | llm | config-semantic | touched-expression | no | root, submodule | interface-diff | CRITICAL, HIGH, LOW | - | - |
+| `compat.expression-behaviour-changed` | page | prose-only notes: an argument whose change replaces the resource | The change adds a name to a `lifecycle` `ignore_changes` list of a block of the type. | never | llm | config-semantic | touched-expression | no | root, submodule | interface-diff | CRITICAL, HIGH, LOW | - | - |
 | `compat.generated-policy-narrowed` | none | - | - | never | candidate | config-semantic | touched-block | no | root, submodule | candidates | CRITICAL, HIGH | lead | mid |
 | `compat.provider-floor-raised` | schema | - | - | never | candidate | config-semantic | touched-expression | no | root, submodule | candidates, interface-diff, schema-coverage | LOW | lead | mid |
 | `compat.resource-address-changed` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule | candidates, interface-diff | CRITICAL, HIGH | lead | mid |
@@ -45,12 +45,12 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `coverage.default-for-required-argument` | page | documented defaults | The change adds or changes a default of an input that backs an argument of the type. | never | llm | config-semantic | touched-expression | no | root, submodule | schema-coverage, interface-diff | HIGH | - | - |
 | `coverage.deprecated-argument` | schema | - | - | never | candidate | config-semantic | touched-expression | no | root, submodule | candidates, schema-coverage | HIGH | lead | mid |
 | `coverage.enum-value-unknown` | page | allowed values | The change sets a literal on an argument of the type, in the module or an example. | never | llm | config-semantic | touched-expression | no | root, submodule, example | schema-coverage | LOW | - | - |
-| `coverage.mutual-exclusion-unguarded` | page | conflicts | The change adds or edits a block of the type. | never | llm | config-semantic | touched-block | no | root, submodule | schema-coverage | HIGH | - | - |
+| `coverage.mutual-exclusion-unguarded` | page | conflicts | The change adds or edits a block of the type. | never | llm | config-semantic | touched-block | no | root, submodule | schema-coverage | HIGH, LOW | - | - |
 | `coverage.optional-argument-unexposed` | schema | documented omissions | The change adds a `resource` block of the type. | never | candidate | config-semantic | newly-introduced | no | root, submodule | candidates, schema-coverage, interface-diff | MEDIUM | lead | lead |
 | `coverage.required-argument-unreachable` | schema | - | - | never | candidate | config-semantic | touched-block | no | root, submodule | candidates, schema-coverage, interface-diff | HIGH | lead | mid |
 | `coverage.unknown-argument` | schema | validator limits | The change adds or edits a block of the type that repeats a nested block. | never | candidate | config-semantic | touched-block | no | root, submodule | candidates, schema-coverage | CRITICAL | lead | mid |
 | `examples.argument-undemonstrated` | none | - | - | never | llm | config-semantic | newly-introduced | yes | root, submodule | interface-diff | LOW | - | - |
-| `examples.custom-input-required` | none | - | - | never | llm | config-semantic | any-file-in-area | yes | example | interface-diff | HIGH | - | - |
+| `examples.custom-input-required` | none | - | - | never | llm | config-semantic | any-file-in-area | yes | example | interface-diff | HIGH, LOW | - | - |
 | `examples.disabled-call-missing` | none | - | - | never | candidate | config-semantic | any-file-in-area | no | example | candidates | MEDIUM, LOW | lead | lead |
 | `examples.docs-incomplete` | none | - | - | never | llm | path | any-file-in-area | no | example | file-index | LOW | - | - |
 | `examples.example-broken` | schema | allowed values, one-ofs | An example the change adds or edits, or one of the version bump only examples, has a block of the type. | never | llm | config-semantic | any-file-in-area | yes | example | schema-coverage, interface-diff | HIGH | - | - |
@@ -69,7 +69,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `profile.owner-identifier` | none | - | - | never | llm | config-semantic | any-file-in-area | no | root, submodule, example | none | MEDIUM | - | - |
 | `profile.provider-meta-missing` | none | - | - | never | llm | config-semantic | touched-block | no | root, submodule | none | MEDIUM | - | - |
 | `profile.putin-khuylo-missing` | none | - | - | never | tool | config-semantic | touched-block | no | root | tool-findings | MEDIUM | - | - |
-| `profile.region-not-allowed` | none | - | - | file | candidate | config-semantic | touched-expression | no | root, submodule, example | candidates | HIGH | lead | lead |
+| `profile.region-not-allowed` | none | - | - | file | candidate | config-semantic | touched-expression | no | root, submodule, example | candidates | HIGH, LOW | lead | lead |
 | `profile.release-config-changed` | none | - | - | never | llm | path | touched-block | no | root | file-index | HIGH | - | - |
 | `profile.required-file-missing` | none | - | - | never | tool | path | newly-introduced | no | root, submodule, example | tool-findings, file-index | MEDIUM | - | - |
 | `profile.template-drift` | none | - | - | never | candidate | path | touched-block | no | root | candidates, file-index | MEDIUM, LOW | lead | lead |
@@ -120,7 +120,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `structure.sibling-block-asymmetry` | schema | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | schema-coverage | HIGH, LOW | - | - |
 | `structure.suppression-unexplained` | none | - | - | file | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
 | `structure.validation-message-uninformative` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | LOW | - | - |
-| `structure.validation-missing` | none | - | - | never | llm | config-semantic | touched-block | no | root, submodule | interface-diff | MEDIUM | - | - |
+| `structure.validation-missing` | page | allowed values | The change adds or edits an input the module branches on whose value also reaches an argument of the type. | never | llm | config-semantic | touched-block | no | root, submodule | interface-diff | MEDIUM, LOW | - | - |
 | `structure.validation-overreaching` | none | - | - | never | llm | config-semantic | newly-introduced | no | root, submodule | none | MEDIUM | - | - |
 | `structure.variable-untyped` | none | - | - | file | candidate | config-semantic | newly-introduced | no | root, submodule | candidates, interface-diff | MEDIUM | lead | lead |
 | `structure.version-floor-understated` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule, example | candidates, interface-diff | CRITICAL, MEDIUM | lead | lead |

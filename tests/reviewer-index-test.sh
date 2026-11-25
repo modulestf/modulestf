@@ -260,6 +260,41 @@ references/large-changes.md|A type of a called module the review cannot read is 
 references/large-changes.md|a module call no such rule reaches is not listed and is no unknown
 references/engine/check-a-compatibility.md|HIGH wins and this LOW does not apply
 references/engine/check-a-compatibility.md|widens access, or blocks or restricts what callers could do before: those keep the bands above
+references/check-g-behaviour.md|The page must be read in this review; with no page read for the type, the band does not hold.
+references/check-g-behaviour.md|none may be an argument the type's page marks as forcing a new resource
+references/check-g-behaviour.md|a credential, a security or data protection control (a policy, a principal, a password, a token, a key or encryption setting, public access, deletion protection, backup, retention, versioning or logging), or one that sets a count, a size, failover, network placement or an identity
+references/check-g-behaviour.md|so a create still applies the caller's value
+references/check-g-behaviour.md|A new list, `all`, or any other added name takes the other bands as written.
+references/check-g-behaviour.md|the change edits nothing else in the block
+references/check-g-behaviour.md|list that exists at the base, in a block with the same address, `count` and `for_each` at both revisions
+references/check-g-behaviour.md|Each added name shares its stem with a name the list already ignores at the base
+references/check-g-behaviour.md|A payload the resource deploys never takes this band
+references/check-g-behaviour.md|none of the ignored-input, documented-intent and ignore-list bands below holds
+references/check-g-behaviour.md|except the ignore-list band below, which reads the type's page
+references/check-b-coverage.md|takes the caller's value unchanged, with no default but null and no fallback
+references/check-b-coverage.md|and none grants or restricts access or is a security control
+references/check-b-coverage.md|or one argument required or not allowed when another is set or unset
+references/check-b-coverage.md|A conflicting pair in any wording, exactly one of and at least one of included, stays HIGH
+references/check-b-coverage.md|and so does a conditional rule where the module supplies a side
+references/check-b-coverage.md|The summary names the rule as the page states it and that the provider or the service rejects such a call.
+references/check-c-structure.md|an argument of a block planned on every path where the module tests it
+references/check-c-structure.md|a page this review read shows the provider checks that argument at plan
+references/check-c-structure.md|that holds every value the module tests
+references/check-c-structure.md|Examples, common values, a list in prose outside the entry or a check the page places at apply do not count.
+references/check-c-structure.md|With no page read for the type, or for a commented-out block, it stays MEDIUM.
+references/check-c-structure.md|a commented-out block stays MEDIUM
+references/check-d-examples.md|when the change adds the example
+references/check-d-examples.md|counts as one the base had and stays HIGH
+references/engine/check-e-profile.md|when the literal is in a file under `examples/` that is not a `terraform test` file (`*.tftest.hcl`), in an example no `*.tftest.hcl` file uses as a module source
+references/engine/check-e-profile.md|The root module, submodules, `tests/` and every `*.tftest.hcl` file keep HIGH
+references/judgment/prefix.md|a conflicting pair in any wording stays HIGH
+references/judgment/prefix.md|LOW for `structure.validation-missing` only as
+references/judgment/prefix.md|counts as one the base had and stays HIGH
+references/judgment/prefix.md|LOW under `examples/` outside a `*.tftest.hcl` file, in an example no such file sources, HIGH elsewhere.
+references/check-g-behaviour.md|one is the other followed by `_` and more
+references/check-g-behaviour.md|a task or container definition, an image, user data, a secret or parameter value, a policy or a configuration document
+references/check-g-behaviour.md|No version attribute (`version`, or a name ending `_version`), `name` or `name_prefix` takes this band, whatever stem it shares.
+references/judgment/prefix.md|LOW for a conditional rule only as
 GUARDS
 }
 
@@ -457,6 +492,41 @@ calibration guard 18 dropped~calibration guard~references/large-changes.md~s#A t
 calibration guard 19 dropped~calibration guard~references/large-changes.md~s#a module call no such rule reaches is not listed and is no unknown#dropped#g
 calibration guard 20 dropped~calibration guard~references/engine/check-a-compatibility.md~s#HIGH wins and this LOW does not apply#dropped#g
 calibration guard 21 dropped~calibration guard~references/engine/check-a-compatibility.md~s#widens access, or blocks or restricts what callers could do before: those keep the bands above#dropped#g
+calibration guard 22 dropped~calibration guard~references/check-g-behaviour.md~s#The page must be read in this review; with no page read for the type, the band does not hold\.#dropped#g
+calibration guard 23 dropped~calibration guard~references/check-g-behaviour.md~s#none may be an argument the type's page marks as forcing a new resource#dropped#g
+calibration guard 24 dropped~calibration guard~references/check-g-behaviour.md~s#a credential, a security or data protection control (a policy, a principal, a password, a token, a key or encryption setting, public access, deletion protection, backup, retention, versioning or logging), or one that sets a count, a size, failover, network placement or an identity#dropped#g
+calibration guard 25 dropped~calibration guard~references/check-g-behaviour.md~s#so a create still applies the caller's value#dropped#g
+calibration guard 26 dropped~calibration guard~references/check-g-behaviour.md~s#A new list, `all`, or any other added name takes the other bands as written\.#dropped#g
+calibration guard 27 dropped~calibration guard~references/check-g-behaviour.md~s#the change edits nothing else in the block#dropped#g
+calibration guard 28 dropped~calibration guard~references/check-g-behaviour.md~s#list that exists at the base, in a block with the same address, `count` and `for_each` at both revisions#dropped#g
+calibration guard 29 dropped~calibration guard~references/check-g-behaviour.md~s#Each added name shares its stem with a name the list already ignores at the base#dropped#g
+calibration guard 30 dropped~calibration guard~references/check-g-behaviour.md~s#A payload the resource deploys never takes this band#dropped#g
+calibration guard 31 dropped~calibration guard~references/check-g-behaviour.md~s#none of the ignored-input, documented-intent and ignore-list bands below holds#dropped#g
+calibration guard 32 dropped~calibration guard~references/check-g-behaviour.md~s#except the ignore-list band below, which reads the type's page#dropped#g
+calibration guard 33 dropped~calibration guard~references/check-b-coverage.md~s#takes the caller's value unchanged, with no default but null and no fallback#dropped#g
+calibration guard 34 dropped~calibration guard~references/check-b-coverage.md~s#and none grants or restricts access or is a security control#dropped#g
+calibration guard 35 dropped~calibration guard~references/check-b-coverage.md~s#or one argument required or not allowed when another is set or unset#dropped#g
+calibration guard 36 dropped~calibration guard~references/check-b-coverage.md~s#A conflicting pair in any wording, exactly one of and at least one of included, stays HIGH#dropped#g
+calibration guard 37 dropped~calibration guard~references/check-b-coverage.md~s#and so does a conditional rule where the module supplies a side#dropped#g
+calibration guard 38 dropped~calibration guard~references/check-b-coverage.md~s#The summary names the rule as the page states it and that the provider or the service rejects such a call\.#dropped#g
+calibration guard 39 dropped~calibration guard~references/check-c-structure.md~s#an argument of a block planned on every path where the module tests it#dropped#g
+calibration guard 40 dropped~calibration guard~references/check-c-structure.md~s#a page this review read shows the provider checks that argument at plan#dropped#g
+calibration guard 41 dropped~calibration guard~references/check-c-structure.md~s#that holds every value the module tests#dropped#g
+calibration guard 42 dropped~calibration guard~references/check-c-structure.md~s#Examples, common values, a list in prose outside the entry or a check the page places at apply do not count\.#dropped#g
+calibration guard 43 dropped~calibration guard~references/check-c-structure.md~s#With no page read for the type, or for a commented-out block, it stays MEDIUM\.#dropped#g
+calibration guard 44 dropped~calibration guard~references/check-c-structure.md~s#a commented-out block stays MEDIUM#dropped#g
+calibration guard 45 dropped~calibration guard~references/check-d-examples.md~s#when the change adds the example#dropped#g
+calibration guard 46 dropped~calibration guard~references/check-d-examples.md~s#counts as one the base had and stays HIGH#dropped#g
+calibration guard 47 dropped~calibration guard~references/engine/check-e-profile.md~s#when the literal is in a file under `examples/` that is not a `terraform test` file (`\*\.tftest\.hcl`), in an example no `\*\.tftest\.hcl` file uses as a module source#dropped#g
+calibration guard 48 dropped~calibration guard~references/engine/check-e-profile.md~s#The root module, submodules, `tests/` and every `\*\.tftest\.hcl` file keep HIGH#dropped#g
+calibration guard 49 dropped~calibration guard~references/judgment/prefix.md~s#a conflicting pair in any wording stays HIGH#dropped#g
+calibration guard 50 dropped~calibration guard~references/judgment/prefix.md~s#LOW for `structure\.validation-missing` only as#dropped#g
+calibration guard 51 dropped~calibration guard~references/judgment/prefix.md~s#counts as one the base had and stays HIGH#dropped#g
+calibration guard 52 dropped~calibration guard~references/judgment/prefix.md~s#LOW under `examples/` outside a `\*\.tftest\.hcl` file, in an example no such file sources, HIGH elsewhere\.#dropped#g
+calibration guard 53 dropped~calibration guard~references/check-g-behaviour.md~s#one is the other followed by `_` and more#dropped#g
+calibration guard 54 dropped~calibration guard~references/check-g-behaviour.md~s#a task or container definition, an image, user data, a secret or parameter value, a policy or a configuration document#dropped#g
+calibration guard 55 dropped~calibration guard~references/check-g-behaviour.md~s#No version attribute (`version`, or a name ending `_version`), `name` or `name_prefix` takes this band, whatever stem it shares\.#dropped#g
+calibration guard 56 dropped~calibration guard~references/judgment/prefix.md~s#LOW for a conditional rule only as#dropped#g
 EOF
 
 echo
