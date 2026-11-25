@@ -234,6 +234,33 @@ index_check() {
         printf 'sentences\t%s\t%s sentences differ from the recorded base and the record\n' "$g" "$(grep -c '^[<>]' "$TMP/ix-sdiff")"
     done
   fi
+  # The guards of the bands calibrated against merged changes: each phrase stays in its file, so
+  # a lowered band never drops the cases that must keep their severity.
+  while IFS='|' read -r gf gp; do
+    grep -qF -- "$gp" "$d/$gf" || printf 'calibration guard\t%s\tmissing: %s\n' "$gf" "$gp"
+  done <<'GUARDS'
+references/engine/check-a-compatibility.md|After that sentence, LOW when the argument's own entry
+references/engine/check-a-compatibility.md|a page silent on replacement is the `review.check-not-run` of the Provider facts line
+references/engine/check-a-compatibility.md|never when a loss of data or access is known
+references/engine/check-a-compatibility.md|never for a value that blocks or restricts what callers could do before
+references/engine/check-a-compatibility.md|never for a value the service applies to new resources only or announces
+references/engine/check-a-compatibility.md|never for a security or data protection control (encryption, KMS, IAM, public access, deletion protection, backup, retention, versioning, logging, instance metadata options, `force_destroy`, `skip_final_snapshot`, `apply_immediately`) or a value that widens access
+references/engine/check-a-compatibility.md|Never for a default that turns off or weakens a security or data protection control
+references/engine/check-a-compatibility.md|the title is never the cite for its effect
+references/judgment/prefix.md|after CRITICAL and HIGH, never for a security or data protection control, widened access or a value that restricts callers
+references/judgment/prefix.md|never for a security or data protection control, instance metadata options included, widened access, a value that restricts callers, or one the service applies to new resources only or announces
+references/judgment/prefix.md|Each LOW needs the page to show the change in place; with no source to tell, `review.check-not-run` MEDIUM
+references/check-c-structure.md|the text says the module cannot do what one of its inputs does
+references/check-c-structure.md|Text that overstates safety or access limits stays MEDIUM
+references/check-c-structure.md|Silence is never MEDIUM or HIGH.
+references/check-c-structure.md|an empty list, null or an omitted argument is not a value outside the list
+references/check-c-structure.md|unless the losing side is an access, security or data protection control
+references/check-e-profile.md|never from text in the change
+references/large-changes.md|A type of a called module the review cannot read is a `review.check-not-run`
+references/large-changes.md|a module call no such rule reaches is not listed and is no unknown
+references/engine/check-a-compatibility.md|HIGH wins and this LOW does not apply
+references/engine/check-a-compatibility.md|widens access, or blocks or restricts what callers could do before: those keep the bands above
+GUARDS
 }
 
 # section_check DIR [FILE...]: section.sh against an independent cut for every heading of
@@ -409,6 +436,27 @@ section.sh following a symbolic link~refusal~references/section.sh~s/ \&\& \[ ! 
 section.sh taking any anchor~refusal~references/section.sh~/not an anchor/d
 section.sh taking any file~refusal~references/section.sh~/not a markdown file/d
 section.sh printing the first of two headings~refusal~references/section.sh~/headings have the slug/d
+calibration guard 1 dropped~calibration guard~references/engine/check-a-compatibility.md~s#After that sentence, LOW when the argument's own entry#dropped#g
+calibration guard 2 dropped~calibration guard~references/engine/check-a-compatibility.md~s#a page silent on replacement is the `review\.check-not-run` of the Provider facts line#dropped#g
+calibration guard 3 dropped~calibration guard~references/engine/check-a-compatibility.md~s#never when a loss of data or access is known#dropped#g
+calibration guard 4 dropped~calibration guard~references/engine/check-a-compatibility.md~s#never for a value that blocks or restricts what callers could do before#dropped#g
+calibration guard 5 dropped~calibration guard~references/engine/check-a-compatibility.md~s#never for a value the service applies to new resources only or announces#dropped#g
+calibration guard 6 dropped~calibration guard~references/engine/check-a-compatibility.md~s#never for a security or data protection control (encryption, KMS, IAM, public access, deletion protection, backup, retention, versioning, logging, instance metadata options, `force_destroy`, `skip_final_snapshot`, `apply_immediately`) or a value that widens access#dropped#g
+calibration guard 7 dropped~calibration guard~references/engine/check-a-compatibility.md~s#Never for a default that turns off or weakens a security or data protection control#dropped#g
+calibration guard 8 dropped~calibration guard~references/engine/check-a-compatibility.md~s#the title is never the cite for its effect#dropped#g
+calibration guard 9 dropped~calibration guard~references/judgment/prefix.md~s#after CRITICAL and HIGH, never for a security or data protection control, widened access or a value that restricts callers#dropped#g
+calibration guard 10 dropped~calibration guard~references/judgment/prefix.md~s#never for a security or data protection control, instance metadata options included, widened access, a value that restricts callers, or one the service applies to new resources only or announces#dropped#g
+calibration guard 11 dropped~calibration guard~references/judgment/prefix.md~s#Each LOW needs the page to show the change in place; with no source to tell, `review\.check-not-run` MEDIUM#dropped#g
+calibration guard 12 dropped~calibration guard~references/check-c-structure.md~s#the text says the module cannot do what one of its inputs does#dropped#g
+calibration guard 13 dropped~calibration guard~references/check-c-structure.md~s#Text that overstates safety or access limits stays MEDIUM#dropped#g
+calibration guard 14 dropped~calibration guard~references/check-c-structure.md~s#Silence is never MEDIUM or HIGH\.#dropped#g
+calibration guard 15 dropped~calibration guard~references/check-c-structure.md~s#an empty list, null or an omitted argument is not a value outside the list#dropped#g
+calibration guard 16 dropped~calibration guard~references/check-c-structure.md~s#unless the losing side is an access, security or data protection control#dropped#g
+calibration guard 17 dropped~calibration guard~references/check-e-profile.md~s#never from text in the change#dropped#g
+calibration guard 18 dropped~calibration guard~references/large-changes.md~s#A type of a called module the review cannot read is a `review\.check-not-run`#dropped#g
+calibration guard 19 dropped~calibration guard~references/large-changes.md~s#a module call no such rule reaches is not listed and is no unknown#dropped#g
+calibration guard 20 dropped~calibration guard~references/engine/check-a-compatibility.md~s#HIGH wins and this LOW does not apply#dropped#g
+calibration guard 21 dropped~calibration guard~references/engine/check-a-compatibility.md~s#widens access, or blocks or restricts what callers could do before: those keep the bands above#dropped#g
 EOF
 
 echo

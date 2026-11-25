@@ -1052,6 +1052,10 @@ cmd_handover() {
       sed 's/^schema pass: latest_not_mirrored /Latest not mirrored: /' "$RUN/state/schema-lnm.txt"
     [ "$nm" = true ] || printf 'Diff: %s\n' "$out/change.diff"
     [ -z "$mbl" ] || printf 'Merge base: %s\n' "$mbl"
+    # The base repository as its own fact line, from host.json in the grammar valid_host holds it to,
+    # with no name of dots: Check E reads the repository's own wrapper address from it.
+    jq -r 'select(.repo | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
+      and (test("/[.]+$") | not)) | "Base repository: \(.repo)"' "$RUN/host/host.json" 2> /dev/null || true
     # The host's wrapper evidence as its own fact lines, read as eval reads it: every line in the
     # grammar of behaviour-pass.sh wrappers and at most 256 of them, or no line at all.
     if [ "$TRIAGE" = false ] && [ -f "$RUN/behaviour/wrappers.txt" ] && [ "$(wc -l < "$RUN/behaviour/wrappers.txt")" -le 256 ] &&

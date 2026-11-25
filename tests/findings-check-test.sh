@@ -235,7 +235,8 @@ grep -q '^note F-001 severity: LOW is outside' <<< "$(said "$(listf low-vr '.[0]
 ! grep -qi 'rule name is wrong' "$REV/findings-schema.md" "$SC"; check "no text says the rule name is wrong" $?
 
 # The calibrated bands of the structure rules the maintainers merged over: a rename or an optional
-# field with a working default is LOW, and no MEDIUM band is left between it and HIGH.
+# field with a working default is LOW, and no MEDIUM band is left between it and HIGH. A default
+# change and a docs finding keep their LOW band, and a check that did not run stays MEDIUM only.
 band_note() { # rule, severity: 0 when the checker notes the severity as outside the rule's row
   grep -q '^note F-001 severity: ' <<< "$(said "$(listf "cb-$1-$2" ".[0].rule_id = \"$1\" | .[0].severity = \"$2\"")")"
 }
@@ -243,7 +244,8 @@ for c in structure.schema-shape-flattened/LOW/no structure.schema-shape-flattene
   structure.sibling-block-asymmetry/LOW/no structure.sibling-block-asymmetry/MEDIUM/yes \
   structure.input-ignored-in-branch/LOW/no profile.release-config-changed/MEDIUM/yes \
   structure.schema-shape-flattened/HIGH/no structure.sibling-block-asymmetry/HIGH/no \
-  structure.input-ignored-in-branch/HIGH/no structure.input-ignored-in-branch/MEDIUM/no; do
+  structure.input-ignored-in-branch/HIGH/no structure.input-ignored-in-branch/MEDIUM/no \
+  compat.default-changed/LOW/no structure.docs-contradict-code/LOW/no review.check-not-run/LOW/yes; do
   IFS=/ read -r r s want <<< "$c"
   band_note "$r" "$s"; got=$([ $? = 0 ] && echo yes || echo no)
   [ "$got" = "$want" ]; check "$r at $s: note $want" $?
