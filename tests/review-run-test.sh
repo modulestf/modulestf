@@ -1028,6 +1028,34 @@ run_rr handover "$RUN" > /dev/null 2>&1
 check "handover at deep accepts a skipped schema and names no fact sheets" "$([ $? = 0 ] && ! grep -q '^Provider fact sheets:' "$RUN/handover/task.md"; echo $?)"
 render_to "$TMP/render-ev"
 check "render accepts a skipped schema" "$([ $? = 0 ] && [ -f "$TMP/render-ev/comment.md" ]; echo $?)"
+# The run file's values reach jq on a descriptor, each exactly one JSON value: an empty
+# coverage.json and one of two values refuse the run file, as --argjson refused them, and one over
+# the argument size limit (1 MiB on macOS, 128 KiB for one argument on Linux) still builds it.
+t_cov_one() {
+  local c="$RUN/coverage.json" k="$TMP/coverage-keep.json" n=0 o rc=0
+  cp "$c" "$k"
+  for v in empty two big; do
+    n=$((n + 1)); o="$TMP/render-cov-$n-$$"; rm -rf "$o"
+    case "$v" in
+      empty) : > "$c" ;;
+      two) cat "$k" "$k" > "$c" ;;
+      big) jq -c '.pad = ("x" * 1200000)' "$k" > "$c" ;;
+    esac
+    render_to "$o"; local st=$?
+    if [ "$v" = big ]; then [ "$st" = 0 ] && [ -f "$o/comment.md" ] || rc=1
+    else [ "$st" != 0 ] && grep -qF 'the run file could not be built' "$TMP/re.out" && [ ! -f "$o/comment.md" ] || rc=1; fi
+    rm -rf "$o"
+  done
+  cp "$k" "$c"; return "$rc"
+}
+t_cov_one; check "render: an empty or two-value coverage.json refuses the run file, one over the argument size limit builds it" $?
+for m in 's/def one: if length == 1 then \.\[0\] else error\(\\"not one JSON value\\"\) end;/def one: .[0];/' \
+  's/--slurpfile cov <\(printf \x27%s\x27 "\$cov"\)/--argjson cov "\$cov"/; s/ \| \(\\\$cov \| one\) as \\\$cov//'; do
+  perl -pe "$m" "$SK/review-run.sh" > "$SK/review-run-cmut.sh"
+  keep="$RR"; RR="$SK/review-run-cmut.sh"; t_cov_one > /dev/null 2>&1; s=$?; RR="$keep"
+  check "render: the run file mutation $m is caught" "$( ! cmp -s "$SK/review-run.sh" "$SK/review-run-cmut.sh" && [ "$s" != 0 ]; echo $?)"
+done
+rm -f "$SK/review-run-cmut.sh"
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=focused prep
