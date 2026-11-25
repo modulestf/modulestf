@@ -268,6 +268,7 @@ unex() {
   jq "${1:-.}" "$TMP/ladder-unex.json" > "$TMP/ladder-u.json"
   local keep="$MOD"; MOD="$UMOD"; DIFF="$TMP/files-unex.json" classify; MOD="$keep"
   [ -z "${UREQ-}" ] || printf '%s\n' "$UREQ" > "$O/required.json"
+  [ -z "${UREQF-}" ] || cp "$UREQF" "$O/required.json"
   evalp --ladder "$TMP/ladder-u.json"
 }
 marked() { jq -c '[.triggers[] | select(.unexercised == true) | .id]' "$O/run-behaviour.json" 2> /dev/null; }
@@ -494,6 +495,38 @@ t_unex_prefix; check "unexercised: under a module root prefix the pass-through a
 t_unex_required() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","required":true},"port":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","min_items":1,"block":{"attributes":{}}}}}}}}}}' > "$TMP/schema-req.json"
   SCHEMA="$TMP/schema-req.json" unex && [ "$(marked)" = '[]' ] && grep -qF '"aws_lb_listener.default_action"' "$O/required.json" && grep -qF '"aws_lb_listener.idle_timeout"' "$O/required.json"; }
 t_unex_required; check "unexercised: an attribute the schema requires, or a block with min_items, is not marked" $?
+# A required list over the argument size limit: the classifier output and claims-eval output
+# recorded from a pull request that adds nested dynamic blocks to aws_wafv2_rule_group and
+# aws_wafv2_web_acl_rule, whose provider schema nests statements so deep that the list holds about
+# 21000 paths, 3.7 MB. A schema of the same shape stands in for it; eval must still run.
+cat > "$TMP/behaviour-waf.json" <<'EOF2'
+{"schema_version":1,"inert":false,"entries":[{"path":"examples/complete/main.tf","change_kind":"modified","inert":false,"trigger_ids":["T-001"]},{"path":"main.tf","change_kind":"modified","inert":false,"trigger_ids":["T-002"]},{"path":"modules/rule-group/main.tf","change_kind":"modified","inert":false,"trigger_ids":["T-003"]},{"path":"modules/web-acl-rule/main.tf","change_kind":"modified","inert":false,"trigger_ids":["T-004"]}],"triggers":[{"id":"T-001","file":"examples/complete/main.tf","line":43,"category":"unclassified-change","change_kind":"modified","address":"module.wafv2","attribute":"rules","base_expr":null,"head_expr":null,"referenced_inputs":[],"contextual_refs":["module.ip_set"],"contextual_ref_details":[{"text":"module.ip_set.arn","kind":"module","type":null,"multi":null}],"pure":true,"levels":["L4"],"reason":"an expression is over 4096 bytes and is left out"},{"id":"T-002","file":"main.tf","line":null,"category":"unclassified-change","change_kind":"modified","address":null,"attribute":null,"base_expr":null,"head_expr":null,"referenced_inputs":[],"contextual_refs":[],"contextual_ref_details":[],"pure":false,"levels":["L4"],"reason":"main.tf is not a regular file with known content"},{"id":"T-003","file":"modules/rule-group/main.tf","line":142,"category":"dynamic-block-change","change_kind":"modified","address":"aws_wafv2_rule_group.this","attribute":"dynamic.rule.dynamic.statement","base_expr":"[rule.value.statement]","head_expr":"[rule.value.statement]","referenced_inputs":[],"contextual_refs":["rule.value"],"contextual_ref_details":[{"text":"rule.value.statement","kind":"resource","type":null,"multi":null}],"pure":true,"levels":["L4"],"reason":null},{"id":"T-004","file":"modules/web-acl-rule/main.tf","line":149,"category":"dynamic-block-change","change_kind":"modified","address":"aws_wafv2_web_acl_rule.this","attribute":"dynamic.statement","base_expr":"[local.rule.statement]","head_expr":"[local.rule.statement]","referenced_inputs":[],"contextual_refs":["local.rule"],"contextual_ref_details":[{"text":"local.rule.statement","kind":"local","type":null,"multi":null}],"pure":true,"levels":["L4"],"reason":null}],"capped":0}
+EOF2
+cat > "$TMP/eval-waf.json" <<'EOF2'
+{"schema_version":1,"triggers":[{"id":"T-001","state":"unverifiable","reason":"the address and changed attribute are in no planned example"},{"id":"T-002","state":"unverifiable","reason":"the trigger has no address a plan can show"},{"id":"T-003","state":"unverifiable","reason":"the address and changed attribute are in no planned example"},{"id":"T-004","state":"unverifiable","reason":"the address and changed attribute are in no planned example"}],"capped":0,"claims":[],"discarded_claims":[]}
+EOF2
+jq -n 'def chain($n): reduce ("ip_set_reference_statement", "statement", "or_statement", "statement", "and_statement", "statement", "rule") as $k
+    ({attributes: ([range($n)] | map({key: "required_attribute_\(.)", value: {type: "string", required: true}}) | from_entries)};
+     {block_types: {($k): {nesting_mode: "list", block: .}}});
+  {format_version: "1.0", provider_schemas: {"registry.terraform.io/hashicorp/aws": {resource_schemas: {
+    aws_wafv2_rule_group: {version: 0, block: chain(7000)}, aws_wafv2_web_acl_rule: {version: 0, block: chain(14000)}}}}}' > "$TMP/schema-waf.json"
+printf '[{"filename":"examples/complete/main.tf","status":"modified"},{"filename":"main.tf","status":"modified"},{"filename":"modules/rule-group/main.tf","status":"modified"},{"filename":"modules/web-acl-rule/main.tf","status":"modified"}]\n' > "$TMP/files-waf.json"
+t_req_big() {
+  setup; cp "$TMP/behaviour-waf.json" "$TMP/behaviour.out"; cp "$TMP/eval-waf.json" "$TMP/eval.out"
+  SCHEMA="$TMP/schema-waf.json" DIFF="$TMP/files-waf.json" classify && evalp \
+    && [ "$(wc -c < "$O/required.json")" -gt 2097152 ] \
+    && jq -e '.status == "ran" and ([.triggers[].state] == ["unverifiable", "unverifiable", "unverifiable", "unverifiable"])
+      and ([.triggers[] | select(has("unexercised"))] == [])' "$O/run-behaviour.json" > /dev/null \
+    && [ "$(head -n 1 "$O/record.txt")" = "behaviour: ran, 4 triggers, 0 over the cap" ] || return 1
+  # The same list is read, not dropped to the require-everything value: with it the null
+  # pass-through and the guarded block are marked, and with idle_timeout added only the block.
+  # A file, not a variable: a variable this size in the environment stops every exec.
+  # The added path sits last, so honouring it shows the whole list arrived.
+  cp "$O/required.json" "$TMP/req-big.json"; jq -c '. + ["aws_lb_listener.idle_timeout"]' "$TMP/req-big.json" > "$TMP/req-big-end.json"
+  UREQF="$TMP/req-big.json" unex && [ "$(marked)" = '["T-008","T-014"]' ] \
+    && UREQF="$TMP/req-big-end.json" unex && [ "$(marked)" = '["T-014"]' ]
+}
+t_req_big; check "unexercised: a required list over the argument size limit still evaluates" $?
 t_unex_optional() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","block":{"attributes":{}}}}}}}}}}' > "$TMP/schema-opt.json"
   SCHEMA="$TMP/schema-opt.json" unex && [ "$(marked)" = '["T-008","T-014"]' ]; }
 t_unex_optional; check "unexercised: an attribute the schema marks optional is marked" $?
@@ -507,6 +540,8 @@ t_unex_badschema() { printf '%s' '{"provider_schemas":{"x":{"resource_schemas":"
 t_unex_badschema; check "unexercised: a schema the required reader cannot read requires everything" $?
 t_unex_badreq() { UREQ='{"a": 1}' unex && [ "$(marked)" = '[]' ]; }
 t_unex_badreq; check "unexercised: a required list that is not a list of strings requires everything" $?
+t_unex_tworeq() { UREQ="$(printf '[]\n["*"]')" unex && [ "$(marked)" = '[]' ]; }
+t_unex_tworeq; check "unexercised: a required file of two JSON values requires everything" $?
 t_unex_nested_req() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","block":{"attributes":{"target_group_arn":{"type":"string","required":true}}}}}}}}}}}' > "$TMP/schema-nreq.json"
   SCHEMA="$TMP/schema-nreq.json" unex . '.triggers |= map(if .id == "T-008" then .attribute = "default_action.target_group_arn" else . end)' \
     && [ "$(marked)" = '["T-014"]' ] && grep -qF '"aws_lb_listener.default_action.target_group_arn"' "$O/required.json"; }
@@ -1133,7 +1168,10 @@ wmutate "unexercised: a block with min_items not read as required" 's/select\(\(
 wmutate "unexercised: a nested required attribute not read" 's/\(\.key as \$b \| \.value\.block \| req\("\\\(\$p\)\.\\\(\$b\)"\)\)/empty/' t_unex_nested_req
 wmutate "unexercised: no schema read as no requirement" 's/rq=\x27\["\*"\]\x27/rq=\x27[]\x27/' t_unex_noschema
 wmutate "unexercised: an unreadable schema read as no requirement" 's/printf \x27\["\*"\]\\n\x27 > "\$out\/required\.json"/printf \x27[]\\n\x27 > "\$out\/required.json"/' t_unex_badschema
-wmutate "unexercised: a malformed required list read as none" 's/then \. else \["\*"\] end/then . else [] end/' t_unex_badreq
+wmutate "unexercised: a malformed required list read as none" 's/then \.\[0\] else \["\*"\] end/then .[0] else [] end/' t_unex_badreq
+wmutate "unexercised: a required file of two values read as its first" 's/if length == 1 and \(\.\[0\] \| /if (.[0] | /' t_unex_tworeq
+wmutate "unexercised: the large required list dropped to require everything" 's/ \| \$rq\[0\] as \$rq/ | ["*"] as \$rq/' t_req_big
+wmutate "unexercised: the required list passed in argv" 's/--slurpfile rq <\(printf \x27%s\\n\x27 "\$\{rq:-\[\\"\*\\"\]\}"\)/--argjson rq "\${rq:-[\\"*\\"]}"/; s/ \| \$rq\[0\] as \$rq//' t_req_big
 wmutate "unexercised: a null attribute not guarded" 's/def not_required\(\$t\): \(\$t\.attribute \| type == "string"\)\n      and /def not_required(\$t): /' t_unex_nullattr
 wmutate "unexercised: an unloaded directory marked" 's/ and plans_known and loaded\(\$t\)/ and plans_known/' t_unex_unloaded
 wmutate "unexercised: an unloaded variable trigger marked" 's/and all\(\.\[\]; IN\(\$m\[\]\)\)\) and loaded\(\$t\);/and all(.[]; IN(\$m[])));/; s/ and plans_known and loaded\(\$t\)/ and plans_known/' t_unex_unloaded

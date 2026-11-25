@@ -176,10 +176,24 @@ affected_to() { # mtf-facts, root, files list, out: the affected report, or no f
 # --- the post record (github-io.md, The Post Record) ---------------------------------------
 
 # This user's own store of the reviews this skill posted, outside every run directory: one
-# directory per pull request, two files per review id. Prints nothing when no absolute home is set.
+# directory per pull request, two files per review id. Fails, so nothing is read or kept, with no
+# absolute XDG_STATE_HOME and no HOME, a base of / or with a . or .. segment, or a repository name of dots.
 records_dir() { # owner/name, number
-  local b="${XDG_STATE_HOME:-${HOME-}/.local/state}"
-  case "$b" in /?*) printf '%s/modulestf/pr-review/records/%s/%s' "$b" "$1" "$2" ;; *) return 1 ;; esac
+  local b="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
+  case "$b" in /?*) ;; *) return 1 ;; esac
+  case "/$b/" in */./* | */../*) return 1 ;; esac
+  [[ "$1" =~ $repo_re ]] && ! [[ "${1#*/}" =~ ^[.]+$ ]] && [[ "$2" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+  printf '%s/modulestf/pr-review/records/%s/%s' "${b%/}" "$1" "$2"
+}
+# The store is this user's alone: every directory from records/ down to the pull request's, and each
+# record file, owned by this user and writable by no one else.
+store_private() { # pull request directory, file...
+  local d="$1" top p; shift
+  top="${d%/*/*/*}"
+  for p in "$top" "${d%/*/*}" "${d%/*}" "$d" "$@"; do
+    [ -O "$p" ] && [ ! -L "$p" ] || return 1
+    [ -z "$(find "$p" -prune \( -perm -g+w -o -perm -o+w \) 2> /dev/null)" ] || return 1
+  done
 }
 sha_file() { openssl dgst -sha256 -r < "$1" | cut -d' ' -f1; }
 META_JQ='type == "object" and keys == ["body_sha256", "format", "plan_sha256", "review_id", "state", "target"]
@@ -198,7 +212,7 @@ read_earlier() { # owner/name, number, token user id, prefix
     m="$d/$rid.json"; pl="$d/$rid.plan.json"
     if [ -e "$m" ] || [ -L "$m" ] || [ -e "$pl" ] || [ -L "$pl" ]; then
       rec=unreadable
-      if [ -f "$m" ] && [ ! -L "$m" ] && [ -f "$pl" ] && [ ! -L "$pl" ] && [ "$(wc -c < "$m")" -le 4096 ] &&
+      if [ -f "$m" ] && [ ! -L "$m" ] && [ -f "$pl" ] && [ ! -L "$pl" ] && store_private "$d" "$m" "$pl" && [ "$(wc -c < "$m")" -le 4096 ] &&
           [ "$(wc -c < "$pl")" -le 4194304 ] && jq -e "$META_JQ" "$m" > /dev/null 2>&1 &&
           jq -e -L "$HERE" 'include "stage-contract"; stage_ok("review-plan")' "$pl" > /dev/null 2>&1 &&
           [ "$(sha_file "$pl")" = "$(jq -r '.plan_sha256' "$m")" ]; then
@@ -206,7 +220,7 @@ read_earlier() { # owner/name, number, token user id, prefix
         elif ! jq -e -n --slurpfile m "$m" --slurpfile p "$pl" --slurpfile h "$h" --arg t "$1#$2" --arg u "$3" --arg pre "$4" '
             $m[0].review_id == $h[0].own_review.id and $m[0].state == "CHANGES_REQUESTED" and $m[0].target == $t
             and $p[0].pin.target == $t and $p[0].pin.head_sha == $h[0].own_review.commit_id
-            and $u != "" and ($p[0].reviewer_id | tostring) == $u and $p[0].module_prefix == $pre' > /dev/null 2>&1; then rec=mismatch
+            and ($p[0].reviewer_id | tostring) == $u and $p[0].module_prefix == $pre' > /dev/null 2>&1; then rec=mismatch
         else rec=ok
         fi
       fi
@@ -1135,8 +1149,13 @@ cmd_handover() {
     fi
     # Our earlier review, only with a record that checked out: its blocking findings for the
     # reviewer to judge at the head (findings-schema.md, Earlier Review Task Line).
-    if jq -e '.record == "ok"' "$RUN/earlier.json" > /dev/null 2>&1 && jq '.findings' "$RUN/earlier.json" > "$out/earlier-task.json"; then
-      printf 'Earlier review: %s\n' "$out/earlier-task.json"
+    # The findings are earlier review output that can quote the change: the file holds them inside an
+    # untrusted block of its own suffix, as the task's block holds the pull request's text.
+    local es=""
+    es="$(openssl rand -hex 6 2> /dev/null)" || es=""
+    if [[ "$es" =~ ^[0-9a-f]{12}$ ]] && jq -e '.record == "ok"' "$RUN/earlier.json" > /dev/null 2>&1 &&
+        { printf 'UNTRUSTED-%s BEGIN\n' "$es"; jq '.findings' "$RUN/earlier.json" && printf 'UNTRUSTED-%s END\n' "$es"; } > "$out/earlier-task.txt"; then
+      printf 'Earlier review: %s\n' "$out/earlier-task.txt"
       printf 'Output: write the findings list as JSON to %s, the summary line and the profile lines to %s, the facts comparison note to %s and the earlier review judgments as JSON to %s, and nothing else.\n' \
         "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt" "$RUN/review/earlier.json"
     else
@@ -1151,6 +1170,8 @@ cmd_handover() {
   [ ! -f "$RUN/depth.json" ] || cp "$RUN/state/depth.sha256" "$RUN/state/handover.sha256"
   # The skipped files the reviewer was handed, pinned as the depth is: render refuses another list.
   shasum -a 256 < "$RUN/skipped.json" | cut -d' ' -f1 > "$RUN/state/skipped.sha256"
+  # The earlier review the reviewer was handed, pinned the same way.
+  [ ! -f "$RUN/earlier.json" ] || shasum -a 256 < "$RUN/earlier.json" | cut -d' ' -f1 > "$RUN/state/earlier.sha256"
   echo "handover: $out/task.md ($(wc -l < "$out/task.md" | tr -d ' ') lines, record $( [ -f "$out/record.txt" ] && wc -l < "$out/record.txt" | tr -d ' ' || echo 0) lines)"
   [ ! -f "$out/reviewer-references.md" ] ||
     echo "references: $out/reviewer-references.md ($(wc -c < "$out/reviewer-references.md" | tr -d ' ') bytes, ${left:-0} sections left out)"
@@ -1183,6 +1204,11 @@ cmd_render() {
     stop "depth.json changed after the handover"
   [ "$(shasum -a 256 < "$RUN/skipped.json" 2> /dev/null | cut -d' ' -f1)" = "$(cat "$RUN/state/skipped.sha256" 2> /dev/null)" ] ||
     stop "skipped.json changed after the handover"
+  if [ -e "$RUN/earlier.json" ] || [ -e "$RUN/state/earlier.sha256" ]; then
+    [ -f "$RUN/earlier.json" ] && [ ! -L "$RUN/earlier.json" ] &&
+      [ "$(shasum -a 256 < "$RUN/earlier.json" | cut -d' ' -f1)" = "$(cat "$RUN/state/earlier.sha256" 2> /dev/null)" ] ||
+      stop "earlier.json changed after the handover"
+  fi
   case "$out" in /?*) ;; *) die "--out must be an absolute path" ;; esac
   [ -d "$out" ] || mkdir -p -- "$out" || die "--out cannot be made"
   local f; for f in plan.json plan.json.tmp fix-plan.md fix-plan.md.tmp; do
@@ -1316,22 +1342,37 @@ floors_of() {
 }
 
 # The run file's earlier (render-comment.sh): earlier.json with the reviewer's judgment of each
-# blocking finding from review/earlier.json. A judgments file that is missing, a link, over its cap
-# or not one entry per finding in its shape leaves every finding not judged, so the block stands.
+# blocking finding from review/earlier.json. A judgments file that is missing, a link, over its cap,
+# not one JSON document or not one entry per finding in its shape leaves every finding not judged,
+# so the block stands. A resolved judgment counts only when its file is a file of the head under the
+# module root and its line is in it; else that finding is not judged.
 earlier_of() {
-  local j="$RUN/review/earlier.json" jud='null'
-  if [ -f "$j" ] && [ ! -L "$j" ] && [ "$(wc -c < "$j")" -le 262144 ]; then jud="$(jq -c . "$j" 2> /dev/null)" || jud='null'; fi
-  jq -c --argjson j "${jud:-null}" '
+  local j="$RUN/review/earlier.json" jud='null' heads='{}' e f l n
+  if [ -f "$j" ] && [ ! -L "$j" ] && [ "$(wc -c < "$j")" -le 262144 ]; then
+    jud="$(jq -c -s 'if length == 1 then .[0] else null end' "$j" 2> /dev/null)" || jud='null'
+  fi
+  # The line count at the head of each place a resolved judgment names, from the clone's objects.
+  while IFS= read -r e; do
+    f="$(jq -r .file <<< "$e")"; l="$(jq -r .line <<< "$e")"
+    [ "$(git -C "$RUN/clone" cat-file -t "HEAD:${PREFIX:+$PREFIX/}$f" 2> /dev/null)" = blob ] || continue
+    n="$(git -C "$RUN/clone" cat-file blob "HEAD:${PREFIX:+$PREFIX/}$f" 2> /dev/null | awk 'END { print NR }')"
+    [[ "$n" =~ ^[0-9]+$ ]] && [ "$l" -le "$n" ] 2> /dev/null || continue
+    heads="$(jq -c --arg k "$f:$l" '. + {($k): true}' <<< "$heads")"
+  done < <(jq -c 'if type == "array" then .[] | objects | select(.judgment == "resolved" and (.file | type == "string")
+      and (.file | test("^[A-Za-z0-9._][A-Za-z0-9._/-]*$")) and ((.file | test("(^|/)[.][.](/|$)")) | not)
+      and (.line | type == "number" and . >= 1 and . == floor and . <= 10000000)) | {file, line} else empty end' <<< "${jud:-null}" 2> /dev/null)
+  jq -c --argjson j "${jud:-null}" --argjson heads "$heads" '
     def plain: type == "string" and length > 0 and length <= 1024 and test("^[A-Za-z0-9._][A-Za-z0-9._/-]*$") and (test("(^|/)[.][.](/|$)") | not);
     .findings as $f
-    | ($j | type == "array" and length == ($f | length) and all(.[]; type == "object"
+    | ($j | type == "array" and all(.[]; type == "object"
          and keys == ["file", "id", "judgment", "line"] and (.id | type == "string")
          and (.judgment | IN("resolved", "partly", "not resolved"))
          and (.file == null or (.file | plain)) and (.line == null or (.line | type == "number" and . >= 1 and . == floor))
          and (.judgment != "resolved" or (.file != null and .line != null)))
-       and ((map(.id) | sort) == ($f | map(.id) | sort)) and (map(.id) | length == (unique | length))) as $ok
+       and ((map(.id) | sort) == ($f | map(.id) | sort))) as $ok
     | {review_id, commit_id, record,
        items: [$f[] | .id as $id | ($j | if $ok then (map(select(.id == $id))[0]) else null end) as $x
+         | (if $x != null and $x.judgment == "resolved" and ($heads["\($x.file):\($x.line)"] | not) then null else $x end) as $x
          | {id, rule_id, severity, file, line,
             judgment: (if $x == null then "not-judged" else ($x.judgment | sub(" "; "-")) end),
             at: (if $x != null and $x.judgment == "resolved" then {file: $x.file, line: $x.line} else null end)}]}' "$RUN/earlier.json"
@@ -1419,11 +1460,13 @@ cmd_record() {
   d="$(records_dir "$repo" "$pr")" || { rm -rf "$w"; fail "record refused: no absolute XDG_STATE_HOME or HOME"; }
   [ ! -e "$d/$id.json" ] && [ ! -L "$d/$id.json" ] && [ ! -e "$d/$id.plan.json" ] && [ ! -L "$d/$id.plan.json" ] ||
     { rm -rf "$w"; fail "record refused: review $id is already recorded"; }
-  (umask 077 && mkdir -p -- "$d") && [ -d "$d" ] && [ ! -L "$d" ] || { rm -rf "$w"; fail "record refused: the record store cannot be made"; }
-  cp -- "$p" "$d/$id.plan.json.tmp" &&
+  (umask 077 && mkdir -p -- "$d") && [ -d "$d" ] && [ ! -L "$d" ] &&
+    chmod 700 "${d%/*/*/*}" "${d%/*/*}" "${d%/*}" "$d" 2> /dev/null && store_private "$d" ||
+    { rm -rf "$w"; fail "record refused: the record store is not this user's alone"; }
+  ( umask 077 && cp -- "$p" "$d/$id.plan.json.tmp" ) &&
     jq -n --argjson id "$id" --arg t "$repo#$pr" --arg st "$(jq -r '.state' "$w/review.json")" \
       --arg b "$(sha_file "$w/body")" --arg ps "$(sha_file "$d/$id.plan.json.tmp")" \
-      '{format: 1, review_id: $id, target: $t, state: $st, body_sha256: $b, plan_sha256: $ps}' > "$d/$id.json.tmp" &&
+      '{format: 1, review_id: $id, target: $t, state: $st, body_sha256: $b, plan_sha256: $ps}' | ( umask 077 && cat > "$d/$id.json.tmp" ) &&
     jq -e "$META_JQ" "$d/$id.json.tmp" > /dev/null &&
     mv -- "$d/$id.plan.json.tmp" "$d/$id.plan.json" && mv -- "$d/$id.json.tmp" "$d/$id.json" ||
     { rm -f "$d/$id.json.tmp" "$d/$id.plan.json.tmp"; rm -rf "$w"; fail "record refused: the record could not be written"; }
