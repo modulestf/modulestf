@@ -25,7 +25,8 @@
 #   review-run.sh evidence <run>        the commands above the depth needs, side by side at deep
 #   review-run.sh handover <run>        <run>/handover/task.md and record.txt for the reviewer, after
 #                                        the module profile snapshot (state/profile.json)
-#                                        and the README evidence (readme-regions.sh)
+#                                        the README evidence (readme-regions.sh) and the vendored
+#                                        policy evidence (vendored-policy.sh)
 #   review-run.sh render <run> --findings <file> --assessment <file> --out <dir>
 #       [--summary <file>] [--standard] [--event <EVENT>]
 #                                        the run file, depth.sh verify, render-comment.sh, plan.json,
@@ -60,6 +61,9 @@ LNM_RE='^schema pass: latest_not_mirrored [a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-
 SOURCE_RE='^schema pass: source [A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100} [a-z0-9][a-z0-9-]{0,63}_[a-z0-9][a-z0-9-]{0,63}-v[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5} [0-9a-f]{64}$'
 # A line of readme-regions.sh (readme-regions.md): a module-relative README.md and its result.
 REGION_LINE_RE='^([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/){0,8}README\.md (generated|differs|unknown [a-z0-9 .-]{1,60})$'
+# A line of vendored-policy.sh (vendored-policy.md, Output): a module-relative .tf file, a policy
+# document's name and one fact of the comparison with its upstream source.
+VP_LINE_RE='^([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/){0,8}[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\.tf [A-Za-z_][A-Za-z0-9_-]{0,63} (source [A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100} v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4} [0-9a-f]{40} [A-Za-z0-9._/-]+|lines [0-9]{1,7} [0-9]{1,7}|upstream equal|upstream differs [0-9]{1,4} extra [0-9]{1,4} missing|base equal|base absent|base differs [0-9]{1,4} added [0-9]{1,4} removed|(extra|missing|added|removed) (Allow|Deny)( [a-z]+:[A-Za-z0-9:/*?._=+,@|;-]+){2,5}|(extra|missing|added|removed) and [0-9]{1,4} more|not compared [0-9]{1,3} dynamic statements|not compared merged documents|unknown [a-z0-9 ]{1,60})$'
 # The review budget (review-run-details.md, Review Budget). A change whose files list or patch text
 # is over REVIEW_THRESHOLD, the size a full run refused before it had a budget (a triage run, which
 # computes no depth, was handed such a change whole), hands the reviewer at
@@ -1256,6 +1260,50 @@ readme_regions() {
     --prefix "$PREFIX" --out "$RUN/readme" > /dev/null 2>&1 || rm -f "$RUN/readme/regions.txt"
 }
 
+# The host's vendored policy evidence (vendored-policy.md): the module profile's sources, the
+# pull request body's tag, the clone's objects at the head and the bound merge base. A failed step,
+# or no profile directory, is no evidence.
+vendored_policy() {
+  local pd="" id
+  rm -rf "$RUN/vendored" && mkdir "$RUN/vendored" || return 0
+  pd="$(jq -r '.dir' "$RUN/state/profile.json" 2> /dev/null)"
+  if [ -z "$pd" ]; then
+    id="$(jq -r '.id' "$RUN/state/profile.json" 2> /dev/null)"
+    [ -n "$MAINT" ] || return 0
+    pd="$MAINT/profiles/${id:-terraform-aws-modules}"
+  fi
+  [ -d "$pd" ] || return 0
+  awk -v s="$2" 'index($0, "ITEM-" s " ") == 1 { p = ($0 ~ / kind=body( |$)/); next }
+    $0 == "UNTRUSTED-" s " END" { p = 0 } p' "$1" > "$RUN/vendored/body.txt" 2> /dev/null || return 0
+  local ba=(); [ -z "$3" ] || ba=(--base "$3")
+  bash "$HERE/vendored-policy.sh" --clone "$RUN/clone" --head "$HEAD_SHA" ${ba[@]+"${ba[@]}"} --diff "$RUN/host/files.json" \
+    --prefix "$PREFIX" --repo "$(jq -r '.repo' "$RUN/host/host.json")" --body "$RUN/vendored/body.txt" \
+    --profile-dir "$pd" --out "$RUN/vendored" > /dev/null 2>&1 || rm -f "$RUN/vendored/vendored.txt"
+}
+
+# vendored_ok: the handover states the lines: outside a triage run, at most 400, each in the grammar.
+vendored_ok() {
+  [ "$TRIAGE" = false ] && [ -s "$RUN/vendored/vendored.txt" ] && [ "$(wc -l < "$RUN/vendored/vendored.txt")" -le 400 ] &&
+    ! grep -qvE "$VP_LINE_RE" "$RUN/vendored/vendored.txt"
+}
+# vendored_equal: the documents the handover's Vendored policy lines found equal to upstream, as
+# [{file, first, last}], from the lines the handover states, or [] when it stated none.
+vendored_equal() {
+  if vendored_ok; then
+    jq -R -n '[inputs | split(" ") | {k: (.[0] + " " + .[1]), f: .[0], fact: .[2:]}] | group_by(.k)
+      | map(select(any(.[]; .fact == ["upstream", "equal"])) | (map(select(.fact[0] == "lines"))[0].fact) as $l
+        | select($l != null) | {file: .[0].f, first: ($l[1] | tonumber), last: ($l[2] | tonumber)})' "$RUN/vendored/vendored.txt"
+  else echo '[]'; fi
+}
+
+# vendored_raise <equal documents>: the findings on stdin, each LOW compat.generated-policy-narrowed
+# finding whose line is in no equal document of its file raised to HIGH (vendored-policy.md).
+vendored_raise() {
+  jq --slurpfile e "$1" '[.[] | if .rule_id == "compat.generated-policy-narrowed" and .severity == "LOW"
+      and ((.file as $f | .line as $l | any($e[0][]; .file == $f and ($l | type == "number") and .first <= $l and $l <= .last)) | not)
+    then .severity = "HIGH" else . end]'
+}
+
 cmd_handover() {
   ready handover
   module_profile
@@ -1302,6 +1350,8 @@ cmd_handover() {
   # An empty base: the task states the new module shape and names no diff, since the reviewer
   # ignores that statement beside a diff, and mtf-facts then runs without --base and --diff.
   jq -e '.new_module == true' "$RUN/index.json" > /dev/null 2>&1 && nm=true && mbl=""
+  rm -rf "$RUN/vendored"; [ "$TRIAGE" = true ] || [ "$nm" = true ] || vendored_policy "$t" "$s" "$mbl"
+  vendored_equal > "$RUN/state/vendored-equal.json"
   rm -rf "$RUN/review"; mkdir "$RUN/review"
   # The reference bundle, outside a triage run: depth.json as the reviewer reads it, and
   # whether a Terraform file changed (a new module, or files.json that cannot be read, counts).
@@ -1376,6 +1426,9 @@ cmd_handover() {
         ! grep -qvE "$REGION_LINE_RE" "$RUN/readme/regions.txt"; then
       sed 's/^/README regions: /' "$RUN/readme/regions.txt"
     fi
+    # The vendored policy evidence as host fact lines: every line in the grammar of
+    # vendored-policy.sh and at most 400 of them, or no line at all.
+    ! vendored_ok || sed 's/^/Vendored policy: /' "$RUN/vendored/vendored.txt"
     # Our earlier review, only with a record that checked out: its blocking findings for the
     # reviewer to judge at the head (findings-schema.md, Earlier Review Task Line).
     # The findings are earlier review output that can quote the change: the file holds them inside an
@@ -1451,7 +1504,11 @@ cmd_render() {
   fi
   local r="$RUN/render"; rm -rf "$r"; mkdir "$r"
   jq -e 'type == "array"' "$findings" > /dev/null 2>&1 || fail "the findings are not a JSON list"
-  jq '[.[] | . + {source: "llm"}]' "$findings" > "$r/findings.json"
+  # A LOW compat.generated-policy-narrowed answer stands only inside a document the handover's
+  # Vendored policy lines found equal to its upstream source (state/vendored-equal.json, which
+  # handover writes); any other is raised to HIGH.
+  jq -e 'type == "array"' "$RUN/state/vendored-equal.json" > /dev/null 2>&1 || echo '[]' > "$RUN/state/vendored-equal.json"
+  vendored_raise "$RUN/state/vendored-equal.json" < "$findings" | jq '[.[] | . + {source: "llm"}]' > "$r/findings.json"
   # The three counts of the reviewer's summary line; absent means 0, a malformed one drops them all.
   local counts=null
   if [ -n "$summary" ] && [ -f "$summary" ]; then

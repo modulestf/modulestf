@@ -217,10 +217,9 @@ for r in $dg; do
 done
 fdown="$(listf m-down '.[0].rule_id = "compat.variable-removed" | .[0].severity = "MEDIUM"')"
 fgp="$(listf m-gp '.[0].rule_id = "compat.generated-policy-narrowed" | .[0].severity = "LOW"')"
-GPL="F-001 severity: LOW is not reported for compat.generated-policy-narrowed: its LOW band is inactive until a host step supplies references; file the CRITICAL or HIGH band by the rule's Severity text, or review.check-not-run at MEDIUM when the author names an upstream policy and no reference exists; never drop the finding"
-line_is "$(said "$fgp")" "$GPL" && [ "$(rc_of checker "$fgp")" = 1 ] && ! grep -q '^note' <<< "$(said "$fgp")"; check "compat.generated-policy-narrowed at LOW is a violation, whole line, and no note" $?
+[ "$(rc_of checker "$fgp")" = 0 ] && ! grep -q '^note' <<< "$(said "$fgp")"; check "compat.generated-policy-narrowed at LOW passes with no note: its LOW band is in the registry and the host raises it without a reference" $?
 differential "compat.generated-policy-narrowed at MEDIUM, the downgrade" '.[0].rule_id = "compat.generated-policy-narrowed" | .[0].severity = "MEDIUM"' yes 0
-differential "compat.generated-policy-narrowed at LOW" '.[0].rule_id = "compat.generated-policy-narrowed" | .[0].severity = "LOW"' yes 1
+differential "compat.generated-policy-narrowed at LOW" '.[0].rule_id = "compat.generated-policy-narrowed" | .[0].severity = "LOW"' yes 0
 differential "review.tool-disputed at HIGH" '.[0].rule_id = "review.tool-disputed" | .[0].severity = "HIGH"' no 1
 differential "review.no-change-identified at CRITICAL" '.[0].rule_id = "review.no-change-identified" | .[0].severity = "CRITICAL"' no 1
 differential "an opener in lower case" '.[0].rule_id = "compat.output-attribute-removed" | .[0].summary = "new rule_id, not in the registry: x."' yes 1
@@ -323,7 +322,6 @@ while IFS=$'\t' read -r id sevs; do
     allowed=0; case ",$sevs," in *",$s,"*) allowed=1 ;; esac
     case "$id/$s" in review.*/CRITICAL) continue ;; esac # a violation of the schema's own rule
     case " $dg " in *" $id "*) [ "$s" = MEDIUM ] && continue ;; esac # the in-repo downgrade
-    [ "$id/$s" = compat.generated-policy-narrowed/LOW ] && continue
     noted=0; grep -q "^note F-00$i severity: " <<< "$said_out" && noted=1
     if [ "$allowed" = 1 ] && [ "$noted" = 1 ]; then reg_ok=$((reg_ok + 1)); echo "  noted though allowed: $id at $s"; fi
     if [ "$allowed" = 0 ] && [ "$noted" = 0 ]; then reg_bad=$((reg_bad + 1)); echo "  not noted: $id at $s"; fi
@@ -473,12 +471,6 @@ mutate "a linked rule-facts.md accepted" 's/\[ -f "\$RULES" \] && \[ ! -L "\$RUL
   'd="$(dirname "$SC")"; rm -f "$d/rule-facts.md"; ln -s "$REV/rule-facts.md" "$d/rule-facts.md"; [ "$(rc_of checker "$f658")" = 2 ]'
 mutate "the in-repo downgrade note not exempted" 's/ and \(\[\$r, \$s\] \| IN\(documented_bands\[\]\) \| not\)//' \
   '! grep -q "^note" <<< "$(said "$fdown")"'
-mutate "the inactive LOW band of the generated policy rule passed" 's/bad\(\$r == "compat\.generated-policy-narrowed" and \$s == "LOW"; /bad(false; /' \
-  'rejects "$fgp"'
-mutate "the generated policy LOW line tells the reviewer to drop the finding" 's/never drop the finding/drop the finding/' \
-  'line_is "$(said "$fgp")" "$GPL"'
-mutate "the generated policy LOW also given a note" 's/ and \(\[\$r, \$s\] != \["compat\.generated-policy-narrowed", "LOW"\]\)//' \
-  '! grep -q "^note" <<< "$(said "$fgp")"'
 mutate "review.tool-disputed accepted at HIGH" 's/bad\(\$r == "review\.tool-disputed" and \$s != "LOW"/bad($r == "review.tool-disputed" and $s == "MEDIUM"/' \
   'rejects "$fdis"'
 mutate "the review CRITICAL test kept for one review rule" 's/startswith\("review\."\) and \$s == "CRITICAL"/startswith("review.check-not-run") and \$s == "CRITICAL"/' \

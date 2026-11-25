@@ -131,11 +131,10 @@ def check_one($id; $reg; $refuted):
           else
             (.rule_id // null) as $r
             | bad(($r | type == "string" and startswith("review.") and $s == "CRITICAL"); $id; "severity"; "a review.* finding is never CRITICAL; a defect of the module filed under review.* has the wrong rule name, so use the rule that names the defect"),
-              bad($r == "compat.generated-policy-narrowed" and $s == "LOW"; $id; "severity"; "LOW is not reported for compat.generated-policy-narrowed: its LOW band is inactive until a host step supplies references; file the CRITICAL or HIGH band by the rule's Severity text, or review.check-not-run at MEDIUM when the author names an upstream policy and no reference exists; never drop the finding"),
               bad($r == "review.tool-disputed" and $s != "LOW"; $id; "severity"; "a review.tool-disputed finding is LOW; a defect of the module filed under it has the wrong rule name, so use the rule that names the defect"),
               # The render reads no severity band of a rule, so a severity outside the registry row is advice:
               # a wrong rule name is a possible cause, and lowering the severity is never the fix.
-              ( if ($r | type == "string") and ($reg | has($r)) and ($reg[$r] | length) > 0 and ($s | IN($reg[$r][]) | not) and ([$r, $s] | IN(documented_bands[]) | not) and ([$r, $s] != ["compat.generated-policy-narrowed", "LOW"]) then
+              ( if ($r | type == "string") and ($reg | has($r)) and ($reg[$r] | length) > 0 and ($s | IN($reg[$r][]) | not) and ([$r, $s] | IN(documented_bands[]) | not) then
                   note($id; "severity"; "\($s) is outside the registry band of \($r), \($reg[$r] | join(", ")); check the rule name: if the rule is right, keep the severity and the render decides; if the reading fits another rule, use the rule whose Severity text gives \($s), or report a new name with the opener; never lower a severity to pass this check")
                 else empty end )
           end
