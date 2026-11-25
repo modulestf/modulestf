@@ -547,6 +547,12 @@ cmd_schema() {
   # read pass as "-", which it refuses as inputs.
   mbs="$(jq -r '.binding.merge_base // ""' "$RUN/depth.json" 2> /dev/null)"
   if [[ "$mbs" =~ $sha_re ]]; then ins="$(schema_inputs "$HEAD_SHA" "$mbs")" || ins=-; else mbs=""; fi
+  # The mirror cache across runs (schema-pass.md, Mirror Cache): each cached asset is checked as a
+  # download is. No cache directory to name, no cache.
+  local sc=""
+  if [ -n "${XDG_CACHE_HOME:-}" ]; then sc="$XDG_CACHE_HOME/modulestf/schema-mirror"
+  elif [ -n "${HOME:-}" ]; then sc="$HOME/.cache/modulestf/schema-mirror"; fi
+  SCHEMA_CACHE="$sc" \
   SCHEMA_DEPTH="$RUN/depth.json" SCHEMA_HEAD="$HEAD_SHA" SCHEMA_MERGE_BASE="$mbs" SCHEMA_INPUTS="$ins" SCHEMA_ROOT="$PREFIX" \
     bash "$HERE/schema-pass.sh" "$RUN/facts" "$RUN/schema-work" "$RUN/schema-handoff" > "$RUN/state/schema.out" 2>&1
   rc=$?
@@ -1361,9 +1367,10 @@ earlier_of() {
   done < <(jq -c 'if type == "array" then .[] | objects | select(.judgment == "resolved" and (.file | type == "string")
       and (.file | test("^[A-Za-z0-9._][A-Za-z0-9._/-]*$")) and ((.file | test("(^|/)[.][.](/|$)")) | not)
       and (.line | type == "number" and . >= 1 and . == floor and . <= 10000000)) | {file, line} else empty end' <<< "${jud:-null}" 2> /dev/null)
-  jq -c --argjson j "${jud:-null}" --argjson heads "$heads" '
+  # The judgments reach jq on a descriptor: at the 262144 byte cap they are over one argument's limit.
+  jq -c --slurpfile j <(printf '%s' "${jud:-null}") --argjson heads "$heads" '
     def plain: type == "string" and length > 0 and length <= 1024 and test("^[A-Za-z0-9._][A-Za-z0-9._/-]*$") and (test("(^|/)[.][.](/|$)") | not);
-    .findings as $f
+    ($j[0]) as $j | .findings as $f
     | ($j | type == "array" and all(.[]; type == "object"
          and keys == ["file", "id", "judgment", "line"] and (.id | type == "string")
          and (.judgment | IN("resolved", "partly", "not resolved"))
@@ -1393,11 +1400,18 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   [ ! -f "$RUN/earlier.json" ] || ear="$(earlier_of)" || return 1
   [ "$TRIAGE" = true ] || fl="$(floors_of)" || fl=null
   mode="$(plan_mode)"
-  jq -n --argjson triage "$triage" --argjson counts "$1" --argjson beh "$beh" --argjson ver "$ver" \
-    --argjson cov "$cov" --argjson skip "$skip" --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
-    --argjson floors "$fl" --argjson skipped "$sk" --argjson earlier "$ear" \
+  # The behaviour, verify, coverage, skip check, skipped files and earlier values have no size cap that
+  # keeps them under one argument's limit (128 KiB on Linux), so they reach jq on a descriptor,
+  # each held to exactly one JSON value as --argjson held it.
+  jq -n --argjson triage "$triage" --argjson counts "$1" --slurpfile beh <(printf '%s' "$beh") --slurpfile ver <(printf '%s' "$ver") \
+    --slurpfile cov <(printf '%s' "$cov") --slurpfile skip <(printf '%s' "$skip") --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
+    --argjson floors "$fl" --slurpfile skipped <(printf '%s' "$sk") \
+    --slurpfile earlier <(printf '%s' "$ear") \
     --argjson planned "$( [ -f "$RUN/state/plan" ] && echo true || echo false)" \
     --slurpfile sel "$RUN/selection.json" "
+    def one: if length == 1 then .[0] else error(\"not one JSON value\") end;
+    (\$beh | one) as \$beh | (\$ver | one) as \$ver | (\$cov | one) as \$cov | (\$skip | one) as \$skip
+    | (\$skipped | one) as \$skipped | (\$earlier | one) as \$earlier |
     {format: 1, triage: \$triage, plan_ran: \$planned,
      verify_gaps: (if \$triage then []
        elif \$ver != null then (\$ver | $GAPS_JQ)

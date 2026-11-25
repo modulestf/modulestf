@@ -574,7 +574,7 @@ bash <this skill>/references/review-run.sh record --out <render output directory
 
 ## Cleanup
 
-Every run ends by deleting the run directory, and the clone, the base worktree and the plugin cache with it. It is a stranger's code on the owner's disk and has no reason to outlive the run.
+Every run ends by deleting the run directory, and the clone, the base worktree and the plugin cache with it. It is a stranger's code on the owner's disk and has no reason to outlive the run. The one thing kept is the schema pass's [mirror cache](schema-pass.md#mirror-cache), which holds only mirror assets that passed every check, never anything from the pull request.
 
 When the plan pass ran in the isolated runner, the runner's Docker objects go first. The runner removes its own when it ends, even on an interrupt; a SIGKILL leaves them. So, when the runner's record holds `run-id.txt`, which the runner writes on the host and no container can reach, remove exactly the names that id gives, and nothing by a name prefix, a filter or a prune: other runs on the same Docker daemon are not this run's.
 
