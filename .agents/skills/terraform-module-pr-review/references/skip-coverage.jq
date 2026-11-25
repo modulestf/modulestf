@@ -10,11 +10,15 @@ def safe_address: type == "string" and length <= 300
 def attr_name: type == "string" and test("^[a-z0-9_]{1,128}$");
 
 # The lines after a block's plan line that a design skip reads (skip-coverage.md, Design skips):
-# every denied, base and base-denied line, kept as lists, so a second one of a kind is seen.
+# every denied, base and base-denied line, and the runner's refused, validate and base-refused
+# lines, kept as lists, so a second one of a kind is seen.
 def design_lines($x):
   if .b[-1].plan == null then .
   elif ($x | startswith("denied: ")) then .b[-1].denied += [$x[8:]]
   elif ($x | startswith("base-denied: ")) then .b[-1].base_denied += [$x[13:]]
+  elif ($x | startswith("refused: ")) then .b[-1].refused += [$x[9:]]
+  elif ($x | startswith("base-refused: ")) then .b[-1].base_refused += [$x[14:]]
+  elif ($x | startswith("validate: ")) then .b[-1].validate += [$x[10:]]
   elif ($x | startswith("base: ")) then .b[-1].base += [$x[6:]]
   else . end;
 
@@ -26,7 +30,7 @@ def record_blocks:
   split("\n") as $l
   | if any($l[]; . == "plan pass mode: laptop") and (any($l[]; startswith("host example ")) | not) then
       reduce $l[] as $x ({b: [], n: 0};
-        if ($x | startswith("example: ")) then .n += 1 | .b += [{n: .n, dir: $x[9:], plan: null, hit: null, hits: [], denied: [], base: [], base_denied: []}]
+        if ($x | startswith("example: ")) then .n += 1 | .b += [{n: .n, dir: $x[9:], plan: null, hit: null, hits: [], denied: [], base: [], base_denied: [], refused: [], base_refused: [], validate: []}]
         elif (.b | length) == 0 then .
         elif ($x | startswith("gate-hit ")) and .b[-1].plan == null then
           .b[-1].hits += [$x[9:] | capture("^(?<gate>G[0-3]) (?<path>[^ :]+)(?<line>:[^ ]*)?$") // {gate: null}]
@@ -107,6 +111,15 @@ def dir_changed($paths; $d; $h; $b):
 # plan class an environment reason of this closed list, a property of the example and the review
 # role, never of the run. A transient reason (timeout, output-cap, network, throttling) is not here.
 def design_kind: {"environment (access-denied)": "access-denied"}[.] // null;
+# A host the plan proxy refuses by design: only the runner has a plan proxy, so runner mode alone.
+def design_kind_runner: design_kind // ({"environment (refused-host)": "refused-host"}[.] // null);
+# The closed list of hosts the plan proxy refuses by design, as run-pass.sh design_host_re, and
+# per host the data source types whose read goes there (plan-runner/README.md, Refused hosts).
+def design_host: test("^(sso|identitystore|api\\.ecr-public)\\.[a-z]{2,4}(-[a-z]+){1,2}-[0-9]{1,2}\\.(amazonaws\\.com|amazonaws\\.com\\.cn|c2s\\.ic\\.gov|sc2s\\.sgov\\.gov|cloud\\.adc-e\\.uk|csp\\.hci\\.ic\\.gov|amazonaws\\.eu):443\\z");
+def host_reads($t): {"sso": "^aws_ssoadmin_instances$", "identitystore": "^aws_identitystore_[a-z0-9_]+$",
+  "api": "^aws_ecrpublic_authorization_token$"}[split(".")[0]] as $re | $re != null and ($t | test($re));
+# The hosts of one refused or base-refused line, or null for a line outside the grammar.
+def refused_set: split(" ") | if length > 0 and length <= 20 and all(.[]; design_host) and . == (unique) then . else null end;
 # The data addresses of one denied or base-denied line, or null for a line outside the grammar.
 def denied_set: split(" ") | if length > 0 and length <= 50 and all(.[]; safe_address and test("(^|\\.)data\\."))
   and . == (unique) then . else null end;
@@ -114,13 +127,19 @@ def denied_set: split(" ") | if length > 0 and length <= 50 and all(.[]; safe_ad
 # reasons, record block and head gate record, what the whole change gave, and $x.refs, the
 # "<address> <attribute>" pairs of changed attributes some .tf file of the clone reads.
 def design_entry($x):
-  ($x.rs[0] | design_kind) as $k
+  ($x.rs[0] | design_kind_runner) as $k
   | (if ($x.rs | length) > 1 then "not-sole-reason"
      elif ($x.headok | not) then "head-mismatch"
      elif ($x.files | length) != $x.nchanged or ($x.cls | length) != ($x.files | length) then "files-incomplete"
      elif $x.blk == null or $x.blk.plan != $x.rs[0] or ($x.d | safe_path | not) then "plan-record-unusable"
      # every error of the head plan an access denial on a data source read, one line of them
-     elif ($x.blk.denied | length) != 1 or ($x.blk.denied[0] | denied_set) == null then "denial-unproven"
+     elif $k == "access-denied" and (($x.blk.denied | length) != 1 or ($x.blk.denied[0] | denied_set) == null) then "denial-unproven"
+     # every refusal of the head plan a host refused by design, one line of them from the runner,
+     # and each host read by a data source of a mapped type declared in the example directory
+     elif $k == "refused-host" and (($x.blk.refused | length) != 1 or ($x.blk.refused[0] | refused_set) == null
+       or any($x.blk.refused[0] | refused_set | .[]; . as $h | any($x.types[]; . as $t | $h | host_reads($t)) | not)) then "denial-unproven"
+     # the head validates there, so the early end hides no type error
+     elif $k == "refused-host" and $x.blk.validate != ["passed"] then "not-validated"
      # a changed data source can change what the plan reads, and so what the role is denied
      elif ($x.wp.allowed | not) or any($x.cls[].attrs[]; .address | startswith("data.")) then "change-not-allowed"
      # a changed attribute some expression reads, into a local, a count, a for_each or a data source
@@ -128,7 +147,9 @@ def design_entry($x):
      elif dir_changed($x.paths; $x.d; $x.h; null) then "dir-changed"
      elif ($x.base | sha | not) then "merge-base-unresolved"
      # the merge base, planned the same way, denied on the same data sources
-     elif $x.blk.base != ["environment (access-denied)"] or $x.blk.base_denied != $x.blk.denied then "base-not-denied"
+     elif $k == "access-denied" and ($x.blk.base != ["environment (access-denied)"] or $x.blk.base_denied != $x.blk.denied) then "base-not-denied"
+     # the merge base, planned the same way, refused the same hosts
+     elif $k == "refused-host" and ($x.blk.base != ["environment (refused-host)"] or $x.blk.base_refused != $x.blk.refused) then "base-not-denied"
      # the head gate record gives the real directory; a gate hit there means the record does not match the clone
      elif $x.h == null or $x.h.done != true or any($x.h.lines[]; startswith("hit ")) then "hit-set-differs"
      elif $x.wp.nowit != null then $x.wp.nowit
@@ -192,14 +213,14 @@ def runner_blocks:
       reduce $l[] as $x ({b: []};
         if ($x | startswith("host example ")) then
           (($x | capture("^host example (?<n>[1-9][0-9]{0,5}): (?<p>.*)$")) // null) as $h
-          | if $h == null then . else .b += [{n: ($h.n | tonumber), dir: $h.p, plan: null, denied: [], base: [], base_denied: []}] end
+          | if $h == null then . else .b += [{n: ($h.n | tonumber), dir: $h.p, plan: null, denied: [], base: [], base_denied: [], refused: [], base_refused: [], validate: []}] end
         elif (.b | length) == 0 then .
         elif ($x | startswith("plan: ")) and .b[-1].plan == null then .b[-1].plan = ($x[6:] | split(" | ")[0])
         else . | design_lines($x) end)
       | .b
     else null end;
 
-def skip_coverage_runner($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $headok; $nchanged; $refs):
+def skip_coverage_runner($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base; $headok; $nchanged; $refs; $types):
   ($rec | runner_blocks) as $blocks
   | witness_part($cls; $blocks; $addr; $head) as $wp
   | ($hg | gate_record_runner($head)) as $H
@@ -214,9 +235,9 @@ def skip_coverage_runner($cov; $files; $cls; $addr; $rec; $hg; $bg; $head; $base
       | ($B[$d]? // null) as $b
       | [($h.lines? // [])[] | select(startswith("hit X"))] as $xh
       | ($xh | sort | .[0] // "" | sub("^hit X[a-z]+ "; "")) as $path
-      | if ($rs[0] | type == "string" and design_kind != null) then
+      | if ($rs[0] | type == "string" and design_kind_runner != null) then
           design_entry({rs: $rs, d: $d, blk: $blk, h: $h, wp: $wp, cls: $cls, files: $files, paths: $paths,
-                        headok: $headok, nchanged: $nchanged, base: $base, refs: $refs})
+                        headok: $headok, nchanged: $nchanged, base: $base, refs: $refs, types: ($types[$d] // [])})
         else
         (if ($rs | length) > 1 then "not-sole-reason"
          elif $k == null then "wrong-gate-class"

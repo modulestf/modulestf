@@ -647,9 +647,9 @@ JQ
 # shellcheck disable=SC2016 # a jq program
 PLAN_HOSTED_JQ='
 def nat: type == "number" and . >= 0 and . == floor and . <= 999999999;
-# plan-pass.sh ENV_REASONS, each as its class
+# plan-pass.sh ENV_REASONS, each as its class, and refused-host, which only the runner writes
 def env_classes: ["credentials", "access-denied", "throttling", "registry", "plugin", "sandbox", "network",
-  "timeout", "output-cap"] | map("environment (\(.))");
+  "timeout", "output-cap", "refused-host"] | map("environment (\(.))");
 def classes: ["planned", "planned-no-changes", "code-error"] + env_classes + ["needs input",
   "output unrecognised", "budget", "plan pass ended: credentials", "plan gate G0", "plan gate G1",
   "plan gate G2", "plan gate G3", "exception: example assumes a role in another account",

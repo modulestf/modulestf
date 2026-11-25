@@ -96,6 +96,9 @@ plan)
   deniedx) printf 'Error: reading SSM Parameter (/app/db): operation error SSM: GetParameter, https response error StatusCode: 400, RequestID: 0f3e-1a, api error AccessDeniedException: User is not authorized\n\n  with data.aws_ssm_parameter.p,\n\nError: Invalid index\n\n  with aws_s3_bucket.this,\n\n'; exit 1 ;;
   split) printf 'Error: invalid key s3cr3t-val\nue-xyz\n\n'; exit 1 ;;
   esac ;;
+validate)
+  [ -z "\$AWS_ACCESS_KEY_ID" ] || echo "validate with credentials" >> "$TMP/tf.log"
+  [ "\${PWD##*/}" != err ] || { printf 'Error: Unsupported argument\n\n'; exit 1; } ;;
 esac
 exit 0
 EOF
@@ -1199,6 +1202,26 @@ for m in 's/\n  \[ -n "\$DENIED" \] && echo "denied: \$DENIED"\n/\n/' \
     "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && ! phases "$TMP/pp-runner-m.sh"; echo $?)"
 done
 
+# The validate phase, which the runner runs for an example it ended because the plan proxy refused
+# it hosts by design: one fixed line, no credentials (skip-coverage.md, Design skips).
+vphase() { # script copy -> the validate lines of examples/denied (passes) and examples/err (fails)
+  local R; R="$(newrun)"
+  rv() { PATH="$TMP/bin:/usr/bin:/bin" PLAN_PASS_AWS_ACCESS_KEY_ID=ASIAFIXTUREFIXTURE01 PLAN_PASS_AWS_SECRET_ACCESS_KEY=s3cr3t-value-xyz \
+    PLAN_PASS_AWS_SESSION_TOKEN=tok-fixture bash "$1" plan "$R" demo --role-arn "$ROLE" --mode runner "${@:2}" 2>&1; }
+  PATH="$TMP/bin:/usr/bin:/bin" bash "$PP" g0 "$R" > /dev/null
+  rv "$1" --phase init examples/denied examples/err > /dev/null
+  rv "$1" --phase validate --index 1 examples/denied; rv "$1" --phase validate --index 2 examples/err
+}
+: > "$TMP/tf.log"
+check "runner phases: validate prints passed for an example that validates and failed for one that does not" \
+  "$([ "$(vphase "$TMP/pp-runner.sh")" = "$(printf 'validate: passed\nvalidate: failed')" ] && echo 0 || echo 1)"
+check "runner phases: validate runs with no credentials" "$(grep -q 'validate with credentials' "$TMP/tf.log" && echo 1 || echo 0)"
+check "runner phases: validate needs an index" \
+  "$(has "$(PATH="$TMP/bin:/usr/bin:/bin" bash "$TMP/pp-runner.sh" plan "$(newrun)" demo --mode runner --phase validate examples/err)" 'plan pass not run: phase validate needs --index and one example')"
+nocont "$PP" | perl -0pe 's/terraform validate -no-color; then/true; then/' > "$TMP/pp-runner-m.sh"
+check "runner phases: the mutation that passes every validate is caught" \
+  "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && [ "$(vphase "$TMP/pp-runner-m.sh" | tail -n 1)" = 'validate: passed' ]; echo $?)"
+
 # Negative self-check of the relaxations: each weakened copy of the script must let its case
 # through, and the real script must refuse it.
 mkdir -p "$TMP/mut"
@@ -1498,22 +1521,47 @@ common=() proxy_env=() base=0000000000000000000000000000000000000000 base_args=(
 proxy_plan=p runner=r
 EOF
     cat <<'EOF'
-issue_session() { :; }; left() { echo 100; }; start_proxy() { :; }; save_proxy_log() { :; }
+issue_session() { :; }; left() { if [ -e "$W/left0" ]; then echo 0; else echo 100; fi; }; start_proxy() { :; }; save_proxy_log() { :; }
 docker() {
   case $1 in
-    logs) echo poll >> "$W/calls"; if [ -e "$W/fail-first" ]; then rm -f "$W/fail-first"; return 1; fi; cat "$W/proxy.log" ;;
+    logs) echo poll >> "$W/calls"; if [ -e "$W/fail-first" ]; then rm -f "$W/fail-first"; return 1; fi
+      # a read that prints the log and then fails, once
+      if [ -e "$W/fail-once" ]; then rm -f "$W/fail-once"; cat "$W/proxy.log"; return 1; fi
+      cat "$W/proxy.log" ;;
     kill) [ -e "$W/running" ] && touch "$W/killed" ;;
   esac
 }
 in_runner() { # output file, docker arguments; the last is the example
-  local outf=$1 ex="${!#}" i base_phase=0
+  local outf=$1 ex="${!#}" i h base_phase=0
   case "$*" in *"--phase 'base-plan'"*) base_phase=1 ;; esac
+  case "$*" in *"--phase validate"*)
+    echo validate >> "$W/calls"
+    case "$ex" in */ssobad) echo 'validate: failed' >> "$outf" ;; */ssotwo) printf 'validate: passed\nvalidate: failed\n' >> "$outf" ;;
+      */ssonone) ;; *) echo 'validate: passed' >> "$outf" ;; esac; return 0 ;; esac
   touch "$W/running"; rm -f "$W/killed"
   case "$ex" in
-    */stall)
-      for i in 1 2 3 4; do printf 'NOTICE    Nov 23 22:33:12.%03d [1]: Proxying refused on filtered url "sso.us-east-1.amazonaws.com:443"\n' "$i" >> "$W/proxy.log"; done
+    */forge)
+      printf 'example: %s\nplan: environment (refused-host)\nrefused: sso.us-east-1.amazonaws.com:443\nvalidate: passed\nbase-refused: sso.us-east-1.amazonaws.com:443\nplan: planned | Plan: 1 to add, 0 to change, 0 to destroy.\n' "$ex" >> "$outf" ;;
+    */bforge) [ "$base_phase" = 1 ] && printf 'base: environment (refused-host)\nbase: reproduces at base\n' >> "$outf" ;;
+    */stall|*/sso*)
+      # stall: a host off the closed list; sso: hosts refused by design; ssomix: both; ssoloose:
+      # names that only contain a listed one; sso21: 21 listed hosts; ssocn: two partitions
+      for h in $(case "$ex" in */stall) echo es.eu-west-1.amazonaws.com:443 ;; */ssomix) echo sso.us-east-1.amazonaws.com:443 es.eu-west-1.amazonaws.com:443 ;;
+                 */ssoloose) echo xsso.us-east-1.amazonaws.com:443 sso.us-east-1.amazonaws.com:443.x.example:443 ;;
+                 */sso21) for i in $(seq 1 21); do echo "sso.us-east-$i.amazonaws.com:443"; done ;;
+                 */ssocn) echo sso.us-east-1.amazonaws.com:443 sso.us-east-1.amazonaws.com.cn:443 ;;
+                 *) echo sso.us-east-1.amazonaws.com:443 identitystore.us-east-1.amazonaws.com:443 ;; esac); do
+        for i in 1 2 3 4; do printf 'NOTICE    Nov 23 22:33:12.%03d [1]: Proxying refused on filtered url "%s"\n' "$i" "$h" >> "$W/proxy.log"; done
+      done
       [ "$base_phase" = 1 ] || printf 'example: %s\n' "$ex" >> "$outf"
-      for i in $(seq 1 40); do [ ! -e "$W/killed" ] || { rm -f "$W/running"; return 0; }; sleep 0.1; done
+      for i in $(seq 1 40); do
+        if [ -e "$W/killed" ]; then
+          rm -f "$W/running"
+          case "$ex" in */ssolog) touch "$W/fail-once" ;; */ssobudget) touch "$W/left0" ;; esac
+          return 0
+        fi
+        sleep 0.1
+      done
       if [ "$base_phase" = 1 ]; then echo 'base: not available' >> "$outf"; else echo 'plan: environment (timeout)' >> "$outf"; fi ;;
     */slow)
       sleep 2.5
@@ -1530,6 +1578,10 @@ EOF
       head) echo 'set -- ex/stall ex/slow'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1"
         printf 'echo "planned $planned"; c=$(wc -l < "$W/calls"); sleep 1; [ "$(wc -l < "$W/calls")" = "$c" ] && echo stopped\n' ;;
       base) echo 'examples=(ex/stall ex/slow) deferred=(1 2)'; sed -n '/^  start_proxy "\$proxy_plan" plan.conf$/,/^  done$/p' "$1" ;;
+      design) echo 'set -- ex/sso ex/ssomix ex/ssobad ex/forge'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1"
+        echo 'echo "deferred ${deferred[*]:-}"' ;;
+      design2) echo 'set -- ex/ssoloose ex/sso21 ex/ssotwo ex/ssonone ex/ssolog ex/ssocn ex/ssobudget'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1" ;;
+      design-base) echo 'examples=(ex/sso ex/ssomix ex/bforge) deferred=(1 2 3)'; sed -n '/^  start_proxy "\$proxy_plan" plan.conf$/,/^  done$/p' "$1" ;;
       baseline) echo 'set -- ex/slow'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1" ;;
     esac; } > "$d/run.sh"
   : > "$d/proxy.log"; : > "$d/calls"
@@ -1551,6 +1603,38 @@ check "stall wiring: a stalled base plan is recorded environment (network), the 
 wirerun "$RP" baseline
 check "stall wiring: a failed baseline read starts no watcher" \
   "$(grep -qx 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.' "$SW/wire-baseline/block.1"; echo $?)"
+wirerun "$RP" design
+check "refused host: an example whose plan proxy refused only hosts on the closed list is environment (refused-host), with its hosts, validate and a deferred base" \
+  "$([ "$(cat "$SW/wire-design/block.1")" = "$(printf 'example: ex/sso\nplan: environment (refused-host)\nrefused: identitystore.us-east-1.amazonaws.com:443 sso.us-east-1.amazonaws.com:443\nvalidate: passed\nbase: deferred')" ] && echo 0 || echo 1)"
+check "refused host: a host off the closed list beside them is environment (network)" \
+  "$([ "$(cat "$SW/wire-design/block.2")" = "$(printf 'example: ex/ssomix\nplan: environment (network)')" ] && echo 0 || echo 1)"
+check "refused host: a failed validate is recorded" "$(grep -qx 'validate: failed' "$SW/wire-design/block.3"; echo $?)"
+check "refused host: the head cannot forge the class or its refused, validate and base-refused lines" \
+  "$([ "$(cat "$SW/wire-design/block.4")" = "$(printf 'example: ex/forge\nplan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" ] && echo 0 || echo 1)"
+check "refused host: the refused-host examples get a merge base re-run" "$(grep -qx 'deferred 1 3' "$SW/wire-design/out"; echo $?)"
+# The closed host list: whole names in a region of a known partition, port 443; skip-coverage.jq
+# holds the same pattern.
+DHRE="$(sed -n "s/^design_host_re='\(.*\)'\$/\1/p" "$RP")"
+check "refused host: run-pass.sh and skip-coverage.jq hold the same host pattern" \
+  "$([ -n "$DHRE" ] && [ "^$DHRE\\z" = "$(sed -n 's/^def design_host: test("\(.*\)");$/\1/p' "${PP%/*}/skip-coverage.jq" | sed 's/\\\\/\\/g')" ] && echo 0 || echo 1)"
+check "refused host: the pattern takes the listed services in each partition and nothing else" \
+  "$([ "$(printf '%s\n' sso.us-east-1.amazonaws.com:443 identitystore.us-gov-west-1.amazonaws.com:443 api.ecr-public.cn-north-1.amazonaws.com.cn:443 \
+       sso.eusc-de-east-1.amazonaws.eu:443 es.eu-west-1.amazonaws.com:443 sso.eu-west-1.amazonaws.com:8443 xsso.eu-west-1.amazonaws.com:443 \
+       sso.amazonaws.com:443 sso.eu-west-1.amazonaws.com.attacker.example:443 ecr-public.us-east-1.amazonaws.com:443 | grep -Ecx "$DHRE")" = 4 ] && echo 0 || echo 1)"
+wirerun "$RP" design-base
+check "refused host: a base plan refused only hosts on the closed list is environment (refused-host) with a base-refused line" \
+  "$([ "$(cat "$SW/wire-design-base/base.1")" = "$(printf 'base: environment (refused-host)\nbase-refused: identitystore.us-east-1.amazonaws.com:443 sso.us-east-1.amazonaws.com:443')" ] \
+     && [ "$(cat "$SW/wire-design-base/base.2")" = 'base: environment (network)' ] && echo 0 || echo 1)"
+check "refused host: a base container cannot forge the refused-host class" "$(head -n 1 "$SW/wire-design-base/base.3" | grep -qx 'base: reproduces at base'; echo $?)"
+wirerun "$RP" design2
+wb() { cat "$SW/wire-design2/block.$1"; }
+check "refused host: names that only contain a listed host are environment (network)" "$([ "$(wb 1)" = "$(printf 'example: ex/ssoloose\nplan: environment (network)')" ] && echo 0 || echo 1)"
+check "refused host: 21 listed hosts are environment (network)" "$([ "$(wb 2)" = "$(printf 'example: ex/sso21\nplan: environment (network)')" ] && echo 0 || echo 1)"
+check "refused host: two validate lines read as validate: not run" "$(wb 3 | grep -qx 'validate: not run'; echo $?)"
+check "refused host: no validate line reads as validate: not run" "$(wb 4 | grep -qx 'validate: not run'; echo $?)"
+check "refused host: a proxy log read that fails after the plan is environment (network)" "$([ "$(wb 5)" = "$(printf 'example: ex/ssolog\nplan: environment (network)')" ] && echo 0 || echo 1)"
+check "refused host: the hosts are sorted in codepoint order" "$(wb 6 | grep -qx 'refused: sso.us-east-1.amazonaws.com.cn:443 sso.us-east-1.amazonaws.com:443'; echo $?)"
+check "refused host: no budget left for validate reads as validate: not run" "$(wb 7 | grep -qx 'validate: not run'; echo $?)"
 wiremut() { # name, perl program, scenario, file, line the real script writes there
   perl -ne "$2" "$RP" > "$SW/$1.sh"
   check "mutation $1 changes the script" "$(cmp -s "$RP" "$SW/$1.sh"; test $? -eq 1; echo $?)"
@@ -1559,8 +1643,30 @@ wiremut() { # name, perl program, scenario, file, line the real script writes th
 }
 wiremut stall-flag-kept 'print unless /^  rm -f "\$TMPRUN\/stalled"$/' head block.2 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.'
 wiremut stall-baseline-zero 's/stall_watch "\$lines"/stall_watch 0/; print' head block.2 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.'
-wiremut stall-no-head-line 'print unless /plan: environment \(network\)/' head block.1 'plan: environment (network)'
-wiremut stall-no-base-line 'print unless /base: environment \(network\)/' base base.1 'base: environment (network)'
+wiremut stall-no-head-line 's/printf .example: %s\\nplan: environment \(network\)\\n. "\$ex" > "\$blk"/:/; print' head block.1 'plan: environment (network)'
+wiremut stall-no-base-line 's/echo .base: environment \(network\). > "\$TMPRUN\/base\.\$n"/:/; print' base base.1 'base: environment (network)'
+wiremut refused-host-substring-host 's/grep -Evx "\$design_host_re"/grep -Ev "\$design_host_re"/; print' design2 block.1 'plan: environment (network)'
+wiremut refused-host-no-cap 's/ && \[ "\$\(printf .%s\\n. "\$t" \| wc -l\)" -le 20 \]//; print' design2 block.2 'plan: environment (network)'
+wiremut refused-host-first-validate "s/^  v=\"\\\$\\(grep -E '\\^validate: ' \"\\\$TMPRUN\/validate\.out\"\\)\" \\|\\| v=\$/  v=\"\\\$(grep -m 1 -E '^validate: (passed|failed)\\\$' \"\\\$TMPRUN\/validate.out\")\" || v=/; print" design2 block.3 'validate: not run'
+wiremut refused-host-failed-read-used 's/refused_targets \| LC_ALL=C sort -u\)" \|\| return 0/refused_targets | LC_ALL=C sort -u)"/; print' design2 block.5 'plan: environment (network)'
+wiremut refused-host-validate-no-budget 'print unless /^  \[ "\$rem" -gt 0 \] \|\| \{ echo .validate: not run.; return 0; \}$/' design2 block.7 'validate: not run'
+wiremut refused-host-base-forgeable 's/ \| grep -Ev .\^base: environment \\\(refused-host\\\). \|/ |/; print' design-base base.3 'base: reproduces at base'
+if [ "$(printf 'sso.us-east-1.amazonaws.com:443\nsso.us-east-1.amazonaws.com.cn:443\n' | LC_ALL=en_US.UTF-8 sort 2> /dev/null | head -n 1)" = sso.us-east-1.amazonaws.com:443 ]; then
+  perl -pe 's/refused_targets \| LC_ALL=C sort -u\)/refused_targets | sort -u)/' "$RP" > "$SW/refused-host-locale.sh"
+  check "mutation refused-host-locale changes the script" "$(cmp -s "$RP" "$SW/refused-host-locale.sh"; test $? -eq 1; echo $?)"
+  LC_ALL=en_US.UTF-8 wirerun "$SW/refused-host-locale.sh" design2
+  check "mutation refused-host-locale is caught" "$(grep -qx 'refused: sso.us-east-1.amazonaws.com.cn:443 sso.us-east-1.amazonaws.com:443' "$SW/wire-design2/block.6"; test $? -eq 1; echo $?)"
+else
+  echo "ok   mutation refused-host-locale: skipped, no en_US.UTF-8 locale here sorts these hosts apart from C"
+fi
+wiremut refused-host-any-host 'print unless /grep -Evx "\$design_host_re"/' design block.2 'plan: environment (network)'
+wiremut refused-host-no-validate 's/vline="\$\(validate_example "\$n" "\$ex"\)"/vline="validate: passed"/; print' design block.3 'validate: failed'
+wiremut refused-host-not-deferred "s/\\|'plan: environment \\(refused-host\\)'\\*//; print" design out 'deferred 1 3'
+wiremut refused-host-no-base-class 's/if \[ -n "\$hosts" \]; then (printf .base: environment \(refused-host\))/if false; then $1/; print' design-base base.1 'base: environment (refused-host)'
+perl -pe 's/\|refused: \|base-refused: \|validate: \|\(plan\|base\): environment \\\(refused-host\\\)\)/)/' "$RP" > "$SW/refused-host-forgeable.sh"
+check "mutation refused-host-forgeable changes the script" "$(cmp -s "$RP" "$SW/refused-host-forgeable.sh"; test $? -eq 1; echo $?)"
+wirerun "$SW/refused-host-forgeable.sh" design
+check "mutation refused-host-forgeable is caught" "$(grep -qx 'validate: passed' "$SW/wire-design/block.4" && echo 0 || echo 1)"
 wiremut stall-baseline-fallback 's/ && \[\[ "\$lines" =~ \^\[0-9\]\+\$ \]\]; then/ || lines=0; then/; print' baseline block.1 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.'
 swmut() { # name, perl substitution, log, baseline, running: the weakened copy flags or kills where the real one does not
   perl -pe "$2" "$RP" > "$SW/$1.sh"
@@ -1607,8 +1713,8 @@ EOF
   check "$sh: env reason: a kill for the output cap is output-cap" "$([ "$("$sh" "$TMP/class.sh" 124 "$TMP/cl.txt" plan)" = 'environment (output-cap)' ] && echo 0 || echo 1)"
 done
 # Every token the classifier can print is a class of hosted-record.sh, host-pass.sh, verify-pass.sh
-# and the render, and no other environment class is.
-toks="$(printf '%s\n' "$(sed -n "/^ENV_REASONS='/,/'\$/p" "$PP" | sed "s/^ENV_REASONS='//" | cut -d' ' -f1)" timeout output-cap | sort -u | tr '\n' ' ')"
+# and the render, and so is refused-host, which only the runner writes; no other environment class is.
+toks="$(printf '%s\n' "$(sed -n "/^ENV_REASONS='/,/'\$/p" "$PP" | sed "s/^ENV_REASONS='//" | cut -d' ' -f1)" timeout output-cap refused-host | sort -u | tr '\n' ' ')"
 for f in plan-runner/hosted-record.sh host-pass.sh verify-pass.sh render-comment.jq; do
   ft="$(sed -n '/^def env_classes: \[/,/map("environment/p' "${PP%/*}/$f" | grep -oE '"[a-z-]+"' | tr -d '"' | sort -u | tr '\n' ' ')"
   check "env reason: $f lists exactly the classifier's tokens" "$([ "$ft" = "$toks" ] && echo 0 || echo 1)"
@@ -1712,9 +1818,9 @@ check "runner: an access denial is deferred to the merge base re-run" "$(denwire
 check "runner: a forged base-denied line is dropped from the head block" "$(grep -q '^base-denied: ' "$DW/block.1" && echo 1 || echo 0)"
 check "runner: the base loop keeps the re-run's base-denied line" \
   "$([ "$(cat "$DW/base.1" 2> /dev/null)" = "$(printf 'base: environment (access-denied)\nbase-denied: data.aws_ssm_parameter.p')" ] && echo 0 || echo 1)"
-perl -pe 's/\|not reached:\|base-denied: \)/|not reached:)/' "$RP" > "$DW/m1.sh"
+perl -pe 's/\|base-denied: \|refused: /|refused: /' "$RP" > "$DW/m1.sh"
 check "runner mutation forged-base-denied is caught" "$(rm -f "$DW/block.1"; denwire "$DW/m1.sh" > /dev/null; grep -q '^base-denied: data.aws_forged' "$DW/block.1"; echo $?)"
-perl -pe "s/'plan: code-error'\*\|'plan: environment \(access-denied\)'\*\)/'plan: code-error'*)/" "$RP" > "$DW/m2.sh"
+perl -pe "s/'plan: code-error'\*\|'plan: environment \(access-denied\)'\*\|/'plan: code-error'*|/" "$RP" > "$DW/m2.sh"
 check "runner mutation denial-not-deferred is caught" "$(denwire "$DW/m2.sh" | grep -qx 'deferred 1' && echo 1 || echo 0)"
 perl -ne "print unless /^      grep -E '\^base-denied: '/" "$RP" > "$DW/m3.sh"
 check "runner mutation base-denied-dropped is caught" "$(denwire "$DW/m3.sh" > /dev/null; grep -q '^base-denied: ' "$DW/base.1" && echo 1 || echo 0)"

@@ -244,8 +244,14 @@ the skill's plan pass whenever a container runtime is available.
   match their patterns, drops a malformed sensitive entry whole, and writes them to
   the record as `addresses-<n>.json` ([plan-pass.md](../plan-pass.md#saved-plans-and-addresses)).
   It counts against the same budget.
-- **Merge base re-run:** only for the examples whose plan block holds `plan: code-error`, or
-  `plan: environment (access-denied)`, and `base: deferred`, after the last head plan, so an example that planned costs the budget
+- **Validate:** only for an example whose plan the runner ended for hosts refused by design
+  ([Refused hosts](#refused-hosts)), one container runs `--phase validate`: no network, no
+  credentials, the work volume read-only. It runs `terraform validate` on the example and
+  prints one `validate: passed` or `validate: failed` line; the host keeps that line only when
+  it is the one `validate:` line printed, and writes `validate: not run` otherwise or with no
+  budget left. It counts against the same budget.
+- **Merge base re-run:** only for the examples whose plan block holds `plan: code-error`,
+  `plan: environment (access-denied)` or `plan: environment (refused-host)`, and `base: deferred`, after the last head plan, so an example that planned costs the budget
   nothing at the base. The plan proxy is removed and the init proxy started again, since
   both answer to the name `proxy`. One container per such example, with no credentials and
   the volume writable, runs `--phase base-init`: the first adds the base worktree, fetching
@@ -356,7 +362,8 @@ plan's time limit. While a plan container runs, `run-pass.sh` reads the plan pro
 the line the container started at. Once one host has been refused 3 times and the container is
 still running 60 seconds later, it kills the container. The example is then recorded
 `plan: environment (network)`, or `base: environment (network)` at the merge base, whatever
-the container printed, and the host stays in `plan-refused-hosts.txt`. A plan that ends by
+the container printed, or `environment (refused-host)` when every host refused there is one
+the proxy refuses by design (below), and the host stays in `plan-refused-hosts.txt`. A plan that ends by
 itself in that time keeps its own result. Only lines in tinyproxy's own format count, so text a
 client puts in a request line never reads as a refusal. When the log cannot be read as the
 container starts, no watcher runs for it, and a later read that fails counts nothing: either
@@ -366,7 +373,13 @@ eks module's `eks-capabilities` example and the emr module's `studio` example re
 account's Identity Center directory (`aws_ssoadmin_instances`, then `aws_identitystore_group`),
 so the `sso` and `identitystore` hosts stay refused, and the eks module's `karpenter` example
 reads a public registry token (`aws_ecrpublic_authorization_token`), which is a credential, so
-`api.ecr-public` stays refused. Those examples end this way.
+`api.ecr-public` stays refused.
+
+When every host refused during the plan, 1 to 20 of them, is one of these three, as a whole AWS name on port 443, the example is recorded
+`plan: environment (refused-host)` instead, with a `refused:` line naming the hosts, a
+`validate:` line from `terraform validate` in a container with no network and no credentials,
+and a merge base re-run, so the review can cover it as a
+[design skip](../skip-coverage.md#design-skips).
 
 ## The bare runner
 

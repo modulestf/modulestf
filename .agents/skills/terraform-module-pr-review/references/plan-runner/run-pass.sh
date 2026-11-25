@@ -30,7 +30,9 @@
 # proxy (AWS service endpoints), with the work volume read-only, and is the only place the
 # credentials go. With --base, an example whose plan is a code-error is then re-run at the
 # merge base in two more containers: base-init behind the init proxy, base-plan behind the
-# plan proxy. Examples that planned never touch the base. Every plan is saved with -out into a
+# plan proxy; so is an example this script ended because the plan proxy refused it only hosts
+# refused by design, which first gets terraform validate in a container with no network and no
+# credentials (README.md, Refused hosts). Examples that planned never touch the base. Every plan is saved with -out into a
 # volume of its own, and the saved plan of an example that planned is then read with terraform
 # show -json in one more container per example, with no network, no credentials and that
 # volume read-only, after the plan container has ended; this script checks the addresses it
@@ -309,6 +311,37 @@ refused_targets() { # tinyproxy log on stdin -> one line per refused CONNECT tar
     $0 ~ (p "Request \\(file descriptor [0-9]+\\): CONNECT [^ ]+:[0-9]+ HTTP/1\\.[01]$") {
       t = $0; sub(/.*: CONNECT /, "", t); sub(/ HTTP\/1\.[01]$/, "", t); if (t !~ /:443$/) print t }'
 }
+# A host the plan proxy refuses by design (README.md, Refused hosts): the Identity Center and
+# public registry token endpoints, each a whole AWS name in a region of a known partition, on
+# port 443, a closed list. ../skip-coverage.jq holds the same pattern as design_host.
+design_host_re='(sso|identitystore|api\.ecr-public)\.[a-z]{2,4}(-[a-z]+){1,2}-[0-9]{1,2}\.(amazonaws\.com|amazonaws\.com\.cn|c2s\.ic\.gov|sc2s\.sgov\.gov|cloud\.adc-e\.uk|csp\.hci\.ic\.gov|amazonaws\.eu):443'
+# The refused targets of the plan container that started at proxy log line $1, on one line and
+# sorted in codepoint order, as skip-coverage.jq compares them, when there are 1 to 20 and every
+# one is a host refused by design; nothing otherwise, a log that cannot be read included
+# (../skip-coverage.md, Design skips).
+design_refusals() { # proxy log lines before the container
+  local t
+  t="$(docker logs "$proxy_plan" 2>&1 | tail -n +"$(($1 + 1))" | refused_targets | LC_ALL=C sort -u)" || return 0
+  [ -n "$t" ] && [ "$(printf '%s\n' "$t" | wc -l)" -le 20 ] || return 0
+  [ -z "$(printf '%s\n' "$t" | grep -Evx "$design_host_re")" ] || return 0
+  printf '%s\n' "$t" | paste -sd ' ' -
+}
+# The head's own terraform validate of one example, in a container with no network and no
+# credentials, as the show phase reads a saved plan: the evidence that a plan the runner ended
+# early hid no type error (../skip-coverage.md, Design skips). One fixed line: the container's
+# one validate line when it printed exactly one and it is passed or failed, else not run.
+validate_example() { # index, example
+  local rem v; rem=$(left)
+  [ "$rem" -gt 0 ] || { echo 'validate: not run'; return 0; }
+  : > "$TMPRUN/validate.out"
+  in_runner "$TMPRUN/validate.out" --network none "${common[@]}" -v "$volume":/work:ro \
+    --tmpfs "$RUN/plan/out:rw,size=256m,mode=1777" --tmpfs "$RUN/plan/tmp:rw,size=64m,mode=1777" \
+    --tmpfs "$RUN/plan/home:rw,size=64m,mode=1777" --entrypoint /bin/bash "$runner_image" -c \
+    "exec bash /opt/plan-pass/plan-pass.sh plan '$RUN' '$pname' --mode runner --budget '$rem' --phase validate --index '$1' \"\$@\"" \
+    plan-pass "$2"
+  v="$(grep -E '^validate: ' "$TMPRUN/validate.out")" || v=
+  case "$v" in 'validate: passed'|'validate: failed') printf '%s\n' "$v" ;; *) echo 'validate: not run' ;; esac
+}
 # A plan whose provider keeps retrying a host the plan proxy refuses would wait for the plan's
 # time limit. While a plan container runs, stall_watch reads the plan proxy's log from the line
 # the container started at: once one host has been refused stall_tries times and the container
@@ -317,7 +350,7 @@ refused_targets() { # tinyproxy log on stdin -> one line per refused CONNECT tar
 # ended on its own keeps its result. The kill and the flag ignore TERM, so the parent's kill
 # and wait after the container ends cannot cut them apart; the watcher ends when its parent is
 # gone.
-stall_tries=3 stall_grace=60 stall_poll=5 wpid=
+stall_tries=3 stall_grace=60 stall_poll=5 wpid= plan_since=
 stall_watch() { # proxy log lines before this container, flag file
   local since="" h
   while sleep "$stall_poll"; do
@@ -343,10 +376,12 @@ plan_container() { # output file, phase, index, example, budget left: the work v
   fi
   issue_session
   rm -f "$TMPRUN/stalled"
+  plan_since=
   # No watcher when the log cannot be read: a baseline of 0 would count earlier refusals
   if lines="$(docker logs "$proxy_plan" 2>&1 | wc -l | tr -d ' ')" && [[ "$lines" =~ ^[0-9]+$ ]]; then
     stall_watch "$lines" "$TMPRUN/stalled" &
     wpid=$!
+    plan_since=$lines
   fi
   in_runner "$1" --network "$net_int" "${common[@]}" "${proxy_env[@]}" \
     -v "$volume":/work:ro -v "$volume":/seed:ro \
@@ -363,8 +398,10 @@ plan_container() { # output file, phase, index, example, budget left: the work v
   wpid=
 }
 # Lines only the host may write; the container's output is untrusted and may not forge them. A
-# base-denied line comes only from a merge base re-run's own container (skip-coverage.md, Design skips).
-host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example |not reached:|base-denied: )'
+# base-denied line comes only from a merge base re-run's own container, and the refused-host
+# class with its refused, validate and base-refused lines only from this script (skip-coverage.md,
+# Design skips).
+host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example |not reached:|base-denied: |refused: |base-refused: |validate: |(plan|base): environment \(refused-host\))'
 # The one credentials line a container may write, from plan-pass.sh's fixed list: the first
 # such line is kept, any other credentials line is dropped
 cred_re='^credentials: (session: not issued|write probe: write allowed|(identity check|write probe): (timed out|expired token|invalid token|access denied|throttled|network|other answer))$'
@@ -384,14 +421,27 @@ for ex in "$@"; do
   : > "$TMPRUN/example.out"
   plan_container "$TMPRUN/example.out" plan "$n" "$ex" "$rem"
   untrusted "$TMPRUN/example.out" > "$blk"
-  # Ended by stall_watch: the plan did not finish, whatever the container printed
-  [ ! -s "$TMPRUN/stalled" ] || printf 'example: %s\nplan: environment (network)\n' "$ex" > "$blk"
+  # Ended by stall_watch: the plan did not finish, whatever the container printed. When every
+  # refusal was of a host refused by design, environment (refused-host) with those hosts, the
+  # head's validate and a merge base re-run (skip-coverage.md, Design skips); otherwise
+  # environment (network).
+  if [ -s "$TMPRUN/stalled" ]; then
+    hosts="$(design_refusals "$plan_since")"
+    if [ -n "$hosts" ]; then
+      vline="$(validate_example "$n" "$ex")"
+      { printf 'example: %s\nplan: environment (refused-host)\nrefused: %s\n%s\n' "$ex" "$hosts" "$vline"
+        if [ -n "$base" ]; then echo 'base: deferred'; else echo 'base: not available'; fi; } > "$blk"
+    else
+      printf 'example: %s\nplan: environment (network)\n' "$ex" > "$blk"
+    fi
+  fi
   line="$(grep -m 1 '^plan: ' "$blk" || true)"
   case "$line" in
     'plan: planned'*) planned=$((planned + 1)) ;; # planned and planned-no-changes
     'plan: exception:'*) exc=$((exc + 1)) ;;
-    # a code-error, and an access denial on data source reads alone (skip-coverage.md, Design skips)
-    'plan: code-error'*|'plan: environment (access-denied)'*) [ -z "$base" ] || ! grep -qx 'base: deferred' "$blk" || deferred+=("$n") ;;
+    # a code-error, an access denial on data source reads alone, and hosts refused by design
+    # (skip-coverage.md, Design skips)
+    'plan: code-error'*|'plan: environment (access-denied)'*|'plan: environment (refused-host)'*) [ -z "$base" ] || ! grep -qx 'base: deferred' "$blk" || deferred+=("$n") ;;
     'plan: plan pass ended: credentials'*) break ;;
   esac
 done
@@ -460,10 +510,14 @@ if [ "${#deferred[@]}" -gt 0 ]; then
     ex="${examples[n - 1]}"
     : > "$TMPRUN/example.out"
     plan_container "$TMPRUN/example.out" base-plan "$n" "$ex" "$rem"
-    { grep -E '^base: ' "$TMPRUN/example.out" | head -n 1
+    { grep -E '^base: ' "$TMPRUN/example.out" | grep -Ev '^base: environment \(refused-host\)' | head -n 1
       grep -E '^base-denied: ' "$TMPRUN/example.out" | head -n 1
       untrusted "$TMPRUN/example.out" | grep '^credentials: ' | head -n 1; } > "$TMPRUN/base.$n" || true
-    [ ! -s "$TMPRUN/stalled" ] || echo 'base: environment (network)' > "$TMPRUN/base.$n"
+    if [ -s "$TMPRUN/stalled" ]; then
+      hosts="$(design_refusals "$plan_since")"
+      if [ -n "$hosts" ]; then printf 'base: environment (refused-host)\nbase-refused: %s\n' "$hosts" > "$TMPRUN/base.$n"
+      else echo 'base: environment (network)' > "$TMPRUN/base.$n"; fi
+    fi
     [ -s "$TMPRUN/base.$n" ] || echo 'base: not available' > "$TMPRUN/base.$n"
   done
   save_proxy_log "$proxy_plan" proxy-plan.log
