@@ -606,7 +606,8 @@ t_pd_edited; check "identical: an example the change edits with no plan diff mar
 t_pd_inex() { pdx '.plan_diff[0].dir = "."' '.coverage.examples[0].dir = "."' && nosame; }
 t_pd_inex; check "identical: a trigger in an example directory is never marked" $?
 # A variable the change adds with a validation block, which can fail a caller that never sets
-# it (the classifier gives it a level), is never marked, nor is the argument that passes it.
+# it (the classifier gives it a level), is never marked; the level is set here by hand, and the
+# classifier's own reading of a validation block is held in the facts repository.
 t_pd_valid() { pdx . . '.triggers |= map(if .id == "T-017" then .levels = ["L4"] else . end)' \
   && q '.triggers[] | select(.id == "T-017") | has("identical") | not' | grep -qx 0; }
 t_pd_valid; check "identical: an added variable with a validation block is not marked" $?

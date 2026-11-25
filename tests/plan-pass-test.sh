@@ -1355,15 +1355,20 @@ check "PDIFF_JQ: each recorded aws type alone is equal" \
        [ "$(pdq "$TMP/pdf-t-base.json" "$TMP/pdf-t-head.json" "$PDF/aws-schema.json")" = equal ] || exit 1; done; echo 0)"
 check "PDIFF_JQ: a recorded security group whose configuration sets an unknown vpc_id is unknown" \
   "$([ "$(pdq "$PDF/aws-base.json" "$PDF/aws-head.json" "$PDF/aws-schema.json")" = unknown ]; echo $?)"
+check "PDIFF_JQ: a recorded dynamic block that joins an id to a changed literal is unknown" \
+  "$([ "$(pdq "$PDF/dynamic-base.json" "$PDF/dynamic-head.json" "$PDF/dynamic-schema.json")" = unknown ]; echo $?)"
 check "PDIFF_JQ: the recorded round 1 case with its configuration is unknown" \
   "$([ "$(pdq "$PDF/data-base.json" "$PDF/data-head.json" "$PDF/data-schema.json")" = unknown ]; echo $?)"
 check "PDIFF_JQ: a value the child joins to an id, unknown at both revisions, is unknown" \
   "$([ "$(pdq "$TMP/pdf-base.json" "$TMP/pdf-head.json" "$TMP/pdf-schema.json")" = unknown ]; echo $?)"
 jq -n '{provider_schemas: {"registry.terraform.io/hashicorp/aws": {resource_schemas: {aws_x: {block: {
-  attributes: {arn: {computed: true}, name: {optional: true}, tags: {optional: true, computed: true}},
+  attributes: {arn: {computed: true}, name: {optional: true}, tags: {optional: true, computed: true},
+    blob: {optional: true, computed: true}, req: {required: true, computed: true}},
   block_types: {rule: {nesting_mode: "list", block: {attributes: {id: {computed: true}, v: {optional: true}, w: {optional: true, computed: true}}}},
     lc: {nesting_mode: "list", block: {attributes: {v: {optional: true}}}},
-    bymap: {nesting_mode: "map", block: {attributes: {id: {computed: true}, v: {optional: true}}}}}}}}}}}' > "$TMP/pdq-schema.json"
+    lc2: {nesting_mode: "list", block: {attributes: {w2: {optional: true, computed: true}}}},
+    bymap: {nesting_mode: "map", block: {attributes: {id: {computed: true}, v: {optional: true}, w: {optional: true, computed: true}}}}}}}},
+  data_source_schemas: {aws_x: {block: {attributes: {id: {optional: true, computed: true}}}}}}}}' > "$TMP/pdq-schema.json"
 jq -n -c '{resource_changes: [{address: "aws_x.this[0]", mode: "managed", type: "aws_x", name: "this", provider_name: "registry.terraform.io/hashicorp/aws",
   change: {actions: ["create"], after: {name: "n", rule: [{v: "a"}]}, after_unknown: {arn: true, rule: [{id: true}]}, after_sensitive: {}, replace_paths: null}}],
   output_changes: {o: {actions: ["create"], after: "v", after_unknown: false, after_sensitive: false}},
@@ -1397,6 +1402,28 @@ pdboth "a nested optional computed attribute its block sets is unknown" \
   '.resource_changes[0].change.after_unknown.rule = [{w: true}] | .configuration.root_module.resources[0].expressions.rule[0].w = {constant_value: "x"}' unknown
 pdboth "a whole nested block no configuration writes, unknown, is equal" '.resource_changes[0].change.after_unknown.lc = true' equal
 pdboth "a map block keyed like a computed attribute is read by its values" '.resource_changes[0].change.after_unknown.bymap = {id: {v: true}}' unknown
+# The rule reads the configuration of both plans, the base example's at each, and nothing else.
+pdcfg() { # name, jq update of the base plan, of the head plan, expected
+  jq -c "$2" "$TMP/pdq-a.json" > "$TMP/pdq-ba.json"; jq -c "$3" "$TMP/pdq-a.json" > "$TMP/pdq-bb.json"
+  check "PDIFF_JQ: $1" "$([ "$(pdq "$TMP/pdq-ba.json" "$TMP/pdq-bb.json")" = "$4" ]; echo $?)"
+}
+TU='.resource_changes[0].change.after_unknown.tags = true'
+TS='.configuration.root_module.resources[0].expressions.tags = {references: ["aws_y.z.id"]}'
+pdcfg "an attribute the base configuration alone sets is unknown" "$TU | $TS" "$TU" unknown
+pdcfg "an attribute the head configuration alone sets is unknown" "$TU" "$TU | $TS" unknown
+pdboth "an optional computed attribute unknown only inside, unset, is unknown" '.resource_changes[0].change.after_unknown.blob = [{d: true}]' unknown
+pdboth "a nested optional computed attribute of a block no configuration writes is unknown" '.resource_changes[0].change.after_unknown.lc2 = [{w2: true}]' unknown
+pdboth "a whole block of a resource with no configuration is unknown" '.resource_changes[0].change.after_unknown.lc = true | del(.configuration)' unknown
+pdboth "a nested optional computed attribute of a resource with no configuration is unknown" '.resource_changes[0].change.after_unknown.rule = [{w: true}] | del(.configuration)' unknown
+pdboth "a required computed attribute unknown at both is unknown" '.resource_changes[0].change.after_unknown.req = true' unknown
+pdboth "a configuration of another mode at the same address is not the resource" '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].mode = "data"' unknown
+pdboth "a data source read at apply is found by its data address" '.resource_changes[0] |= (.address = "data.aws_x.this" | .mode = "data" | .change.after_unknown = {id: true})
+  | .configuration.root_module.resources[0] |= (.address = "data.aws_x.this" | .mode = "data" | .expressions = {})' equal
+pdboth "a map block is read by the attributes its labels set" '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
+  | .configuration.root_module.resources[0].expressions.bymap = {a: {w: {constant_value: "x"}}}' unknown
+pdboth "a module key holding a bracket is removed whole" '.resource_changes[0].module_address = "module.m[\"x]y\"]" | .resource_changes[0].address = "module.m[\"x]y\"].aws_x.this[0]"
+  | .resource_changes[0].change.after_unknown.tags = true
+  | .configuration.root_module = {module_calls: {m: {module: {resources: .configuration.root_module.resources}}}}' equal
 pdboth "a configurable attribute of a nested block unknown at both is unknown" '.resource_changes[0].change.after_unknown.rule = [{v: true}]' unknown
 pdboth "a whole nested block the configuration writes, unknown, is unknown" '.resource_changes[0].change.after_unknown.rule = true' unknown
 pdboth "an attribute the schema does not name, unknown, is unknown" '.resource_changes[0].change.after_unknown.other = true' unknown
@@ -1423,12 +1450,32 @@ pdjmut "without the outputs" 's/\| "output\.\\\(\.\)"\]/| empty]/' '.output_chan
 pdjmut "without the deferred check" 's/\n      or \(\(\(\.deferred_changes \/\/ \[\]\) \| length\) > 0\)//' '.deferred_changes = [{reason: "x"}]' "" unknown
 pdjmut "without the marker check" 's/ or \(\.change\.after_sensitive \| marker \| not\)//' '.resource_changes[0].change.after_sensitive = true' "" unknown
 pdjmut "that takes an optional attribute as computed-only" 's/\(\.optional \| not\)/true/' '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].expressions.tags = {references: ["aws_y.z.id"]}' "" unknown
-pdjmut "that ignores what the configuration sets" 's/\(\$ex != null and \(\$set \| not\)\)\)\)/true))/' \
+pdjmut "that ignores what the configuration sets" 's/\(\$ex != null and \(\$set \| not\) and \$v == true\)\)\)/true))/' \
   '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].expressions.tags = {references: ["aws_y.z.id"]}' "" unknown
 pdjmut "that reads a map block by its keys" 's/\n          elif \$bt\.nesting_mode == "map" then [^\n]*//' '.resource_changes[0].change.after_unknown.bymap = {id: {v: true}}' "" unknown
 pdjmut "that takes an attribute the schema does not name" 's/      else \(\$v \| has_true \| not\) end\)/      else true end)/' '.resource_changes[0].change.after_unknown.other = true' "" unknown
 pdjmut "that takes a nested configurable attribute" 's/elif \(\$v \| type\) == "array" then all\(\$v\[\]; computed_only\(\$nb; \$nex\)\)/elif (\$v | type) == "array" then true/' '.resource_changes[0].change.after_unknown.rule = [{v: true}]' "" unknown
 pdjmut "that takes a whole block the configuration writes" 's/elif \$v == true then \$ex != null and \(\$set \| not\)/elif \$v == true then true/' '.resource_changes[0].change.after_unknown.rule = true' "" unknown
+pdcfgmut() { # name, perl substitution, base update, head update: the real comparison says unknown
+  local m; m="$(printf '%s\n' "$PDJ" | perl -0pe "$2")"
+  jq -c "$3" "$TMP/pdq-a.json" > "$TMP/pdq-ba.json"; jq -c "$4" "$TMP/pdq-a.json" > "$TMP/pdq-bb.json"
+  check "PDIFF_JQ: the mutation $1 is caught" "$([ "$m" != "$PDJ" ] && [ "$(PDQ="$m" pdq "$TMP/pdq-ba.json" "$TMP/pdq-bb.json")" != unknown ]; echo $?)"
+}
+pdcfgmut "that reads the head configuration only" 's/any\(cfg_of\(\$A; \$c\), cfg_of\(\$B; \$c\);/any(cfg_of(\$B; \$c);/' "$TU | $TS" "$TU"
+pdcfgmut "that reads the base configuration only" 's/any\(cfg_of\(\$A; \$c\), cfg_of\(\$B; \$c\);/any(cfg_of(\$A; \$c);/' "$TU" "$TU | $TS"
+pdjmut "that takes a whole block with no configuration found" 's/elif \$v == true then \$ex != null and \(\$set \| not\)/elif \$v == true then (\$set | not)/' '.resource_changes[0].change.after_unknown.lc = true | del(.configuration)' "" unknown
+pdjmut "that reads a resource with no configuration as nothing set" 's/if \$ex == null or \(\$set \| not\) then null/if \$ex == null then {} elif (\$set | not) then null/' '.resource_changes[0].change.after_unknown.rule = [{w: true}] | del(.configuration)' "" unknown
+pdjmut "that reads a block no configuration writes as nothing set" 's/if \$ex == null or \(\$set \| not\) then null/if \$ex == null then null elif (\$set | not) then {}/' '.resource_changes[0].change.after_unknown.lc2 = [{w2: true}]' "" unknown
+pdjmut "that takes an unset attribute unknown only inside" 's/ and \$v == true\)\)\)/)))/' '.resource_changes[0].change.after_unknown.blob = [{d: true}]' "" unknown
+pdjmut "that takes a required computed attribute" 's/ and \(\.required \| not\)//' '.resource_changes[0].change.after_unknown.req = true' "" unknown
+pdjmut "that finds a resource of another mode" 's/ and \.mode == \$c\.mode\)/)/' '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].mode = "data"' "" unknown
+pdjmut "that looks a data source up without its data prefix" 's/\(if \$c\.mode == "data" then "data\." else "" end\) \+ //' '.resource_changes[0] |= (.address = "data.aws_x.this" | .mode = "data" | .change.after_unknown = {id: true})
+  | .configuration.root_module.resources[0] |= (.address = "data.aws_x.this" | .mode = "data" | .expressions = {})' "" equal
+pdjmut "that reads a map block by its labels" 's/\n           elif \$bt\.nesting_mode == "map" then \(\$ex\[\$k\][^\n]*//' '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
+  | .configuration.root_module.resources[0].expressions.bymap = {a: {w: {constant_value: "x"}}}' "" unknown
+pdjmut "that cuts a module key at a bracket" 's/\(\$c\.module_address \/\/ "" \| nokey/(\$c.module_address \/\/ "" | gsub("\\\\[[^\\\\]]*\\\\]"; "")/' '.resource_changes[0].module_address = "module.m[\"x]y\"]" | .resource_changes[0].address = "module.m[\"x]y\"].aws_x.this[0]"
+  | .resource_changes[0].change.after_unknown.tags = true
+  | .configuration.root_module = {module_calls: {m: {module: {resources: .configuration.root_module.resources}}}}' "" equal
 pdjmut "that takes a type the schema lacks" 's/\(\$blk == null\) or //' '.resource_changes[0].type = "aws_y" | .resource_changes[0].change.after_unknown = {}' "" unknown
 
 # The runner phases of the plan diff, from a copy without the container check: diff-init adds the

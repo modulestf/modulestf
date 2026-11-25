@@ -430,8 +430,8 @@ evaluate() {
     # call the directory of the trigger is eligible; one absent at the base, or equal and not
     # calling it, is not; any other example that calls it at the head, or whose files the change
     # touches, leaves the trigger as it was. At least one is eligible, and one of them plans the
-    # address the change sits in under its call: the resource, or for a variable or an output any
-    # address of that module instance. The examples are listed sorted, at most 20.
+    # address the change sits in under its call: the resource, or for a variable any address of
+    # that module instance. The examples are listed sorted, at most 20.
     def pd_of($d): first($pd[] | select(.dir == $d)) // null;
     def repo_dir: if startswith("/") then .[1:] elif $pre == "" then . elif . == "." then $pre else $pre + "/" + . end;
     def calls($mc; $d): [($mc // {}) | to_entries[] | select(.value == $d) | "module.\(.key)."];

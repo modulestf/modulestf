@@ -965,8 +965,9 @@ def nokey: gsub("\\[(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)\\]"; ""); # a whole quoted o
 # nowhere else, with the provider schema of the head module plan ($s). Per address, index keys
 # kept, the address sets and each change's actions, after, after_unknown, after_sensitive and
 # replace_paths; then the root outputs whole. A value unknown on either side is equal only in an
-# attribute the schema marks computed that neither plan's configuration sets on that resource (a
-# computed-only attribute never is), or in a nested block neither configuration writes: an
+# attribute the schema marks computed that neither plan's configuration sets on that resource,
+# wholly unknown when it is optional (a computed-only attribute never is set), or in a nested block
+# neither configuration writes, wholly unknown: an
 # attribute the configuration sets, one the schema does not name, a resource whose configuration
 # cannot be found and a type the schema lacks are unknown, and so are a plan that errored, one that
 # deferred a change and a change whose markers are not objects. Prints {result, differs}: differs
@@ -993,10 +994,12 @@ def computed_only($blk; $ex):
     | if ($blk.attributes[$k] | type) == "object" then
         ($v | has_true | not)
         or ($blk.attributes[$k] | .computed == true and (.required | not)
-            and ((.optional | not) or ($ex != null and ($set | not))))
+            and ((.optional | not) or ($ex != null and ($set | not) and $v == true)))
       elif ($blk.block_types[$k] | type) == "object" then
         $blk.block_types[$k] as $bt | $bt.block as $nb
-        | (if $ex == null then null elif $set then ($ex[$k] | set_keys) else {} end) as $nex
+        | (if $ex == null or ($set | not) then null
+           elif $bt.nesting_mode == "map" then ($ex[$k] | if type == "object" then [.[] | set_keys] | add // {} else {} end)
+           else ($ex[$k] | set_keys) end) as $nex
         | if $v == null or $v == false then true
           elif $v == true then $ex != null and ($set | not)
           elif $bt.nesting_mode == "map" then ($v | type) == "object" and all($v[]; computed_only($nb; $nex))
@@ -1009,11 +1012,11 @@ def block_of($c): ($s[0].provider_schemas[$c.provider_name // ""]
     | if $c.mode == "data" then .data_source_schemas else .resource_schemas end | .[$c.type // ""].block) // null;
 # The expressions of a change'"'"'s resource in a plan'"'"'s configuration, through its module calls; null
 # when they cannot be found.
-def cfg_of($P; $c): ($c.module_address // "" | gsub("\\[[^\\]]*\\]"; "")
+def cfg_of($P; $c): ($c.module_address // "" | nokey
     | if . == "" then [] else split(".") | [range(1; length; 2) as $i | .[$i]] end) as $mods
   | (reduce $mods[] as $m ($P.configuration.root_module; if type == "object" then .module_calls[$m].module else null end)) as $mod
   | if ($mod | type) != "object" then null
-    else first($mod.resources[]? | select(.address == "\($c.type).\($c.name)" and .mode == $c.mode) | (.expressions // {})) // null end;
+    else first($mod.resources[]? | select(.address == (if $c.mode == "data" then "data." else "" end) + "\($c.type).\($c.name)" and .mode == $c.mode) | (.expressions // {})) // null end;
 $a[0] as $A | $b[0] as $B
 | if any(($A, $B); type != "object" or .errored == true or (.resource_changes | type) != "array"
       or (((.deferred_changes // []) | length) > 0)
