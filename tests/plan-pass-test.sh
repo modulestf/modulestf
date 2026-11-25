@@ -1357,6 +1357,8 @@ check "PDIFF_JQ: a recorded security group whose configuration sets an unknown v
   "$([ "$(pdq "$PDF/aws-base.json" "$PDF/aws-head.json" "$PDF/aws-schema.json")" = unknown ]; echo $?)"
 check "PDIFF_JQ: a recorded dynamic block that joins an id to a changed literal is unknown" \
   "$([ "$(pdq "$PDF/dynamic-base.json" "$PDF/dynamic-head.json" "$PDF/dynamic-schema.json")" = unknown ]; echo $?)"
+check "PDIFF_JQ: a recorded batch environment whose launch template version, at block depth 2, joins an id to a changed literal is unknown" \
+  "$([ "$(pdq "$PDF/depth2-base.json" "$PDF/depth2-head.json" "$PDF/depth2-schema.json")" = unknown ]; echo $?)"
 check "PDIFF_JQ: the recorded round 1 case with its configuration is unknown" \
   "$([ "$(pdq "$PDF/data-base.json" "$PDF/data-head.json" "$PDF/data-schema.json")" = unknown ]; echo $?)"
 check "PDIFF_JQ: a value the child joins to an id, unknown at both revisions, is unknown" \
@@ -1364,7 +1366,9 @@ check "PDIFF_JQ: a value the child joins to an id, unknown at both revisions, is
 jq -n '{provider_schemas: {"registry.terraform.io/hashicorp/aws": {resource_schemas: {aws_x: {block: {
   attributes: {arn: {computed: true}, name: {optional: true}, tags: {optional: true, computed: true},
     blob: {optional: true, computed: true}, req: {required: true, computed: true}},
-  block_types: {rule: {nesting_mode: "list", block: {attributes: {id: {computed: true}, v: {optional: true}, w: {optional: true, computed: true}}}},
+  block_types: {rule: {nesting_mode: "list", block: {attributes: {id: {computed: true}, v: {optional: true}, w: {optional: true, computed: true}},
+      block_types: {sub: {nesting_mode: "list", block: {attributes: {x: {optional: true, computed: true}},
+        block_types: {deep: {nesting_mode: "list", block: {attributes: {y: {optional: true}}}}}}}}}},
     lc: {nesting_mode: "list", block: {attributes: {v: {optional: true}}}},
     lc2: {nesting_mode: "list", block: {attributes: {w2: {optional: true, computed: true}}}},
     bymap: {nesting_mode: "map", block: {attributes: {id: {computed: true}, v: {optional: true}, w: {optional: true, computed: true}}}}}}}},
@@ -1421,6 +1425,15 @@ pdboth "a data source read at apply is found by its data address" '.resource_cha
   | .configuration.root_module.resources[0] |= (.address = "data.aws_x.this" | .mode = "data" | .expressions = {})' equal
 pdboth "a map block is read by the attributes its labels set" '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
   | .configuration.root_module.resources[0].expressions.bymap = {a: {w: {constant_value: "x"}}}' unknown
+# Nested blocks are read at every depth: what a block inside a block sets is seen.
+pdboth "an optional computed attribute a block inside a block sets, unknown at both, is unknown" '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{x: {references: ["aws_y.z.id"]}}]}]' unknown
+pdboth "an optional computed attribute a block inside a block does not set, unknown at both, is equal" '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{}]}]' equal
+pdboth "a block written at depth 3, wholly unknown, is unknown" '.resource_changes[0].change.after_unknown.rule = [{sub: [{deep: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{deep: [{y: {constant_value: "q"}}]}]}]' unknown
+pdboth "a map block whose configuration is no object is unknown" '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
+  | .configuration.root_module.resources[0].expressions.bymap = "x"' unknown
 pdboth "a module key holding a bracket is removed whole" '.resource_changes[0].module_address = "module.m[\"x]y\"]" | .resource_changes[0].address = "module.m[\"x]y\"].aws_x.this[0]"
   | .resource_changes[0].change.after_unknown.tags = true
   | .configuration.root_module = {module_calls: {m: {module: {resources: .configuration.root_module.resources}}}}' equal
@@ -1476,6 +1489,12 @@ pdjmut "that reads a map block by its labels" 's/\n           elif \$bt\.nesting
 pdjmut "that cuts a module key at a bracket" 's/\(\$c\.module_address \/\/ "" \| nokey/(\$c.module_address \/\/ "" | gsub("\\\\[[^\\\\]]*\\\\]"; "")/' '.resource_changes[0].module_address = "module.m[\"x]y\"]" | .resource_changes[0].address = "module.m[\"x]y\"].aws_x.this[0]"
   | .resource_changes[0].change.after_unknown.tags = true
   | .configuration.root_module = {module_calls: {m: {module: {resources: .configuration.root_module.resources}}}}' "" equal
+pdjmut "that collapses a nested block to its keys" 's/\.\[\$e\.key\] = \(if \(\.\[\$e\.key\] \| type\) == "array" and \(\$e\.value \| type\) == "array" then \.\[\$e\.key\] \+ \$e\.value\n                   else \.\[\$e\.key\] \/\/ \$e\.value end\)/.[\$e.key] = true/; s/\n  else null end;/\n  else {} end;/' '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{x: {references: ["aws_y.z.id"]}}]}]' "" unknown
+pdjmut "that reads a map block of another shape as nothing set" 's/then \[\.\[\]\] \| merge_cfg else null end\)/then [.[]] | merge_cfg else {} end)/' '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
+  | .configuration.root_module.resources[0].expressions.bymap = "x"' "" unknown
+pdjmut "that reads a block of another shape as nothing set" 's/                   else \.\[\$e\.key\] \/\/ \$e\.value end\)\)\)\n  else null end;/                   else .[\$e.key] \/\/ \$e.value end)))\n  else {} end;/' '.resource_changes[0].change.after_unknown.rule = [{w: true}]
+  | .configuration.root_module.resources[0].expressions.rule = "x"' "" unknown
 pdjmut "that takes a type the schema lacks" 's/\(\$blk == null\) or //' '.resource_changes[0].type = "aws_y" | .resource_changes[0].change.after_unknown = {}' "" unknown
 
 # The runner phases of the plan diff, from a copy without the container check: diff-init adds the
@@ -1519,8 +1538,10 @@ pdmark() { # script copy, marker to remove -> the diff phase's output
 pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}'
 check "runner phases: a merge base that is not a full SHA is no base, and a missing decision is not-run" \
   "$([ "$(pdmark "$TMP/pp-runner.sh" e1-diff.unchanged)" = "$(printf 'badsha nobase\nplan-diff: not-run head-module-plan')" ]; echo $?)"
-check "runner phases: with its decision the same example is equal" \
-  "$(pdmark "$TMP/pp-runner.sh" none | grep -qx 'plan-diff: equal'; echo $?)"
+o="$(pdmark "$TMP/pp-runner.sh" none)"
+check "runner phases: with its decision the same example is equal" "$(printf '%s\n' "$o" | grep -qx 'plan-diff: equal'; echo $?)"
+# shown only when the case fails, so a failure under load says what the diff phase printed
+printf '%s\n' "$o" | grep -qx 'plan-diff: equal' || printf 'diff phase printed:\n%s\n' "$o" | sed 's/^/  | /
 nocont "$PP" | perl -0pe 's/  else echo "plan-diff: not-run head-module-plan"; exit 0; fi/  else hk=\$key hd=\$HROOT\/\$rel_ex; fi/' > "$TMP/pp-runner-m.sh"
 check "runner phases: the mutation that reads a missing decision as unchanged is caught" \
   "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && ! pdmark "$TMP/pp-runner-m.sh" e1-diff.unchanged | grep -qx 'plan-diff: not-run head-module-plan'; echo $?)"

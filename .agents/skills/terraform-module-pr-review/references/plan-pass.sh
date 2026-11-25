@@ -979,9 +979,16 @@ def rc: [.resource_changes[] | select(type == "object" and (.address | type == "
 def part: .change | {actions, after, after_unknown, after_sensitive, replace_paths};
 def marker: . == null or . == false or type == "object";
 def has_true: [.. | select(. == true)] != [];
-# The keys a block of the configuration sets: an object of expressions, or a list of them for a
-# nested block; null when the configuration is not known.
-def set_keys: if type == "object" then . elif type == "array" then (map(objects | keys) | add // [] | map({key: ., value: true}) | from_entries) else {} end;
+# The configuration of a nested block as one object: a single block as it is; the instances of a
+# list or set merged, each key kept with the instances of a block nested in it joined into one
+# list, so the next level reads what every instance sets; null for any other shape, which reads
+# as no configuration.
+def merge_cfg: if type == "object" then .
+  elif type == "array" and all(.[]; type == "object") then
+    reduce .[] as $o ({}; reduce ($o | to_entries[]) as $e (.;
+      .[$e.key] = (if (.[$e.key] | type) == "array" and ($e.value | type) == "array" then .[$e.key] + $e.value
+                   else .[$e.key] // $e.value end)))
+  else null end;
 # Every true leaf of an after_unknown value at block level ($blk) is in an attribute the schema
 # marks computed that the configuration at this level ($ex, null when not known) does not set, or
 # in a nested block it does not write.
@@ -998,8 +1005,8 @@ def computed_only($blk; $ex):
       elif ($blk.block_types[$k] | type) == "object" then
         $blk.block_types[$k] as $bt | $bt.block as $nb
         | (if $ex == null or ($set | not) then null
-           elif $bt.nesting_mode == "map" then ($ex[$k] | if type == "object" then [.[] | set_keys] | add // {} else {} end)
-           else ($ex[$k] | set_keys) end) as $nex
+           elif $bt.nesting_mode == "map" then ($ex[$k] | if type == "object" then [.[]] | merge_cfg else null end)
+           else ($ex[$k] | merge_cfg) end) as $nex
         | if $v == null or $v == false then true
           elif $v == true then $ex != null and ($set | not)
           elif $bt.nesting_mode == "map" then ($v | type) == "object" and all($v[]; computed_only($nb; $nex))
