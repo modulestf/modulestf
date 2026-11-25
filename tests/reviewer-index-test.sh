@@ -1,5 +1,5 @@
 #!/bin/bash
-# The reviewer's run summaries and its section helper. For each of Checks A to G:
+# The reviewer's run summaries and its section helper. For each of Checks A to H:
 # - references/run/check-<x>.md has one row for every rule_id the check owns, each with a
 #   non-empty Applies when, the Provider facts and Page entry when of rule-facts.md, and at
 #   least one section link; no row for a rule_id the check does not own. A check owns the
@@ -41,7 +41,7 @@ trap 'rm -rf "$TMP"' EXIT
 fails=0
 fail() { echo "FAIL $1: $2 $3"; fails=$((fails + 1)); }
 
-CHECKS="a:check-a-compatibility b:check-b-coverage c:check-c-structure d:check-d-examples e:check-e-profile f:check-f-scope g:check-g-behaviour"
+CHECKS="a:check-a-compatibility b:check-b-coverage c:check-c-structure d:check-d-examples e:check-e-profile f:check-f-scope g:check-g-behaviour h:check-h-non-hcl"
 ID_RE='`(compat|coverage|structure|examples|profile|scope|review|claim)\.[a-z0-9-]+`'
 
 # heads DIR: one line per heading of every markdown file under DIR: file (relative to DIR),
@@ -111,7 +111,8 @@ if [ -n "$BASE" ]; then
     for f in $members; do
       git show "$BASE:$RSK/$f" >> "$TMP/base/$k.raw" 2> /dev/null && got=1 && echo >> "$TMP/base/$k.raw"
     done
-    [ "$got" = 1 ] || continue
+    # A file the base lacks starts empty only when the record lists its sentences.
+    [ "$got" = 1 ] || awk -F'\t' -v g="$g" '$2 == g { f = 1 } END { exit !f }' "$REC" || continue
     sentences "$TMP/base/$k.raw" |
       awk -F'\t' -v g="$g" '
         FILENAME == ARGV[1] { if ($2 == g) { op[++n] = $1; t[n] = $3 }; next }
@@ -162,6 +163,7 @@ index_check() {
       awk -v x="$x" '
         function owner(id) {
           if (id ~ /^claim\./ || id == "compat.expression-behaviour-changed" || id == "review.verification-incomplete") return "g"
+          if (id ~ /^structure\.non-hcl-/) return "h"
           if (id ~ /^compat\./) return "a"; if (id ~ /^coverage\./) return "b"; if (id ~ /^structure\./) return "c"
           if (id ~ /^examples\./) return "d"; if (id ~ /^profile\./) return "e"; if (id ~ /^scope\./) return "f"
           return ""
@@ -456,6 +458,8 @@ the ignored-input band without its null default~sentences~references/check-g-beh
 a sentence of the spec rewritten~sentences~references/check-g-behaviour.md~s/^- `claim.refuted`: a `claim` line has state `refuted`/- `claim.refuted`: a `claim` line says `refuted`/
 a sentence of an engine file rewritten~sentences~references/engine/check-d-examples.md~s/^- A submodule added by the change has no example of its own\./- A submodule added by the change has no example./
 a sentence moved out of SKILL.md rewritten~sentences~references/inputs.md~s/^- The workspace is the only source of file content\./- The workspace is the sole source of file content./
+a sentence of a check file the base lacks rewritten~sentences~references/check-h-non-hcl.md~s/^Naming, formatting and the idiom/Names, formatting and the idiom/
+a row of Check H deleted~missing row~references/run/check-h.md~/^| `structure.non-hcl-test-missing` /d
 a navigation line added to SKILL.md unrecorded~sentences~SKILL.md~s/ These headings keep their links\./ These headings keep their links. They hold no text./
 Read First dropped~read first~references/run/check-a.md~/^When any row below applies: /d
 a facts-engine candidate no longer forcing its row~facts rows~SKILL.md~s/ A row whose rule the `mtf-facts` report of Step 1 gives a finding or candidate for, in any area, holds whatever its condition says: its sections are opened and the rule is judged\.//

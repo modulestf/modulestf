@@ -76,7 +76,7 @@ Every run takes these steps in order. Open each file named here only as far as t
 
 1. Read the task: the change, and the host's `Depth:`, `Diff:`, `Merge base:`, `Provider fact sheets:`, `Schema handoff:`, `Output:` and `References:` lines, as [Reading by Depth](#reading-by-depth) says. Open [Inputs](references/inputs.md#inputs) for the rules on reading it.
 2. Run [Step 1](references/workflow.md#step-1-establish-scope): the head revision check in the form of [git-safety.md](references/git-safety.md#the-form), the change, the paths, [their classes](references/large-changes.md#classify-every-changed-path), the versions, the title and the profile. When `mtf-facts` is installed, run it as [run/facts.md](references/run/facts.md) says.
-3. Run each check in scope, A to G, through its run summary, as [Reading by Depth](#reading-by-depth) says. Which checks are in scope is the depth's: at `light` C, E, F and Check G's claim reading; at `focused` every check but one `depth.json` may put out, B; at `deep` all seven.
+3. Run each check in scope, A to H, through its run summary, as [Reading by Depth](#reading-by-depth) says. Which checks are in scope is the depth's: at `light` C, E, F, H and Check G's claim reading; at `focused` every check but one `depth.json` may put out, B; at `deep` all eight.
 4. Assemble the findings by the [Final Step](references/workflow.md#final-step-assemble-the-findings) and write them, the summary line and any Facts comparison note as [run/output.md](references/run/output.md) says.
 
 A triage run follows [triage.md](references/triage.md) unchanged, reading each check it runs the same way.
@@ -91,7 +91,7 @@ A host that computed the change's depth names its file in the task with the line
 - A check or example out of scope runs nothing and reports nothing, not even `review.check-not-run`: the host lists it. Anything in scope that cannot run is still `review.check-not-run` (Rule 4).
 - A check counts as run when it is in scope and was read through its summary, whatever it found. With only `G-ladder` out, Check G runs its claim reading and counts as run. A check whose rows all failed their conditions counts as run, with no findings.
 
-At every depth, each check in scope is read through its run summary, [references/run/](references/run/check-a.md) `check-a.md` to `check-g.md`, an index of its rules that holds no rule text:
+At every depth, each check in scope is read through its run summary, [references/run/](references/run/check-a.md) `check-a.md` to `check-h.md`, an index of its rules that holds no rule text:
 
 1. Read the summary. For each row, decide from the diff, the task and the verification record whether **Applies when** holds. When unsure, it holds. A row whose rule the `mtf-facts` report of Step 1 gives a finding or candidate for, in any area, holds whatever its condition says: its sections are opened and the rule is judged.
 2. When any row holds, open the summary's Read first sections, then the sections of every row that holds, then each other section whose **Open when** holds, and apply every rule in them. Open a section with `bash <skill root>/references/section.sh <file> <anchor>`: a link `../x.md#y` in a summary is the file `references/x.md` and the anchor `y`. A section the helper refuses or cannot find is read whole from its file instead.
@@ -108,7 +108,7 @@ Open a file by section, `bash references/section.sh <file> <anchor>`, and whole 
 |------|------|
 | [inputs.md](references/inputs.md) | [Inputs](references/inputs.md#inputs) in every run; [Responsibility Boundaries](references/inputs.md#responsibility-boundaries) when a request reaches past reviewing |
 | [workflow.md](references/workflow.md) | [Step 1](references/workflow.md#step-1-establish-scope) in every run; [Final Step](references/workflow.md#final-step-assemble-the-findings) before writing the findings; a check's heading only when its run summary cannot be read |
-| [run/](references/run/check-a.md) `check-a.md` to `check-g.md` | Whole, for each check in scope, as [Reading by Depth](#reading-by-depth) says |
+| [run/](references/run/check-a.md) `check-a.md` to `check-h.md` | Whole, for each check in scope, as [Reading by Depth](#reading-by-depth) says |
 | [run/output.md](references/run/output.md) | Whole, before writing the findings; it links each section of [findings-schema.md](references/findings-schema.md) and [output.md](references/output.md) a finding needs |
 | [run/facts.md](references/run/facts.md) | [mtf-facts](references/run/facts.md#mtf-facts) only when Step 1 runs `mtf-facts`; [Fact Sheets](references/run/facts.md#fact-sheets) when the task names a fact sheets directory and a row that holds needs provider facts; each links the sections of [facts-engine.md](references/facts-engine.md) or the [Budget](references/large-changes.md#budget) to open |
 | [large-changes.md](references/large-changes.md) | [Classify Every Changed Path](references/large-changes.md#classify-every-changed-path) and [Review Order](references/large-changes.md#review-order) in every run; [Budget](references/large-changes.md#budget) when a row that holds needs provider facts; the rest only for a change with more than one area |
