@@ -349,21 +349,60 @@ awk '{ print $2, $3, $4 }' "$WORK/types" | sort -u -k3,3 -k2,2 -k1,1 > "$WORK/ta
 awk -v m="$MAX_TYPES" 'NR <= m' "$WORK/tall" > "$WORK/tkeep"
 [ "$(wc -l < "$WORK/tall")" -le "$MAX_TYPES" ] || note overflow
 
+# A cache entry's manifest and schema copied into an empty directory, when both are regular
+# files within their caps; status 1 otherwise. What is copied is checked there, never trusted.
+cache_take() { # entry, directory, schema file name
+  local f
+  for f in manifest.json "$3"; do [ -f "$1/$f" ] && [ ! -L "$1/$f" ] || return 1; done
+  [ "$(wc -c < "$1/manifest.json")" -le "$CAP_MANIFEST" ] && [ "$(wc -c < "$1/$3")" -le "$CAP_GZ" ] || return 1
+  cp "$1/manifest.json" "$1/$3" "$2/" 2> /dev/null
+}
+# A checked manifest and schema stored as the entry, whole or not at all; a failure leaves the
+# run as it is.
+cache_put() { # entry, directory, schema file name
+  local t
+  t="$(mktemp -d "$CACHE/.put.XXXXXX" 2> /dev/null)" || return 0
+  if cp "$2/manifest.json" "$2/$3" "$t/" 2> /dev/null && rm -rf "$1" && mv "$t" "$1" 2> /dev/null; then return 0; fi
+  rm -rf "$t"
+}
+
 # One provider version's schema from the mirror into an empty directory: the three assets,
 # the checksums, the manifest, the decompressed size and the JSON shape, as schema-pass.md
 # gives them. Leaves the schema as schema.json; prints nothing when every check passed,
 # else one reason code.
 get_schema() { # provider, version, directory
-  local prov="$1" ver="$2" d="$3" ns="${1%%/*}" name="${1#*/}" sf base a f cap r n l
+  local prov="$1" ver="$2" d="$3" ns="${1%%/*}" name="${1#*/}" sf base a f cap r e=""
   sf="${ns}_${name}-${ver}.schema.json.gz"
   base="https://github.com/$MODULESTF_SCHEMA_MIRROR/releases/download/${ns}_${name}-v${ver}"
+  [ -z "$CACHE" ] || e="$CACHE/${ns}_${name}-v${ver}"
+  # A cache entry stands in for the manifest and the schema only: SHA256SUMS always comes from
+  # the mirror, and the copies in the staging directory get every check a download gets.
+  if [ -n "$e" ] && cache_take "$e" "$d" "$sf"; then
+    if ! r="$(fetch "$base/SHA256SUMS" "$d/SHA256SUMS" "$CAP_SUMS" "$MIRROR_HOSTS")"; then
+      [ "$r" != not_found ] || r=not_in_mirror
+      echo "$r"; return
+    fi
+    r="$(check_schema "$prov" "$ver" "$d" "$sf")"
+    [ -n "$r" ] || return 0
+    rm -rf "$e"
+    rm -f "$d/manifest.json" "$d/$sf" "$d/sums" "$d/schema.json"
+  fi
   for a in "SHA256SUMS $CAP_SUMS" "manifest.json $CAP_MANIFEST" "$sf $CAP_GZ"; do
     f="${a% *}" cap="${a#* }"
+    [ ! -f "$d/$f" ] || continue # SHA256SUMS read for a cache entry that failed
     if ! r="$(fetch "$base/$f" "$d/$f" "$cap" "$MIRROR_HOSTS")"; then
       case "$r" in not_found) r=not_in_mirror ;; cap_exceeded) [ "$f" = "$sf" ] && r=schema_too_large ;; esac
       echo "$r"; return
     fi
   done
+  r="$(check_schema "$prov" "$ver" "$d" "$sf")"
+  [ -z "$r" ] || { echo "$r"; return; }
+  [ -z "$e" ] || cache_put "$e" "$d" "$sf"
+}
+# The checks of one provider version's downloaded assets in a directory, as schema-pass.md
+# gives them; prints nothing when every check passed, else one reason code.
+check_schema() { # provider, version, directory, schema file name
+  local prov="$1" ver="$2" d="$3" sf="$4" f n l
   # The exact lines for the schema and the manifest, each once, checked by sha256sum.
   : > "$d/sums"
   for f in "$sf" manifest.json; do
@@ -388,6 +427,17 @@ get_schema() { # provider, version, directory
 if [[ -n "$MODULESTF_SCHEMA_MIRROR" && ! "$MODULESTF_SCHEMA_MIRROR" =~ $mirror_re ]]; then
   echo "schema pass: MODULESTF_SCHEMA_MIRROR is not owner/name; no mirror"
   MODULESTF_SCHEMA_MIRROR=""
+fi
+# The mirror cache across runs (schema-pass.md, Mirror Cache): a directory the user owns, not a
+# link and writable by no one else, else not used and one line says so.
+CACHE=""
+if [ -n "$MODULESTF_SCHEMA_MIRROR" ] && [ -n "${SCHEMA_CACHE:-}" ]; then
+  case "$SCHEMA_CACHE" in /?*) mkdir -p -m 0700 "$SCHEMA_CACHE" 2> /dev/null ;; esac
+  if [[ "$SCHEMA_CACHE" == /?* ]] && [ -d "$SCHEMA_CACHE" ] && [ ! -L "$SCHEMA_CACHE" ] && [ -O "$SCHEMA_CACHE" ] && [ -z "$(find "$SCHEMA_CACHE" -maxdepth 0 \( -perm -0020 -o -perm -0002 \))" ]; then
+    CACHE="$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR"
+    mkdir -p "$CACHE" 2> /dev/null || CACHE=""
+  fi
+  [ -n "$CACHE" ] || echo "schema pass: mirror cache not used"
 fi
 while read -r -u 3 prov ver; do
   [ -n "$MODULESTF_SCHEMA_MIRROR" ] || break

@@ -8,10 +8,10 @@ The pass is one script, [schema-pass.sh](schema-pass.sh), with its renderer in [
 ```sh
 SCHEMA_PROVIDERS="<tokens>" SCHEMA_TYPES="<tokens>" MODULESTF_SCHEMA_MIRROR="<owner>/<name>" \
   SCHEMA_HEAD="<sha>" SCHEMA_MERGE_BASE="<sha>" SCHEMA_INPUTS="<tokens>" [SCHEMA_ROOT="<module root>"] \
-  bash schema-pass.sh <facts output directory> <work directory> [<handoff directory>]
+  [SCHEMA_CACHE="<absolute directory>"] bash schema-pass.sh <facts output directory> <work directory> [<handoff directory>]
 ```
 
-With a handoff directory, the same run also writes the [schema handoff](#schema-handoff) for the facts engine. With `SCHEMA_DEPTH` set, the run is in a [depth mode](#depth-modes).
+With a handoff directory, the same run also writes the [schema handoff](#schema-handoff) for the facts engine. With `SCHEMA_DEPTH` set, the run is in a [depth mode](#depth-modes). With `SCHEMA_CACHE` set, it keeps the mirror's assets across runs ([Mirror Cache](#mirror-cache)).
 
 ## Inputs
 
@@ -52,6 +52,15 @@ Per provider version:
 - **Checksums (`checksum`):** from `SHA256SUMS`, the exact lines for the schema and `manifest.json`, each once, checked with `sha256sum --strict -c`.
 - **Manifest (`manifest`):** must name this provider, version and schema file, with a `format_version` matching `^([0-9]+)\.[0-9]+$` of major 1.
 - **Schema (`json_shape`):** the same `format_version` rule, and `provider_schemas` holding exactly one key, `registry.terraform.io/<namespace>/<name>`.
+
+## Mirror Cache
+
+`SCHEMA_CACHE` names a directory that keeps the `manifest.json` and the gzipped schema of each provider version the pass read whole, under `<mirror owner>/<mirror name>/<namespace>_<name>-v<version>/`, so a later run at the same versions does not download them again. [review-run.sh](review-run.sh) sets it to `$XDG_CACHE_HOME/modulestf/schema-mirror`, or `~/.cache/modulestf/schema-mirror`.
+
+- `SHA256SUMS` is never cached. Each run fetches it from the mirror, copies the cached manifest and schema into its staging directory, and gives the copies every check of [Downloads](#downloads), from the checksums on. The bytes the pass reads are the bytes the mirror publishes that day, so the fact sheets, the handoff, `versions.json`, `missing.json` and the output lines are byte for byte those of a run without the cache.
+- A cached file that is missing, not a regular file, a symbolic link or over its cap leaves the entry unused; a copy that fails a check drops the entry. Either way the version is downloaded as without a cache, and once every check passes, stored again whole or not at all.
+- The directory is used only when its path is absolute and it is a directory, not a symbolic link, owned by the user and writable by neither group nor others; it is made `0700` when it does not exist. Otherwise the run prints `schema pass: mirror cache not used` and downloads as without a cache. A cache that cannot be written changes nothing but the time.
+- With no mirror, or a mirror the depth modes do not trust, nothing is cached.
 
 ## Caps
 

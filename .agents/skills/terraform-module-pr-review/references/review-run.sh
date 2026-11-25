@@ -471,6 +471,8 @@ cmd_schema() {
   # read pass as "-", which it refuses as inputs.
   mbs="$(jq -r '.binding.merge_base // ""' "$RUN/depth.json" 2> /dev/null)"
   if [[ "$mbs" =~ $sha_re ]]; then ins="$(schema_inputs "$HEAD_SHA" "$mbs")" || ins=-; else mbs=""; fi
+  # The mirror cache across runs (schema-pass.md, Mirror Cache): each cached asset is checked as a download is.
+  SCHEMA_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/modulestf/schema-mirror" \
   SCHEMA_DEPTH="$RUN/depth.json" SCHEMA_HEAD="$HEAD_SHA" SCHEMA_MERGE_BASE="$mbs" SCHEMA_INPUTS="$ins" SCHEMA_ROOT="$PREFIX" \
     bash "$HERE/schema-pass.sh" "$RUN/facts" "$RUN/schema-work" "$RUN/schema-handoff" > "$RUN/state/schema.out" 2>&1
   rc=$?

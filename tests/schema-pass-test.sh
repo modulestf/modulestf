@@ -380,6 +380,49 @@ D="$(mk hist_thing "$HP" "$HT" "")" run since-404
 check "introduced: a version the mirror lacks mid-search leaves the paths that need it unresolved not_in_mirror, the run goes on" "$?"
 mv "$TMP/hist-1.6.0" "$SITE/mirror/example_hist-v1.6.0"
 
+# --- The mirror cache across runs (SCHEMA_CACHE): the same bytes as a run without it, every
+# file and the output; a warm run reads each release's SHA256SUMS from the mirror and no
+# other asset; a cached file that fails the checks is dropped and downloaded again; a cache
+# directory that is not the user's own, a link or writable by others is not used.
+C="$TMP/mirror-cache"
+assets() { grep -c '^URL https://github.com/modulestf/terraform-schema-mirror/releases/download/example_hist-v.*/\(manifest\.json\|example_hist-.*\.schema\.json\.gz\)$' "$R.log"; }
+same_as_since() { # the run's facts and output equal the run without a cache, the given extra line aside
+  (cd "$R/facts" 2> /dev/null && find . -type f | LC_ALL=C sort | while IFS= read -r f; do sha256 "$f"; done) > "$TMP/cache-b"
+  [ "$RC" = 0 ] && cmp -s "$TMP/since-a" "$TMP/cache-b" && [ "$(grep -vxF "${1:-no such line}" "$R.out")" = "$since_out" ]
+}
+entry() { echo "$C/modulestf/terraform-schema-mirror/example_hist-v$1"; } # version -> its cache entry
+SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run cache-cold
+same_as_since && [ "$(assets)" = 10 ] && [ "$(find "$C" -type f | wc -l | tr -d ' ')" = 10 ] &&
+  cmp -s "$(entry 1.8.0)/example_hist-1.8.0.schema.json.gz" "$SITE/mirror/example_hist-v1.8.0/example_hist-1.8.0.schema.json.gz" &&
+  [ ! -e "$(entry 1.8.0)/SHA256SUMS" ] && [ "$(find "$C" -maxdepth 0 -perm 0700 | wc -l | tr -d ' ')" = 1 ]
+check "cache: a cold run gives the same bytes and output, and stores each checked manifest and schema, never SHA256SUMS" "$?"
+SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run cache-warm
+same_as_since && [ "$(assets)" = 0 ] && [ "$(hfetched 1.0.0 1.4.0 1.5.0 1.6.0 1.8.0)" = "1 1 1 1 1 " ]
+check "cache: a warm run gives the same bytes and output, reads every SHA256SUMS from the mirror and nothing else" "$?"
+c_tamper() { # the cached 1.8.0 schema replaced by a valid schema of 1.7.0, its manifest kept
+  cp "$SITE/mirror/example_hist-v1.7.0/example_hist-1.7.0.schema.json.gz" "$(entry 1.8.0)/example_hist-1.8.0.schema.json.gz" 2> /dev/null
+  SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run "${1:-cache-tamper}"
+}
+k_tamper() {
+  same_as_since && [ "$(assets)" = 2 ] &&
+    cmp -s "$(entry 1.8.0)/example_hist-1.8.0.schema.json.gz" "$SITE/mirror/example_hist-v1.8.0/example_hist-1.8.0.schema.json.gz"
+}
+c_tamper; k_tamper
+check "cache: a cached schema that fails its checksum is dropped, downloaded and stored again; the same bytes" "$?"
+rm "$(entry 1.4.0)/manifest.json" && ln -s "$SITE/mirror/example_hist-v1.4.0/manifest.json" "$(entry 1.4.0)/manifest.json"
+SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run cache-link
+same_as_since && [ "$(assets)" = 2 ] && [ ! -L "$(entry 1.4.0)/manifest.json" ]
+check "cache: a cached file that is a symbolic link is not read; the release is downloaded and stored as files" "$?"
+k_croot() { same_as_since 'schema pass: mirror cache not used' && [ "$(assets)" = 10 ] && grep -qx 'schema pass: mirror cache not used' "$R.out"; }
+mkdir -p "$TMP/cache-shared" && chmod 0777 "$TMP/cache-shared"
+ln -s "$C" "$TMP/cache-link"
+nbad=0
+for bad in relative/cache "$TMP/cache-shared" "$TMP/cache-link"; do
+  SCHEMA_CACHE="$bad" D="$(mk hist_thing "$HP" "$HT" "")" run "cache-bad-$((++nbad))"
+  k_croot && [ -z "$(find "$TMP/cache-shared" -mindepth 1)" ] && [ ! -e relative ]
+  check "cache: SCHEMA_CACHE $bad is not used, one line says so, the same bytes" "$?"
+done
+
 # --- The newest release is not in the mirror yet (it runs once a day). At deep the latest stays
 # not_in_mirror, so every rule on the latest schema is an unknown as before, but the minimum, the
 # old floor and the lock versions are still read and published, so the floors can be read; the
@@ -691,6 +734,13 @@ k_many() { [ "$RC" = 0 ] && [ "$(intro 1.8.0 hist_many | tr '|' '\n' | grep -c '
   [ "$(intro 1.8.0 hist_many | tr '|' '\n' | tail -n 1)" = 'since: 584 more paths unresolved overflow' ]; }
 mutant since-more-written 's/if (\$NF == "more" || shut/if (shut/' c_many k_many
 mutant since-counted-in-cap "s/^MAX_SHEET_BYTES=49152\$/MAX_SHEET_BYTES=$fb/;"'s/^    \[ "\$sheets" -le "\$MAX_SHEETS" \] && \[ "\$bytes" -le "\$MAX_SHEET_BYTES" \] || escalate overflow$/    :/; s/^  \[ -z "\$late" \] || echo "schema pass: introduced deadline/  [ "$MODE" != focused ] || [ "$(find "$WORK\/stage" -type f -name "*.facts" -exec cat -- {} + | wc -c)" -le "$MAX_SHEET_BYTES" ] || escalate overflow; [ -z "$late" ] || echo "schema pass: introduced deadline/' c_many k_bigok
+c_cache() { rm -rf "$C" "$TMP"/run-m-cache-cold && SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run m-cache-cold && c_tamper m-cache; }
+c_bad() { SCHEMA_CACHE="$TMP/cache-shared" D="$(mk hist_thing "$HP" "$HT" "")" run m-cache-bad; }
+k_bad() { k_croot && [ -z "$(find "$TMP/cache-shared" -mindepth 1)" ]; }
+mutant cache-unchecked 's/^    \[ -n "\$r" \] || return 0$/    return 0/' c_cache k_tamper
+mutant cache-no-fallback 's/^    rm -rf "\$e"$/    echo "$r"; return/' c_cache k_tamper
+mutant cache-not-stored 's/^  \[ -z "\$e" \] || cache_put "\$e" "\$d" "\$sf"$/  :/' c_cache k_tamper
+mutant cache-root-unchecked 's/ && \[ -z "\$(find "\$SCHEMA_CACHE" -maxdepth 0 .*$/; then/' c_bad k_bad
 mutant since-overflow-silent 's/^MAX_SINCE_DOWNLOADS=12$/MAX_SINCE_DOWNLOADS=1/; s/{ print p, \$1, "unresolved", \$3 }/{ next }/' c_since k_sover
 
 if [ "$fails" = 0 ]; then echo "all passed"; else echo "$fails failed"; exit 1; fi

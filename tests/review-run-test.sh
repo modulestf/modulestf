@@ -57,6 +57,7 @@ cat > "$SK/schema-pass.sh" <<'EOF'
 echo "schema $SCHEMA_DEPTH $*" >> "${STUB_LOG:?}"
 echo "schema-env $SCHEMA_HEAD $SCHEMA_MERGE_BASE $(tr "\n" " " <<< "$SCHEMA_INPUTS")" >> "$STUB_LOG"
 echo "schema-root $SCHEMA_ROOT" >> "$STUB_LOG"
+echo "schema-cache ${SCHEMA_CACHE-unset}" >> "$STUB_LOG"
 src="schema pass: source modulestf/terraform-schema-mirror hashicorp_aws-v6.1.0 $(printf 'ab%.0s' $(seq 32))"
 case "${SCHEMA_STUB:-overflow}" in
   ok) mkdir -p "$1"; echo "$src"; [ -z "${3-}" ] || { mkdir -p "$3"; echo '{}' | gzip -n > "$3/schema-handoff.json.gz"
@@ -742,6 +743,8 @@ check "schema: the handoff gets the head, the bound merge base and one token per
      set -- $l; [ "$2" = "$(git -C "$RUN/clone" rev-parse HEAD)" ] && [ "$3" = "$mb" ] && [ $(($# - 3)) = "$n" ] && [ "$n" -gt 0 ] &&
      t="$4" && f="${t#*:*:}" && [ "${t%%:*}" = "$2" ] &&
      [ "$(cut -d: -f2 <<< "$t")" = "$(git -C "$RUN/clone" cat-file blob "$2:$f" | shasum -a 256 | cut -d' ' -f1)" ]; echo $?)"
+check "schema: the pass gets the mirror cache under the user's cache directory" \
+  "$([ "$(grep '^schema-cache ' "$STUB_LOG" | tail -n 1)" = "schema-cache $XDG_CACHE_HOME/modulestf/schema-mirror" ]; echo $?)"
 check "schema: its source lines cross in the verification record, checked against their grammar" \
   "$(grep -qx "schema pass: source modulestf/terraform-schema-mirror hashicorp_aws-v6.1.0 $(printf 'ab%.0s' $(seq 32))" "$RUN/handover/record.txt" &&
      [ "$(grep -c '^schema pass: source ' "$RUN/handover/record.txt")" = 1 ]; echo $?)"
