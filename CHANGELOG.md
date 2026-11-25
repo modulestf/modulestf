@@ -1,3 +1,12 @@
+# [0.13.0](https://github.com/modulestf/modulestf/compare/v0.12.28...v0.13.0) (2026-11-25)
+
+
+### Features
+
+* **pr-review:** Plan coverage for changes outside Terraform, and reviewer Check H ([#223](https://github.com/modulestf/modulestf/issues/223)) ([1257b45](https://github.com/modulestf/modulestf/commit/1257b455086ae8c1e4d6bdce7004a0fe597f1a4d))
+
+
+
 ## [0.12.28](https://github.com/modulestf/modulestf/compare/v0.12.27...v0.12.28) (2026-11-25)
 
 
