@@ -3,7 +3,7 @@
 > **Part of:** [terraform-module-pr-review](../SKILL.md)
 > **Purpose:** The second exception of Rule 3: the repository's own Python unit tests, run inside the isolated runner for a change to a module's embedded code, and the one fixed result line they leave.
 
-A change to a file outside HCL that HCL reads, such as a Lambda function's source, is a `non-hcl-dependency` trigger ([behaviour-pass.md](behaviour-pass.md)). No level of the ladder can verify it. Its evidence is the repository's own tests. The Checks signal reads them when the head has check runs ([verdict.md](verdict.md#the-ladder)); this pass runs them itself, in the runner, so the review has test evidence of its own.
+A change to a file outside HCL that HCL reads, such as a Lambda function's source, is a `non-hcl-dependency` trigger ([behaviour-pass.md](behaviour-pass.md)). No level of the ladder can verify it. Its evidence is the repository's own tests. The Checks signal is read as a gate only when the head has check runs ([verdict.md](verdict.md#the-ladder)); this pass runs the tests itself, in the runner, so the review has test evidence of its own.
 
 ## When It Runs
 

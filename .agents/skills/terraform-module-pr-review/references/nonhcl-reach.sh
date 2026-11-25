@@ -50,7 +50,11 @@ g cat-file -e "$head^{commit}" 2> /dev/null && g cat-file -e "$base^{commit}" 2>
 rp() { if [ -z "$prefix" ]; then printf '%s' "$1"; else printf '%s/%s' "$prefix" "$1"; fi; }
 trig="$(jq -r '[.triggers[]? | select(.category == "non-hcl-dependency") | .file] | unique | .[]' "$beh" 2> /dev/null)" || die
 changed="$(jq -r '.[] | .filename, (.previous_filename // empty)' "$files" 2> /dev/null)" || die
-[ "$(printf '%s\n' "$trig" | grep -c .)" -le 40 ] || die
+[ "$(grep -c . <<< "$trig")" -le 40 ] || die
+# A check reads its input whole: a here-string, never "printf | grep -q", whose early exit under
+# pipefail could read as "not found". A byte order mark or a non-ASCII space in any file read, where
+# the reader and Terraform could disagree, makes a line stale.
+wide=$'\xef\xbb\xbf|\xc2\xa0|\xe2\x80[\x80-\x8b]|\xe2\x80\xaf|\xe2\x81\x9f|\xe3\x80\x80'
 
 
 # The module profile's reach file (profile-format.md, Reach of changes outside Terraform): lines
@@ -84,7 +88,7 @@ reader() { # mode, arg, name
   awk -v mode="$1" -v arg="$2" -v name="$3" '
     function bad() { print "stale"; failed = 1; exit }
     function names(s) { return (name != "" && index(s, name) > 0) || s ~ /fileset[[:space:]]*\(/ }
-    { line = $0; sub(/\r$/, "", line) }
+    { line = $0; sub(/\r$/, "", line); if (line ~ /[^\t -~]/) bad() }
     tag != "" {
       t = line; gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
       if (t == tag) { tag = ""; next }
@@ -144,7 +148,7 @@ reader() { # mode, arg, name
         }
       }
       if (inblk && depth == 1 && line ~ /^[[:space:]]*(count|for_each)[[:space:]]*=/) {
-        g = line; gsub(/^[[:space:]]+|[[:space:]]+$/, "", g); gate = g
+        g = code; gsub(/^[[:space:]]+|[[:space:]]+$/, "", g); gate = g
       }
       if (inblk && names(line)) hit = 1
       n = gsub(/\{/, "{", code); m = gsub(/\}/, "}", code)
@@ -194,11 +198,12 @@ guard_at() { # rev, dir, file, argument=literal
     case "$path" in *.tf.json | *.tofu | *.tofu.json) return 1 ;; */*.tf) return 1 ;; esac
     [ "$(g cat-file -s "$rev:$d/$path" 2> /dev/null)" -le 1048576 ] 2> /dev/null || return 1
     t="$(g cat-file blob "$rev:$d/$path" 2> /dev/null)" || return 1
-    ! printf '%s\n' "$t" | grep -Fq -- "$b" || return 1
+    ! grep -Fq -- "$b" <<< "$t" || return 1
+    ! grep -Eq "$wide" <<< "$t" || return 1
     case "$path" in *.tf) ;; *) continue ;; esac
     [ "$mode" = 100644 ] || return 1
-    ! printf '%s\n' "$t" | grep -Eq 'fileset[[:space:]]*\(' || return 1
-    r="$(printf '%s\n' "$t" | reader calls "$arg" "")" || return 1
+    ! grep -Eq 'fileset[[:space:]]*\(' <<< "$t" || return 1
+    r="$(reader calls "$arg" "" <<< "$t")" || return 1
     case "$r" in *stale*) return 1 ;; esac
     while read -r name src val; do
       [ -n "$name" ] || continue
@@ -219,14 +224,14 @@ gate_at() { # rev, file, var name
   while read -r mode type path; do
     case "$path" in *.tf | *.tf.json | *.tofu | *.tofu.json) ;; *) continue ;; esac
     t="$(g cat-file blob "$rev:${prefix:+$prefix/}$path" 2> /dev/null)" || return 1
-    printf '%s\n' "$t" | grep -Fq -- "$b" || printf '%s\n' "$t" | grep -Eq 'fileset[[:space:]]*\(' || continue
+    grep -Fq -- "$b" <<< "$t" || grep -Eq 'fileset[[:space:]]*\(' <<< "$t" || continue
     [ "$mode" = 100644 ] && [ "$type" = blob ] || return 1
     case "$path" in *.tf) ;; *) return 1 ;; esac
-    r="$(printf '%s\n' "$t" | reader blocks "" "$b")" || return 1
+    r="$(reader blocks "" "$b" <<< "$t")" || return 1
     case "$r" in *stale*) return 1 ;; esac
     while IFS=$'\t' read -r h gl; do
       [ -n "$h" ] || continue
-      printf '%s\n' "$gl" | grep -Eq "^(count|for_each)[[:space:]]*=.*(^|[^A-Za-z0-9_.])var\.$v([^A-Za-z0-9_]|\$)" || return 1
+      grep -Eq "^(count|for_each)[[:space:]]*=.*(^|[^A-Za-z0-9_.])var\.$v([^A-Za-z0-9_]|\$)" <<< "$gl" || return 1
       list="$list$path"$'\t'"$h"$'\t'"$gl"$'\n'
     done <<< "$r"
   done <<< "$ents"
@@ -237,7 +242,7 @@ gate_at() { # rev, file, var name
 # A change that edits a .tf file of the module root changes what the gate means: nothing is cleared.
 rootre="^${prefix:+$prefix/}[^/]+\.(tf|tf\.json|tofu|tofu\.json)$"
 root_changed=false
-! printf '%s\n' "$changed" | grep -Eq "$rootre" || root_changed=true
+! grep -Eq "$rootre" <<< "$changed" || root_changed=true
 
 out='[]'
 while IFS= read -r f; do
@@ -248,7 +253,7 @@ while IFS= read -r f; do
   while read -r mf md ma mv; do
     [ "$mf" = "$r" ] && [ "$root_changed" = false ] || continue
     # A directory that holds a changed file is the change's own business, never cleared.
-    printf '%s\n' "$changed" | awk -v d="$md/" 'index($0, d) == 1 { f = 1 } END { exit !f }' && continue
+    awk -v d="$md/" 'index($0, d) == 1 { f = 1 } END { exit !f }' <<< "$changed" && continue
     # Both guards at both revisions, and the same module calls and gates at both.
     hc="$(guard_at "$head" "$md" "$r" "$ma")" || continue
     bc="$(guard_at "$base" "$md" "$r" "$ma")" || continue

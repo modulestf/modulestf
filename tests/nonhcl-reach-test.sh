@@ -234,6 +234,49 @@ t_rootchg() {
   FILES="$TMP/f3.json" none
 }
 t_rootchg; check "a change that edits a .tf file of the module root clears nothing" $?
+# Files over the pipe buffer, the name on their first line: a check must read them whole.
+pad() { awk 'BEGIN { for (i = 0; i < 2500; i++) printf "# filler line %04d of padding text for the pipe buffer\n", i }'; }
+bigtxt() { { printf 'python3 ../../package.py\n'; pad; } > examples/ex/notes.txt; }
+t_bigtxt() { repo bigtxt bigtxt; none; }
+t_bigtxt; check "a file over the pipe buffer that names the changed file first is read whole" $?
+bigfs() { { printf 'locals {\n  srcs = fileset("../..", "*.py")\n}\n'; pad; } > examples/ex/extra.tf; }
+t_bigfileset() { repo bigfileset bigfs; none; }
+t_bigfileset; check "a .tf file over the pipe buffer that calls fileset first is read whole" $?
+bigroot() {
+  { printf 'resource "null_resource" "zz" {\n  provisioner "local-exec" {\n    command = "python3 ${path.module}/package.py"\n  }\n}\n'; pad; } > zz.tf
+}
+t_bigroot() { repo bigroot bigroot; none; }
+t_bigroot; check "an ungated root block in a .tf file over the pipe buffer is read whole" $?
+t_bigrootchg() {
+  repo bigrootchg
+  jq -n '[{filename: "package.py", status: "modified"}, {filename: "package.tf", status: "modified"}]
+    + [range(8000) | {filename: "docs/file-\(.).md", status: "modified"}]' > "$TMP/f4.json"
+  FILES="$TMP/f4.json" none
+}
+t_bigrootchg; check "an edited root .tf file early in a files list over the pipe buffer clears nothing" $?
+gate_cmt() { perl -0pi -e 's/  count = var.create && var.create_package \? 1 : 0\n\n  program/  count = 1 # was var.create_package ? 1 : 0\n\n  program/' package.tf; }
+t_gatecmt() { repo gatecmt gate_cmt; none; }
+t_gatecmt; check "a root gate whose variable is only in a comment makes the line stale" $?
+gate_str() { perl -0pi -e 's/  count = var.create && var.create_package \? 1 : 0\n\n  program/  for_each = toset(["var.create_package"])\n\n  program/' package.tf; }
+t_gatestr() { repo gatestr gate_str; none; }
+t_gatestr; check "a root gate whose variable is only in a string makes the line stale" $?
+bom() { printf '\357\273\277module "g" {\n  source = "../../"\n}\n' > examples/ex/bom.tf; }
+t_bom() { repo bom bom; none; }
+t_bom; check "a byte order mark in an example .tf file makes the line stale" $?
+otherbyte() { printf '\342\200\250module "g" {\n  source = "../../"\n}\n' > examples/ex/sep.tf; }
+t_otherbyte() { repo otherbyte otherbyte; none; }
+t_otherbyte; check "any byte outside printable ASCII in an example .tf file makes the line stale" $?
+bomtxt() { printf '\357\273\277notes\n' > examples/ex/notes.txt; }
+t_bomtxt() { repo bomtxt bomtxt; none; }
+t_bomtxt; check "a byte order mark in any example file makes the line stale" $?
+nbsp() {
+  printf 'locals {\n  y = <<EOT\ntext\nEOT\302\240\n}\nmodule "hid" {\n  source = "../../"\n}\nlocals {\n  z = <<EOT\nEOT\n}\n' > examples/ex/extra.tf
+}
+t_nbsp() { repo nbsp nbsp; none; }
+t_nbsp; check "a non-ASCII space after a heredoc tag makes the line stale" $?
+nbsptxt() { printf 'a\302\240b\n' > examples/ex/notes.txt; }
+t_nbsptxt() { repo nbsptxt nbsptxt; none; }
+t_nbsptxt; check "a non-ASCII space in any example file makes the line stale" $?
 to_sub() {
   mkdir sub && mv package.py package.tf sub/
   perl -pi -e 's|source = "../../"$|source = "../../sub"|' examples/ex/main.tf
@@ -279,8 +322,8 @@ mutate "the repository of a reach line not compared" 's/\[ "\$r" != "\$repo" \] 
 mutate "a malformed reach line skipped" 's/\[\[ "\$\{bv-\}" =~ (\S+) \]\] \|\| die/[[ "\${bv-}" =~ $1 ]] || continue/' t_badreach
 mutate "a file and directory named twice taken" 's/case "\$seen" in \*"\|\$r \$f \$d\|"\*\) die ;; esac//' t_twice
 mutate "a reach link followed" 's/ && \[ ! -L "\$reach" \]//' t_link
-mutate "a name of the changed file in another example file not read" 's/    ! printf .%s\\n. "\$t" \| grep -Fq -- "\$b" \|\| return 1\n    case "\$path" in \*\.tf\) ;; \*\) continue ;; esac/    case "\$path" in *.tf) ;; *) continue ;; esac/' t_namessh
-mutate "an example fileset taken" 's/    ! printf .%s\\n. "\$t" \| grep -Eq .fileset\[\[:space:\]\]\*\\\(. \|\| return 1\n//' t_fileset
+mutate "a name of the changed file in another example file not read" 's/    ! grep -Fq -- "\$b" <<< "\$t" \|\| return 1\n    ! grep -Eq "\$wide"/    ! grep -Eq "\$wide"/' t_namessh
+mutate "an example fileset taken" 's/    ! grep -Eq .fileset\[\[:space:\]\]\*\\\(. <<< "\$t" \|\| return 1\n//' t_fileset
 mutate "a .tf.json file taken" 's/case "\$path" in \*\.tf\.json \| \*\.tofu \| \*\.tofu\.json\) return 1 ;; \*\/\*\.tf\) return 1 ;; esac/case "\$path" in *.tofu | *.tofu.json) return 1 ;; *\/*.tf) return 1 ;; esac/' t_json
 mutate "an OpenTofu file taken" 's/case "\$path" in \*\.tf\.json \| \*\.tofu \| \*\.tofu\.json\) return 1 ;;/case "\$path" in *.tf.json) return 1 ;;/' t_tofu
 mutate "a link taken" 's/\[ "\$mode" = 100644 \] \|\| \[ "\$mode" = 100755 \] \|\| return 1/:/' t_lnkany
@@ -293,10 +336,18 @@ mutate "a quote inside a template sequence taken" 's/if \(c == "\\"" \|\| \(c ==
 mutate "a template directive read as text" 's/if \(\(c == "\$" \|\| c == "%"\) && n2 == "\{"\) \{ lvl = 1; i\+\+; continue \}/if (c == "\$" \&\& n2 == "{") { lvl = 1; i++; continue }/' t_dirq
 mutate "the root gate not read at the head" 's/hg="\$\(gate_at "\$head"/hg="\$(gate_at "\$base"/' t_gatediff
 mutate "the root gate not compared" 's/\[ "\$hg" = "\$bg" \] \|\| continue/:/' t_gatediff
-mutate "an ungated root block taken" 's/printf .%s\\n. "\$gl" \| grep -Eq "\^\(count\|for_each\)\[\[:space:\]\]\*=\.\*\(\^\|\[\^A-Za-z0-9_\.\]\)var\\\.\$v\(\[\^A-Za-z0-9_\]\|\\\$\)" \|\| return 1/:/' t_ungated
+mutate "an ungated root block taken" 's/<<< "\$gl" \|\| return 1/<<< "\$gl" || :/' t_ungated
 mutate "a module root with no naming block taken" 's/\[ -n "\$list" \] \|\| return 1\n  printf .%s. "\$list" \| sort\n\}\n\n# A change/printf "%s" "\$list" | sort\n}\n\n# A change/' t_nogate
 mutate "an edited root .tf file ignored" 's/\|\| root_changed=true/|| :/' t_rootchg
 mutate "the module root taken as the repository root under a prefix" 's/root="\$\{prefix:-\.\}" ents mode type path t r name/root="." ents mode type path t r name/' t_prefixroot
+mutate "an example file read through a pipe" 's/! grep -Fq -- "\$b" <<< "\$t" \|\| return 1/! printf "%s\\n" "\$t" | grep -Fq -- "\$b" || return 1/' t_bigtxt
+mutate "an example fileset read through a pipe" 's/! grep -Eq .fileset\[\[:space:\]\]\*\\\(. <<< "\$t" \|\| return 1/! printf "%s\\n" "\$t" | grep -Eq "fileset" || return 1/' t_bigfileset
+mutate "a root file read through a pipe" 's/grep -Fq -- "\$b" <<< "\$t" \|\| grep -Eq .fileset\[\[:space:\]\]\*\\\(. <<< "\$t" \|\| continue/printf "%s\\n" "\$t" | grep -Fq -- "\$b" || continue/' t_bigroot
+mutate "the files list read through a pipe" 's/! grep -Eq "\$rootre" <<< "\$changed" \|\| root_changed=true/! printf "%s\\n" "\$changed" | grep -Eq "\$rootre" || root_changed=true/' t_bigrootchg
+mutate "the root gate read from the raw line" 's/g = code; gsub/g = line; gsub/' t_gatecmt
+mutate "the root gate read with its strings" 's/g = code; gsub/g = line; gsub/' t_gatestr
+mutate "a byte outside printable ASCII taken in a .tf file" 's/    \{ line = \$0; sub\(\/\\r\$\/, "", line\); if \(line ~ \/\[\^\\t -~\]\/\) bad\(\) \}/    { line = \$0; sub(\/\\r\$\/, "", line) }/' t_otherbyte
+mutate "a byte order mark taken in another file" 's/    ! grep -Eq "\$wide" <<< "\$t" \|\| return 1\n//' t_bomtxt
 mutate "a partial clone read" 's/\[ -z "\$\(g config --get extensions\.partialclone 2> \/dev\/null\)" \] \|\| die/:/' t_partial
 
 echo

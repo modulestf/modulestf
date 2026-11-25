@@ -1055,7 +1055,7 @@ def evidence_lines($b):
      # The changes over the classifier cap, reported once beside the classified ones.
      + (if $b.capped > 0 then " " + tx(if $b.capped == 1 then "behaviour-evidence-capped-one" else "behaviour-evidence-capped" end; {count: $b.capped}) else "" end)]
     + ([$b.triggers[] | select(ci_gated)] | length
-       | if . > 0 then ["Changes outside Terraform left to the repository's own tests, which the Checks signal reads: \(.)."] else [] end)
+       | if . > 0 then ["Changes outside Terraform the Checks signal gates, with no test run of them read: \(.)."] else [] end)
     + ([$b.triggers[] | select(floor_ok)] | length | if . > 0 then [tx("behaviour-floor-judged"; {count: .})] else [] end)
     + ([$b.triggers[] | select(demo_ok)] | length | if . > 0 then [tx("behaviour-undemonstrated"; {count: .})] else [] end)
   end;

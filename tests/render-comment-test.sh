@@ -1404,7 +1404,7 @@ t_bgroups; check "behaviour: over five unverified triggers render one line per c
 RUN1='.check_runs = [{app_slug: "ci", check_suite_id: 2, conclusion: "success", id: 1, status: "completed"}]'
 t_cigated() {
   render "$NONE" "" "$(checks cig pass "$RUN1")" "$(brun cig "[$(bt T-001 non-hcl-dependency unverifiable), $(bt T-002 non-hcl-dependency unverifiable)]" '[]')"
-  grep -qxF "Changes outside Terraform left to the repository's own tests, which the Checks signal reads: 2." "$O/comment.md" \
+  grep -qxF "Changes outside Terraform the Checks signal gates, with no test run of them read: 2." "$O/comment.md" \
     && ! grep -q '^- Behaviour change at ' "$O/comment.md" && ! grep -q 'ladder rule 4' "$O/comment.md"
 }
 t_cigated; check "behaviour: non-hcl-dependency triggers are left to the repository's tests" $?
@@ -1412,7 +1412,7 @@ t_cigated; check "behaviour: non-hcl-dependency triggers are left to the reposit
 t_cinone() {
   render "$NONE" "" "$(checks cin pass)" "$(brun cin "[$(bt T-001 non-hcl-dependency unverifiable)]" '[]')"
   grep -q '^- Behaviour change at ' "$O/comment.md" && grep -q 'ladder rule 4' "$O/comment.md" \
-    && ! grep -q "left to the repository's own tests" "$O/comment.md"
+    && ! grep -q "the Checks signal gates" "$O/comment.md"
 }
 t_cinone; check "behaviour: with no check on the head, non-hcl-dependency triggers stay gaps" $?
 # The test pass (test-pass.md): its result marks the Python non-hcl-dependency triggers of the tested
@@ -1453,7 +1453,7 @@ t_tests_error() {
 t_tests_error; check "tests: an error result renders as no test pass at all" $?
 t_tests_ci() {
   render "$NONE" "" "$(checks tc pass "$RUN1")" "$(trun ci '{dir: "functions", result: "passed 4"}')"
-  grep -qxF "Changes outside Terraform left to the repository's own tests, which the Checks signal reads: 1." "$O/comment.md" \
+  grep -qxF "Changes outside Terraform the Checks signal gates, with no test run of them read: 1." "$O/comment.md" \
     && grep -qF 'they cover: 2.' "$O/comment.md"
 }
 t_tests_ci; check "tests: beside a check run, the untested trigger is left to the Checks signal" $?
@@ -1591,7 +1591,7 @@ t_jobless_amb ownjobs '.jobless = [{workflow: "pre-commit.yml", conclusion: "fai
 t_jobless_ci() {
   render "$NONE" "" "$(checks jlci unknown "$JL1"' | .check_runs = [{app_slug: "ci", check_suite_id: 2, conclusion: "success", id: 1, status: "completed"}]')" \
     "$(runf jlci '.behaviour.triggers = [{id: "T-001", file: "functions/app.py", line: null, category: "non-hcl-dependency", state: "unverifiable"}]')"
-  [ "$(rule)" = 4 ] && ! grep -qF "left to the repository's own tests" "$O/comment.md" \
+  [ "$(rule)" = 4 ] && ! grep -qF "the Checks signal gates" "$O/comment.md" \
     && grep -qF -- '- Behaviour change at `functions/app.py` (non-hcl-dependency): not verified.' "$O/comment.md"
 }
 t_jobless_ci; check "checks: a job-less run is no test evidence for a change outside Terraform" $?
