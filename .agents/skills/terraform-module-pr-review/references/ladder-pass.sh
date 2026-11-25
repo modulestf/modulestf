@@ -899,9 +899,12 @@ subject_error() { # plan error output: 0 when every error it holds is located in
     if ($cur && /\A\s*on (\S+) line [0-9]+/) { $s++ if $1 eq "subject.tf"; $cur = 0 } }
     exit($n > 0 && $s == $n ? 0 : 1)' "$1" 2> /dev/null
 }
+# Observations and the coverage have no size cap, so they reach jq on a descriptor, past one
+# argument's size limit (128 KiB on Linux), each held to exactly one JSON value as --argjson held it.
+ONE='def one: if length == 1 then .[0] else error("not one JSON value") end;'
 record() { # trigger state reason fixture_sha control observations; the level is $LV
-  jq -cn --arg id "$1" --arg st "$2" --arg why "$3" --arg fx "$4" --arg ctl "$5" --argjson obs "$6" --arg lv "${LV:-L1}" \
-    '{trigger_id:$id, level:$lv, state:$st, reason:(if $why == "" then null else $why end),
+  jq -cn --arg id "$1" --arg st "$2" --arg why "$3" --arg fx "$4" --arg ctl "$5" --slurpfile obs <(printf '%s' "$6") --arg lv "${LV:-L1}" \
+    "$ONE"'($obs | one) as $obs | {trigger_id:$id, level:$lv, state:$st, reason:(if $why == "" then null else $why end),
       fixture_sha256:(if $fx == "" then null else $fx end), control:(if $ctl == "" then null else $ctl end),
       observations:$obs}' >> "$L/runs.jsonl"
 }
@@ -992,13 +995,13 @@ l1() { # trigger file, id: one run record
           record "$id" unverifiable "sensitive subject $side $c" "$fx" "" "$fob"; return
         fi
       fi
-      if [ "$side" = base ]; then obsb="$(printf '%s' "$obsb" | jq -c --argjson o "$o" '. + [$o.obs]')"
-      else obsh="$(printf '%s' "$obsh" | jq -c --argjson o "$o" '. + [$o.obs]')"; fi
+      if [ "$side" = base ]; then obsb="$(printf '%s' "$obsb" | jq -c --slurpfile o <(printf '%s' "$o") "$ONE"'. + [($o | one).obs]')"
+      else obsh="$(printf '%s' "$obsh" | jq -c --slurpfile o <(printf '%s' "$o") "$ONE"'. + [($o | one).obs]')"; fi
     done
     [ "$(du -sk "$S" | cut -f1)" -le "$SCRATCH_CAP_KB" ] || { record "$id" unverifiable "scratch over its cap" "$fx" "" "$fob"; return; }
   done
-  record "$id" ran "" "$fx" valid "$(jq -cn --argjson b "$obsb" --argjson h "$obsh" --argjson f "$fixj" --argjson s "$SBXJ" \
-    '{base:$b, head:$h, fixture:$f, sandbox:($s | {kind, proven, profile_sha256})}')"
+  record "$id" ran "" "$fx" valid "$(jq -cn --slurpfile b <(printf '%s' "$obsb") --slurpfile h <(printf '%s' "$obsh") --slurpfile f <(printf '%s' "$fixj") --argjson s "$SBXJ" \
+    "$ONE"'($b | one) as $b | ($h | one) as $h | ($f | one) as $f | {base:$b, head:$h, fixture:$f, sandbox:($s | {kind, proven, profile_sha256})}')"
 }
 
 # --- L2 ------------------------------------------------------------------------------------------
@@ -1106,13 +1109,13 @@ l2() { # trigger file, id
         *) if [ "$rc" -eq 0 ]; then record "$id" unverifiable "test $side $c: no plan" "$fx" "" "$fob"
            else record "$id" unverifiable "test $side $c exited $rc" "$fx" "" "$fob"; fi; return ;;
       esac
-      if [ "$side" = base ]; then obsb="$(printf '%s' "$obsb" | jq -c --argjson o "$o" '. + [$o.obs]')"
-      else obsh="$(printf '%s' "$obsh" | jq -c --argjson o "$o" '. + [$o.obs]')"; fi
+      if [ "$side" = base ]; then obsb="$(printf '%s' "$obsb" | jq -c --slurpfile o <(printf '%s' "$o") "$ONE"'. + [($o | one).obs]')"
+      else obsh="$(printf '%s' "$obsh" | jq -c --slurpfile o <(printf '%s' "$o") "$ONE"'. + [($o | one).obs]')"; fi
     done
     [ "$(du -sk "$S" | cut -f1)" -le "$SCRATCH_CAP_KB" ] || { record "$id" unverifiable "scratch over its cap" "$fx" "" "$fob"; return; }
   done
-  record "$id" ran "" "$fx" valid "$(jq -cn --argjson b "$obsb" --argjson h "$obsh" --argjson f "$fixj" --argjson s "$SBXJ" \
-    '{base:$b, head:$h, fixture:$f, sandbox:($s | {kind, proven, profile_sha256})}')"
+  record "$id" ran "" "$fx" valid "$(jq -cn --slurpfile b <(printf '%s' "$obsb") --slurpfile h <(printf '%s' "$obsh") --slurpfile f <(printf '%s' "$fixj") --argjson s "$SBXJ" \
+    "$ONE"'($b | one) as $b | ($h | one) as $h | ($f | one) as $f | {base:$b, head:$h, fixture:$f, sandbox:($s | {kind, proven, profile_sha256})}')"
 }
 
 # --- L3 ------------------------------------------------------------------------------------------
@@ -1250,13 +1253,13 @@ l3() { # trigger file, id
     for side in base head; do
       ctl=
       plan_show "$side" "$ci" || { r3 "$why" "$fx" "$ctl" "$fob"; return; }
-      if [ "$side" = base ]; then obsb="$(printf '%s' "$obsb" | jq -c --argjson o "$o" '. + [$o.obs]')"
-      else obsh="$(printf '%s' "$obsh" | jq -c --argjson o "$o" '. + [$o.obs]')"; fi
+      if [ "$side" = base ]; then obsb="$(printf '%s' "$obsb" | jq -c --slurpfile o <(printf '%s' "$o") "$ONE"'. + [($o | one).obs]')"
+      else obsh="$(printf '%s' "$obsh" | jq -c --slurpfile o <(printf '%s' "$o") "$ONE"'. + [($o | one).obs]')"; fi
     done
     [ "$(du -sk "$S" | cut -f1)" -le "$SCRATCH_CAP_KB" ] || { r3 "scratch over its cap" "$fx" "" "$fob"; return; }
   done
-  record "$id" ran "" "$fx" valid "$(jq -cn --argjson b "$obsb" --argjson h "$obsh" --argjson f "$fixj" --argjson s "$L3SBXJ" \
-    '{base:$b, head:$h, fixture:$f, sandbox:($s | {kind, profile, proven, profile_sha256})}')"
+  record "$id" ran "" "$fx" valid "$(jq -cn --slurpfile b <(printf '%s' "$obsb") --slurpfile h <(printf '%s' "$obsh") --slurpfile f <(printf '%s' "$fixj") --argjson s "$L3SBXJ" \
+    "$ONE"'($b | one) as $b | ($h | one) as $h | ($f | one) as $f | {base:$b, head:$h, fixture:$f, sandbox:($s | {kind, profile, proven, profile_sha256})}')"
 }
 
 : > "$L/runs.jsonl"
@@ -1281,7 +1284,7 @@ done < "$L/etc/l1-triggers.jsonl"
 PINSJ='[]'; [ -s "$L/pins.jsonl" ] && PINSJ="$(jq -cs . "$L/pins.jsonl")"
 COVJ='{"class":"none","examples":[]}'; [ -n "$COVER" ] && COVJ="$(jq -c '{class, examples}' "$COVER")"
 if ! { jq -n --arg head "$HEADSHA" --arg base "$BASESHA" --argjson tfv "$TFV" --argjson pins "$PINSJ" \
-  --argjson cov "$COVJ" --slurpfile runs "$L/runs.jsonl" \
-  '{schema_version:1, head_sha:$head, base_sha:$base, terraform_version:$tfv, pins:$pins, runs:$runs,
+  --slurpfile cov <(printf '%s' "$COVJ") --slurpfile runs "$L/runs.jsonl" \
+  "$ONE"'($cov | one) as $cov | {schema_version:1, head_sha:$head, base_sha:$base, terraform_version:$tfv, pins:$pins, runs:$runs,
     coverage:$cov}' > "$OUT.tmp" && mv -- "$OUT.tmp" "$OUT"; }; then die "cannot write $OUT"; fi
 exit 0

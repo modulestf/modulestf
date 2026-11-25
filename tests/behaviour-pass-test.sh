@@ -268,6 +268,7 @@ unex() {
   jq "${1:-.}" "$TMP/ladder-unex.json" > "$TMP/ladder-u.json"
   local keep="$MOD"; MOD="$UMOD"; DIFF="$TMP/files-unex.json" classify; MOD="$keep"
   [ -z "${UREQ-}" ] || printf '%s\n' "$UREQ" > "$O/required.json"
+  [ -z "${UREQF-}" ] || cp "$UREQF" "$O/required.json"
   evalp --ladder "$TMP/ladder-u.json"
 }
 marked() { jq -c '[.triggers[] | select(.unexercised == true) | .id]' "$O/run-behaviour.json" 2> /dev/null; }
@@ -516,7 +517,14 @@ t_req_big() {
     && [ "$(wc -c < "$O/required.json")" -gt 2097152 ] \
     && jq -e '.status == "ran" and ([.triggers[].state] == ["unverifiable", "unverifiable", "unverifiable", "unverifiable"])
       and ([.triggers[] | select(has("unexercised"))] == [])' "$O/run-behaviour.json" > /dev/null \
-    && [ "$(head -n 1 "$O/record.txt")" = "behaviour: ran, 4 triggers, 0 over the cap" ]
+    && [ "$(head -n 1 "$O/record.txt")" = "behaviour: ran, 4 triggers, 0 over the cap" ] || return 1
+  # The same list is read, not dropped to the require-everything value: with it the null
+  # pass-through and the guarded block are marked, and with idle_timeout added only the block.
+  # A file, not a variable: a variable this size in the environment stops every exec.
+  # The added path sits last, so honouring it shows the whole list arrived.
+  cp "$O/required.json" "$TMP/req-big.json"; jq -c '. + ["aws_lb_listener.idle_timeout"]' "$TMP/req-big.json" > "$TMP/req-big-end.json"
+  UREQF="$TMP/req-big.json" unex && [ "$(marked)" = '["T-008","T-014"]' ] \
+    && UREQF="$TMP/req-big-end.json" unex && [ "$(marked)" = '["T-014"]' ]
 }
 t_req_big; check "unexercised: a required list over the argument size limit still evaluates" $?
 t_unex_optional() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","block":{"attributes":{}}}}}}}}}}' > "$TMP/schema-opt.json"
@@ -532,6 +540,8 @@ t_unex_badschema() { printf '%s' '{"provider_schemas":{"x":{"resource_schemas":"
 t_unex_badschema; check "unexercised: a schema the required reader cannot read requires everything" $?
 t_unex_badreq() { UREQ='{"a": 1}' unex && [ "$(marked)" = '[]' ]; }
 t_unex_badreq; check "unexercised: a required list that is not a list of strings requires everything" $?
+t_unex_tworeq() { UREQ="$(printf '[]\n["*"]')" unex && [ "$(marked)" = '[]' ]; }
+t_unex_tworeq; check "unexercised: a required file of two JSON values requires everything" $?
 t_unex_nested_req() { printf '%s' '{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"resource_schemas":{"aws_lb_listener":{"version":0,"block":{"attributes":{"idle_timeout":{"type":"number","optional":true}},"block_types":{"default_action":{"nesting_mode":"list","block":{"attributes":{"target_group_arn":{"type":"string","required":true}}}}}}}}}}}' > "$TMP/schema-nreq.json"
   SCHEMA="$TMP/schema-nreq.json" unex . '.triggers |= map(if .id == "T-008" then .attribute = "default_action.target_group_arn" else . end)' \
     && [ "$(marked)" = '["T-014"]' ] && grep -qF '"aws_lb_listener.default_action.target_group_arn"' "$O/required.json"; }
@@ -1158,7 +1168,9 @@ wmutate "unexercised: a block with min_items not read as required" 's/select\(\(
 wmutate "unexercised: a nested required attribute not read" 's/\(\.key as \$b \| \.value\.block \| req\("\\\(\$p\)\.\\\(\$b\)"\)\)/empty/' t_unex_nested_req
 wmutate "unexercised: no schema read as no requirement" 's/rq=\x27\["\*"\]\x27/rq=\x27[]\x27/' t_unex_noschema
 wmutate "unexercised: an unreadable schema read as no requirement" 's/printf \x27\["\*"\]\\n\x27 > "\$out\/required\.json"/printf \x27[]\\n\x27 > "\$out\/required.json"/' t_unex_badschema
-wmutate "unexercised: a malformed required list read as none" 's/then \. else \["\*"\] end/then . else [] end/' t_unex_badreq
+wmutate "unexercised: a malformed required list read as none" 's/then \.\[0\] else \["\*"\] end/then .[0] else [] end/' t_unex_badreq
+wmutate "unexercised: a required file of two values read as its first" 's/if length == 1 and \(\.\[0\] \| /if (.[0] | /' t_unex_tworeq
+wmutate "unexercised: the large required list dropped to require everything" 's/ \| \$rq\[0\] as \$rq/ | ["*"] as \$rq/' t_req_big
 wmutate "unexercised: the required list passed in argv" 's/--slurpfile rq <\(printf \x27%s\\n\x27 "\$\{rq:-\[\\"\*\\"\]\}"\)/--argjson rq "\${rq:-[\\"*\\"]}"/; s/ \| \$rq\[0\] as \$rq//' t_req_big
 wmutate "unexercised: a null attribute not guarded" 's/def not_required\(\$t\): \(\$t\.attribute \| type == "string"\)\n      and /def not_required(\$t): /' t_unex_nullattr
 wmutate "unexercised: an unloaded directory marked" 's/ and plans_known and loaded\(\$t\)/ and plans_known/' t_unex_unloaded

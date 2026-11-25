@@ -303,9 +303,10 @@ evaluate() {
   if [ -f "$out/nullvars.json" ]; then
     nv="$(jq -c 'if type == "array" and all(.[]; type == "object" and (.dir | type == "string") and (.name | type == "string")) then . else [] end' "$out/nullvars.json" 2> /dev/null)" || nv='[]'
   fi
-  # A required list that cannot be read requires everything, so nothing is marked.
+  # A required list that cannot be read, or a file of more than one JSON value, requires
+  # everything, so nothing is marked.
   if [ -f "$out/required.json" ]; then
-    rq="$(jq -c 'if type == "array" and all(.[]; type == "string") then . else ["*"] end' "$out/required.json" 2> /dev/null)" || rq='["*"]'
+    rq="$(jq -c -s 'if length == 1 and (.[0] | type == "array" and all(.[]; type == "string")) then .[0] else ["*"] end' "$out/required.json" 2> /dev/null)" || rq='["*"]'
   fi
   # The required list can hold thousands of paths (a deeply nested schema gives megabytes), past
   # the argument size limit, so it reaches jq on a descriptor, not in argv.
