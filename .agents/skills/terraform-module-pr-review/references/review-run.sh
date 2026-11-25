@@ -1250,14 +1250,13 @@ floors_of() {
 # module profile from this skill checkout, never from the workspace; a custom profile has none.
 # Prints nothing and fails when there is no merge base or the script refuses.
 nonhcl_of() {
-  local pid reach=() br
+  local pid reach=()
   [ -n "$MB" ] || return 1
   pid="$(jq -r '.label | if startswith("shipped:") then .[8:] else "" end' "$RUN/state/profile.json" 2> /dev/null)"
   [ -z "$pid" ] || [ -z "$MAINT" ] || reach=(--reach "$MAINT/profiles/$pid/nonhcl-reach.txt")
-  br="$(jq -r '.base_ref // ""' "$RUN/state/pin.json" 2> /dev/null)"
   bash "$HERE/nonhcl-reach.sh" --git "$RUN/clone" --head "$HEAD_SHA" --base "$MB" --repo "$(arg repo)" \
     --behaviour "$RUN/behaviour/behaviour.json" --files "$RUN/host/files.json" --prefix "$PREFIX" \
-    ${reach[@]+"${reach[@]}"} ${br:+--base-ref "$br"} 2> /dev/null
+    ${reach[@]+"${reach[@]}"} 2> /dev/null
 }
 
 build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout

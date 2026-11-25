@@ -56,8 +56,9 @@ def header: capture(header_re);
 # Rules 3 to 5 read host signals the model rendered; the model's verdict stands for those,
 # and only toward stricter. A known MEDIUM blocker, a MEDIUM outside review.*, outranks
 # rules 4 and 5 (verdict.md, The Ladder). Approve with nits with no LOW finding is the model's
-# from a jobless Checks signal or a covered skip, a design skip among them, which keep the verdict
-# off rule 8; it stands, being stricter than approve. The disputed note is the one finding the
+# from a jobless Checks signal, a covered skip, a design skip among them, or a change whose only
+# behaviour triggers are outside Terraform (verdict.md, Changes outside Terraform), which keep the
+# verdict off rule 8; it stands, being stricter than approve. The disputed note is the one finding the
 # ladder does not read.
 # Rule 0 also needs no refuted behaviour state, which only the model saw: a model's block over a
 # CRITICAL compat finding is rule 1 and stands. The model's verdict must equal the result.

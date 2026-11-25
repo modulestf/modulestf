@@ -1099,7 +1099,7 @@ render_to "$TMP/render-tests"
 check "tests: render carries the result into the run file" "$(q "$RUN/render/run-file.json" '.tests == {dir: "functions", result: "passed 3"}')"
 check "tests: render carries the evidence of the change outside Terraform, bound to the head and the merge base" \
   "$(jq -e --arg h "$(jq -r .head "$RUN/index.json")" --arg b "$(jq -r .merge_base "$RUN/index.json")" \
-     '.nonhcl == {head_sha: $h, base_sha: $b, files: [{file: "functions/app.py", unreached: [], tested_by: []}]}' "$RUN/render/run-file.json" > /dev/null; echo $?)"
+     '.nonhcl == {head_sha: $h, base_sha: $b, files: [{file: "functions/app.py", unreached: []}]}' "$RUN/render/run-file.json" > /dev/null; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 : > "$STUB_LOG"
 prep_fn
