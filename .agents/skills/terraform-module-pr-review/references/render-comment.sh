@@ -64,6 +64,11 @@
 #   provider-version-floor-change trigger whose directory's floors were all read is no gap, nor is
 #   one a compat.provider-floor-raised finding names by its file (verdict.md, Provider floor
 #   changes). Any other shape is refused.
+#   One optional key more, "nonhcl": {"head_sha", "base_sha", "files": [{"file", "unreached",
+#   "tested_by"}]}, the evidence of a change outside Terraform nonhcl-reach.sh gives, written by
+#   review-run.sh; with its SHAs equal to --head and host.json's merge_base it may clear every
+#   example not planned, approve with nits at best (verdict.md, Changes outside Terraform). Any
+#   other shape is refused.
 #   The Checks signal reads as jobless when the accepted checks file's only unknown is workflows
 #   that ended action_required or failure without starting a job: approve with nits at best
 #   (verdict.md, Host Signals).

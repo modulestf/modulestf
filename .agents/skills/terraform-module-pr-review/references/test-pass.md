@@ -57,7 +57,7 @@ No test name, message or other output prose crosses into the record, the reviewe
 
 ## Verdict
 
-[verdict.md](verdict.md#behaviour-evidence): `passed <n>` marks the Python `non-hcl-dependency` triggers of the tested directory `tested`, no gap of rule 4; `failed <n>` marks them `refuted`, a block at rule 2; `error` and `not run` change nothing, so the Checks signal stays their evidence as before. The comment gives one fixed line, `tests-passed` or `tests-failed` ([comment-format.md](comment-format.md#host-render-strings)).
+[verdict.md](verdict.md#behaviour-evidence): `passed <n>` marks the Python `non-hcl-dependency` triggers of the tested directory `tested`, no gap of rule 4; `failed <n>` marks them `refuted`, a block at rule 2; `error` and `not run` change nothing, so the Checks signal stays their evidence as before. The comment gives one fixed line, `tests-passed` or `tests-failed` ([comment-format.md](comment-format.md#host-render-strings)). Which examples a change outside Terraform still needs planned is another question, the one of [Changes outside Terraform](verdict.md#changes-outside-terraform): there the evidence is the repository's own tests at the merge base under its CI, read from git objects, and this pass's result alone clears no example.
 
 ## Limits of the Evidence
 

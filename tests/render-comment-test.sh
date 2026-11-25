@@ -1460,6 +1460,72 @@ t_tests_ci; check "tests: beside a check run, the untested trigger is left to th
 refused "a tests result outside the grammar" "$NONE" "" "" "$(trun bad '{dir: "functions", result: "passed: all"}')"
 refused "a tests key with another field" "$NONE" "" "" "$(trun badk '{dir: "functions", result: "passed 1", log: "x"}')"
 refused "a tests directory that is not a plain path" "$NONE" "" "" "$(trun badd '{dir: "a b\nc", result: "passed 1"}')"
+# Changes outside Terraform (verdict.md): a change whose only behaviour changes are outside HCL clears
+# its examples not planned, all or nothing, when each runs no changed file by the module profile, or
+# the repository's tests at the merge base run every changed file and the Checks signal passed with a
+# check run. Approve with nits at best, never approve.
+NHU='[{dir: "examples/container-image", reason: "exception: needs a Docker daemon"}, {dir: "examples/build-package", reason: "exception: needs a Docker daemon"}]'
+nhrun() { # name, unreached json, tested_by json [, jq update] -> run file: package.py changed, 2 of 5 examples not planned
+  runf "nh-$1" ".plan_ran = true | .plan_mode = \"runner\" | .examples = {count: 5, skipped: 0, validated: 5}
+    | .coverage = {class: \"partial\", inert: false, unplanned: $NHU}
+    | .behaviour = {status: \"ran\", reason: null, claims: [], capped: 0,
+        triggers: [{id: \"T-001\", file: \"package.py\", line: 3, category: \"non-hcl-dependency\", state: \"unverifiable\"}]}
+    | .nonhcl = {head_sha: \"$HEAD\", base_sha: \"$BASE\", files: [{file: \"package.py\", unreached: $2, tested_by: $3}]} | ${4-.}"
+}
+NHC="$(checks nh pass "$RUN1")"
+NHT='["tests/test_zip_source.py"]'
+t_nh_both() {
+  render "$NONE" "" "$NHC" "$(nhrun both '["examples/container-image"]' "$NHT")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] \
+    && grep -qxF "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-7-nonhcl"]')" "$O/comment.md" \
+    && grep -qxF '### Examples not planned' "$O/comment.md" && ! grep -q '^### What to do' "$O/comment.md" \
+    && grep -qxF -- '- By the module profile, 1 example above runs no changed file outside Terraform, so it leaves nothing unknown.' "$O/comment.md" \
+    && grep -qxF -- "- The repository's own tests run every changed file outside Terraform (\`tests/test_zip_source.py\`), and the Checks signal passed, so 1 example above that runs one leaves nothing unknown." "$O/comment.md"
+}
+t_nh_both; check "outside Terraform: the profile and the tests clear every example not planned, approve with nits" $?
+t_nh_reach() {
+  render "$NONE" "" "$NHC" "$(nhrun reach '["examples/build-package", "examples/container-image"]' '[]')"
+  [ "$(rule)" = 7 ] && grep -qxF -- '- By the module profile, 2 examples above run no changed file outside Terraform, so they leave nothing unknown.' "$O/comment.md" \
+    && ! grep -qF "The repository's own tests run every changed file" "$O/comment.md"
+}
+t_nh_reach; check "outside Terraform: the profile alone clears examples that run no changed file" $?
+t_nh_low() {
+  render "$LOWF" "" "$NHC" "$(nhrun low '["examples/container-image"]' "$NHT")"
+  [ "$(rule)" = 7 ] && grep -qxF "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-7"]')" "$O/comment.md"
+}
+t_nh_low; check "outside Terraform: beside a LOW finding the rationale is the LOW one" $?
+nh_rule4() { # name, unreached, tested_by [, jq update [, checks]] -> holds when the render stays at rule 4
+  render "$NONE" "" "${5:-$NHC}" "$(nhrun "$1" "$2" "$3" "${4-.}")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && ! grep -qF 'By the module profile' "$O/comment.md"
+}
+t_nh_partial() { nh_rule4 partial '["examples/container-image"]' '[]'; }
+t_nh_partial; check "outside Terraform: an example that runs a changed file with no test evidence keeps all of them unknown" $?
+t_nh_bind() { nh_rule4 bind '["examples/container-image"]' "$NHT" ".nonhcl.base_sha = \"$HEAD\""; }
+t_nh_bind; check "outside Terraform: evidence bound to another merge base clears nothing" $?
+t_nh_hcl() { nh_rule4 hcl '["examples/container-image"]' "$NHT" ".behaviour.triggers += [$(bt T-002 literal-argument-change verified)]"; }
+t_nh_hcl; check "outside Terraform: a behaviour change in Terraform beside it keeps the coverage required" $?
+t_nh_merged() { nh_rule4 merged '["examples/container-image"]' "$NHT" '.behaviour.triggers[0].also_categories = ["literal-argument-change"]'; }
+t_nh_merged; check "outside Terraform: a trigger that merges a Terraform category keeps the coverage required" $?
+t_nh_codeerr() { nh_rule4 codeerr '["examples/container-image"]' "$NHT" '.coverage.unplanned[1].reason = "code-error, merge base not planned"'; }
+t_nh_codeerr; check "outside Terraform: a plan that failed on the code is never cleared" $?
+t_nh_noplan() { nh_rule4 noplan '["examples/container-image"]' "$NHT" '.examples.count = 2 | .examples.validated = 2'; }
+t_nh_noplan; check "outside Terraform: with no example planned nothing is cleared" $?
+t_nh_noruns() {
+  nh_rule4 noruns '[]' "$NHT" '.behaviour.triggers[0].state = "unverifiable" | .tests = {dir: ".", result: "passed 3"}' "$(checks nhn pass)"
+}
+t_nh_noruns; check "outside Terraform: tests at the merge base with no check run on the head clear nothing" $?
+t_nh_nofile() { nh_rule4 nofile '["examples/container-image"]' "$NHT" '.nonhcl.files[0].file = "other.py"'; }
+t_nh_nofile; check "outside Terraform: a changed file with no evidence entry clears nothing" $?
+refused "a nonhcl key with another field" "$NONE" "" "" "$(nhrun badk '[]' '[]' '.nonhcl.note = "x"')"
+refused "a nonhcl test path that climbs out" "$NONE" "" "" "$(nhrun badp '[]' '["../x.py"]')"
+refused "a nonhcl head that is not a SHA" "$NONE" "" "" "$(nhrun bads '[]' '[]' '.nonhcl.head_sha = "HEAD"')"
+mutate "the outside-Terraform clearing not capped at rule 7" 's/ or \.nonhcl > 0 then \{rule: 7/ then {rule: 7/' t_nh_both
+mutate "the outside-Terraform clearing not all or nothing" 's/if \(\$c \| length\) == \(\$u \| length\) then \$c else \[\] end/\$c/' t_nh_partial
+mutate "the outside-Terraform evidence not bound to the merge base" 's/ and \$n\.base_sha == \$in\.host\.merge_base//' t_nh_bind
+mutate "the outside-Terraform clearing beside a Terraform trigger" 's/and all\(\$t\[\]; nonhcl_only and/and all(\$t[];/' t_nh_merged
+mutate "the outside-Terraform clearing of a code error" 's/\.reason != "code-error, merge base not planned" and //' t_nh_codeerr
+mutate "the outside-Terraform clearing with no example planned" 's/ and \(\$u \| length\) < \(\$run\.examples\.count \/\/ 0\) and \(\$u \| map/ and (\$u | map/' t_nh_noplan
+mutate "the outside-Terraform tests without a check run" 's/ and \(\$in\.checks\.runs \/\/ 0\) > 0 and all/ and all/' t_nh_noruns
 # Job-less workflow runs: CI that never ran. Ended action_required or failure with every read
 # complete and nothing else open, the signal is jobless: approve with nits at best, one line each,
 # named by file or unnamed, and a maintainer item in place of the author's "Fix the failing checks."
@@ -2320,8 +2386,8 @@ mutate "the skip SHAs accepted alone" 's/and \(\[has\("covered_skips", "skip_bas
 mutate "covered names not allowlisted" 's/dir: \(\$c\.dir \| nm\(allowed\)\)/dir: (\$c.dir | nm(true))/' t_cov_names
 mutate "the witness lines left out of section 5" 's/if \$cov != \[\] then covered_lines\("unplanned-covered"; \$cov; \$run\) else/if false then [] else/' t_cov_std
 mutate "the COMPACT sentence dropped" 's/\+ \(if \$cov != \[\] then " " \+ covered_sentence\("compact-covered"; \$run; \$cov\)/+ (if false then " " + covered_sentence("compact-covered"; \$run; \$cov)/' t_cov_gold
-mutate "What to do with no item rendered" 's/ or \(\(\$cov != \[\] or \$l\.undemonstrated > 0\) and \$items == \[\]\)//' t_cov_rule8_std
-mutate "What to do with no item rendered beside undemonstrated coverage" 's/\(\$cov != \[\] or \$l\.undemonstrated > 0\) and \$items == \[\]/\$cov != [] and \$items == []/' t_ux
+mutate "What to do with no item rendered" 's/ or \(\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.nonhcl > 0\) and \$items == \[\]\)//' t_cov_rule8_std
+mutate "What to do with no item rendered beside undemonstrated coverage" 's/\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.nonhcl > 0\) and \$items == \[\]/\$cov != [] and \$items == []/' t_ux
 mutate "the rule 7 rationale for covered skips alone dropped" 's/elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.covered > 0 then tx\("rationale-7-covered"\)\n//' t_cov_rule8_std
 mutate "the base not checked" 's/ and \$cv\.skip_base_sha == \$in\.host\.merge_base//' t_cov_base
 mutate "a plan pass that did not run accepted" 's/and \$run\.plan_ran and \(\$cv\.inert/and (\$cv.inert/' t_cov_noplan
@@ -2339,7 +2405,7 @@ mutate "the witness cap dropped" 's/and \(witnesses\(\$cs\) \| length\) <= 100/a
 mutate "non-canonical paths accepted" 's/def canon_path: plain_path and [^\n]*/def canon_path: plain_path;/' t_cov_canon
 mutate "a dir listed twice accepted" 's/type == "array" and \(map\(\.dir\?\) \| length == \(unique \| length\)\)/type == "array"/' t_cov_dupdir
 mutate "the one form of the covered sentence dropped" 's/\+ \(if \$n == 1 then "-one" else "-many" end\); \{count: \$n, total/+ "-many"; {count: \$n, total/' t_cov_one
-mutate "STANDARD section 5 keeps its gap heading" 's/section\(if \$cov != \[\] then "Examples not planned" else/section(if false then "Examples not planned" else/' t_cov_one
+mutate "STANDARD section 5 keeps its gap heading" 's/section\(if \$cov != \[\] or \$nh != \[\] then "Examples not planned" else/section(if false then "Examples not planned" else/' t_cov_one
 mutate "witnesses not deduplicated" 's/if any\(\.\[\]; \. == \$w\) then \. else \. \+ \[\$w\] end/. + [\$w]/' t_cov_gold
 mutate "the downloaded flag ignored" 's/if \$c\.downloaded then "-downloaded" else/if false then "-downloaded" else/' t_cov_dl
 mutate "the one witness example not allowlisted" 's/ and \(\$e\[0\] \| allowed\)//' t_cov_names
@@ -2786,7 +2852,7 @@ t_jobless_queued() { t_jobless_amb mq '.jobless = [{workflow: "pre-commit.yml", 
 t_jobless_pending() { t_jobless_amb mp '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = [] | .statuses = {state: "pending", total_count: 1}'; }
 t_jobless_reads() { t_jobless_amb mr '.jobless = [{workflow: "pre-commit.yml", conclusion: "failure"}] | .check_runs = [] | .reads = "failed"'; }
 mutate "jobless never computed" 's/jobless_only: \(\.jobless != \[\]/jobless_only: (false/' t_jobless
-mutate "jobless reaches rule 8" 's/ or \$g\.checks == "jobless" then/ then/' t_jobless
+mutate "jobless reaches rule 8" 's/ or \$g\.checks == "jobless" or / or /' t_jobless
 mutate "jobless for any conclusion" 's/\n      and all\(\.jobless\[\]; \.conclusion \| IN\("action_required", "failure"\)\)//' t_jobless_cancelled
 mutate "jobless beside an open check run" 's/\n      and all\(\.check_runs\[\]; \.status == "completed" and \(\.conclusion \| IN\("success", "neutral", "skipped"\)\)\)//' t_jobless_queued
 mutate "jobless with a pending status" 's/\n      and \(\.statuses == null or \.statuses\.total_count == 0 or \.statuses\.state == "success"\)\)/)/' t_jobless_pending

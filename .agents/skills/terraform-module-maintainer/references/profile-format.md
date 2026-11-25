@@ -18,6 +18,7 @@ A profile is one self-contained directory. It links to no other profile and hold
 | `pr-description.md` | no | What a pull request body holds |
 | `plan-providers.txt` | no | Providers the review's plan pass admits in runner mode. The plan pass reads only the default profile's file today, whatever profile is selected |
 | `generated-artifacts.txt` | no | The generators the generated-only mode of `terraform-module-pr-fix` may run, in the grammar of [Generated artifacts](#generated-artifacts). Absent means none |
+| `nonhcl-reach.txt` | no | Example directories that run no changed file outside Terraform, in the grammar of [Reach of changes outside Terraform](#reach-of-changes-outside-terraform). Absent means every example runs every such file |
 
 A file the profile omits means only the generic rules of the skills apply where a rule links to it. The reviewer's checks link to the files of the default profile, [terraform-aws-modules](../profiles/terraform-aws-modules/PROFILE.md); under another profile each link means the selected profile's file of the same name, and the same section in it.
 
@@ -76,6 +77,12 @@ The file is at most 4096 bytes. Each line is blank, a comment that starts with `
 - `terraform-docs-pin <path> <VARIABLE>`: where the family's CI pins terraform-docs, as a repository-relative file path and a variable name of capitals, digits and underscores.
 
 `generator terraform-docs` needs exactly one `terraform-docs-pin` line, and a pin line needs `generator terraform-docs`. Any other line, a generator named twice, a link or a file over the cap refuses the run with `the profile's generated-artifacts.txt is malformed`.
+
+## Reach of changes outside Terraform
+
+`nonhcl-reach.txt` names, per module repository, the example directories that run no given file outside Terraform, such as a packaging script a `.tf` file runs. The review's host reads it for a change whose only behaviour changes are outside HCL: an example listed for every changed file needs no plan ([Changes outside Terraform](../../terraform-module-pr-review/references/verdict.md#changes-outside-terraform)). [review-run.sh](../../terraform-module-pr-review/references/review-run.sh) reads it from the profile directory of the skill checkout for the run's shipped profile id, never from the workspace; a custom profile has none. No `mtf-facts` command reads it.
+
+The file is at most 65536 bytes and is no link. Each line is blank, a comment that starts with `#`, or `not-run <owner/name> <file> <example directory>`: the repository, the file and the directory, both repository-relative paths of letters, digits, `.`, `_` and `-` with no `.` or `..` segment. Any other line refuses the whole file, and the review then takes no example as unreached. The list names what does not run a file, so an example a module adds later runs it until a line says otherwise. A listed directory that is absent at the head, or holds a file the change edits, is not taken.
 
 ## Gate table
 

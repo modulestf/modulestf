@@ -611,3 +611,46 @@ references/check-a-compatibility.md references/check-g-behaviour.md references/e
 +	references/engine/check-c-structure.md	- LOW for `structure.validation-missing` only as [Branch values a provider checks]() sets out; a commented-out block stays MEDIUM.
 +	references/engine/check-d-examples.md	- LOW for `examples.custom-input-required` when the change adds the example; one renamed, moved or replaced from another path counts as one the base had and stays HIGH.
 +	references/engine/check-d-examples.md	- LOW for `examples.custom-input-required` when the change adds the example; one renamed, moved or replaced from another path counts as one the base had and stays HIGH.
+-	SKILL.md	At every depth, each check in scope is read through its run summary, [references/run/]() `check-a.md` to `check-g.md`, an index of its rules that holds no rule text:
++	SKILL.md	At every depth, each check in scope is read through its run summary, [references/run/]() `check-a.md` to `check-h.md`, an index of its rules that holds no rule text:
++	SKILL.md	Judges a changed line that fails for an input it handles, a process started through a shell with an unquoted value, and an altered behaviour no existing test covers.
++	SKILL.md	Reading never verifies such a change and never clears a gap the caller lists.
++	SKILL.md	Reads each changed file outside Terraform that the module runs, such as a packaging script a `.tf` file runs, at the base and the head, with the `.tf` lines that run it and the tests that import it.
++	SKILL.md	Rules: [check-h-non-hcl.md](), opened by section through its [run summary]() before running this check.
+-	SKILL.md	Run each check in scope, A to G, through its run summary, as [Reading by Depth]() says.
++	SKILL.md	Run each check in scope, A to H, through its run summary, as [Reading by Depth]() says.
+-	SKILL.md	Which checks are in scope is the depth's: at `light` C, E, F and Check G's claim reading; at `focused` every check but one `depth.json` may put out, B; at `deep` all seven.
++	SKILL.md	Which checks are in scope is the depth's: at `light` C, E, F, H and Check G's claim reading; at `focused` every check but one `depth.json` may put out, B; at `deep` all eight.
++	SKILL.md	`rule_id` values: `structure.non-hcl-logic-error`, `structure.non-hcl-unsafe-subprocess` and `structure.non-hcl-test-missing`.
+-	SKILL.md	| [run/]() `check-a.md` to `check-g.md` | Whole, for each check in scope, as [Reading by Depth]() says |
++	SKILL.md	| [run/]() `check-a.md` to `check-h.md` | Whole, for each check in scope, as [Reading by Depth]() says |
++	references/check-h-non-hcl.md	**Fails when:**
++	references/check-h-non-hcl.md	**Provider facts:** none.
++	references/check-h-non-hcl.md	**Reads:** each such file the change edits, whole, at the base and the head, the `.tf` lines that run it with the arguments they pass, and the test files of the repository that import or run it.
++	references/check-h-non-hcl.md	**Severity:**
++	references/check-h-non-hcl.md	- `structure.non-hcl-logic-error`: HIGH, the feature that does not work of [Severity Levels](), when every caller of the module that runs the code reaches the failing input, such as a packaging step that now fails for the default arguments; MEDIUM when only some callers reach it, such as one runtime or one option of the packaging step.
++	references/check-h-non-hcl.md	- `structure.non-hcl-logic-error`: a line the change adds or edits fails, on reading, for an input the code handles: it raises, returns the wrong value, writes the wrong file or exits with the wrong status, where the input comes from the arguments the `.tf` lines pass, the files the code reads or the environment it runs in.
++	references/check-h-non-hcl.md	- `structure.non-hcl-test-missing`: LOW.
++	references/check-h-non-hcl.md	- `structure.non-hcl-test-missing`: the change alters what such a file does for an input it already handled, the repository has a test file that imports or runs the file, and no test covers the altered behaviour at the head.
++	references/check-h-non-hcl.md	- `structure.non-hcl-unsafe-subprocess`: CRITICAL when a module input or a file name a caller controls reaches the shell unquoted; HIGH when only the environment the module runs in does.
++	references/check-h-non-hcl.md	- `structure.non-hcl-unsafe-subprocess`: a line the change adds or edits starts a process through a shell with a value it does not quote, such as `shell=True`, `os.system` or a command string built from a value, or passes a value as an option where a file name is meant, when that value comes from a module input, a file name in a tree the module packages, or the environment.
++	references/check-h-non-hcl.md	> **Part of:** [terraform-module-reviewer]()
++	references/check-h-non-hcl.md	> **Purpose:** The operative fails-when and severity rules of Check H, which reads changed code outside Terraform that the module runs.
++	references/check-h-non-hcl.md	A change with no test file for the code at all is not this rule, and neither is a change that alters no behaviour, such as a comment, a log message or a rename.
++	references/check-h-non-hcl.md	A file that a `.tf` file packages or reads, such as a Lambda source or a `templatefile` input, is embedded code and belongs to [Check C](), even when a `.tf` file also runs it.
++	references/check-h-non-hcl.md	A path, platform or version the code does not claim to handle is no input it handles.
++	references/check-h-non-hcl.md	Check H reads a changed file that is not Terraform configuration and that the module runs: a program a `.tf` file runs, through a `data "external"` `program`, a `local-exec` or other provisioner `command`, or a packaging step's build command, such as a packaging script at the module root; and a script the module's own tests run.
++	references/check-h-non-hcl.md	It helps the author and never blocks, and a follow-up is an acceptable answer.
++	references/check-h-non-hcl.md	Naming, formatting and the idiom of the language are not judged, and neither is a choice of library.
++	references/check-h-non-hcl.md	Nothing in them is run (Rule 1), and a file the change does not edit is not read.
++	references/check-h-non-hcl.md	One finding per pattern, naming each of its lines.
++	references/check-h-non-hcl.md	Reading supports a judgement and verifies nothing: no finding of this check, and no absence of one, ever stands in for a plan or a test run, and a caller never clears a gap of its own on it.
++	references/check-h-non-hcl.md	Rule numbers refer to the [Mandatory Rules]() in SKILL.md.
++	references/check-h-non-hcl.md	|
++	references/check-h-non-hcl.md	|
++	references/check-h-non-hcl.md	|
++	references/check-h-non-hcl.md	| `rule_id` | Fix |
++	references/check-h-non-hcl.md	| `structure.non-hcl-logic-error` | Name the input and the line, and the change that handles it, such as a guard, a default or the corrected expression.
++	references/check-h-non-hcl.md	| `structure.non-hcl-test-missing` | Add a case to the existing test file named in the summary for the altered input.
++	references/check-h-non-hcl.md	| `structure.non-hcl-unsafe-subprocess` | Pass the command as a list with no shell, or quote the value for the shell, and end options with `--` before a file name.
++	references/check-h-non-hcl.md	|-----------|-----|

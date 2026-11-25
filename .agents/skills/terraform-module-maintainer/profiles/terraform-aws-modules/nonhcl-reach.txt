@@ -1,0 +1,8 @@
+# Example directories that run no changed file outside Terraform (profile-format.md, Reach of
+# changes outside Terraform): not-run <owner/name> <file> <example directory>, both paths
+# repository-relative. An example not listed runs the file. Check a line against the module's
+# code before adding it: here every module call of the example sets create_package = false, so
+# package.tf, which runs package.py, creates nothing.
+not-run terraform-aws-modules/terraform-aws-lambda package.py examples/code-signing
+not-run terraform-aws-modules/terraform-aws-lambda package.py examples/container-image
+not-run terraform-aws-modules/terraform-aws-lambda package.py examples/triggers

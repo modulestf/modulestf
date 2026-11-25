@@ -145,7 +145,7 @@ echo
 copy "$R/output.md" "../" "Skill" "u:Severity and Output|h:Output"
 echo
 copy "$R/workflow.md" "../" "Skill" \
-  "u:Review Steps|h:Check A: Backwards Compatibility|h:Check B: Coverage Gaps Against the Provider Schema|h:Check C: Module Structure|h:Check D: Examples|h:Check E: Profile Conventions|h:Check F: Scope|h:Check G: Behaviour Changes and Claims|l:^7[.] Select the profile and take its snapshot|l:^8[.] If .mtf-facts. is installed|l:^Classify the changed paths, order the areas|l:^Each check.s full [*][*]Reads|l:^6[.] Run .findings-check|l:^The .rule_id. values named in the checks above"
+  "u:Review Steps|h:Check A: Backwards Compatibility|h:Check B: Coverage Gaps Against the Provider Schema|h:Check C: Module Structure|h:Check D: Examples|h:Check E: Profile Conventions|h:Check F: Scope|h:Check G: Behaviour Changes and Claims|h:Check H: Code Outside Terraform|l:^7[.] Select the profile and take its snapshot|l:^8[.] If .mtf-facts. is installed|l:^Classify the changed paths, order the areas|l:^Each check.s full [*][*]Reads|l:^6[.] Run .findings-check|l:^The .rule_id. values named in the checks above"
 for c in $CHECKS; do
   echo
   # Pointer lines to the engine files and the rule id lists say nothing a judgment run needs.
