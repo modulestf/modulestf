@@ -10,6 +10,7 @@ on:
       - .agents/skills/terraform-module-pr-review/references/ladder-*
       - .agents/skills/terraform-module-pr-review/references/ladder-templates/**
       - .agents/skills/terraform-module-pr-review/references/ladder-fixtures/**
+      - .agents/skills/terraform-module-pr-review/references/mtf-facts-*
       - tests/ladder-pass-test.sh
       - .github/workflows/ladder-live.yml
   push:
@@ -17,6 +18,7 @@ on:
       - .agents/skills/terraform-module-pr-review/references/ladder-*
       - .agents/skills/terraform-module-pr-review/references/ladder-templates/**
       - .agents/skills/terraform-module-pr-review/references/ladder-fixtures/**
+      - .agents/skills/terraform-module-pr-review/references/mtf-facts-*
       - tests/ladder-pass-test.sh
       - .github/workflows/ladder-live.yml
 
@@ -27,12 +29,6 @@ concurrency:
   group: ladder-live-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # mtf-facts with L2 selection and evaluation, fixture-check --level L2, the curated
-  # aws_db_instance and the null base of an added attribute (v0.4.0-rc.4), pinned by a
-  # commit of its master.
-  MTF_FACTS_COMMIT: 870367669293c59fa5249569e450249ca359cb48
-
 jobs:
   linux:
     runs-on: ubuntu-latest
@@ -41,10 +37,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: 1.27.3
-          cache: false
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: 1.14.0
@@ -52,8 +44,12 @@ jobs:
       - name: Install bubblewrap and mtf-facts
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
-          go install "github.com/modulestf/facts/cmd/mtf-facts@$MTF_FACTS_COMMIT"
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          # The pinned release, its hash checked. It has L2 selection and evaluation,
+          # fixture-check --level L2, the curated aws_db_instance and the null base of an
+          # added attribute.
+          mkdir -p "$RUNNER_TEMP/mtf-facts"
+          bash .agents/skills/terraform-module-pr-review/references/mtf-facts-install.sh "$RUNNER_TEMP/mtf-facts"
+          echo "$RUNNER_TEMP/mtf-facts" >> "$GITHUB_PATH"
       - name: Allow unprivileged user namespaces
         # Ubuntu's AppArmor restricts them by default, and bwrap needs one.
         run: |
