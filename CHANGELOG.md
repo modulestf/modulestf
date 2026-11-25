@@ -1,3 +1,12 @@
+## [0.12.24](https://github.com/modulestf/modulestf/compare/v0.12.23...v0.12.24) (2026-11-25)
+
+
+### Bug Fixes
+
+* **reviewer:** Calibrate default change and documentation bands against merged changes ([#211](https://github.com/modulestf/modulestf/issues/211)) ([4082717](https://github.com/modulestf/modulestf/commit/408271718a2c07d431288fe41e2cfbdf9f761722))
+
+
+
 ## [0.12.23](https://github.com/modulestf/modulestf/compare/v0.12.22...v0.12.23) (2026-11-24)
 
 
