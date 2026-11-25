@@ -31,11 +31,15 @@
 #                                        the run file, depth.sh verify, render-comment.sh, plan.json,
 #                                        fix-plan.md
 #   review-run.sh cleanup <run>         deletes the run directory
+#   review-run.sh record --out <dir> --review-id <id>
+#                                        after the confirmed write of Step 12: keeps the posted
+#                                        review's plan.json and body digest in this user's record
+#                                        store, which prepare reads back (github-io.md, The Post Record)
 #
 # Every subcommand prints at most 30 lines. Host strings never reach a command line or an
 # eval: they travel in files and through jq --arg. Exit 0 done, 1 a refusal or a failed step
 # with its fixed reason printed, 2 a usage error. There is no post command: posting stays the
-# skill's confirmed step (SKILL.md, Rule 1).
+# skill's confirmed step (SKILL.md, Rule 1); record only reads the posted review back.
 set -uo pipefail
 set -f
 # SHA-256 with GNU coreutils or macOS sha256sum, else the slower Perl shasum.
@@ -169,6 +173,61 @@ affected_to() { # mtf-facts, root, files list, out: the affected report, or no f
   fi
 }
 
+# --- the post record (github-io.md, The Post Record) ---------------------------------------
+
+# This user's own store of the reviews this skill posted, outside every run directory: one
+# directory per pull request, two files per review id. Prints nothing when no absolute home is set.
+records_dir() { # owner/name, number
+  local b="${XDG_STATE_HOME:-${HOME-}/.local/state}"
+  case "$b" in /?*) printf '%s/modulestf/pr-review/records/%s/%s' "$b" "$1" "$2" ;; *) return 1 ;; esac
+}
+sha_file() { openssl dgst -sha256 -r < "$1" | cut -d' ' -f1; }
+META_JQ='type == "object" and keys == ["body_sha256", "format", "plan_sha256", "review_id", "state", "target"]
+  and .format == 1 and (.review_id | type == "number" and . >= 1 and . == floor)
+  and (.body_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and (.plan_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+  and (.state | IN("APPROVED", "CHANGES_REQUESTED", "COMMENTED")) and (.target | type == "string")'
+
+# Our earlier review: when host.json names an own CHANGES_REQUESTED, the record kept when this
+# skill posted it, checked against the review as GitHub holds it now. earlier.json says ok with the
+# record's blocking findings (MEDIUM and above, module-relative), or why the block cannot be checked.
+read_earlier() { # owner/name, number, token user id, prefix
+  local h="$RUN/host/host.json" rid d m pl rec=missing
+  [ "$(jq -r '.own_review.state // ""' "$h")" = CHANGES_REQUESTED ] || return 0
+  rid="$(jq -r '.own_review.id' "$h")"
+  if d="$(records_dir "$1" "$2")"; then
+    m="$d/$rid.json"; pl="$d/$rid.plan.json"
+    if [ -e "$m" ] || [ -L "$m" ] || [ -e "$pl" ] || [ -L "$pl" ]; then
+      rec=unreadable
+      if [ -f "$m" ] && [ ! -L "$m" ] && [ -f "$pl" ] && [ ! -L "$pl" ] && [ "$(wc -c < "$m")" -le 4096 ] &&
+          [ "$(wc -c < "$pl")" -le 4194304 ] && jq -e "$META_JQ" "$m" > /dev/null 2>&1 &&
+          jq -e -L "$HERE" 'include "stage-contract"; stage_ok("review-plan")' "$pl" > /dev/null 2>&1 &&
+          [ "$(sha_file "$pl")" = "$(jq -r '.plan_sha256' "$m")" ]; then
+        if [ "$(jq -r '.body_sha256' "$m")" != "$(jq -r '.own_review.body_sha256' "$h")" ]; then rec=edited
+        elif ! jq -e -n --slurpfile m "$m" --slurpfile p "$pl" --slurpfile h "$h" --arg t "$1#$2" --arg u "$3" --arg pre "$4" '
+            $m[0].review_id == $h[0].own_review.id and $m[0].state == "CHANGES_REQUESTED" and $m[0].target == $t
+            and $p[0].pin.target == $t and $p[0].pin.head_sha == $h[0].own_review.commit_id
+            and $u != "" and ($p[0].reviewer_id | tostring) == $u and $p[0].module_prefix == $pre' > /dev/null 2>&1; then rec=mismatch
+        else rec=ok
+        fi
+      fi
+    fi
+  fi
+  jq -n --slurpfile h "$h" --arg rec "$rec" --arg pre "$4" --slurpfile p "$( [ "$rec" = ok ] && echo "$pl" || echo /dev/null)" '
+    def rel: if $pre == "" then . elif . == $pre then "." elif startswith($pre + "/") then .[($pre | length) + 1:] else null end;
+    ([($p[0].findings // [])[] | select(.severity | IN("CRITICAL", "HIGH", "MEDIUM")) | .file |= rel]) as $f
+    # Each finding in the grammar the render holds the run file to, else the record is unreadable.
+    | (all($f[]; (.id | type == "string" and test("^F-[0-9]{3,4}$")) and (.rule_id | type == "string" and test("^[a-z][a-z0-9_.-]{0,127}$"))
+        and (.line == null or (.line | type == "number" and . >= 1 and . == floor))
+        and (.file == null or (.file | type == "string" and length <= 1024 and test("^[A-Za-z0-9._][A-Za-z0-9._/-]*$") and (test("(^|/)[.][.](/|$)") | not))))
+       and ($f | map(.id) | length == (unique | length))) as $g
+    | (if $rec != "ok" then $rec elif $f == [] then "empty" elif ($g | not) then "unreadable"
+       elif any($f[]; .file == null) then "mismatch" else "ok" end) as $r
+    | {review_id: $h[0].own_review.id, commit_id: $h[0].own_review.commit_id, record: $r,
+       findings: (if $r == "ok" then $f else [] end)}' > "$RUN/earlier.json" 2> /dev/null ||
+    jq -n --slurpfile h "$h" '{review_id: $h[0].own_review.id, commit_id: $h[0].own_review.commit_id,
+      record: "unreadable", findings: []}' > "$RUN/earlier.json"
+}
+
 # --- prepare ---------------------------------------------------------------------------------
 
 refuse() { # fixed reason, words: index.json says refused and nothing else
@@ -255,6 +314,7 @@ cmd_prepare() {
   local head base mb prefix
   head="$(jq -r '.head_sha' "$RUN/host/host.json")"; base="$(jq -r '.base_sha' "$RUN/host/host.json")"
   mb="$(jq -r '.merge_base // ""' "$RUN/host/host.json")"; prefix="$(jq -r '.prefix' "$RUN/host/host.json")"
+  read_earlier "$repo" "$pr" "$uid" "$prefix"
   "${hp[@]}" checks --repo "$repo" --head "$head" --out "$RUN/checks" --own-pairs "" > /dev/null 2>&1
   local checks_file=rejected
   [ "$("${hp[@]}" check "$RUN/checks" --head "$head" 2> /dev/null)" = "checks accepted" ] && checks_file=accepted
@@ -387,6 +447,8 @@ cmd_prepare() {
   echo "RUN=$RUN"
   echo "identity: $login_shown, posting $posting$( [ "$render_only" = false ] || echo ", render-only")"
   summary_lines
+  [ ! -f "$RUN/earlier.json" ] || jq -r '"earlier review: changes requested on \(.commit_id[:12]), record \(.record)"
+    + (if .record == "ok" then ", \(.findings | length) blocking findings for the reviewer to judge" else ", the block stands" end)' "$RUN/earlier.json"
 }
 
 # index.json: enumerated fields and validated paths only, never prose, a title or a branch.
@@ -1071,8 +1133,16 @@ cmd_handover() {
         ! grep -qvE "$REGION_LINE_RE" "$RUN/readme/regions.txt"; then
       sed 's/^/README regions: /' "$RUN/readme/regions.txt"
     fi
-    printf 'Output: write the findings list as JSON to %s, the summary line and the profile lines to %s and the facts comparison note to %s, and nothing else.\n' \
-      "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt"
+    # Our earlier review, only with a record that checked out: its blocking findings for the
+    # reviewer to judge at the head (findings-schema.md, Earlier Review Task Line).
+    if jq -e '.record == "ok"' "$RUN/earlier.json" > /dev/null 2>&1 && jq '.findings' "$RUN/earlier.json" > "$out/earlier-task.json"; then
+      printf 'Earlier review: %s\n' "$out/earlier-task.json"
+      printf 'Output: write the findings list as JSON to %s, the summary line and the profile lines to %s, the facts comparison note to %s and the earlier review judgments as JSON to %s, and nothing else.\n' \
+        "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt" "$RUN/review/earlier.json"
+    else
+      printf 'Output: write the findings list as JSON to %s, the summary line and the profile lines to %s and the facts comparison note to %s, and nothing else.\n' \
+        "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt"
+    fi
     [ ! -f "$out/reviewer-references.md" ] || printf 'References: %s\n' "$out/reviewer-references.md"
     sed -n "$n,\$p" "$t" | sed '$d'
     [ "$TRIAGE" = true ] || { printf 'RECORD-%s\n' "$s"; cat "$out/record.txt"; }
@@ -1245,6 +1315,28 @@ floors_of() {
   jq -c -n --arg h "$HEAD_SHA" --arg b "$mbs" --argjson d "$out" '{head_sha: $h, base_sha: $b, dirs: $d}'
 }
 
+# The run file's earlier (render-comment.sh): earlier.json with the reviewer's judgment of each
+# blocking finding from review/earlier.json. A judgments file that is missing, a link, over its cap
+# or not one entry per finding in its shape leaves every finding not judged, so the block stands.
+earlier_of() {
+  local j="$RUN/review/earlier.json" jud='null'
+  if [ -f "$j" ] && [ ! -L "$j" ] && [ "$(wc -c < "$j")" -le 262144 ]; then jud="$(jq -c . "$j" 2> /dev/null)" || jud='null'; fi
+  jq -c --argjson j "${jud:-null}" '
+    def plain: type == "string" and length > 0 and length <= 1024 and test("^[A-Za-z0-9._][A-Za-z0-9._/-]*$") and (test("(^|/)[.][.](/|$)") | not);
+    .findings as $f
+    | ($j | type == "array" and length == ($f | length) and all(.[]; type == "object"
+         and keys == ["file", "id", "judgment", "line"] and (.id | type == "string")
+         and (.judgment | IN("resolved", "partly", "not resolved"))
+         and (.file == null or (.file | plain)) and (.line == null or (.line | type == "number" and . >= 1 and . == floor))
+         and (.judgment != "resolved" or (.file != null and .line != null)))
+       and ((map(.id) | sort) == ($f | map(.id) | sort)) and (map(.id) | length == (unique | length))) as $ok
+    | {review_id, commit_id, record,
+       items: [$f[] | .id as $id | ($j | if $ok then (map(select(.id == $id))[0]) else null end) as $x
+         | {id, rule_id, severity, file, line,
+            judgment: (if $x == null then "not-judged" else ($x.judgment | sub(" "; "-")) end),
+            at: (if $x != null and $x.judgment == "resolved" then {file: $x.file, line: $x.line} else null end)}]}' "$RUN/earlier.json"
+}
+
 build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   local triage beh='null' ver='null' cov='null' skip='null' dj='null' tj='null' mode
   triage="$TRIAGE"
@@ -1255,13 +1347,14 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   [ ! -f "$RUN/depth.json" ] || dj="$(cat "$RUN/depth.json")"
   [ "$TRIAGE" = true ] || [ ! -f "$RUN/tests.json" ] || tj="$(cat "$RUN/tests.json")"
   local sk; sk="$(cat "$RUN/skipped.json")" || return 1
-  local prof=null fl=null
+  local prof=null fl=null ear=null
   [ ! -f "$RUN/state/profile.json" ] || prof="$(cat "$RUN/state/profile.json")"
+  [ ! -f "$RUN/earlier.json" ] || ear="$(earlier_of)" || return 1
   [ "$TRIAGE" = true ] || fl="$(floors_of)" || fl=null
   mode="$(plan_mode)"
   jq -n --argjson triage "$triage" --argjson counts "$1" --argjson beh "$beh" --argjson ver "$ver" \
     --argjson cov "$cov" --argjson skip "$skip" --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
-    --argjson floors "$fl" --argjson skipped "$sk" \
+    --argjson floors "$fl" --argjson skipped "$sk" --argjson earlier "$ear" \
     --argjson planned "$( [ -f "$RUN/state/plan" ] && echo true || echo false)" \
     --slurpfile sel "$RUN/selection.json" "
     {format: 1, triage: \$triage, plan_ran: \$planned,
@@ -1283,8 +1376,59 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
     + (if \$tests != null then {tests: \$tests} else {} end)
     + (if \$floors != null then {floors: \$floors} else {} end)
     + (if \$skipped != [] then {skipped_files: \$skipped} else {} end)
+    + (if \$earlier != null then {earlier: \$earlier} else {} end)
     + (if \$prof != null and (\$prof.label != \"shipped:terraform-aws-modules\" or \$prof.tree != \"none\")
        then {profile: {label: \$prof.label, tree: \$prof.tree}} else {} end)"
+}
+
+# --- record ----------------------------------------------------------------------------------
+
+# After the confirmed write of Step 12, with the review id the write returned: the review as GitHub
+# holds it must be the token user's, of the plan's head, and carry the rendered body exactly as
+# posted; then plan.json and the body's digest are kept under that id. It reads, never writes, the host.
+cmd_record() {
+  local out="" id=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out) out="${2-}"; shift 2 || die "--out needs a value" ;;
+      --review-id) id="${2-}"; shift 2 || die "--review-id needs a value" ;;
+      *) die "unexpected argument" ;;
+    esac
+  done
+  case "$out" in /?*) ;; *) die "--out must be an absolute path" ;; esac
+  [[ "$id" =~ ^[1-9][0-9]{0,15}$ ]] || die "--review-id must be a review id"
+  local p="$out/plan.json" c="$out/comment.md" w repo pr uid d
+  [ -f "$p" ] && [ ! -L "$p" ] && [ -f "$c" ] && [ ! -L "$c" ] || fail "record refused: the output directory holds no plan.json and comment.md"
+  jq -e -L "$HERE" 'include "stage-contract"; stage_ok("review-plan") and (.reviewer_id | type == "number")' "$p" > /dev/null 2>&1 ||
+    fail "record refused: plan.json is not a review plan with the token user's id"
+  repo="$(jq -r '.pin.base_repo' "$p")"; pr="$(jq -r '.pin.number' "$p")"
+  [[ "$repo" =~ $repo_re ]] && [[ "$pr" =~ ^[1-9][0-9]{0,9}$ ]] && [ "$(jq -r '.pin.target' "$p")" = "$repo#$pr" ] ||
+    fail "record refused: plan.json names no pull request"
+  uid="$(gh api user --jq '.id' 2> /dev/null)" && [ "$uid" = "$(jq -r '.reviewer_id' "$p")" ] ||
+    fail "record refused: the token user is not the one the plan was rendered for"
+  w="$(mktemp -d "${TMPDIR:-/tmp}/pr-record.XXXXXX")" || fail "record refused: no temporary directory"
+  gh api "repos/$repo/pulls/$pr/reviews/$id" > "$w/review.json" 2> /dev/null &&
+    jq -e --argjson id "$id" --argjson u "$uid" --slurpfile p "$p" '.id == $id and .user.id == $u
+      and .commit_id == $p[0].pin.head_sha and (.state | IN("APPROVED", "CHANGES_REQUESTED", "COMMENTED"))
+      and (.body | type == "string")' "$w/review.json" > /dev/null 2>&1 ||
+    { rm -rf "$w"; fail "record refused: review $id is not the token user's review of the plan's head"; }
+  # The write sent "$(cat comment.md)", which drops the final newlines.
+  jq -j '.body' "$w/review.json" > "$w/body"
+  printf '%s' "$(cat "$c")" > "$w/sent"
+  cmp -s "$w/body" "$w/sent" || { rm -rf "$w"; fail "record refused: review $id does not carry the rendered body"; }
+  d="$(records_dir "$repo" "$pr")" || { rm -rf "$w"; fail "record refused: no absolute XDG_STATE_HOME or HOME"; }
+  [ ! -e "$d/$id.json" ] && [ ! -L "$d/$id.json" ] && [ ! -e "$d/$id.plan.json" ] && [ ! -L "$d/$id.plan.json" ] ||
+    { rm -rf "$w"; fail "record refused: review $id is already recorded"; }
+  (umask 077 && mkdir -p -- "$d") && [ -d "$d" ] && [ ! -L "$d" ] || { rm -rf "$w"; fail "record refused: the record store cannot be made"; }
+  cp -- "$p" "$d/$id.plan.json.tmp" &&
+    jq -n --argjson id "$id" --arg t "$repo#$pr" --arg st "$(jq -r '.state' "$w/review.json")" \
+      --arg b "$(sha_file "$w/body")" --arg ps "$(sha_file "$d/$id.plan.json.tmp")" \
+      '{format: 1, review_id: $id, target: $t, state: $st, body_sha256: $b, plan_sha256: $ps}' > "$d/$id.json.tmp" &&
+    jq -e "$META_JQ" "$d/$id.json.tmp" > /dev/null &&
+    mv -- "$d/$id.plan.json.tmp" "$d/$id.plan.json" && mv -- "$d/$id.json.tmp" "$d/$id.json" ||
+    { rm -f "$d/$id.json.tmp" "$d/$id.plan.json.tmp"; rm -rf "$w"; fail "record refused: the record could not be written"; }
+  rm -rf "$w"
+  echo "record: review $id ($(jq -r '.state' "$d/$id.json")) kept in $d"
 }
 
 # --- cleanup ---------------------------------------------------------------------------------
@@ -1321,9 +1465,10 @@ timed() { # command...: its output with the seconds it took after the first line
 
 # --- main ------------------------------------------------------------------------------------
 
-cmd="${1-}"; CMD="$cmd"; shift || die "usage: review-run.sh <prepare|schema|verify|plan|skip-coverage|ladder|tests|evidence|handover|render|cleanup> ..."
+cmd="${1-}"; CMD="$cmd"; shift || die "usage: review-run.sh <prepare|schema|verify|plan|skip-coverage|ladder|tests|evidence|handover|render|cleanup|record> ..."
 case "$cmd" in
   prepare) cmd_prepare "$@" ;;
+  record) cmd_record "$@" ;;
   schema | verify | plan | skip-coverage | ladder | tests | evidence | handover | render | cleanup)
     run_dir="${1-}"; shift || die "$cmd needs the run directory"
     RUN=""; open_run "$run_dir"

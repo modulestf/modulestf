@@ -58,6 +58,13 @@
 #                 repository host.json names (comment-format.md, Location links); without it the
 #                 location is a plain code span
 #
+#   One optional key more, "earlier": {"review_id", "commit_id", "record", "items"}, the record of
+#   the posting login's own CHANGES_REQUESTED that review-run.sh prepare read back, record one of
+#   ok, missing, edited, mismatch, unreadable or empty, and per blocking finding of an ok record
+#   {"id", "rule_id", "severity", "file", "line", "judgment", "at"}, judgment resolved, partly,
+#   not-resolved or not-judged and at {"file", "line"} only when resolved; any other shape is
+#   refused. Bound to host.json's own_review id and commit, it decides APPROVE or COMMENT over that
+#   block and renders the Earlier review section (verdict.md, Our Earlier Block).
 #   One optional key more, "floors": {"head_sha", "base_sha", "dirs": [{"dir", "provider",
 #   "old_floor", "floor", "read"} and an optional "old_floor_none"]}, the provider floors the schema pass read, written by
 #   review-run.sh; with Check A run and its SHAs equal to --head and host.json's merge_base, a

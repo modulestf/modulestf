@@ -351,9 +351,41 @@ def depth_raise($r):
 # The binding the render checks: the head it renders and host.json's merge base, never null.
 def depth_bound($h): .binding.head_sha == $h.head_sha and $h.merge_base != null and .binding.merge_base == $h.merge_base;
 
+# --- Our earlier review (verdict.md, Our Earlier Block): the run file's earlier, from the record
+# of the posting login's own CHANGES_REQUESTED that prepare read back and the reviewer's judgment
+# of each of its blocking findings at the head. Only a resolved finding carries where.
+def earlier_records: ["ok", "missing", "edited", "mismatch", "unreadable", "empty"];
+def judgments: ["resolved", "partly", "not-resolved", "not-judged"];
+def valid_earlier:
+  type == "object" and keys == ["commit_id", "items", "record", "review_id"]
+  and (.review_id | nat and . > 0) and (.commit_id | sha40) and (.record | IN(earlier_records[]))
+  and (.items | type == "array" and length <= 1000 and all(.[]; type == "object"
+        and keys == ["at", "file", "id", "judgment", "line", "rule_id", "severity"]
+        and (.id | type == "string" and test("^F-[0-9]{3,4}$"))
+        and (.rule_id | type == "string" and test("^[a-z][a-z0-9_.-]{0,127}$"))
+        and (.severity | IN("CRITICAL", "HIGH", "MEDIUM"))
+        and (.file | plain_path) and (.line == null or (.line | nat and . > 0))
+        and (.judgment | IN(judgments[]))
+        and (if .judgment == "resolved"
+             then .at | type == "object" and keys == ["file", "line"] and (.file | plain_path) and (.line | nat and . > 0)
+             else .at == null end))
+       and (map(.id) | length == (unique | length)))
+  # A record that is not ok has no finding to judge, and an ok one has at least one.
+  and ((.record == "ok") == (.items != []));
+def own_block($h): ($h.own_review // {}).state == "CHANGES_REQUESTED";
+# The earlier object the render reads: none without an own block; a record of another review or
+# commit is a mismatch, and no record at all is missing.
+def earlier_of($in): $in.host as $h | ($in.run.earlier // null) as $e
+  | if own_block($h) | not then null
+    elif $e == null then {record: "missing", items: []}
+    elif $e.review_id == $h.own_review.id and $e.commit_id == $h.own_review.commit_id then $e
+    else {record: "mismatch", items: []} end;
+def earlier_cleared($e): $e != null and $e.record == "ok" and $e.items != [] and all($e.items[]; .judgment == "resolved");
+
 def valid_run:
   type == "object"
-  and ((keys - ["behaviour", "depth", "examples", "floors", "plan_mode", "profile", "skipped_files", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((keys - ["behaviour", "depth", "earlier", "examples", "floors", "plan_mode", "profile", "skipped_files", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((has("earlier") | not) or (.earlier | valid_earlier))
   # The reviewer's profile line, as the run checked it against its handover.
   and ((has("profile") | not) or (.profile | type == "object" and keys == ["label", "tree"]
         and (.label | type == "string" and test("^(shipped:[a-z0-9-]{1,64}|custom)$"))
@@ -506,10 +538,14 @@ def verdict_line: {
   "approve": "Good to merge."}[.];
 
 # render-output.md: block proposes REQUEST_CHANGES, approve APPROVE, the rest COMMENT; of the
-# clamps only draft and closed or merged apply, each turning the event into COMMENT.
-def proposed_event($state):
+# clamps only draft and closed or merged apply, each turning the event into COMMENT. Over the
+# posting login's own block (verdict.md, Our Earlier Block), APPROVE needs every earlier blocking
+# finding resolved, and then approve with nits proposes it too, so the block is replaced.
+def proposed_event($state; $own; $cleared):
   if $state.draft or $state.state == "closed" or $state.merged then "COMMENT"
-  elif . == "block" then "REQUEST_CHANGES" elif . == "approve" then "APPROVE" else "COMMENT" end;
+  elif . == "block" then "REQUEST_CHANGES"
+  elif $own then (if $cleared and IN("approve", "approve with nits") then "APPROVE" else "COMMENT" end)
+  elif . == "approve" then "APPROVE" else "COMMENT" end;
 
 def count_word: if . == 1 then "A"
   else (["Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"][. - 2] // tostring) end;
@@ -714,7 +750,22 @@ def texts: {
   "behaviour-claims-one": "1 claim",
   "behaviour-claims-many": "{count} claims",
   "tests-passed": "Unit tests of {dir} in the isolated runner: passed {count}; changes outside Terraform they cover: {changes}.",
-  "tests-failed": "Unit tests of {dir} in the isolated runner: failed {count}; changes outside Terraform they refute: {changes}."
+  "tests-failed": "Unit tests of {dir} in the isolated runner: failed {count}; changes outside Terraform they refute: {changes}.",
+  "own-review-replaced": "Earlier review from this account: {state} on {sha}; this review replaces it.",
+  "own-review-stays": "Earlier review from this account: {state} on {sha}; it stays in effect until this account replaces it or it is dismissed.",
+  "earlier-intro": "This account requested changes on `{sha}`. Its blocking findings, judged at this head:",
+  "earlier-unchecked": "This account requested changes on `{sha}`, and that review cannot be checked against this head: {reason}.",
+  "earlier-reason-missing": "no record of it was kept where it was posted",
+  "earlier-reason-edited": "its body was edited after it was posted",
+  "earlier-reason-mismatch": "the record kept of it does not match it",
+  "earlier-reason-unreadable": "the record kept of it could not be read",
+  "earlier-reason-empty": "the record kept of it lists no blocking finding",
+  "earlier-resolved": "resolved at {location}",
+  "earlier-partly": "partly resolved",
+  "earlier-not-resolved": "not resolved",
+  "earlier-not-judged": "not judged",
+  "earlier-all-resolved": "Every blocking finding of that review is resolved at this head.",
+  "earlier-stands": "That request for changes stands until this account replaces it or it is dismissed."
 };
 
 def tx($k; $v): texts[$k] | gsub("\\{(?<n>[a-z_]+)\\}"; $v[.n] | tostring);
@@ -1069,8 +1120,21 @@ def checks_signal($c): if $c.jobless_only == true and $c.signal == "unknown" the
 def signals_of($h): $h.signals
   | if .mergeability == "not-applicable" and (is_closed($h) | not) then .mergeability = "unknown" else . end;
 
-def state_lines($h; $c):
-  (signals_of($h) + {checks: checks_signal($c)}) as $g
+# A location in the comment's charset, else withheld.
+def safe_loc($p): (.file | repo_path($p)) as $f
+  | if $f | allowed then loc_at($f) else tx("name-withheld") end;
+# The posting login's earlier review that is still in effect, named by its state and commit, and
+# whether the proposed event replaces it: a COMMENT never does.
+def own_lines($h; $event):
+  if ($h.own_review // {}).state | IN("CHANGES_REQUESTED", "APPROVED") then
+    [tx(if $event == "COMMENT" then "own-review-stays" else "own-review-replaced" end;
+        {state: ({"CHANGES_REQUESTED": "changes requested", "APPROVED": "approved"}[$h.own_review.state]),
+         sha: $h.own_review.commit_id[:7]})]
+  else [] end;
+
+def state_lines($h; $c; $event):
+  own_lines($h; $event) +
+  ((signals_of($h) + {checks: checks_signal($c)}) as $g
   | (if any($g[]; . == "fail" or . == "unknown" or . == "not-applicable" or . == "jobless") then
       # A job-less run makes the signal unknown; the phrase says so, as the job-less lines below detail it.
       [ [tx("checks-" + $g.checks + (if $g.checks == "unknown" and $c.accepted and ($c.jobless // []) != [] then "-jobless" else "" end)),
@@ -1092,7 +1156,24 @@ def state_lines($h; $c):
        + (if $c.own_jobs_dropped > 0 then ["Checks: the jobs of the host's own workflow runs excluded."] else [] end)
        + (if $c.own_jobs_unreadable then ["Checks: the host's own jobs could not be read."] else [] end)
        + [($c.jobless // [])[] | "Checks: workflow \(workflow_name) ended `\(.conclusion)` without starting a job, so its tests never ran and say nothing about this change."]
-     end);
+     end));
+
+# The Earlier review section, only over the posting login's own block: its record's blocking
+# findings with the reviewer's judgment at the head, or why the review could not be checked, and
+# under a COMMENT the line that the block stands. Names render only in the comment's charset.
+def earlier_lines($h; $e; $event; $p):
+  if $e == null then [] else
+    ($h.own_review.commit_id[:7]) as $sha
+    | (if $e.record == "ok" then
+         [tx("earlier-intro"; {sha: $sha}),
+          ("| Earlier finding | Severity | Location | At this head |\n|---|---|---|---|\n"
+           + ([$e.items[] | "| \(.id) `\(.rule_id)` | \(.severity) | \(safe_loc($p)) | "
+               + (if .judgment == "resolved" then tx("earlier-resolved"; {location: (.at | safe_loc($p))})
+                  else tx("earlier-" + .judgment) end) + " |"] | join("\n")))]
+         + (if earlier_cleared($e) then [tx("earlier-all-resolved")] else [] end)
+       else [tx("earlier-unchecked"; {sha: $sha, reason: tx("earlier-reason-" + $e.record)})] end)
+    + (if $event == "COMMENT" and (earlier_cleared($e) | not) then [tx("earlier-stands")] else [] end)
+  end;
 
 # A thread's path comes from the host already repository-relative (GitHub's own path), so only
 # the finding's path takes the prefix.
@@ -1195,7 +1276,7 @@ def causes($l; $h; $run; $b):
 
 def compact_ok($l; $v; $c; $run; $b):
   ($l.findings | map(select(routed | not))) as $counted
-  | ($v.rule | IN(4, 7, 8)) and $l.signals.checks != "jobless"
+  | ($v.rule | IN(4, 7, 8)) and $l.signals.checks != "jobless" and ($l.own_block | not)
   and (any($l.findings[]; .severity | IN("CRITICAL", "HIGH", "MEDIUM")) | not)
   and ($counted | length) <= 3
   and (any($l.findings[]; .rule_id == "review.tool-disputed") | not)
@@ -1227,8 +1308,6 @@ def standard_over: [ if type == "array" then .[] else empty end | objects | .id 
 # three and the count of the rest; a name outside the charset is withheld and still counts.
 def name_list: sort | (.[:3] | map(if allowed then "`\(.)`" else tx("name-withheld") end))
   + (if length > 3 then [tx("evidence-more"; {count: (length - 3)})] else [] end) | join(", ");
-def safe_loc($p): (.file | repo_path($p)) as $f
-  | if $f | allowed then loc_at($f) else tx("name-withheld") end;
 
 # The rule 4 action line: one clause per cause, in table order; none when a cause is outside the table.
 def action_line($c):
@@ -1259,7 +1338,7 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
          ($b.claims | length | select(. > 0) | if . == 1 then tx("evidence-claims-one") else tx("evidence-claims-many"; {count: .}) end)]
         | if . == [] then [] else ["- " + join(" ")] end)
      + [$o[] | select(routed) | tx("evidence-predates"; {rule_id, location: safe_loc($p), summary})]
-     + [(depth_lines($run)[], profile_lines($run)[], state_lines($h; $in.checks)[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
+     + [(depth_lines($run)[], profile_lines($run)[], state_lines($h; $in.checks; $in.event)[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
   | {body: ([$in.assessment, $verdict] + (if is_closed($h) then [tx("clamp-closed")] else [] end) + reopen_line($h) + $action + (if $bullets == [] then [] else [$bullets | join("\n")] end)
             + (if $notes == [] then [] else ["<details><summary>\(tx("evidence-summary"))</summary>\n\n" + ($notes | join("\n")) + "\n</details>"] end)
             | join("\n\n") + "\n"),
@@ -1317,7 +1396,7 @@ def render($in):
      skipped: ($in.run | skipped_gap),
      gaps: (($in.run | skipped_gap) + ($h.could_not_run | cnr_count) + ($unreg | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
      unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end),
-     undemonstrated: ($b | demo_count)};
+     undemonstrated: ($b | demo_count), own_block: own_block($h)};
   # Triggers that are all inert make the change inert for plan coverage (triggers_inert), unless
   # another rule 4 unknown is present: then the coverage stays required.
   ledger($in) as $l0
@@ -1327,6 +1406,9 @@ def render($in):
   | covered_of($in; $l; $b) as $cov
   | ($l + {covered: ($cov | length)} | .unplanned_open = .unplanned - .covered) as $l
   | ($l | ladder) as $v
+  | earlier_of($in) as $e
+  | ($v.verdict | proposed_event($h.state; own_block($h); earlier_cleared($e))) as $event
+  | ($in + {event: $event}) as $in
   | ($v | rationale($l)
      + (if $cov != [] then " " + covered_sentence("rationale-covered"; $in.run; $cov) else "" end)) as $why
   | causes($l; $h; $in.run; $b) as $c
@@ -1356,7 +1438,8 @@ def render($in):
      + section("Changes no example creates"; [($b // {triggers: []}).triggers[] | select(demo_ok) | tx("undemonstrated-trigger"; trigger_at($p))]; "\n")
      + section("Review depth"; depth_lines($in.run); "\n\n")
      + section("Profile"; profile_lines($in.run); "\n\n")
-     + section("Pull request state"; state_lines($h; $in.checks); "\n\n")
+     + section("Earlier review"; earlier_lines($h; $e; $event; $p); "\n\n")
+     + section("Pull request state"; state_lines($h; $in.checks; $event); "\n\n")
      + section("Existing threads"; thread_lines($h; $in.findings; $p); "\n")
      + section("Conversation comments"; conversation_lines($h.conversation; $in.run.counts); "\n\n")
      | join("\n\n") + "\n") as $standard
@@ -1366,7 +1449,7 @@ def render($in):
   | (if $fit and $over == null then "COMPACT" else "STANDARD" end) as $tier
   | (if $tier == "COMPACT" then compact_body($in; $l; $v; $c; $b; $p; $cov)
      else {body: $standard, findings: ($in.findings | body_order($p))} end) as $out
-  | {rule: $v.rule, verdict: $v.verdict, event: ($v.verdict | proposed_event($h.state)), tier: $tier,
+  | {rule: $v.rule, verdict: $v.verdict, event: $event, tier: $tier,
      fallback: $over,
      body: $out.body, findings: $out.findings,
      parts: ([{src: "the assessment", text: $in.assessment}]

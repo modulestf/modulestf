@@ -3206,5 +3206,89 @@ acc_mutate "accept reading the disputed note" 's/map\(select\(\.rule_id != "revi
 acc_mutate "accept holding over a model's block" 's/then \(if \$model == "block" then "block" else "hold for the next major" end\)/then "hold for the next major"/' t_acc_cr
 acc_mutate "accept without review.verification-incomplete" 's/, "review\.verification-incomplete"\)\)/))/' t_acc_vi
 
+# --- Our earlier review (verdict.md, Our Earlier Block; comment-format.md, section 6): the posting
+# login's own CHANGES_REQUESTED, the record of it the run read back and the reviewer's judgment of
+# each of its blocking findings at the head. APPROVE replaces the block only when every one is
+# resolved; COMMENT over it always says it stands; a record that is missing, edited or not bound to
+# the review fails closed.
+OWNC='{id: 41, state: "CHANGES_REQUESTED", commit_id: "'"$BASE"'", body_sha256: "'"$(printf '%064d' 0)"'"}'
+HOWN="$(host own ".own_review = $OWNC")"
+eitem() { # id, judgment [, at file, at line]
+  jq -nc --arg id "$1" --arg j "$2" --arg af "${3-}" --arg al "${4-}" '{id: $id, rule_id: "structure.wrong-file", severity: "HIGH",
+    file: "main.tf", line: 3, judgment: $j, at: (if $af == "" then null else {file: $af, line: ($al | tonumber)} end)}'
+}
+erun() { # name, record, items JSON [, review id]
+  runf "$1" ".earlier = {review_id: ${4:-41}, commit_id: \"$BASE\", record: \"$2\", items: $3}"
+}
+EOK="$(erun eok ok "[$(eitem F-001 resolved main.tf 9), $(eitem F-002 resolved outputs.tf 2)]")"
+EPART="$(erun epart ok "[$(eitem F-001 resolved main.tf 9), $(eitem F-002 partly)]")"
+ONELOW="$(one structure.grouping LOW variables.tf 8 "S." "F.")"
+cat > "$TMP/earlier-ok.md" <<WANT
+### Earlier review
+
+This account requested changes on \`${BASE:0:7}\`. Its blocking findings, judged at this head:
+
+| Earlier finding | Severity | Location | At this head |
+|---|---|---|---|
+| F-001 \`structure.wrong-file\` | HIGH | \`main.tf:3\` | resolved at \`main.tf:9\` |
+| F-002 \`structure.wrong-file\` | HIGH | \`main.tf:3\` | resolved at \`outputs.tf:2\` |
+
+Every blocking finding of that review is resolved at this head.
+
+### Pull request state
+
+Earlier review from this account: changes requested on ${BASE:0:7}; this review replaces it.
+WANT
+t_own_ok() { render "$NONE" "$HOWN" "" "$EOK"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve APPROVE" ] &&
+  awk '/^### Earlier review$/ { on = 1 } on' "$O/comment.md" | cmp -s - "$TMP/earlier-ok.md"; }
+t_own_ok; check "earlier review: every blocking finding resolved, approve proposes APPROVE, the table and the replace line byte for byte" $?
+t_own_nits() { render "$ONELOW" "$HOWN" "" "$EOK"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve with nits APPROVE" ]; }
+t_own_nits; check "earlier review: every blocking finding resolved, approve with nits proposes APPROVE to replace the block" $?
+t_own_part() { render "$NONE" "$HOWN" "" "$EPART"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ] &&
+  grep -qxF '| F-002 `structure.wrong-file` | HIGH | `main.tf:3` | partly resolved |' "$O/comment.md" &&
+  grep -qxF 'That request for changes stands until this account replaces it or it is dismissed.' "$O/comment.md" &&
+  grep -qxF "Earlier review from this account: changes requested on ${BASE:0:7}; it stays in effect until this account replaces it or it is dismissed." "$O/comment.md"; }
+t_own_part; check "earlier review: a partly resolved finding keeps the block, approve proposes COMMENT and says the block stands" $?
+t_own_missing() { render "$NONE" "$HOWN"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ] &&
+  grep -qxF "This account requested changes on \`${BASE:0:7}\`, and that review cannot be checked against this head: no record of it was kept where it was posted." "$O/comment.md" &&
+  grep -qxF 'That request for changes stands until this account replaces it or it is dismissed.' "$O/comment.md"; }
+t_own_missing; check "earlier review: no record of the block, approve proposes COMMENT and says why and that it stands" $?
+t_own_edited() { render "$NONE" "$HOWN" "" "$(erun eedit edited '[]')"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ] &&
+  grep -qF 'cannot be checked against this head: its body was edited after it was posted.' "$O/comment.md"; }
+t_own_edited; check "earlier review: a block whose body was edited since it was posted proposes COMMENT" $?
+t_own_unbound() { render "$NONE" "$HOWN" "" "$(erun eother ok "[$(eitem F-001 resolved main.tf 9)]" 40)"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ] &&
+  grep -qF 'cannot be checked against this head: the record kept of it does not match it.' "$O/comment.md"; }
+t_own_unbound; check "earlier review: a record of another review id is not read, approve proposes COMMENT" $?
+t_own_nojudge() { render "$NONE" "$HOWN" "" "$(erun enoj ok "[$(eitem F-001 not-judged)]")"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ] &&
+  grep -qxF '| F-001 `structure.wrong-file` | HIGH | `main.tf:3` | not judged |' "$O/comment.md"; }
+t_own_nojudge; check "earlier review: a finding the reviewer did not judge keeps the block" $?
+t_own_block() { render "$(one structure.wrong-file HIGH main.tf 3 "S." "F.")" "$HOWN" "" "$EPART"; [ "$ST" = 0 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ] &&
+  grep -qxF "Earlier review from this account: changes requested on ${BASE:0:7}; this review replaces it." "$O/comment.md" &&
+  ! grep -qF 'stands until' "$O/comment.md"; }
+t_own_block; check "earlier review: a fresh block proposes REQUEST_CHANGES, which replaces the earlier one" $?
+t_own_draft() { render "$NONE" "$(host owndraft ".own_review = $OWNC | .state.draft = true")" "" "$EOK"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ]; }
+t_own_draft; check "earlier review: the draft clamp still turns APPROVE into COMMENT" $?
+t_own_appr() { render "$NONE" "$(host ownappr ".own_review = ($OWNC | .state = \"APPROVED\")")"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve APPROVE" ] &&
+  grep -qxF "Earlier review from this account: approved on ${BASE:0:7}; this review replaces it." "$O/comment.md" && ! grep -q '^### Earlier review$' "$O/comment.md"; }
+t_own_appr; check "earlier review: an earlier approval is no block, approve proposes APPROVE and names it in section 6" $?
+t_own_compact() { jq ".own_review = $OWNC" "$H556" > "$TMP/h556own.json"; rc "$(F556)" "$(R556 own)" "$TMP/h556own.json"; [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ]; }
+t_own_compact; check "earlier review: an earlier block forces STANDARD where COMPACT would fit" $?
+t_own_refused() {
+  local r
+  for r in "$(erun ebad1 ok '[]')" "$(erun ebad2 edited "[$(eitem F-001 resolved main.tf 9)]")" \
+      "$(erun ebad3 ok "[$(eitem F-001 resolved)]")" "$(erun ebad4 ok "[$(eitem F-001 partly main.tf 9)]")" \
+      "$(erun ebad5 ok "[$(eitem F-001 fixed)]")" "$(erun ebad6 ok "[$(eitem F-001 partly), $(eitem F-001 partly)]")" \
+      "$(erun ebad7 kept '[]')"; do
+    render "$NONE" "$HOWN" "" "$r"; [ "$ST" = 2 ] && empty_out || return 1
+  done
+}
+t_own_refused; check "earlier review: a run file earlier outside its grammar is refused, nothing written" $?
+mutate "APPROVE over an earlier block with a finding not resolved" 's/all\(\$e\.items\[\]; \.judgment == "resolved"\)/true/' t_own_part
+mutate "an earlier block left out of the event" 's/elif \$own then \(if \$cleared/elif false then (if \$cleared/' t_own_missing
+mutate "approve with nits never replacing the block" 's/IN\("approve", "approve with nits"\) then "APPROVE"/IN("approve") then "APPROVE"/' t_own_nits
+mutate "a record of another review read" 's/\$e\.review_id == \$h\.own_review\.id and //' t_own_unbound
+mutate "COMPACT over an earlier block" 's/ and \(\$l\.own_block \| not\)//' t_own_compact
+mutate "the stands line dropped" 's/\[tx\("earlier-stands"\)\]/[]/' t_own_missing
+
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

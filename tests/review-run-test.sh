@@ -150,6 +150,7 @@ case "$ep" in
   graphql) case "$query" in *reviewThreads*) f=threads ;; *closingIssuesReferences*) f=closing ;; *) f=comments ;; esac ;;
   repos/*/pulls/*/files) f=files ;;
   repos/*/pulls/*/reviews) f=reviews ;;
+  repos/*/pulls/*/reviews/*) f="review-${ep##*/}" ;;
   repos/*/pulls/*/comments) f=empty ;;
   repos/*/pulls/*/commits) f=prcommits ;;
   repos/*/pulls/*) f=meta ;;
@@ -237,8 +238,8 @@ ghfiles() { # state, merged, own review state
   jq -n '[{filename: "README.md", status: "modified", additions: 1, deletions: 0, patch: "@@ -1 +1,2 @@\n # w\n+more"},
     {filename: "docs/a;b.md", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+x"},
     {filename: "$(touch x).md", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+y"}]' > "$GHD/files"
-  jq -n --arg b "$BASEC" --arg s "$3" '[{user: {login: "octo-reviewer", id: 5}, state: $s, commit_id: $b},
-    {user: {login: "other", id: 6}, state: "COMMENTED", commit_id: $b}]' > "$GHD/reviews"
+  jq -n --arg b "$BASEC" --arg s "$3" '[{id: 41, user: {login: "octo-reviewer", id: 5}, state: $s, commit_id: $b, body: "Earlier."},
+    {id: 42, user: {login: "other", id: 6}, state: "COMMENTED", commit_id: $b, body: ""}]' > "$GHD/reviews"
   echo '{"login": "octo-reviewer", "type": "User", "id": 5}' > "$GHD/user"
   echo '{"data": {"repository": {"pullRequest": {"reviewThreads": {"pageInfo": {"hasNextPage": false}, "nodes": []}}}}}' > "$GHD/threads"
   echo '{"data": {"repository": {"pullRequest": {"comments": {"pageInfo": {"hasNextPage": false}, "nodes": []}}}}}' > "$GHD/comments"
@@ -250,7 +251,7 @@ ghfiles() { # state, merged, own review state
 }
 
 RR="$SK/review-run.sh"
-export PATH="$TMP/bin:$PATH" TMPDIR="$TMP/root" HOST_PASS_WAIT=0 XDG_CACHE_HOME="$TMP/cache"
+export PATH="$TMP/bin:$PATH" TMPDIR="$TMP/root" HOST_PASS_WAIT=0 XDG_CACHE_HOME="$TMP/cache" XDG_STATE_HOME="$TMP/state"
 mkdir -p "$TMPDIR"
 unset CI GITHUB_ACTIONS GITHUB_RUN_ID
 SH=bash; [ ! -x /bin/bash ] || SH=/bin/bash # the system bash: 3.2 on macOS, whose regex refuses a bound over 255
@@ -1588,6 +1589,104 @@ check "plan.json: a failed render-time pulls read exits 0, keeps the body and re
 run_rr cleanup "$RUN" > /dev/null
 ghfiles open false APPROVED
 
+# --- 5c2. Our earlier review (github-io.md, The Post Record): record keeps the posted review's
+# plan.json and body digest after the write; prepare reads it back for the posting login's own
+# CHANGES_REQUESTED with the edit check; handover hands its blocking findings to the reviewer; render
+# shows the reviewer's judgment of each. A missing, edited or unbound record leaves the block standing.
+HEADREF=feat/pr-branch ghfiles open false APPROVED
+jq -n '[{id: "F-001", rule_id: "structure.wrong-file", severity: "HIGH", file: "README.md", line: 1,
+  summary: "The line is in the wrong file.", suggested_fix: "Move the line."}]' > "$TMP/fe.json"
+prep; full; run_rr handover "$RUN" > /dev/null
+run_rr render "$RUN" --findings "$TMP/fe.json" --assessment "$TMP/a0.txt" --out "$TMP/rec-out" > /dev/null 2>&1
+run_rr cleanup "$RUN" > /dev/null
+own_review() { # id, user id, commit, body file -> the single review read
+  jq -n --argjson id "$1" --argjson u "$2" --arg c "$3" --rawfile b "$4" \
+    '{id: $id, user: {login: "octo-reviewer", id: $u}, state: "CHANGES_REQUESTED", commit_id: $c, body: $b}' > "$GHD/review-$1"
+}
+printf '%s' "$(cat "$TMP/rec-out/comment.md")" > "$TMP/posted.txt"
+own_review 41 5 "$HEADC" "$TMP/posted.txt"
+RECD="$XDG_STATE_HOME/modulestf/pr-review/records/example-org/widget/7"
+rec() { run_rr record --out "$1" --review-id "${2:-41}" > "$TMP/rec.out" 2>&1; }
+cp -R "$TMP/rec-out" "$TMP/rec-body"; printf 'other\n' > "$TMP/rec-body/comment.md"
+rec "$TMP/rec-body"
+check "record: a review that does not carry the rendered body is refused, nothing kept" \
+  "$([ $? = 1 ] && grep -qx 'review-run.sh: record refused: review 41 does not carry the rendered body' "$TMP/rec.out" && [ ! -e "$RECD/41.json" ]; echo $?)"
+own_review 41 6 "$HEADC" "$TMP/posted.txt"; rec "$TMP/rec-out"
+check "record: a review of another user is refused" "$([ $? = 1 ] && [ ! -e "$RECD/41.json" ]; echo $?)"
+own_review 41 5 "$BASEC" "$TMP/posted.txt"; rec "$TMP/rec-out"
+check "record: a review of another commit than the plan's head is refused" "$([ $? = 1 ] && [ ! -e "$RECD/41.json" ]; echo $?)"
+rec "$TMP/rec-none"
+check "record: an output directory with no plan.json is refused" "$([ $? = 1 ] && grep -q 'holds no plan.json and comment.md' "$TMP/rec.out"; echo $?)"
+own_review 41 5 "$HEADC" "$TMP/posted.txt"; rec "$TMP/rec-out"
+check "record: the posted review is kept, plan.json byte for byte, with the body digest" \
+  "$([ $? = 0 ] && cmp -s "$RECD/41.plan.json" "$TMP/rec-out/plan.json" &&
+     jq -e --arg b "$(openssl dgst -sha256 -r < "$TMP/posted.txt" | cut -d' ' -f1)" --arg p "$(openssl dgst -sha256 -r < "$TMP/rec-out/plan.json" | cut -d' ' -f1)" \
+       '. == {format: 1, review_id: 41, target: "example-org/widget#7", state: "CHANGES_REQUESTED", body_sha256: $b, plan_sha256: $p}' "$RECD/41.json" > /dev/null &&
+     [ "$(stat -f %Lp "$RECD" 2> /dev/null || stat -c %a "$RECD")" = 700 ]; echo $?)"
+rec "$TMP/rec-out"
+check "record: a review already recorded is refused" "$([ $? = 1 ] && grep -q 'already recorded' "$TMP/rec.out"; echo $?)"
+# The reviews list as GitHub holds it after the post: the own review with its id, commit and body.
+own_list() { # body file [, commit]
+  jq -n --arg c "${2:-$HEADC}" --rawfile b "$1" '[{id: 41, user: {login: "octo-reviewer", id: 5}, state: "CHANGES_REQUESTED", commit_id: $c, body: $b},
+    {id: 42, user: {login: "other", id: 6}, state: "COMMENTED", commit_id: $c, body: ""}]' > "$GHD/reviews"
+}
+own_list "$TMP/posted.txt"
+earlier_run() { prep; full; run_rr handover "$RUN" > /dev/null; }
+earlier_run
+check "prepare: the record of the own block checks out, its one blocking finding read back" \
+  "$(q "$RUN/earlier.json" '.record == "ok" and .review_id == 41 and (.findings | map(.id)) == ["F-001"] and .findings[0].file == "README.md"')"
+check "prepare: one line names the earlier review and its record" \
+  "$(grep -qx "earlier review: changes requested on ${HEADC:0:12}, record ok, 1 blocking findings for the reviewer to judge" "$TMP/p.out"; echo $?)"
+T="$RUN/handover/task.md"
+check "handover: the Earlier review line and the judgments file on the Output line, before the block" \
+  "$(sed '/^UNTRUSTED-[0-9a-f]\{12\} BEGIN$/,$d' "$T" | grep -qx "Earlier review: $RUN/handover/earlier-task.json" &&
+     sed '/^UNTRUSTED-[0-9a-f]\{12\} BEGIN$/,$d' "$T" | grep -q "and the earlier review judgments as JSON to $RUN/review/earlier.json, and nothing else.\$" &&
+     cmp -s <(jq -c . "$RUN/handover/earlier-task.json") <(jq -c .findings "$RUN/earlier.json"); echo $?)"
+echo '[{"id": "F-001", "judgment": "resolved", "file": "README.md", "line": 2}]' > "$RUN/review/earlier.json"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/rec-r1" > /dev/null 2>&1
+check "render: the reviewer's judgment of each earlier finding renders in the Earlier review table" \
+  "$(grep -qxF '| F-001 `structure.wrong-file` | HIGH | [`README.md:1`]('"https://github.com/example-org/widget/blob/$HEADC/README.md#L1"') | resolved at [`README.md:2`]('"https://github.com/example-org/widget/blob/$HEADC/README.md#L2"') |' "$TMP/rec-r1/comment.md"; echo $?)"
+echo '[{"id": "F-009", "judgment": "resolved", "file": "README.md", "line": 2}]' > "$RUN/review/earlier.json"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/rec-r2" > /dev/null 2>&1
+check "render: judgments that do not name each earlier finding leave every one not judged, the block standing" \
+  "$(grep -q '| not judged |$' "$TMP/rec-r2/comment.md" && grep -qxF 'That request for changes stands until this account replaces it or it is dismissed.' "$TMP/rec-r2/comment.md" &&
+     [ "$(jq -r .proposed_event "$TMP/rec-r2/result.json")" != APPROVE ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+printf 'edited' > "$TMP/edited.txt"; own_list "$TMP/edited.txt"; earlier_run
+check "prepare: an own review whose body changed since it was posted is edited, no Earlier review line" \
+  "$([ "$(q "$RUN/earlier.json" '.record == "edited" and .findings == []')" = 0 ] && ! grep -q '^Earlier review: ' "$RUN/handover/task.md" &&
+     grep -q 'record edited, the block stands$' "$TMP/p.out"; echo $?)"
+run_rr cleanup "$RUN" > /dev/null
+own_list "$TMP/posted.txt" "$BASEC"; earlier_run
+check "prepare: an own review of another commit than the recorded plan's head is a mismatch" "$(q "$RUN/earlier.json" '.record == "mismatch"')"
+run_rr cleanup "$RUN" > /dev/null
+own_list "$TMP/posted.txt"; mv "$RECD/41.plan.json" "$TMP/plan-keep.json"; ln -s "$TMP/plan-keep.json" "$RECD/41.plan.json"; earlier_run
+check "prepare: a record that is a link is unreadable" "$(q "$RUN/earlier.json" '.record == "unreadable"')"
+run_rr cleanup "$RUN" > /dev/null
+rm "$RECD/41.plan.json"; jq '.verdict = "approve"' "$TMP/plan-keep.json" > "$RECD/41.plan.json"; earlier_run
+check "prepare: a record whose plan.json changed since it was kept is unreadable" "$(q "$RUN/earlier.json" '.record == "unreadable"')"
+run_rr cleanup "$RUN" > /dev/null
+cp "$TMP/plan-keep.json" "$RECD/41.plan.json"; mv "$RECD" "$TMP/recd-keep"; earlier_run
+check "prepare: no record of the own block is missing" "$(q "$RUN/earlier.json" '.record == "missing" and .findings == []')"
+run_rr cleanup "$RUN" > /dev/null
+mv "$TMP/recd-keep" "$RECD"
+# Negative self-check: copies of review-run.sh without the edit check, or without the body check of record.
+er_mut() { # name, perl -0 expression, case: edited | body
+  local c="$SK/review-run.mut.sh" keep="$RR" s
+  perl -0pe "$2" "$keep" > "$c"
+  if cmp -s "$c" "$keep"; then rm -f "$c"; check "self-check: $1 (the mutation changed nothing)" 1; return; fi
+  RR="$c"
+  case "$3" in
+    edited) own_list "$TMP/edited.txt"; earlier_run; s="$(q "$RUN/earlier.json" '.record == "edited"')"; run_rr cleanup "$RUN" > /dev/null; own_list "$TMP/posted.txt" ;;
+    body) rm -rf "$RECD.keep"; mv "$RECD" "$RECD.keep"; rec "$TMP/rec-body"; s=$?; [ "$s" = 1 ] && s=0 || s=1; rm -rf "$RECD"; mv "$RECD.keep" "$RECD" ;;
+  esac
+  RR="$keep"; rm -f "$c"
+  check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
+}
+er_mut "prepare without the edit check" 's/if \[ "\$\(jq -r \x27\.body_sha256\x27 "\$m"\)" != "\$\(jq -r \x27\.own_review\.body_sha256\x27 "\$h"\)" \]; then rec=edited\n        elif/if false; then rec=edited\n        elif/' edited
+er_mut "record without the body check" 's/cmp -s "\$w\/body" "\$w\/sent" \|\|/true ||/' body
+ghfiles open false APPROVED
+
 # --- 5d. A large change: a files list over 1 MiB gets a focused review over the budget, not a refusal.
 # depth.sh takes the list and hands mtf-facts names and line counts; prepare names the files past the
 # review budget, the interface files first, then other Terraform, example Terraform, README and the
@@ -1854,6 +1953,7 @@ mkrepo widget; ghfiles open false APPROVED
 # relayed quote's "in quotation marks" shortened to keep SKILL.md under 16384 bytes.
 # Updated for Step 5.5: skip-coverage.sh also decides the design skips, examples denied a data
 # source read at the head and at the base.
+# Updated for Step 12 keeping the post record with review-run.sh record (github-io.md, The Post Record).
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -1862,7 +1962,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=cefddf899cab
+want=9230a96b9de7
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"

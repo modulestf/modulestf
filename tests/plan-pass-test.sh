@@ -2057,9 +2057,9 @@ ans_mut no-association 's/\(\$r\.author_association \| IN\("OWNER", "MEMBER", "C
 ans_mut no-author-match 's/\n(\s+)and \.user\.id == \$a\.databaseId//' other
 ans_mut no-latest-review 's/\| last\) as \$r/| first) as \$r/' changes
 # The review decision compares the posting login in lower case, as `answered` does.
-dec() { jq -n -c -L "${1:-$AD}" 'include "host-records"; [{state: "APPROVED", user: {login: "u20", id: 20}, author_association: "MEMBER"}] | decision("U20"; false)'; }
-check "decision: the posting login's own review is left out whatever its case" \
-  "$([ "$(dec)" = '{"review_decision":"none","own_review":{"state":"APPROVED","commit_id":null}}' ]; echo $?)"
+dec() { jq -n -c -L "${1:-$AD}" 'include "host-records"; [{id: 31, state: "APPROVED", user: {login: "u20", id: 20}, author_association: "MEMBER"}] | decision("U20"; false)'; }
+check "decision: the posting login's own review is left out whatever its case, kept with its id" \
+  "$([ "$(dec)" = '{"review_decision":"none","own_review":{"id":31,"state":"APPROVED","commit_id":null}}' ]; echo $?)"
 mkdir "$TMP/dec-mut" && cp "$AD/host-records.jq" "$TMP/dec-mut/"
 perl -0pi -e 's/\(\(\.user\.login \/\/ ""\) \| ascii_downcase\) != \(\$login \| ascii_downcase\)\)\n      and/.user.login != \$login)\n      and/' "$TMP/dec-mut/host-records.jq"
 check "self-check: the decision login case mutation changes the file and is caught" \
@@ -2083,6 +2083,14 @@ check "host.json: a locked pull request with a reason, or with none, is valid" \
 check "host.json: a lock that is not a boolean is refused" \
   "$([ "$(hv '.state.locked = "true"')" = false ] && [ "$(hv '.state.locked = null')" = false ]; echo $?)"
 check "host.json: a state without the lock is refused" "$([ "$(hv 'del(.state.locked)')" = false ]; echo $?)"
+# The posting login's earlier review: its id, state, commit and the SHA-256 of its body, the edit
+# check of github-io.md, The Post Record.
+OWN="{\"id\":41,\"state\":\"CHANGES_REQUESTED\",\"commit_id\":\"$HH\",\"body_sha256\":\"$(printf '%064d' 0)\"}"
+check "host.json: an own review with its id, state, commit and body digest is valid" \
+  "$([ "$(hv ".own_review = $OWN")" = true ]; echo $?)"
+check "host.json: an own review without its body digest or id, or with a malformed one, is refused" \
+  "$([ "$(hv ".own_review = ($OWN | del(.body_sha256))")" = false ] && [ "$(hv ".own_review = ($OWN | del(.id))")" = false ] &&
+     [ "$(hv ".own_review = ($OWN | .body_sha256 = \"x\")")" = false ] && [ "$(hv ".own_review = ($OWN | .id = 0)")" = false ]; echo $?)"
 check "host.json: a lock reason outside GitHub's set, or on an unlocked pull request, is refused" \
   "$([ "$(hv '.state.locked = true | .state.lock_reason = "x"')" = false ] && [ "$(hv '.state.lock_reason = "spam"')" = false ]; echo $?)"
 # Negative self-check: a host-records.jq without the boolean test passes a string lock.
