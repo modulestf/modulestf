@@ -17,6 +17,7 @@ Engine: `candidate`
 
 **Severity:**
 - HIGH when an example is broken by the change before or during apply (`examples.example-broken`), requires custom Terraform inputs or edits (`examples.custom-input-required`), or a submodule added by the change has no example. A verification record showing a failed plan is evidence for that HIGH, and its decisive error line is quoted in the `summary`. Only a failure new under this change reaches HIGH; one the record marks as reproducing at the base is the LOW above.
+- LOW for `examples.custom-input-required` when the change adds the example; one renamed, moved or replaced from another path counts as one the base had and stays HIGH.
 
 ### Confirm when: `examples.stale-reference`
 
@@ -39,6 +40,7 @@ Engine: `candidate`
 
 **Severity:**
 - HIGH when an example is broken by the change before or during apply (`examples.example-broken`), requires custom Terraform inputs or edits (`examples.custom-input-required`), or a submodule added by the change has no example. A verification record showing a failed plan is evidence for that HIGH, and its decisive error line is quoted in the `summary`. Only a failure new under this change reaches HIGH; one the record marks as reproducing at the base is the LOW above.
+- LOW for `examples.custom-input-required` when the change adds the example; one renamed, moved or replaced from another path counts as one the base had and stays HIGH.
 
 ### Confirm when: `examples.submodule-missing`
 

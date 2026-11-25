@@ -47,6 +47,7 @@ Scope is the change. Pre-existing gaps in resources the change does not touch ar
 **Severity:**
 - CRITICAL for a block no allowed version accepts: moved to `coverage.unknown-argument` and `coverage.block-attribute-mismatch` in [engine/check-b-coverage.md](engine/check-b-coverage.md).
 - HIGH when a required argument is unreachable, a deprecated argument is newly used, or mutually exclusive arguments are unguarded. HIGH too when the module defaults an argument the schema marks Required (`coverage.default-for-required-argument`).
+- LOW for a conditional rule only as [Conflicting pairs and conditional rules](#conflicting-pairs-and-conditional-rules) sets out; a conflicting pair in any wording stays HIGH.
 - HIGH for an argument above the declared minimum: moved to `coverage.argument-above-min-version` in [engine/check-b-coverage.md](engine/check-b-coverage.md#coverageargument-above-min-version).
 - HIGH for an output wrong in a supported mode: moved to `coverage.attribute-not-output` in [engine/check-b-coverage.md](engine/check-b-coverage.md#coverageattribute-not-output).
 - MEDIUM for an unexposed optional argument or computed attribute: moved to `coverage.optional-argument-unexposed` and `coverage.attribute-not-output` in [engine/check-b-coverage.md](engine/check-b-coverage.md).
@@ -55,6 +56,12 @@ Scope is the change. Pre-existing gaps in resources the change does not touch ar
 - No finding, at any severity, on an argument type or a nesting mode the page does not state.
 
 `rule_id` prefix: `coverage.`, for example `coverage.unknown-argument`, `coverage.block-attribute-mismatch`, `coverage.required-argument-unreachable`, `coverage.deprecated-argument`, `coverage.optional-argument-unexposed`, `coverage.attribute-not-output`, `coverage.mutual-exclusion-unguarded`, `coverage.argument-above-min-version`, `coverage.default-for-required-argument`, `coverage.enum-value-unknown`.
+
+## Conflicting pairs and conditional rules
+
+A conflicting pair is any rule the page states on whether arguments are set together, in any wording: `Conflicts with`, exactly one of, at least one of, or one argument required or not allowed when another is set or unset. A conditional rule ties an argument to a value of another argument: the page makes it required, valid or unused only for that value ("Required when `target_type` is `AWS_LAMBDA`"). Both are `coverage.mutual-exclusion-unguarded`.
+
+A conditional rule is LOW when each argument it names takes the caller's value unchanged, with no default but null and no fallback, and none grants or restricts access or is a security control. The summary names the rule as the page states it and that the provider or the service rejects such a call. A conflicting pair in any wording, exactly one of and at least one of included, stays HIGH, and so does a conditional rule where the module supplies a side: a non-null default, a fallback, a literal or a value of a resource it creates.
 
 ## Suggested Fixes
 
@@ -69,7 +76,7 @@ Each row gives the fix a finding of that rule carries, in the forms of the [Sugg
 | `coverage.attribute-not-output` | code change | MEDIUM: add `output "<name>"` reading the attribute, per [Expose Stable, User-Useful Computed Attributes](../../terraform-module-maintainer/references/module-structure.md#expose-stable-user-useful-computed-attributes). HIGH: change the named output's expression so every mode the module supports yields a value or null, per [Conditional Outputs with try()](../../terraform-module-maintainer/references/module-structure.md#conditional-outputs-with-try). |
 | `coverage.deprecated-argument` | code change | Replace the argument with the one the page names as its replacement, or remove it when the page names none. |
 | `coverage.argument-above-min-version` | code change or needs decision | Raise the provider floor in `versions.tf` to the first version that has the argument, named: the version of its own host `since` line, else (an `unresolved` line, a count line or none) the first version whose page lists it. That raise is a `compat.provider-floor-raised` LOW. When that version is in a later major than the floor, `needs decision:` (a) raise the floor, a breaking change; (b) remove the argument. |
-| `coverage.mutual-exclusion-unguarded` | code change | Add a `validation` block when both arguments come from one input, otherwise a `precondition` in the resource's `lifecycle`, rejecting both set at once, per [Preconditions for Cross-Field Invariants](../../terraform-module-maintainer/references/module-structure.md#preconditions-for-cross-field-invariants), with an `error_message` naming both. |
+| `coverage.mutual-exclusion-unguarded` | code change | Add a `validation` block when both arguments come from one input, otherwise a `precondition` in the resource's `lifecycle`, rejecting both set at once, per [Preconditions for Cross-Field Invariants](../../terraform-module-maintainer/references/module-structure.md#preconditions-for-cross-field-invariants), with an `error_message` naming both. For a conditional rule, a `precondition` that rejects the argument when the governing value is not the one the page names. |
 | `coverage.default-for-required-argument` | code change | Set the default to the value the page documents, named, or remove the default when the page documents none, so the caller has to choose. |
 | `coverage.enum-value-unknown` | needs decision | Whether the literal or the page is stale: (a) change the literal to one of the documented values, listed; (b) keep it, with a comment giving the source that shows the value is accepted and the date it was read. |
 | `review.check-not-run` | `no code change:` | The schema the check needed, by type and version, and the rules it left unevaluated. |
