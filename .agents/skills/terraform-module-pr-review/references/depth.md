@@ -37,7 +37,7 @@ The `mtf-facts depth` object, every key required and no other:
 | `limits` | `tf_files`, `changed_lines`, `changed_blocks`, `selected_examples`; a reduced depth needs them within the focused limits, and light no Terraform file |
 | `schema_providers`, `schema_types`, `schema_locks` | The tokens of [schema-pass.md](schema-pass.md#inputs); a lock is `<dir>:<namespace>/<name>=<x.y.z>` |
 
-depth.sh adds one key, `binding`: `head_sha`, `base_sha` and `merge_base`, 40 lowercase hex, and `diff_sha256`, the SHA-256 of `git diff --no-ext-diff --no-textconv --binary <merge base> <head>`. The merge base is the only result of `git merge-base --all <base> <head>`; none or several abort the run.
+An `mtf-facts` release that versions its reports also writes `schema_version`, which must be `1`; depth.sh takes the report with or without it and drops it, so `depth.json` holds exactly the keys above. depth.sh adds one key, `binding`: `head_sha`, `base_sha` and `merge_base`, 40 lowercase hex, and `diff_sha256`, the SHA-256 of `git diff --no-ext-diff --no-textconv --binary <merge base> <head>`. The merge base is the only result of `git merge-base --all <base> <head>`; none or several abort the run.
 
 ## Reason Tokens
 
