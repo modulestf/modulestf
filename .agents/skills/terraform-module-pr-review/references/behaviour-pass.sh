@@ -6,7 +6,7 @@
 #   behaviour-pass.sh classify --facts <mtf-facts> --dir <module root>
 #       (--diff <files.json> [--prefix <module root prefix>] | --base <dir>) [--schema <schema.json>] --out <dir>
 #   behaviour-pass.sh eval --facts <mtf-facts> --out <dir> --head <sha> --base-sha <sha>
-#       [--claims <claims.json>] [--ladder <ladder.json>] [--wrappers <wrappers.txt>] [--prefix <module root prefix>]
+#       [--claims <claims.json>] [--ladder <ladder.json>] [--wrappers <wrappers.txt>] [--verify <verify.json>] [--prefix <module root prefix>]
 #   behaviour-pass.sh wrappers --clone <dir> --head <sha> --diff <files.json> [--prefix <p>] --out <dir>
 #
 # wrappers writes <out>/wrappers.txt, one line per wrapper versions.tf the change touches: its
@@ -33,12 +33,12 @@ deadline="${BEHAVIOUR_PASS_TIMEOUT:-120}"
 die() { echo "behaviour-pass.sh: $1" >&2; exit 2; }
 
 cmd="${1-}"; shift 2> /dev/null
-facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder="" wrappers="" clone=""
+facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder="" wrappers="" clone="" verify=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --facts) facts="${2-}" ;; --dir) dir="${2-}" ;; --diff) diff="${2-}" ;; --prefix) prefix="${2-}" ;; --base) base="${2-}" ;; --schema) schema="${2-}" ;;
     --out) out="${2-}" ;; --head) head="${2-}" ;; --base-sha) bsha="${2-}" ;;
-    --claims) claims="${2-}" ;; --ladder) ladder="${2-}" ;; --wrappers) wrappers="${2-}" ;; --clone) clone="${2-}" ;;
+    --claims) claims="${2-}" ;; --ladder) ladder="${2-}" ;; --wrappers) wrappers="${2-}" ;; --clone) clone="${2-}" ;; --verify) verify="${2-}" ;;
     *) die "unexpected argument" ;;
   esac
   [ $# -ge 2 ] || die "$1 needs a value"; shift 2
@@ -73,11 +73,13 @@ def valid_behaviour:
               and all(.[]; type == "object" and (.id | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$"))
                            and (.inputs | type == "object"))
               and (map(.id) | length == (unique | length))))
-        # caller_code (behaviour-pass.md, Caller Code): a boolean, only on a literal argument change,
-        # every merged category one too, in a .tf file below examples/ or tests/.
+        # caller_code (behaviour-pass.md, Caller Code), as the classifier sets it: a boolean, only on a
+        # literal argument change modified in place with no follows, every merged category one too, in
+        # a .tf file below examples/ or tests/ with no empty or dot segment.
         and ((has("caller_code") | not) or ((.caller_code | type == "boolean") and .category == "literal-argument-change"
               and all((.also_categories // [])[]; . == "literal-argument-change")
-              and (.file | test("^(examples|tests)/.+\\.tf$")))))
+              and .change_kind == "modified" and (has("follows") | not)
+              and (.file | test("^(examples|tests)/(.+/)?[^/]+\\.tf$")) and (.file | split("/") | all(. != "" and . != ".")))))
         and (map(.id) | length == (unique | length)))
   and (.entries | type == "array" and all(.[]; type == "object" and (.path | plain_path)
         and (.trigger_ids | type == "array" and all(.[]; tid))
@@ -86,7 +88,10 @@ def valid_behaviour:
         # Past the cap the tool lists the file with the triggers it cut, so an entry may name none then;
         # a capped run is a rule 4 unknown whatever its entries say.
         and ((.trigger_ids | length) > 0 or .inert == true or $cap > 0)))
-  and ([.entries[].trigger_ids[]] - [.triggers[].id] == []);
+  and ([.entries[].trigger_ids[]] - [.triggers[].id] == [])
+  # A caller_code trigger names a file the change modified in place, not a rename.
+  and (. as $r | all(.triggers[] | select(has("caller_code")); .file as $f
+        | any($r.entries[]; .path == $f and .change_kind == "modified" and (has("previous_path") | not))));
 def attrs: ["known", "wholly_unknown", "unknown_mask", "length", "value", "sensitive", "redacted", "unknown_inputs",
   "action", "unchanged_vs_prior", "error"];
 def valid_eval($b; $c):
@@ -198,9 +203,25 @@ null_vars() {
   fi
 }
 
+# caller_files_ok <behaviour>: every caller_code file is a regular file at the head, reached through no
+# link from the module root, as the classifier requires (behaviour-pass.md, Caller Code).
+caller_files_ok() {
+  local f p c rest
+  while IFS= read -r f; do
+    p="$dir"; rest="$f"
+    while :; do
+      c="${rest%%/*}"; p="$p/$c"
+      [ ! -L "$p" ] || return 1
+      [ "$rest" != "$c" ] || break
+      rest="${rest#*/}"
+    done
+    [ -f "$p" ] || return 1
+  done < <(jq -r '.triggers[] | select(has("caller_code")) | .file' "$1")
+}
+
 classify() {
   abs "$dir" --dir; [ -d "$dir" ] || die "--dir is not a directory"
-  [ ! -e "$out/behaviour.json" ] && [ ! -e "$out/status" ] || die "--out already holds a classification"
+  [ ! -e "$out/behaviour.json" ] && [ ! -e "$out/status" ] && [ ! -e "$out/classify-prefix" ] || die "--out already holds a classification"
   local cover=/dev/null
   if [ -n "$diff" ] && [ -z "$base" ]; then
     abs "$diff" --diff
@@ -215,6 +236,8 @@ classify() {
     cover="$out/files-module.json"
   elif [ -n "$base" ] && [ -z "$diff" ] && [ -z "$prefix" ]; then abs "$base" --base; set -- --base "$base"
   else die "classify needs one of --diff and --base, and --prefix only with --diff"; fi
+  # The prefix this classification is relative to, which eval compares with its own (Caller Code).
+  printf '%s\n' "${prefix%/}" > "$out/classify-prefix"
   # The provider schema acquisition wrote, when there is one: a regular file, not a link.
   if [ -n "$schema" ]; then
     abs "$schema" --schema; [ -f "$schema" ] && [ ! -L "$schema" ] || die "--schema is not a regular file"
@@ -228,7 +251,7 @@ classify() {
       late) echo "mtf-facts timed out" > "$out/status" ;;
       fail) echo "mtf-facts failed" > "$out/status" ;;
       ok) if jq -e --slurpfile d "$cover" "$JQ_DEFS"' valid_behaviour
-             and ($d == [] or covers($d[0]))' "$out/behaviour.raw" > /dev/null 2>&1; then
+             and ($d == [] or covers($d[0]))' "$out/behaviour.raw" > /dev/null 2>&1 && caller_files_ok "$out/behaviour.raw"; then
             mv -- "$out/behaviour.raw" "$out/behaviour.json"
             null_vars
           else echo "output refused" > "$out/status"; fi ;;
@@ -249,10 +272,11 @@ not_run() {
 evaluate() {
   [[ "$head" =~ $sha_re ]] && [[ "$bsha" =~ $sha_re ]] || die "--head and --base-sha must be 40 character SHAs"
   [ ! -e "$out/run-behaviour.json" ] && [ ! -e "$out/record.txt" ] || die "--out already holds an evaluation"
+  case "$prefix" in /* | *..* | . | ./) die "--prefix must be repository-relative" ;; esac
   prefix="${prefix%/}"
-  case "$prefix" in /* | *..* | .) die "--prefix must be repository-relative" ;; esac
   [ -n "$ladder" ] && { abs "$ladder" --ladder; [ -f "$ladder" ] && [ ! -L "$ladder" ] || die "--ladder is not a regular file"; }
   [ -n "$claims" ] && { abs "$claims" --claims; [ -f "$claims" ] && [ ! -L "$claims" ] || die "--claims is not a regular file"; }
+  [ -n "$verify" ] && { abs "$verify" --verify; [ -f "$verify" ] && [ ! -L "$verify" ] || die "--verify is not a regular file"; }
   if [ -f "$out/status" ]; then not_run "$(cat "$out/status")"; fi
   [ -f "$out/behaviour.json" ] || die "run classify first"
   [ -f "$facts" ] && [ -x "$facts" ] || not_run "mtf-facts not installed"
@@ -292,14 +316,23 @@ evaluate() {
       "$ladder" > "$out/ladder-module.json" 2> /dev/null || not_run "ladder refused"
     ladder="$out/ladder-module.json"
   fi
-  # The classifier seals caller code (behaviour-pass.md, Caller Code) on the module root alone. Under
-  # a prefix, configuration elsewhere in the repository may load it, so claims-eval gets no mark.
-  local bj="$out/behaviour.json"
-  if [ -n "$prefix" ]; then
-    jq 'del(.triggers[].caller_code)' "$bj" > "$out/behaviour-module.json" 2> /dev/null || not_run "output refused"
-    bj="$out/behaviour-module.json"
+  # Caller code (behaviour-pass.md, Caller Code): claims-eval reads a caller_code trigger as inert. The
+  # mark is kept only at the repository root, where classify recorded no prefix and eval got none, and
+  # only when the verify record of this head shows validate passed in the trigger's own directory, an
+  # examples/<name> the default pass verifies. Any other trigger reaches claims-eval with no mark.
+  local cp=missing root=false vj='{"dirs": []}'
+  if [ -f "$out/classify-prefix" ] && [ ! -L "$out/classify-prefix" ]; then cp="$(cat "$out/classify-prefix")" || cp=missing; fi
+  [ "$cp" = "$prefix" ] && [ -z "$prefix" ] && root=true
+  if [ -n "$verify" ]; then
+    vj="$(jq -c --arg h "$head" 'if type == "object" and .head_sha == $h and (.dirs | type == "array") then . else {dirs: []} end' \
+      "$verify" 2> /dev/null)" || vj='{"dirs": []}'
   fi
-  set -- claims-eval --behaviour "$bj" --ladder "$ladder" --head-sha "$head" --base-sha "$bsha"
+  jq --argjson root "$root" --argjson v "${vj:-"{\"dirs\": []}"}" '
+    def validated($d): $d | test("^examples/[^/]+$") and any($v.dirs[]; type == "object" and .dir == $d and .reason == "verified"
+      and .head.record == "code-result" and .head.validate == 0);
+    .triggers |= map(if .caller_code == true and $root and validated(.file | sub("/[^/]*$"; "")) then . else del(.caller_code) end)' \
+    "$out/behaviour.json" > "$out/behaviour-eval.json" 2> /dev/null || not_run "output refused"
+  set -- claims-eval --behaviour "$out/behaviour-eval.json" --ladder "$ladder" --head-sha "$head" --base-sha "$bsha"
   [ -n "$claims" ] && set -- "$@" --claims "$claims"
   case "$(run_facts "$out/eval.raw" "$@" --json)" in
     big) not_run "output refused" ;;

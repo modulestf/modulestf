@@ -494,6 +494,17 @@ sed 's/ --prefix "\$PREFIX" / /' "$RR" > "$SK/review-run-noprefix.sh"
 check "self-check: the mutant passes no --prefix to eval" "$(cmp -s "$RR" "$SK/review-run-noprefix.sh"; [ $? = 1 ]; echo $?)"
 check "self-check: without --prefix the eval prefix check fails" "$(eval_prefix "$SK/review-run-noprefix.sh"; [ $? = 1 ]; echo $?)"
 rm -f "$SK/review-run-noprefix.sh"
+# eval gets the verify record, so caller code reads inert only beside a passed validate of its example
+# (behaviour-pass.md, Caller Code); a copy that does not pass it is caught.
+eval_verify() { # review-run.sh copy: ladder again; 0 when eval got --verify with the run's verify.json
+  local n; n="$(wc -l < "$STUB_LOG")"; (cd "$TMP/cwd" && "$SH" "$1" ladder "$RUN") > /dev/null 2>&1
+  tail -n +"$((n + 1))" "$STUB_LOG" | grep -E '^behaviour eval ' | grep -qF -- "--verify $RUN/verify.json"
+}
+check "ladder: the claims evaluation gets the verify record" "$(eval_verify "$RR"; echo $?)"
+perl -0pe 's/ \$\{vf\[\@\]\+"\$\{vf\[\@\]\}"\}//' "$RR" > "$SK/review-run-noverify.sh"
+check "self-check: the mutant passes no --verify to eval" "$(cmp -s "$RR" "$SK/review-run-noverify.sh"; [ $? = 1 ]; echo $?)"
+check "self-check: without --verify the eval verify check fails" "$(eval_verify "$SK/review-run-noverify.sh"; [ $? = 1 ]; echo $?)"
+rm -f "$SK/review-run-noverify.sh"
 run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render0" > /dev/null 2>&1
 check "render: refused before handover" "$([ $? = 1 ] && [ ! -e "$TMP/render0/comment.md" ]; echo $?)"
 run_rr handover "$RUN" > "$TMP/ho.out"
@@ -641,7 +652,7 @@ wrap_mut() { # name, perl substitution: a weakened copy of review-run.sh must fa
   check "self-check: wrappers mutation $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
 wrap_mut "the grammar check dropped" 's/ &&\n        ! grep -qvE "\$WRAP_LINE_RE" "\$RUN\/behaviour\/wrappers\.txt"; then/; then/'
-wrap_mut "the file not passed to eval" 's/\$\{wr\[\@\]\+"\$\{wr\[\@\]\}"\} > \/dev\/null 2> "\$RUN\/state\/eval\.err"/> \/dev\/null 2> "\$RUN\/state\/eval.err"/'
+wrap_mut "the file not passed to eval" 's/\$\{wr\[\@\]\+"\$\{wr\[\@\]\}"\} //'
 wrap_mut "the wrappers step not run" 's/  bash "\$HERE\/behaviour-pass\.sh" wrappers [^\n]*\n[^\n]*\n/  :\n/'
 
 # Lowering the depth: a deep run whose depth.json is edited to light is refused.

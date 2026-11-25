@@ -654,8 +654,10 @@ cmd_ladder() {
   fi
   # The end of Step 5.5: the claims evaluation, at every depth outside a triage run.
   [ -d "$RUN/behaviour" ] || mkdir "$RUN/behaviour"
-  local cl=() ld=() wr=()
+  local cl=() ld=() wr=() vf=()
   [ ! -f "$RUN/behaviour/claims.json" ] || cl=(--claims "$RUN/behaviour/claims.json")
+  # The verify record: caller code reads inert only beside a passed validate of its example.
+  [ ! -f "$RUN/verify.json" ] || vf=(--verify "$RUN/verify.json")
   [ ! -f "$RUN/behaviour/ladder.json" ] || ld=(--ladder "$RUN/behaviour/ladder.json")
   # The generator result of each wrapper versions.tf the change touches (behaviour-pass.md,
   # Wrapper Versions), for eval and the handover; a failed step is no evidence.
@@ -663,7 +665,7 @@ cmd_ladder() {
     --prefix "$PREFIX" --out "$RUN/behaviour" > /dev/null 2>&1 || rm -f "$RUN/behaviour/wrappers.txt"
   [ ! -f "$RUN/behaviour/wrappers.txt" ] || wr=(--wrappers "$RUN/behaviour/wrappers.txt")
   bash "$HERE/behaviour-pass.sh" eval --facts "$facts" --out "$RUN/behaviour" --head "$HEAD_SHA" \
-    --base-sha "${MB:-$HEAD_SHA}" --prefix "$PREFIX" ${cl[@]+"${cl[@]}"} ${ld[@]+"${ld[@]}"} ${wr[@]+"${wr[@]}"} > /dev/null 2> "$RUN/state/eval.err" ||
+    --base-sha "${MB:-$HEAD_SHA}" --prefix "$PREFIX" ${cl[@]+"${cl[@]}"} ${ld[@]+"${ld[@]}"} ${wr[@]+"${wr[@]}"} ${vf[@]+"${vf[@]}"} > /dev/null 2> "$RUN/state/eval.err" ||
     fail "behaviour-pass.sh eval failed"
   head -n 1 "$RUN/behaviour/record.txt" 2> /dev/null | cut -c1-200
 }

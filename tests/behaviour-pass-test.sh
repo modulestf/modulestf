@@ -1030,57 +1030,137 @@ t_wr_render() {
 t_wr_render; check "wrappers render: a run whose only trigger is a derived wrapper approves" $?
 
 # --- Caller code (behaviour-pass.md, Caller Code): a literal argument change in a .tf file below
-# examples/ or tests/ that mtf-facts behaviour marked caller_code. claims-eval reads it as inert; with a
-# module root prefix eval drops the mark first, since the classifier's seal read the module root alone.
-# The classifier output is the schema example of mtf-facts.
+# examples/ or tests/ that mtf-facts behaviour marked caller_code. claims-eval reads it as inert. eval
+# keeps the mark only when classify recorded no module root prefix, eval gets none either, and the
+# verify record shows validate passed at the head in the trigger's own example directory; otherwise
+# claims-eval gets the trigger with no mark. The classifier output is the schema example of mtf-facts.
 cat > "$TMP/behaviour-caller.json" <<'EOF2'
 {"schema_version":1,"inert":false,"entries":[{"path":"examples/complete/main.tf","change_kind":"modified","inert":false,"trigger_ids":["T-001"]}],"triggers":[{"id":"T-001","file":"examples/complete/main.tf","line":3,"category":"literal-argument-change","change_kind":"modified","address":"module.s3","attribute":"name","base_expr":"\"a\"","head_expr":"\"b\"","referenced_inputs":[],"contextual_refs":[],"contextual_ref_details":[],"pure":true,"levels":["L4"],"reason":null,"caller_code":true}],"capped":0}
 EOF2
-t_caller() { # [module root prefix] [behaviour jq update]: classify and eval as review-run.sh runs them; sets O
-  setup; : > "$TMP/eval.caller"; jq -c "${2:-.}" "$TMP/behaviour-caller.json" > "$TMP/behaviour.out"
-  jq -n --arg p "${1:+$1/}" '[{filename: ($p + "examples/complete/main.tf"), status: "modified"}]' > "$TMP/files-caller.json"
-  DIFF="$TMP/files-caller.json" PFX="${1:-}" classify; evalp --prefix "${1:-}"
+# The repository: the module root at its top, and the same tree as modules/s3 under it.
+CMOD="$TMP/caller-repo"
+for r in "$CMOD" "$CMOD/modules/s3"; do
+  mkdir -p "$r/examples/complete" "$r/examples/group/nested" "$r/tests/basic"
+  printf 'resource "aws_s3_bucket" "this" {}\n' > "$r/main.tf"
+  for f in examples/complete examples/group/nested tests/basic; do printf 'module "s3" {\n  source = "../.."\n  name = "b"\n}\n' > "$r/$f/main.tf"; done
+  printf 'module "s3" {\n  source = ".."\n}\n' > "$r/examples/main.tf"
+done
+# verify_rec <dir> <init> <validate> [record] [reason] [head sha]: a verify-pass.sh output with that one
+# example. Some cases forge a head side the pass never writes, so each check of eval has its own case.
+verify_rec() {
+  jq -n --arg d "$1" --argjson i "$2" --argjson v "$3" --arg r "${4:-code-result}" --arg why "${5:-verified}" --arg h "${6:-$HEAD}" --arg b "$BASE" \
+    '{head_sha: $h, base_sha: $b, terraform_version: "1.9.8", selection: {tool: "mtf-facts", fallback: null, inert: false},
+      dirs: [{dir: $d, reason: $why, affected: "touched", head: {init: $i, validate: $v, record: $r, line: null}, base: null, outside: false}]}' > "$TMP/verify.json"
 }
-t_caller_root() { # the module root is the repository root: the mark crosses and the trigger is inert
-  t_caller
-  jq -e '.triggers[0].caller_code == true' "$TMP/behaviour-seen.json" > /dev/null 2>&1 || { echo seen; return 1; }
+# t_caller [prefix] [behaviour jq update] [eval args...]: classify and eval as review-run.sh runs them,
+# with the verify record in $TMP/verify.json unless CALLER_NOVERIFY is set; sets O.
+t_caller() {
+  local p="${1:-}" u="${2:-.}"; shift 2 2> /dev/null || shift $#
+  setup; : > "$TMP/eval.caller"; jq -c "$u" "$TMP/behaviour-caller.json" > "$TMP/behaviour.out"
+  jq --arg p "${p:+$p/}" '[.entries[] | {filename: ($p + .path), status: "modified"}]' "$TMP/behaviour.out" > "$TMP/files-caller.json"
+  local root="$CMOD"; [ -z "$p" ] || root="$CMOD/$p"
+  DIFF="$TMP/files-caller.json" PFX="$p" MOD="$root" classify
+  if [ "$#" -gt 0 ]; then evalp "$@"
+  elif [ -n "${CALLER_NOVERIFY:-}" ]; then evalp --prefix "$p"
+  else evalp --prefix "$p" --verify "$TMP/verify.json"; fi
+}
+state1() { jq -r '.triggers[0].state' "$O/run-behaviour.json" 2> /dev/null; }
+seen_mark() { jq -e '.triggers[0].caller_code == true' "$TMP/behaviour-seen.json" > /dev/null 2>&1; }
+t_caller_root() { # the repository root, a passed validate of examples/complete: the mark crosses and the trigger is inert
+  verify_rec examples/complete 0 0; t_caller
+  seen_mark || { echo seen; return 1; }
   [ "$(q '.status == "ran" and .triggers == [{id: "T-001", file: "examples/complete/main.tf", line: 3, category: "literal-argument-change", state: "inert"}]')" = 0 ] || { echo run; return 1; }
   grep -qxF 'trigger T-001 `examples/complete/main.tf` line 3 literal-argument-change: inert' "$O/record.txt"
 }
-t_caller_prefix() { # a module root prefix: claims-eval gets no mark, and the trigger is unverifiable
-  t_caller modules/s3
-  jq -e '.triggers | length == 1 and all(.[]; has("caller_code") | not)' "$TMP/behaviour-seen.json" > /dev/null 2>&1 || { echo seen; return 1; }
-  jq -e '.triggers[0].caller_code == true' "$O/behaviour.json" > /dev/null 2>&1 || { echo kept; return 1; }
-  [ "$(q '.status == "ran" and .triggers[0].state == "unverifiable"')" = 0 ] || { echo run; return 1; }
-  grep -qxF 'trigger T-001 `examples/complete/main.tf` line 3 literal-argument-change: unverifiable' "$O/record.txt"
+stripped() { # -> 0 when claims-eval got no mark and the trigger is unverifiable, while behaviour.json keeps it
+  ! seen_mark && [ "$(state1)" = unverifiable ] && jq -e '.triggers[0].caller_code == true' "$O/behaviour.json" > /dev/null 2>&1
 }
-t_caller_root; check "caller code: at the repository root the mark crosses and the trigger is inert" $?
+t_caller_prefix() { verify_rec examples/complete 0 0; t_caller modules/s3; stripped; }
+t_caller_noverify() { CALLER_NOVERIFY=1 t_caller; stripped; }
+t_caller_failed() { verify_rec examples/complete 0 1; t_caller; stripped; }
+t_caller_initfail() { verify_rec examples/complete 1 null init-failed; t_caller; stripped; }
+t_caller_env() { verify_rec examples/complete 0 0 not-run-environment; t_caller; stripped; }
+t_caller_bump() { verify_rec examples/complete 0 0 code-result skipped-version-bump; t_caller; stripped; }
+t_caller_otherdir() { verify_rec examples/other 0 0; t_caller; stripped; }
+t_caller_otherhead() { verify_rec examples/complete 0 0 code-result verified 1111111111111111111111111111111111111111; t_caller; stripped; }
+t_caller_tests() { verify_rec tests/basic 0 0; t_caller "" '.triggers[0].file = "tests/basic/main.tf" | .entries[0].path = "tests/basic/main.tf"' --prefix "" --verify "$TMP/verify.json"; stripped; }
+t_caller_nested() { verify_rec examples/group/nested 0 0; t_caller "" '.triggers[0].file = "examples/group/nested/main.tf" | .entries[0].path = "examples/group/nested/main.tf"' --prefix "" --verify "$TMP/verify.json"; stripped; }
+t_caller_flat() { verify_rec examples 0 0; t_caller "" '.triggers[0].file = "examples/main.tf" | .entries[0].path = "examples/main.tf"' --prefix "" --verify "$TMP/verify.json"; stripped; }
+t_caller_noprefixflag() { verify_rec examples/complete 0 0; t_caller modules/s3 . --verify "$TMP/verify.json"; stripped; }
+t_caller_norecord() { # classify's prefix record gone: no mark
+  verify_rec examples/complete 0 0; setup; : > "$TMP/eval.caller"; cp "$TMP/behaviour-caller.json" "$TMP/behaviour.out"
+  jq -n '[{filename: "examples/complete/main.tf", status: "modified"}]' > "$TMP/files-caller.json"
+  DIFF="$TMP/files-caller.json" MOD="$CMOD" classify; rm -f "$O/classify-prefix"
+  evalp --prefix "" --verify "$TMP/verify.json"; stripped
+}
+t_caller_record() {
+  t_caller modules/s3; [ "$(cat "$O/classify-prefix")" = modules/s3 ] || return 1
+  t_caller; [ -f "$O/classify-prefix" ] && [ "$(cat "$O/classify-prefix")" = "" ]
+}
+t_caller_slash() { verify_rec examples/complete 0 0; t_caller "" . --prefix / --verify "$TMP/verify.json"; local s=$?; [ "$s" = 2 ] && [ ! -e "$O/record.txt" ]; }
+t_caller_root; check "caller code: at the repository root with a passed validate of its example the mark crosses and the trigger is inert" $?
 t_caller_prefix; check "caller code: under a module root prefix claims-eval gets no mark and the trigger is unverifiable" $?
+t_caller_noverify; check "caller code: with no verify record the mark is dropped" $?
+t_caller_failed; check "caller code: a failed validate of its example drops the mark" $?
+t_caller_initfail; check "caller code: an init that failed drops the mark" $?
+t_caller_env; check "caller code: a validate not run for the environment drops the mark" $?
+t_caller_bump; check "caller code: an example skipped as a version bump drops the mark" $?
+t_caller_otherdir; check "caller code: a validate of another example drops the mark" $?
+t_caller_otherhead; check "caller code: a verify record of another head drops the mark" $?
+t_caller_tests; check "caller code: a tests/ file drops the mark, even beside a record that names its directory" $?
+t_caller_nested; check "caller code: a nested example drops the mark, even beside a record that names its directory" $?
+t_caller_flat; check "caller code: a file directly in examples/ drops the mark" $?
+t_caller_noprefixflag; check "caller code: a classify prefix and an eval with no --prefix drop the mark" $?
+t_caller_norecord; check "caller code: no prefix record from classify drops the mark" $?
+t_caller_record; check "caller code: classify records the prefix it was given, empty at the root" $?
+t_caller_slash; check "caller code: --prefix / is a usage error" $?
 CALLER_BAD=('.triggers[0].caller_code = "true"' '.triggers[0].caller_code = 1' '.triggers[0].caller_code = null'
   '.triggers[0].category = "default-change"' '.triggers[0].also_categories = ["literal-argument-change", "default-change"]'
-  '.triggers[0].file = "main.tf"' '.triggers[0].file = "modules/a/examples/b/main.tf"' '.triggers[0].file = "Examples/complete/main.tf"'
-  '.triggers[0].file = "tests/basic.tftest.hcl"' '.triggers[0].file = "examples/complete/main.tofu"' '.triggers[0].file = "examples.tf"'
-  '.triggers[0].caller_code = false | .triggers[0].file = "main.tf"')
+  '.triggers[0].file = "main.tf" | .entries[0].path = "main.tf"' '.triggers[0].file = "modules/s3/examples/complete/main.tf" | .entries[0].path = "modules/s3/examples/complete/main.tf"' '.triggers[0].file = "Examples/complete/main.tf" | .entries[0].path = "Examples/complete/main.tf"'
+  '.triggers[0].file = "tests/basic.tftest.hcl" | .entries[0].path = "tests/basic.tftest.hcl"' '.triggers[0].file = "examples/complete/main.tofu" | .entries[0].path = "examples/complete/main.tofu"' '.triggers[0].file = "examples.tf" | .entries[0].path = "examples.tf"'
+  '.triggers[0].caller_code = false | .triggers[0].file = "main.tf" | .entries[0].path = "main.tf"'
+  '.triggers[0].change_kind = "added"' '.triggers[0].follows = []' '.triggers[0].follows = ["T-002"]'
+  '.entries[0].change_kind = "added"' '.entries[0] += {change_kind: "renamed", previous_path: "examples/old/main.tf"}'
+  '.triggers[0].file = "examples//main.tf" | .entries[0].path = "examples//main.tf"' '.triggers[0].file = "examples/./main.tf" | .entries[0].path = "examples/./main.tf"' '.triggers[0].file = "examples/complete/.tf" | .entries[0].path = "examples/complete/.tf"'
+  '.triggers[0].file = "examples/absent/main.tf" | .entries[0].path = "examples/absent/main.tf"')
 caller_refused() { # behaviour jq update -> 0 when classify refuses it
-  t_caller "" "$1"; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt" && [ "$(q '.status == "not-run" and .reason == "output refused"')" = 0 ]
+  verify_rec examples/complete 0 0; t_caller "" "$1"
+  grep -qxF 'behaviour: not run: output refused' "$O/classify.txt" && [ "$(q '.status == "not-run" and .reason == "output refused"')" = 0 ]
 }
 for u in "${CALLER_BAD[@]}"; do caller_refused "$u"; check "caller code refused: $u" $?; done
-t_caller ""  '.triggers[0].also_categories = ["literal-argument-change"] | .triggers[0].file = "tests/basic/main.tf"'
-check "caller code: a merged literal change in a tests/ file is accepted" "$(q '.triggers[0].state == "inert"')"
 t_caller_refused() { local u; for u in "${CALLER_BAD[@]}"; do caller_refused "$u" || return 1; done; }
-# The render: a run whose only trigger is caller code at the repository root approves with no
-# example planned; under a prefix the same change is inconclusive.
-t_caller_render() { # [module root prefix] -> the render line in RL
-  t_caller "${1:-}"
+# A link at the head: the file itself, or an ancestor directory of it.
+t_caller_link() {
+  local L="$TMP/caller-link" s=0
+  for kind in file dir; do
+    rm -rf "$L"; cp -R "$CMOD" "$L"; rm -rf "$L/modules"
+    if [ "$kind" = file ]; then mv "$L/examples/complete/main.tf" "$L/real.tf"; ln -s ../../real.tf "$L/examples/complete/main.tf"
+    else mv "$L/examples/complete" "$L/real"; ln -s ../real "$L/examples/complete"; fi
+    verify_rec examples/complete 0 0; setup; : > "$TMP/eval.caller"; cp "$TMP/behaviour-caller.json" "$TMP/behaviour.out"
+    jq -n '[{filename: "examples/complete/main.tf", status: "modified"}]' > "$TMP/files-caller.json"
+    DIFF="$TMP/files-caller.json" MOD="$L" classify
+    grep -qxF 'behaviour: not run: output refused' "$O/classify.txt" || { echo "$kind"; s=1; }
+  done
+  return "$s"
+}
+t_caller_link; check "caller code refused: the file at the head is a link, or reached through one" $?
+verify_rec tests/basic 0 0
+t_caller "" '.triggers[0].also_categories = ["literal-argument-change"] | .triggers[0].file = "tests/basic/main.tf" | .entries[0].path = "tests/basic/main.tf"'
+check "caller code: a merged literal change in a tests/ file classifies" "$([ -f "$O/behaviour.json" ]; echo $?)"
+# The render: a run whose only trigger is caller code at the repository root, its example validated,
+# approves with no example planned; under a prefix, or with that validate failed, it is inconclusive.
+t_caller_render() { # [module root prefix] [validate status] -> the render line in RL
+  verify_rec "${1:+$1/}examples/complete" 0 "${2:-0}"; t_caller "${1:-}"
   jq -n --slurpfile b "$O/run-behaviour.json" '{format: 1, triage: false, plan_ran: false, verify_gaps: [], behaviour: $b[0],
     coverage: {class: "none", inert: false, unplanned: [{dir: "examples/complete", reason: "no AWS profile named"}]},
     counts: {"instruction-like-text-from-others": 0, "conversation-claims-unread": 0, "review.quoted-claim-unverifiable": 0}}' > "$TMP/run-c.json"
-  printf '[]\n' > "$TMP/findings-c.json"; local r="$TMP/render-c${1:+-p}"; mkdir -p "$r"
+  printf '[]\n' > "$TMP/findings-c.json"; local r="$TMP/render-c$c"; mkdir -p "$r"
   RL="$(bash "$RCU" --head "$HEAD" --findings "$TMP/findings-c.json" --host "$TMP/host.json" --checks "$TMP/checks" \
     --run "$TMP/run-c.json" --assessment "$TMP/assess.txt" --run-dir "$TMP/rundir" --out "$r" 2>&1)"
 }
-t_caller_render; check "caller code render: at the repository root it approves with no example planned" "$(case "$RL" in "rendered approve (ladder rule 8),"*) echo 0 ;; *) echo "$RL" >&2; echo 1 ;; esac)"
+t_caller_render; check "caller code render: at the repository root with its example validated it approves with no example planned" "$(case "$RL" in "rendered approve (ladder rule 8),"*) echo 0 ;; *) echo "$RL" >&2; echo 1 ;; esac)"
 t_caller_render modules/s3; check "caller code render: under a prefix it is inconclusive" "$(case "$RL" in "rendered inconclusive (ladder rule 4),"*) echo 0 ;; *) echo "$RL" >&2; echo 1 ;; esac)"
+t_caller_render "" 1; check "caller code render: with its validate failed it is inconclusive" "$(case "$RL" in "rendered inconclusive (ladder rule 4),"*) echo 0 ;; *) echo "$RL" >&2; echo 1 ;; esac)"
 
 # The negative self-check: each weakened copy of the script lets a case above through.
 mn=0
@@ -1196,14 +1276,30 @@ wmutate "unexercised: a directly called directory not seen as loaded" 's/\.dir =
 wmutate "unexercised: strings matched without escapes" 's/s\/"\(\(\?:\[\^"\\\\\]\|\\\\\.\)\*\)"\//s\/"([^"]*)"\//' t_unex_escq
 wmutate "unexercised: a nested dynamic segment kept" 's/split\("\."\) \| map\(select\(\. != "dynamic"\)\) \| join\("\."\)/sub("^dynamic\\\\."; "")/' t_unex_nested_dyn
 wmutate "unexercised: a type the schema lacks requires nothing" 's/,\n         \(\$ty\[\] \| select\(IN\(\$have\[\]\) \| not\) \| "\\\(\.\)\.\*"\)//' t_unex_lacktype
-wmutate "caller code: the mark kept under a prefix" 's/del\(\.triggers\[\]\.caller_code\)/./' t_caller_prefix
-wmutate "caller code: the mark dropped at the repository root" 's/  if \[ -n "\$prefix" \]; then\n(    jq .del)/  if true; then\n$1/' t_caller_root
+wmutate "caller code: the mark kept under a prefix" 's/ and \$root and / and /' t_caller_prefix
+wmutate "caller code: the mark dropped at the repository root" 's/if \.caller_code == true and \$root and/if false and \$root and/' t_caller_root
+wmutate "caller code: the verify record not required" 's/ and validated\(\.file \| sub\([^)]*\)\)/ and true/' t_caller_noverify
+wmutate "caller code: a failed validate accepted" 's/ and \.head\.validate == 0\)/)/' t_caller_failed
+wmutate "caller code: any head record accepted" 's/ and \.head\.record == "code-result"//' t_caller_env
+wmutate "caller code: a skipped example accepted" 's/ and \.reason == "verified"//' t_caller_bump
+wmutate "caller code: another example accepted" 's/\.dir == \$d and /true and /' t_caller_otherdir
+wmutate "caller code: a verify record of another head accepted" 's/type == "object" and \.head_sha == \$h and \(\.dirs/type == "object" and (.dirs/' t_caller_otherhead
+wmutate "caller code: a directory outside examples/<name> accepted" 's/\$d \| test\("\^examples\/\[\^\/\]\+\$"\) and //' t_caller_tests
+wmutate "caller code: the prefix record not read" 's/\[ "\$cp" = "\$prefix" \] && \[ -z "\$prefix" \]/[ -z "\$prefix" ]/' t_caller_noprefixflag
+wmutate "caller code: a missing prefix record read as the root" 's/local cp=missing /local cp= /' t_caller_norecord
+wmutate "caller code: --prefix / stripped to the root" 's/  case "\$prefix" in \/\* \| /  case "\${prefix%\/}" in \/* | /' t_caller_slash
 wmutate "caller code: the field not validated" 's/and \(\(has\("caller_code"\) \| not\) or /and (true or /' t_caller_refused
 wmutate "caller code: a boolean not required" 's/\(\.caller_code \| type == "boolean"\) and \.category/.category/' t_caller_refused
 wmutate "caller code: any category accepted" 's/and \.category == "literal-argument-change"\n/\n/' t_caller_refused
 wmutate "caller code: merged categories not read" 's/and all\(\(\.also_categories \/\/ \[\]\)\[\]; \. == "literal-argument-change"\)//' t_caller_refused
-wmutate "caller code: any path accepted" 's/and \(\.file \| test\("\^\(examples\|tests\)\/[^)]*\)\)/and true/' t_caller_refused
+wmutate "caller code: any path accepted" 's/and \(\.file \| test\("\^\(examples\|tests\)\/[^"]*"\)\)/and true/' t_caller_refused
 wmutate "caller code: the path not anchored" 's/test\("\^\(examples\|tests\)\//test("(examples|tests)\//' t_caller_refused
+wmutate "caller code: an empty or dot segment accepted" 's/ and \(\.file \| split\("\/"\) \| all\(\. != "" and \. != "\."\)\)//' t_caller_refused
+wmutate "caller code: an added trigger accepted" 's/ and \.change_kind == "modified" and \(has\("follows"\) \| not\)/ and (has("follows") | not)/' t_caller_refused
+wmutate "caller code: a follower accepted" 's/ and \.change_kind == "modified" and \(has\("follows"\) \| not\)/ and .change_kind == "modified"/' t_caller_refused
+wmutate "caller code: the entry not read" 's/\.path == \$f and \.change_kind == "modified" and \(has\("previous_path"\) \| not\)/.path == \$f/' t_caller_refused
+wmutate "caller code: a missing file accepted" 's/    \[ -f "\$p" \] \|\| return 1\n//' t_caller_refused
+wmutate "caller code: a link at the head accepted" 's/      \[ ! -L "\$p" \] \|\| return 1\n//' t_caller_link
 wmutate "derive in the shared file returning its input" 's/  return \$o;\n\}/  return \$s;\n}/' t_wr_derived wrapper-derive.pl
 
 echo
