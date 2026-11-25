@@ -265,6 +265,13 @@ cp -R "$FX/." "$FR/"; rm -rf "$FR/expected" "$FR/reviewer"; mkdir "$FR/clone"
 run_rr handover "$FR" > "$TMP/h.out"
 sed -e "s#$FR/#RUN/#g" "$FR/handover/task.md" > "$TMP/task.norm"
 check "acceptance: handover reproduces the hand-assembled task byte for byte" "$(cmp -s "$TMP/task.norm" "$FX/expected/task.md"; echo $?)"
+check "handover: the base repository line is host.json's repo, before the untrusted block" \
+  "$(awk '/^Base repository: example-org\/terraform-aws-widget$/{w=NR} /^UNTRUSTED-[0-9a-f]{12} BEGIN$/{b=NR} END{exit !(w && w < b)}' "$FR/handover/task.md"; echo $?)"
+FB="$(mktemp -d "$ROOTD/pr-review.XXXXXX")"
+cp -R "$FX/." "$FB/"; rm -rf "$FB/expected" "$FB/reviewer"; mkdir "$FB/clone"
+jq '.repo = "example-org/.."' "$FX/host/host.json" > "$FB/host/host.json"
+run_rr handover "$FB" > /dev/null 2>&1
+check "handover: a repository name of dots gives no base repository line" "$(! grep -q '^Base repository:' "$FB/handover/task.md" 2> /dev/null; echo $?)"
 check "acceptance: handover reproduces the hand-assembled verification record" "$(cmp -s "$FR/handover/record.txt" "$FX/expected/record.txt"; echo $?)"
 check "acceptance: handover prints at most 30 lines" "$(lines_ok "$TMP/h.out")"
 B="$FR/handover/reviewer-references.md"

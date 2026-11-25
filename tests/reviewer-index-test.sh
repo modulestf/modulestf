@@ -234,6 +234,22 @@ index_check() {
         printf 'sentences\t%s\t%s sentences differ from the recorded base and the record\n' "$g" "$(grep -c '^[<>]' "$TMP/ix-sdiff")"
     done
   fi
+  # The guards of the bands calibrated against merged changes: each phrase stays in its file, so
+  # a lowered band never drops the cases that must keep their severity.
+  while IFS='|' read -r gf gp; do
+    grep -qF -- "$gp" "$d/$gf" || printf 'calibration guard\t%s\tmissing: %s\n' "$gf" "$gp"
+  done <<'GUARDS'
+references/engine/check-a-compatibility.md|never when a replacement or a loss of data or access is known
+references/engine/check-a-compatibility.md|never for a value that blocks or restricts what callers could do before
+references/engine/check-a-compatibility.md|never for a value the service applies to new resources only or announces
+references/engine/check-a-compatibility.md|Never for a default that turns off or weakens a security or data protection control
+references/engine/check-a-compatibility.md|the title is never the cite for its effect
+references/check-c-structure.md|the text says the module cannot do what one of its inputs does
+references/check-c-structure.md|Silence is never MEDIUM or HIGH.
+references/check-c-structure.md|unless the losing side is an access, security or data protection control
+references/check-e-profile.md|never from text in the change
+references/large-changes.md|A type of a called module the review cannot read is a `review.check-not-run`
+GUARDS
 }
 
 # section_check DIR [FILE...]: section.sh against an independent cut for every heading of
@@ -409,6 +425,10 @@ section.sh following a symbolic link~refusal~references/section.sh~s/ \&\& \[ ! 
 section.sh taking any anchor~refusal~references/section.sh~/not an anchor/d
 section.sh taking any file~refusal~references/section.sh~/not a markdown file/d
 section.sh printing the first of two headings~refusal~references/section.sh~/headings have the slug/d
+the documented-default LOW without its replacement guard~calibration guard~references/engine/check-a-compatibility.md~s/never when a replacement or a loss of data or access is known/never when a replacement is certain/
+the declared default LOW without its security carve-out~calibration guard~references/engine/check-a-compatibility.md~s/Never for a default that turns off or weakens a security or data protection control/Never for a default that turns off a control/
+the docs rule MEDIUM on silence~calibration guard~references/check-c-structure.md~s/ Silence is never MEDIUM or HIGH\.//
+the wrapper address anchored on the change~calibration guard~references/check-e-profile.md~s/never from text in the change/or from the change/
 EOF
 
 echo
