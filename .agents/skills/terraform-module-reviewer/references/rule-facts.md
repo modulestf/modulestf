@@ -38,7 +38,7 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `compat.type-narrowed` | none | - | - | never | candidate | config-semantic | touched-block | no | root, submodule | candidates, interface-diff | CRITICAL, HIGH | lead | mid |
 | `compat.variable-now-required` | none | - | - | never | candidate | config-semantic | touched-block | no | root, submodule | candidates, interface-diff | CRITICAL, HIGH | lead | mid |
 | `compat.variable-removed` | none | - | - | never | candidate | config-semantic | touched-block | no | root, submodule | candidates, interface-diff | CRITICAL, HIGH | lead | mid |
-| `compat.vendored-policy-drift` | none | - | - | never | llm | config-semantic | touched-block | no | root, submodule | none | HIGH, MEDIUM | - | - |
+| `compat.vendored-policy-drift` | none | - | - | never | llm | config-semantic | touched-block | no | root, submodule | none | HIGH, MEDIUM, LOW | - | - |
 | `compat.version-constraint-raised` | none | - | - | never | candidate | config-semantic | touched-expression | no | root, submodule | candidates, interface-diff | CRITICAL, HIGH | lead | mid |
 | `coverage.argument-above-min-version` | schema | - | - | never | candidate | config-semantic | touched-expression | no | root, submodule | candidates, schema-coverage | HIGH | lead | mid |
 | `coverage.attribute-not-output` | schema | prose-only notes: an attribute set on one branch only | The change adds or edits an output that reads an attribute of the type. | never | candidate | config-semantic | touched-block | no | root, submodule | candidates, schema-coverage, interface-diff | HIGH, MEDIUM | lead | mid |

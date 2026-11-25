@@ -105,7 +105,8 @@ copy() {
 # Check B's Fails when sits in its Rules section. The
 # heading that opens that text is an anchor for the run summaries, so it is unwrapped.
 # Check A's Host Vendored Policy Evidence is left out for the size cap, as Check E's Host README
-# Evidence is: a judgment run keeps the rules it had for those lines, inconclusive at worst.
+# Evidence is. The pull request review's handover states no Vendored policy line when the host
+# selects the judgment variant, so its Confirm when line rejects the claim with no host reference.
 # Check E's Host Wrapper Evidence is left out for the size cap; its pointer line, kept, carries
 # the rule a judgment run needs: a derived or copied wrapper has no finding.
 # Its new-module owner identifier bullet and MEDIUM band are the A new module on-demand read, and

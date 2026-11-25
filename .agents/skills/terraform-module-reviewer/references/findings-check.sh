@@ -2,10 +2,12 @@
 # findings-check.sh: checks a findings list against the limits the pull request review's host
 # render enforces, so a reviewer finds a violation before it returns the list, not after the
 # render refuses the whole run.
-#   bash findings-check.sh [--refuted <n>] <findings.json>   the findings list, a regular file
-#   bash findings-check.sh [--refuted <n>] -                 the findings list on standard input
+#   bash findings-check.sh [--refuted <n>] [--vendored-equal <m>] <findings.json>   a regular file
+#   bash findings-check.sh [--refuted <n>] [--vendored-equal <m>] -   the list on standard input
 # <n> is the number of `claim` and `trigger` lines of the verification record whose state is
 # refuted, 0 when the task carries no record. The render refuses any claim.* finding when it is 0.
+# <m> is the number of `Vendored policy:` lines of the task that say `upstream equal`, 0 when the
+# task carries none. A LOW compat.generated-policy-narrowed finding is a violation when it is 0.
 # Prints one line per violation, "<finding id> <field>: <what is wrong>", and exits 1 when there
 # is any. A line that starts with "note " is advice, not a violation. Prints "findings-check: ok"
 # and exits 0 when there is no violation. Exits 2 only when the checker itself cannot run: a
@@ -24,12 +26,18 @@ RULES="$HERE/rule-facts.md"
 CAP=1048576
 
 die() { echo "findings-check: $*" >&2; exit 2; }
-refuted=0
-if [ "${1-}" = --refuted ]; then
-  refuted="${2-}"; shift 2 2> /dev/null || die "usage: findings-check.sh [--refuted <n>] <findings.json> | -"
-  case "$refuted" in '' | *[!0-9]* | ???????*) die "--refuted needs a number of at most 6 digits" ;; esac
-fi
-[ "$#" = 1 ] || die "usage: findings-check.sh [--refuted <n>] <findings.json> | -"
+USAGE="usage: findings-check.sh [--refuted <n>] [--vendored-equal <m>] <findings.json> | -"
+refuted=0 vequal=0
+while [ "$#" -gt 1 ]; do
+  case "$1" in
+    --refuted) refuted="${2-}"; shift 2 2> /dev/null || die "$USAGE"
+      case "$refuted" in '' | *[!0-9]* | ???????*) die "--refuted needs a number of at most 6 digits" ;; esac ;;
+    --vendored-equal) vequal="${2-}"; shift 2 2> /dev/null || die "$USAGE"
+      case "$vequal" in '' | *[!0-9]* | ???????*) die "--vendored-equal needs a number of at most 6 digits" ;; esac ;;
+    *) break ;;
+  esac
+done
+[ "$#" = 1 ] || die "$USAGE"
 command -v jq > /dev/null 2>&1 || die "jq is not installed"
 [ -f "$RULES" ] && [ ! -L "$RULES" ] || die "rule-facts.md is not beside this script"
 if [ "$1" != - ]; then
@@ -94,7 +102,7 @@ def text_check($id; $field; $cap):
       bad(($t | type == "string" and length > $cap); $id; $field; "\($t | if type == "string" then length else 0 end) characters, limit \($cap)")
   else empty end;
 
-def check_one($id; $reg; $refuted):
+def check_one($id; $reg; $refuted; $vequal):
   if type != "object" then viol($id; "finding"; "not an object") else
     ( (keys - allowed_keys - host_keys)[] | viol($id; (.[0:40] | @json); "not a field of a finding") ),
     ( (keys | map(select(IN(host_keys[]))))[] | viol($id; .; "set by the host, never by a review run; remove it") ),
@@ -131,6 +139,7 @@ def check_one($id; $reg; $refuted):
           else
             (.rule_id // null) as $r
             | bad(($r | type == "string" and startswith("review.") and $s == "CRITICAL"); $id; "severity"; "a review.* finding is never CRITICAL; a defect of the module filed under review.* has the wrong rule name, so use the rule that names the defect"),
+              bad($r == "compat.generated-policy-narrowed" and $s == "LOW" and $vequal == 0; $id; "severity"; "LOW is not reported for compat.generated-policy-narrowed without a host reference: the task has no Vendored policy line that says upstream equal (--vendored-equal 0); file the CRITICAL or HIGH band by the rule's Severity text, or review.check-not-run at MEDIUM when the author names an upstream policy and no reference exists; never drop the finding"),
               bad($r == "review.tool-disputed" and $s != "LOW"; $id; "severity"; "a review.tool-disputed finding is LOW; a defect of the module filed under it has the wrong rule name, so use the rule that names the defect"),
               # The render reads no severity band of a rule, so a severity outside the registry row is advice:
               # a wrong rule name is a possible cause, and lowering the severity is never the fix.
@@ -157,7 +166,7 @@ registry as $reg
     $in[0] as $l
     | ([$l[] | select(type == "object" and (.rule_id | type == "string") and (.severity | type == "string") and (.severity | IN(sev_order[])))]) as $banded
     | bad(($l | length) > list_cap; "findings"; "list"; "\($l | length) findings, limit \(list_cap)"),
-      ( $l | to_entries[] | .key as $i | .value | check_one(fid($i); $reg; $refuted) ),
+      ( $l | to_entries[] | .key as $i | .value | check_one(fid($i); $reg; $refuted; $vequal) ),
       ( [$l[] | select(type == "object" and (.id | type == "string") and (.id | test("^F-[0-9]{3,}$"))) | .id] | group_by(.) | map(select(length > 1) | .[0])[]
         | viol(.; "id"; "used by more than one finding") ),
       ( $l | to_entries[] | .key as $i | .value | select(type == "object" and .rule_id == "compat.claim-contradicts-analysis"
@@ -183,7 +192,7 @@ IFS= read -r -d '' data < <(slurp "$1")
 if [ $? = 0 ]; then echo "findings: not valid JSON, the input holds a NUL byte"; exit 1; fi
 [ "${#data}" -le "$CAP" ] || { echo "findings: over the 1 MiB size cap"; exit 1; }
 printf '%s' "$data" | jq empty > /dev/null 2>&1 || { echo "findings: not valid JSON"; exit 1; }
-out="$(printf '%s' "$data" | jq -s -r --argjson refuted "$refuted" --rawfile rules "$RULES" "$LIB $MAIN" 2> /dev/null)" \
+out="$(printf '%s' "$data" | jq -s -r --argjson refuted "$refuted" --argjson vequal "$vequal" --rawfile rules "$RULES" "$LIB $MAIN" 2> /dev/null)" \
   || die "jq failed on input that parses; this is a fault of the checker"
 
 nviol="$(printf '%s\n' "$out" | awk 'NF && !/^note / { n++ } END { print n + 0 }')"

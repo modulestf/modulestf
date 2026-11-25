@@ -63,7 +63,7 @@ SOURCE_RE='^schema pass: source [A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,1
 REGION_LINE_RE='^([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/){0,8}README\.md (generated|differs|unknown [a-z0-9 .-]{1,60})$'
 # A line of vendored-policy.sh (vendored-policy.md, Output): a module-relative .tf file, a policy
 # document's name and one fact of the comparison with its upstream source.
-VP_LINE_RE='^([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/){0,8}[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\.tf [A-Za-z_][A-Za-z0-9_-]{0,63} (source [A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100} v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4} [0-9a-f]{40} [A-Za-z0-9._/-]+|lines [0-9]{1,7} [0-9]{1,7}|upstream equal|upstream differs [0-9]{1,4} extra [0-9]{1,4} missing|base equal|base absent|base differs [0-9]{1,4} added [0-9]{1,4} removed|(extra|missing|added|removed) (Allow|Deny)( [a-z]+:[A-Za-z0-9:/*?._=+,@|;-]+){2,5}|(extra|missing|added|removed) and [0-9]{1,4} more|not compared [0-9]{1,3} dynamic statements|not compared merged documents|unknown [a-z0-9 ]{1,60})$'
+VP_LINE_RE='^([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/){0,8}[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\.tf [A-Za-z_][A-Za-z0-9_-]{0,63} (source [A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100} v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4} [0-9a-f]{40} [A-Za-z0-9._/-]+|lines [0-9]{1,7} [0-9]{1,7}|upstream equal|upstream differs [0-9]{1,4} extra [0-9]{1,4} missing|base equal|base absent|base differs [0-9]{1,4} added [0-9]{1,4} removed|(extra|missing|added|removed|widened|carried) (Allow|Deny)( [a-z]+:[]A-Za-z0-9:/*?._=+,@|;"${}[-]+){2,5}|(extra|missing|added|removed|widened|carried) and [0-9]{1,4} more|unknown [a-z0-9 ]{1,60})$'
 # The review budget (review-run-details.md, Review Budget). A change whose files list or patch text
 # is over REVIEW_THRESHOLD, the size a full run refused before it had a budget (a triage run, which
 # computes no depth, was handed such a change whole), hands the reviewer at
@@ -1263,9 +1263,15 @@ readme_regions() {
 # The host's vendored policy evidence (vendored-policy.md): the module profile's sources, the
 # pull request body's tag, the clone's objects at the head and the bound merge base. A failed step,
 # or no profile directory, is no evidence.
-vendored_policy() {
+vendored_policy() { # task file, block id, merge base, new module (true or false)
   local pd="" id
-  rm -rf "$RUN/vendored" && mkdir "$RUN/vendored" || return 0
+  rm -rf "$RUN/vendored"
+  # No evidence for a triage run or a new module, which has no base to compare.
+  [ "$TRIAGE" = false ] && [ "$4" = false ] || return 0
+  # Nor for a host that selects the judgment variant: its prefix leaves out the reviewer's evidence
+  # section for the size cap, so such a run keeps the rules it had (vendored-policy.md).
+  [ "${MODULESTF_FACTS_VARIANT:-full}" != judgment ] || return 0
+  mkdir "$RUN/vendored" || return 0
   pd="$(jq -r '.dir' "$RUN/state/profile.json" 2> /dev/null)"
   if [ -z "$pd" ]; then
     id="$(jq -r '.id' "$RUN/state/profile.json" 2> /dev/null)"
@@ -1350,7 +1356,7 @@ cmd_handover() {
   # An empty base: the task states the new module shape and names no diff, since the reviewer
   # ignores that statement beside a diff, and mtf-facts then runs without --base and --diff.
   jq -e '.new_module == true' "$RUN/index.json" > /dev/null 2>&1 && nm=true && mbl=""
-  rm -rf "$RUN/vendored"; [ "$TRIAGE" = true ] || [ "$nm" = true ] || vendored_policy "$t" "$s" "$mbl"
+  vendored_policy "$t" "$s" "$mbl" "$nm"
   vendored_equal > "$RUN/state/vendored-equal.json"
   rm -rf "$RUN/review"; mkdir "$RUN/review"
   # The reference bundle, outside a triage run: depth.json as the reviewer reads it, and

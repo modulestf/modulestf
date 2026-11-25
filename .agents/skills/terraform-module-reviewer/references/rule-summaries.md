@@ -19,7 +19,7 @@
 | `compat.type-narrowed` | A variable's type is narrowed, or a `validation` block is added or tightened, so input that was valid before is now rejected. Existing callers can fail at plan. |
 | `compat.variable-now-required` | A variable loses its `default`, gains `nullable = false` or otherwise becomes required. Every caller that did not set it fails at plan. |
 | `compat.variable-removed` | A variable or output is removed or renamed. Every caller that sets or reads it fails at plan. |
-| `compat.vendored-policy-drift` | A policy the module copies from a workload's published policy grants an action, resource or condition that the published policy at the named release lacks. The copy has drifted from its source. |
+| `compat.vendored-policy-drift` | A policy the module copies from a workload's published policy gains an action, resource or condition that the published policy at the named release lacks, or loses a restriction it keeps. The copy has drifted from its source; a grant the module already had is LOW. |
 | `compat.version-constraint-raised` | The Terraform `required_version` floor rises, or a provider minimum moves to a new major version. Callers on the old versions can no longer use the module. |
 | `coverage.argument-above-min-version` | The change adds an argument the latest provider has but the module's declared minimum provider version lacks, and leaves that minimum unchanged. Callers on the minimum version fail. |
 | `coverage.attribute-not-output` | A new resource has a stable, useful computed attribute that no output exposes, or an output yields no value in a mode the module supports. Callers cannot read the value, or index an empty element. |

@@ -3,13 +3,14 @@
 # data "aws_iam_policy_document" block from a Terraform file, evaluates nothing, and prints its
 # statements as JSON for vendored-policy.sh, or one line "unknown <reason>" when the block holds
 # anything it cannot read as literal text: a reference other than a profile substitution, a
-# function, a conditional, a heredoc, a template directive or a dynamic block inside a statement.
+# function, a conditional, a heredoc anywhere in the file, a template directive, a dynamic block, a
+# merged document, a bare block label anywhere in the file, or more than 4000 action and resource pairs.
 #
 #   perl policy-hcl.pl <file.tf> <block name> <substitutions file>
 #
 # The substitutions file holds "<expression> <value>" lines from the module profile: each
 # expression, written alone as a list element or as ${<expression>} inside a string, reads as its
-# value. Output: {"statements": [...], "dynamic": [<text>...], "merges": "<text>", "lines": [<first>,
+# value. Output: {"statements": [...], "gate": "<count or for_each text>" or null, "lines": [<first>,
 # <last>]}, the block's lines in the file, with each
 # statement {effect, action, not_action, resource, not_resource, principal, not_principal,
 # condition}, the lists sorted and null when absent. Exit 0 with either output; 2 a usage error.
@@ -42,6 +43,8 @@ defined $text or unknown("read failed");
 length($text) <= 1048576 or unknown("file over 1 mib");
 $text =~ /[^\x09\x0a\x0d\x20-\x7e]/ and unknown("unsafe text");
 $text =~ s/\r\n/\n/g;
+# A heredoc anywhere: its body could hold any text, so the brace and quote scan below cannot be trusted.
+$text =~ /<<-?[A-Za-z_]/ and unknown("heredoc");
 
 # Comments out, strings kept: a string runs to its closing quote, an interpolation ${...} inside it
 # to its matching brace, with strings nested in the interpolation followed too.
@@ -92,12 +95,6 @@ while ($i < $n) {
   $i++;
 }
 
-# The block: exactly one at the top level, found by its header, with its body to the matching brace.
-my @hits;
-while ($clean =~ /^[ \t]*data[ \t]+"aws_iam_policy_document"[ \t]+"\Q$name\E"[ \t]*\{/mg) { push @hits, pos($clean) }
-@hits or unknown("block missing");
-@hits == 1 or unknown("block repeated");
-
 # body($pos): the text from $pos to the brace that closes the block opened just before it.
 sub close_of {
   my ($s, $pos) = @_;
@@ -118,13 +115,6 @@ sub close_of {
   }
   unknown("unclosed block");
 }
-my $start = $hits[0];
-my $end = close_of($clean, $start);
-my $first = 1 + (substr($clean, 0, $start) =~ tr/\n//);
-my $last = 1 + (substr($clean, 0, $end) =~ tr/\n//);
-my $block = substr($clean, $start, $end - $start);
-$block =~ /<</ and unknown("heredoc");
-
 # items($text): the attributes and blocks of a body, in order, as [kind, name, labels, text].
 sub items {
   my ($s) = @_;
@@ -166,11 +156,21 @@ sub items {
     }
     substr($s, $p, 1) eq '{' or unknown("unsupported syntax");
     my $e = close_of($s, $p + 1);
-    push @out, ['block', $id, \@labels, substr($s, $p + 1, $e - $p - 1)];
+    push @out, ['block', $id, \@labels, substr($s, $p + 1, $e - $p - 1), $p + 1, $e];
     $p = $e + 1;
   }
   return @out;
 }
+
+# The block: read the whole file as top-level blocks, so a block Terraform evaluates is never missed
+# (a bare label is unsupported syntax) and text inside another block is never taken for it.
+my @hits = grep { $_->[0] eq 'block' && $_->[1] eq 'data' && @{$_->[2]} == 2
+  && $_->[2][0] eq 'aws_iam_policy_document' && $_->[2][1] eq $name } items($clean);
+@hits or unknown("block missing");
+@hits == 1 or unknown("block repeated");
+my $block = $hits[0][3];
+my $first = 1 + (substr($clean, 0, $hits[0][4]) =~ tr/\n//);
+my $last = 1 + (substr($clean, 0, $hits[0][5]) =~ tr/\n//);
 
 # A string literal, its interpolations replaced by their substitutions.
 sub str {
@@ -270,23 +270,28 @@ sub statement {
   return \%st;
 }
 
-my (@statements, @dynamic, @merges);
+my (@statements, $gate);
+my $cells = 0;
 for my $it (items($block)) {
   my ($k, $id, $labels, $v) = @$it;
   if ($k eq 'block') {
-    if ($id eq 'statement' && !@$labels) { push @statements, statement($v) }
-    elsif ($id eq 'dynamic' && @$labels == 1 && $labels->[0] eq 'statement') {
-      (my $t = $v) =~ s/\s+/ /g;
-      push @dynamic, $t;
-    } else { unknown("unsupported attribute") }
+    unknown("dynamic statement") if $id eq 'dynamic';
+    $id eq 'statement' && !@$labels or unknown("unsupported attribute");
+    my $st = statement($v);
+    # The tuple product, capped here before anything expands it.
+    $cells += (defined $st->{action} ? scalar @{$st->{action}} : 1) * (defined $st->{resource} ? scalar @{$st->{resource}} : 1);
+    $cells <= 4000 or unknown("too large");
+    push @statements, $st;
     next;
   }
-  if ($id eq 'count') { next }
-  if ($id =~ /^(source_policy_documents|override_policy_documents|policy_id|version)$/) {
+  unknown("merged documents") if $id eq 'source_policy_documents' || $id eq 'override_policy_documents';
+  if ($id eq 'count' || $id eq 'for_each') {
+    !defined $gate or unknown("unsupported attribute");
     (my $t = $v) =~ s/\s+/ /g;
-    push @merges, "$id = $t";
+    $gate = "$id = $t";
     next;
   }
+  if ($id eq 'version') { str($v) eq '2012-10-17' or unknown("unsupported attribute"); next }
   unknown("unsupported attribute");
 }
-print JSON::PP->new->canonical->encode({ statements => \@statements, dynamic => \@dynamic, merges => join("\n", @merges), lines => [$first, $last] }), "\n";
+print JSON::PP->new->canonical->encode({ statements => \@statements, gate => $gate, lines => [$first, $last] }), "\n";

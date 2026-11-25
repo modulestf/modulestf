@@ -85,20 +85,22 @@ blob() {
   safe_git cat-file blob "$obj" > "$3" 2> /dev/null || { echo "read failed"; return 1; }
 }
 
-# gh with the time limit of github-io.md, Allowed Commands.
+# A command with the time limit of github-io.md, Allowed Commands: gh, perl and jq alike.
 limit() {
   if command -v timeout > /dev/null; then timeout 30 "$@"
   elif command -v gtimeout > /dev/null; then gtimeout 30 "$@"
   else perl -e 'alarm 30; exec @ARGV' "$@"; fi
 }
 TAG_RE='^v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$'
-# tags <upstream> <file>...: each release tag the files name in a GitHub address of the upstream.
+# tags <upstream> <file>...: each release tag the files name in a GitHub address of the upstream,
+# the address as GitHub writes it, followed by a delimiter or punctuation that ends a sentence.
 tags() {
-  local up="$1"; shift
-  grep -ohiE "github\\.com/${up//./\\.}/(releases/tag|blob|tree)/v[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}([/)\"'> ]|$)" "$@" 2> /dev/null |
-    sed -E 's#^.*/(releases/tag|blob|tree)/##; s#[/)"'"'"'> ]$##' | sort -u
+  local up="$1" x; shift
+  grep -ohE "github\\.com/${up//./\\.}/(releases/tag|blob|tree)/v[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}([/)\"'> .,;:]|$)" "$@" 2> /dev/null |
+    sed -E 's#^.*/(releases/tag|blob|tree)/##; s#[/)"'"'"'> .,;:]$##' | sort -u |
+    while IFS= read -r x; do [[ "$x" =~ $TAG_RE ]] && printf '%s\n' "$x"; done
 }
-# older <a> <b>: a is a lower version than b.
+# older <a> <b>: a is a lower version than b. Both match TAG_RE.
 older() {
   local IFS=. a b i; read -r -a a <<< "${1#v}"; read -r -a b <<< "${2#v}"
   for i in 0 1 2; do
@@ -120,6 +122,39 @@ commit_of() {
   fi
   [ "$t" = commit ] && [[ "$s" =~ $sha_re ]] && printf '%s\n' "$s"
 }
+# latest <upstream>: the tag of the upstream's latest release now, or nothing.
+latest() {
+  local r
+  r="$(limit gh api "repos/$1/releases/latest" 2> /dev/null | jq -r '.tag_name // empty' 2> /dev/null)"
+  [[ "$r" =~ $TAG_RE ]] && printf '%s\n' "$r"
+}
+# wiring <commit> <dir> <block> <file>: the reference lines of the document in the directory's .tf
+# files, trimmed and sorted, into the file; or prints why not: an override or JSON configuration
+# file, a file it cannot read, or more than 200 files.
+wiring() {
+  local e name obj n=0 ref="data.aws_iam_policy_document.$3"
+  : > "$4"
+  local ps=(); [ -z "$2" ] || ps=("$2/")
+  e="$(safe_git ls-tree -z "$1" -- ${ps[@]+"${ps[@]}"} 2> /dev/null | tr '\0' '\n')" || { echo "read failed"; return 1; }
+  while IFS= read -r x; do
+    [[ "$x" =~ ^([0-7]{6})\ ([a-z]+)\ ([0-9a-f]{40,64})$'\t'(.+)$ ]] || continue
+    name="${BASH_REMATCH[4]##*/}" obj="${BASH_REMATCH[3]}"
+    case "$name" in
+      override.tf | *_override.tf | override.tf.json | *_override.tf.json) echo "override file"; return 1 ;;
+      *.tf.json) echo "json configuration"; return 1 ;;
+      *.tf) ;;
+      *) continue ;;
+    esac
+    [ "${BASH_REMATCH[2]}" = blob ] || { echo "not a regular file"; return 1; }
+    n=$((n + 1)); [ "$n" -le 200 ] || { echo "too many files"; return 1; }
+    safe_git cat-file blob "$obj" 2> /dev/null | head -c 1048577 > "$W/wire.tf" || { echo "read failed"; return 1; }
+    [ "$(wc -c < "$W/wire.tf")" -le 1048576 ] || { echo "file over 1 mib"; return 1; }
+    grep -F "$ref" "$W/wire.tf" | grep -E "${ref//./\\.}(\\[(0|\\*)\\])?\\.json" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' |
+      grep -vE '^(#|//|/\*|\*)' >> "$4"
+  done <<< "$e"
+  sort -o "$4" "$4"
+}
+unk() { sed -n 's/^unknown \([a-z0-9 ]*\)$/\1/p' "$1"; }
 
 n=0
 while read -r path block up upath; do
@@ -141,46 +176,66 @@ while read -r path block up upath; do
     elif [ "$why" != absent ]; then line "unknown base $why"; continue
     fi
   fi
-  # The static reads of head and base. A block the change leaves as it was gets no line.
-  perl "$HERE/policy-hcl.pl" "$d/head.tf" "$block" "$W/subst" > "$d/head.json" 2> /dev/null || { line "unknown head unreadable"; continue; }
+  # The static reads of head and base, each with the time limit. A block the change leaves as it
+  # was, statements and gate alike, gets no line.
+  limit perl "$HERE/policy-hcl.pl" "$d/head.tf" "$block" "$W/subst" > "$d/head.json" 2> /dev/null || { line "unknown head unreadable"; continue; }
   if [ -n "$basefile" ]; then
-    perl "$HERE/policy-hcl.pl" "$basefile" "$block" "$W/subst" > "$d/base.json" 2> /dev/null || { line "unknown base unreadable"; continue; }
-    jq -e -s '(.[0] | del(.lines)) == (.[1] | del(.lines))' "$d/head.json" "$d/base.json" > /dev/null 2>&1 && continue
+    limit perl "$HERE/policy-hcl.pl" "$basefile" "$block" "$W/subst" > "$d/base.json" 2> /dev/null || { line "unknown base unreadable"; continue; }
+    limit jq -e -s '(.[0] | del(.lines)) == (.[1] | del(.lines))' "$d/head.json" "$d/base.json" > /dev/null 2>&1 && continue
   fi
-  r="$(sed -n 's/^unknown \([a-z0-9 ]*\)$/\1/p' "$d/head.json")"
+  r="$(unk "$d/head.json")"
   [ -z "$r" ] || { line "unknown $r"; continue; }
+  bstate=null
   if [ -n "$basefile" ]; then
-    r="$(sed -n 's/^unknown \([a-z0-9 ]*\)$/\1/p' "$d/base.json")"
-    if [ "$r" = "block missing" ]; then : > "$d/base.json"
+    r="$(unk "$d/base.json")"
+    if [ "$r" = "block missing" ]; then bstate=absent
     elif [ -n "$r" ]; then line "unknown base $r"; continue
-    elif ! jq -e -s '.[0].dynamic == .[1].dynamic' "$d/head.json" "$d/base.json" > /dev/null 2>&1; then
-      line "unknown dynamic statements changed"; continue
-    elif ! jq -e -s '.[0].merges == .[1].merges' "$d/head.json" "$d/base.json" > /dev/null 2>&1; then
-      line "unknown merged documents changed"; continue
+    else bstate=read
     fi
+  elif [ -n "$base" ]; then bstate=absent
   fi
-  [ -s "$d/base.json" ] || echo null > "$d/base.json"
-  # The tag: the one release tag the pull request body and the head file name for this upstream,
-  # never older than the newest one the base file names.
+  # The gate: a count or for_each on the document must read the same at the base.
+  hg="$(jq -r '.gate // ""' "$d/head.json")"
+  if [ "$bstate" = read ]; then
+    [ "$hg" = "$(jq -r '.gate // ""' "$d/base.json")" ] || { line "unknown gate changed"; continue; }
+  elif [ -n "$hg" ]; then line "unknown gate without base"; continue
+  fi
+  # The wiring: no override or JSON file beside the document, a policy that reads it, and the same
+  # reference lines at the base.
+  dir="$(dirname "$path")"; [ "$dir" != . ] || dir=""
+  why="$(wiring "$head" "$dir" "$block" "$d/wire-head")" || { line "unknown $why"; continue; }
+  [ -s "$d/wire-head" ] || { line "unknown not wired"; continue; }
+  if [ "$bstate" = read ]; then
+    why="$(wiring "$base" "$dir" "$block" "$d/wire-base")" || { line "unknown base $why"; continue; }
+    cmp -s "$d/wire-head" "$d/wire-base" || { line "unknown wiring changed"; continue; }
+  fi
+  # The tag: the one release tag the pull request body and the head file name for this upstream.
+  # It is evidence only when it is newer than the newest tag the base file names, or, failing that,
+  # when it is the upstream's latest release now. A tag older than the base's never is.
   t="$(tags "$up" "$body" "$d/head.tf")"
   [ -n "$t" ] || { line "unknown no tag"; continue; }
   [ "$(wc -l <<< "$t" | tr -d ' ')" = 1 ] || { line "unknown tag ambiguous"; continue; }
-  if [ -n "$basefile" ]; then
-    bt=""
+  bt=""
+  if [ "$bstate" = read ]; then
     while IFS= read -r x; do [ -n "$x" ] && { [ -z "$bt" ] || older "$bt" "$x"; } && bt="$x"; done < <(tags "$up" "$basefile")
-    if [ -n "$bt" ] && older "$t" "$bt"; then line "unknown tag older"; continue; fi
+  fi
+  if [ -n "$bt" ] && older "$t" "$bt"; then line "unknown tag older"; continue; fi
+  if [ -z "$bt" ] || ! older "$bt" "$t"; then
+    lt="$(latest "$up")" || { line "unknown latest unreadable"; continue; }
+    [ "$t" = "$lt" ] || { line "unknown tag not newest"; continue; }
   fi
   sha="$(commit_of "$up" "$t")" || { line "unknown tag not found"; continue; }
   limit gh api "repos/$up/contents/$upath?ref=$sha" > "$d/up.raw" 2> /dev/null &&
     jq -er --arg p "$upath" 'select(.type == "file" and .path == $p and .encoding == "base64" and .size <= 1048576) | .content' \
       "$d/up.raw" 2> /dev/null | tr -d '\n' | base64 -d > "$d/up.json" 2> /dev/null && [ -s "$d/up.json" ] ||
     { line "unknown fetch failed"; continue; }
-  if ! jq -r -n -L "$HERE" --slurpfile h "$d/head.json" --slurpfile b "$d/base.json" --slurpfile u "$d/up.json" '
+  [ "$bstate" = read ] || echo null > "$d/base.json"
+  if ! limit jq -r -n -L "$HERE" --slurpfile h "$d/head.json" --slurpfile b "$d/base.json" --slurpfile u "$d/up.json" --arg bs "$bstate" '
       include "vendored-policy";
-      try ({head: ($h[0] | tuples), base: ($b[0] | if . == null then null else tuples end), up: ($u[0] | upstream | tuples)}
-        | diff_lines) catch ("unknown " + (if type == "string" and test("^[a-z ]{1,40}$") then . else "upstream unreadable" end)),
-      ($h[0].dynamic | length | select(. > 0) | "not compared \(.) dynamic statements"),
-      ($h[0].merges | select(. != "") | "not compared merged documents")' > "$d/lines" 2> /dev/null; then
+      try ({head: ($h[0] | tuples), up: ($u[0] | upstream | tuples),
+            base: (if $bs == "read" then ($b[0] | tuples) elif $bs == "absent" then "absent" else null end)}
+        | diff_lines) catch ("unknown " + (if type == "string" and test("^[a-z ]{1,40}$") then . else "upstream unreadable" end))' \
+      > "$d/lines" 2> /dev/null; then
     line "unknown upstream unreadable"; continue
   fi
   if grep -q '^unknown ' "$d/lines"; then line "$(grep -m1 '^unknown ' "$d/lines")"; continue; fi
