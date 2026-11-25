@@ -176,7 +176,7 @@ affected_to() { # mtf-facts, root, files list, out: the affected report, or no f
 # --- the post record (github-io.md, The Post Record) ---------------------------------------
 
 # This user's own store of the reviews this skill posted, outside every run directory: one
-# directory per pull request, two files per review id. Fails, so nothing is read or kept, with no
+# directory per pull request, three files per review id. Fails, so nothing is read or kept, with no
 # absolute XDG_STATE_HOME and no HOME, a base of / or with a . or .. segment, or a repository name of dots.
 records_dir() { # owner/name, number
   local b="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
@@ -208,7 +208,11 @@ META_JQ='type == "object" and keys == ["body_sha256", "carried_sha256", "format"
 EARLIER_JQ='def plain: type == "string" and length > 0 and length <= 1024
     and test("^(\\.|(?!/)(?!.*\\\\)(?!(.*/)?\\.\\.(/|$)).+)$") and (test("[\\x00-\\x1f\\x7f`]") | not);
   def earlier_id: type == "string" and test("^F-[0-9]{3,4}(@[0-9]{1,16})?$");
-  def seven: type == "object" and keys == ["file", "id", "line", "rule_id", "severity", "suggested_fix", "summary"];'
+  def seven: type == "object" and keys == ["file", "id", "line", "rule_id", "severity", "suggested_fix", "summary"];
+  def chain_reasons: ["missing", "edited", "mismatch", "unreadable", "broken"];
+  def carried_ok: (type == "array" and length <= 1000
+      and all(.[]; seven and (.id | earlier_id) and (.severity | IN("CRITICAL", "HIGH", "MEDIUM"))))
+    or (type == "object" and keys == ["broken_chain"] and (.broken_chain | IN(chain_reasons[])));'
 # The form of the reviewer's git-safety.md, in the clone: ls-tree and cat-file read the head's
 # objects only and run no driver, filter or textconv, with pathspecs taken literally.
 safe_clone_git() {
@@ -238,12 +242,15 @@ read_earlier() { # owner/name, number, token user id, prefix
           jq -e -L "$HERE" 'include "stage-contract"; stage_ok("review-plan")' "$pl" > /dev/null 2>&1 &&
           [ "$(sha_file "$pl")" = "$(jq -r '.plan_sha256' "$m")" ] &&
           [ "$(sha_file "$c")" = "$(jq -r '.carried_sha256' "$m")" ] &&
-          jq -e "$EARLIER_JQ"' type == "array" and length <= 1000 and all(.[]; seven)' "$c" > /dev/null 2>&1; then
+          jq -e -s "$EARLIER_JQ"' length == 1 and (.[0] | carried_ok)' "$c" > /dev/null 2>&1; then
         if [ "$(jq -r '.body_sha256' "$m")" != "$(jq -r '.own_review.body_sha256' "$h")" ]; then rec=edited
         elif ! jq -e -n --slurpfile m "$m" --slurpfile p "$pl" --slurpfile h "$h" --arg t "$1#$2" --arg u "$3" --arg pre "$4" '
             $m[0].review_id == $h[0].own_review.id and $m[0].state == "CHANGES_REQUESTED" and $m[0].target == $t
             and $p[0].pin.target == $t and $p[0].pin.head_sha == $h[0].own_review.commit_id
             and ($p[0].reviewer_id | tostring) == $u and $p[0].module_prefix == $pre' > /dev/null 2>&1; then rec=mismatch
+        # The review replaced a block of ours whose record did not check out: its requests were never
+        # judged, so ours stands until it is dismissed or a person confirms an APPROVE.
+        elif jq -e 'type == "object"' "$c" > /dev/null 2>&1; then rec=broken
         else rec=ok
         fi
       fi
@@ -269,20 +276,27 @@ read_earlier() { # owner/name, number, token user id, prefix
 # carried.json, beside plan.json: the earlier blocking findings this review left not resolved, each
 # with its id and, when it has none yet, @ and the id of the review that raised it, paths
 # repository-relative as in plan.json. A record of this review keeps it, so a block that replaces
-# ours keeps every open item of ours; [] when there is no earlier record or every item is resolved.
+# ours keeps every open item of ours; [] when there is no earlier block or every item is resolved.
+# Over a block of ours whose record did not check out (missing, edited, mismatch, unreadable or an
+# earlier broken chain), {"broken_chain": <reason>}: its requests are unknown, so a later run reads
+# the chain as broken and our block stands. An empty record came from a host signal or a refuted
+# state, which every run reads again, and carries [].
 write_carried() { # out directory, run file
   local o="$1"
   jq -n --slurpfile r "$2" --slurpfile e "$( [ -f "$RUN/earlier.json" ] && echo "$RUN/earlier.json" || echo /dev/null)" --arg p "$PREFIX" '
     def repo_path: if $p == "" then . elif . == "." then $p else $p + "/" + . end;
     ($e[0] // null) as $e | ($r[0].earlier // null) as $x
-    | if $e == null or $e.record != "ok" or $x == null or $x.record != "ok" or $x.review_id != $e.review_id then []
+    | if $e == null or $e.record == "empty" then []
+      elif $e.record != "ok" then {broken_chain: $e.record}
+      elif $x == null or $x.record != "ok" or $x.review_id != $e.review_id then []
       else [$x.items[] | select(.judgment != "resolved") | .id as $id | $e.findings[] | select(.id == $id)
         | {id: (if $id | test("@") then $id else "\($id)@\($e.review_id)" end), rule_id, severity,
            file: (.file | repo_path), line, summary, suggested_fix}] end' > "$o/carried.json.tmp" 2> /dev/null &&
-    jq -e "$EARLIER_JQ"' type == "array" and all(.[]; seven and (.id | earlier_id))' "$o/carried.json.tmp" > /dev/null 2>&1 &&
+    jq -e "$EARLIER_JQ"' carried_ok' "$o/carried.json.tmp" > /dev/null 2>&1 &&
     mv -- "$o/carried.json.tmp" "$o/carried.json" ||
     { rm -f "$o/carried.json.tmp"; echo "carried: not written, the record of this review keeps no open earlier finding"; return 0; }
-  echo "carried: $o/carried.json ($(jq length "$o/carried.json") open earlier findings)"
+  jq -r '"carried: \(input_filename) " + (if type == "array" then "(\(length) open earlier findings)"
+    else "(broken chain: \(.broken_chain), our block stands until dismissed)" end)' "$o/carried.json"
 }
 
 # --- prepare ---------------------------------------------------------------------------------
@@ -1506,7 +1520,7 @@ cmd_record() {
   jq -e -L "$HERE" 'include "stage-contract"; stage_ok("review-plan") and (.reviewer_id | type == "number")' "$p" > /dev/null 2>&1 ||
     fail "record refused: plan.json is not a review plan with the token user's id"
   [ -f "$k" ] && [ ! -L "$k" ] && [ "$(wc -c < "$k")" -le 4194304 ] &&
-    jq -e "$EARLIER_JQ"' type == "array" and length <= 1000 and all(.[]; seven and (.id | earlier_id))' "$k" > /dev/null 2>&1 ||
+    jq -e -s "$EARLIER_JQ"' length == 1 and (.[0] | carried_ok)' "$k" > /dev/null 2>&1 ||
     fail "record refused: the output directory holds no carried.json of earlier findings"
   repo="$(jq -r '.pin.base_repo' "$p")"; pr="$(jq -r '.pin.number' "$p")"
   [[ "$repo" =~ $repo_re ]] && [[ "$pr" =~ ^[1-9][0-9]{0,9}$ ]] && [ "$(jq -r '.pin.target' "$p")" = "$repo#$pr" ] ||

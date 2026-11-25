@@ -354,7 +354,7 @@ def depth_bound($h): .binding.head_sha == $h.head_sha and $h.merge_base != null 
 # --- Our earlier review (verdict.md, Our Earlier Block): the run file's earlier, from the record
 # of the posting login's own CHANGES_REQUESTED that prepare read back and the reviewer's judgment
 # of each of its blocking findings at the head. Only a resolved finding carries where.
-def earlier_records: ["ok", "missing", "edited", "mismatch", "unreadable", "empty"];
+def earlier_records: ["ok", "missing", "edited", "mismatch", "unreadable", "empty", "broken"];
 def judgments: ["resolved", "partly", "not-resolved", "not-judged"];
 def valid_earlier:
   type == "object" and keys == ["commit_id", "items", "record", "review_id"]
@@ -760,6 +760,7 @@ def texts: {
   "earlier-reason-mismatch": "the record kept of it does not match it",
   "earlier-reason-unreadable": "the record kept of it could not be read",
   "earlier-reason-empty": "the record kept of it lists no blocking finding",
+  "earlier-reason-broken": "it replaced an earlier block of this account that could not be checked, whose requests were never judged",
   "earlier-resolved": "resolved at {location}",
   "earlier-partly": "partly resolved",
   "earlier-not-resolved": "not resolved",
@@ -1410,8 +1411,8 @@ def render($in):
   | earlier_of($in) as $e
   # APPROVE replaces the block only where the ladder itself would approve: every earlier blocking
   # finding resolved, and approve, or approve with nits whose only cause is LOW findings, so that
-  # without them the ladder lands at rule 8. A covered skip, a jobless Checks signal or any other
-  # rule 7 cause proposes COMMENT.
+  # the same ladder reading no finding lands at rule 8, a trigger a LOW finding explains staying
+  # explained. A covered skip, a jobless Checks signal or any other rule 7 cause proposes COMMENT.
   | (earlier_cleared($e) and ($v.verdict == "approve"
        or ($v.verdict == "approve with nits" and (($l | .findings = [] | ladder).rule == 8)))) as $replace
   | ($v.verdict | proposed_event($h.state; own_block($h); $replace)) as $proposed

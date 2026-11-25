@@ -3331,5 +3331,12 @@ mutate "a carried id refused" 's/\(@\[0-9\]\{1,16\}\)\?\$"\)\)/\$"))/' t_own_car
 mutate "the confirmed event ignored" 's/\(\$in\.confirmed \/\/ \$proposed\) as \$event/\$proposed as \$event/' t_own_confirmed
 mutate "result.json taking the confirmed event" 's/event: \$proposed, tier: \$tier,/event: \$event, tier: \$tier,/' t_own_confirmed
 
+# A record whose chain is broken: a fresh block replaced a block of ours that could not be checked.
+t_own_broken() { render "$NONE" "$HOWN" "" "$(erun ebroken broken '[]')"
+  [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md" &&
+  grep -qxF "This account requested changes on \`${BASE:0:7}\`, and that review cannot be checked against this head: it replaced an earlier block of this account that could not be checked, whose requests were never judged." "$O/comment.md"; }
+t_own_broken; check "earlier review: a broken chain keeps the block, approve proposes COMMENT and says why" $?
+mutate "a broken chain refused as a record state" 's/, "empty", "broken"\]/, "empty"]/' t_own_broken
+
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi
