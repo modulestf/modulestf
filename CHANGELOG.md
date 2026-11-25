@@ -1,3 +1,12 @@
+## [0.12.25](https://github.com/modulestf/modulestf/compare/v0.12.24...v0.12.25) (2026-11-25)
+
+
+### Bug Fixes
+
+* **pr-review:** Cover an example the plan proxy refuses by design when a planned example witnesses the change ([#213](https://github.com/modulestf/modulestf/issues/213)) ([77f49ed](https://github.com/modulestf/modulestf/commit/77f49eda3283daf0e86ba12a05b164443ec013ec))
+
+
+
 ## [0.12.24](https://github.com/modulestf/modulestf/compare/v0.12.23...v0.12.24) (2026-11-25)
 
 
