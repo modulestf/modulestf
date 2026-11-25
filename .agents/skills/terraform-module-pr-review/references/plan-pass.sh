@@ -590,9 +590,9 @@ done
 
 # Opt-in and tools: a failed check stops the pass here, with a note for the record
 case "$GMODE" in laptop|runner) ;; *) echo "plan pass not run: mode unknown"; exit 0 ;; esac
-# A plan diff directory is repository-relative: "." or plain segments, never "..".
-printf '%s' "$DIFFDIRS" | grep -Evx '\.|[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*' | grep -q . &&
-  { echo "plan pass not run: plan diff directory refused"; exit 0; }
+# A plan diff directory is repository-relative: "." or plain segments, never "..". Any other
+# loses only its own plan diff.
+DIFFDIRS="$(printf '%s' "$DIFFDIRS" | grep -Ex '\.|[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*')"
 case "$PHASE" in
   '') ;;
   init) [ "$GMODE" = runner ] || { echo "plan pass not run: phase needs runner mode"; exit 0; } ;;
@@ -962,23 +962,46 @@ def nokey: gsub("\\[(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)\\]"; ""); # a whole quoted o
 '
 # The plan diff of one example (plan-pass.md, Plan diff): two saved plans of the merge base
 # example's HCL, against the base module ($a) and against the head module ($b), compared here and
-# nowhere else. Per address, index keys kept, the address sets and each change's actions, after,
-# after_unknown, after_sensitive and replace_paths; then the root outputs whole. Unknown and
-# sensitive values are compared by their markers. Prints {result, differs}: equal or differs, or
-# unknown for a plan that errored, deferred a change or holds a change whose markers are not
-# objects. differs names the addresses, index keys removed, and outputs that differ: names only,
-# no value leaves this program.
+# nowhere else, with the provider schema of the head module plan ($s). Per address, index keys
+# kept, the address sets and each change's actions, after, after_unknown, after_sensitive and
+# replace_paths; then the root outputs whole. A value unknown on either side is equal only when
+# the schema marks its attribute computed-only, never set by configuration: an unknown
+# configurable attribute, one the schema does not name, a wholly unknown nested block and a type
+# the schema lacks are unknown, and so are a plan that errored, one that deferred a change and a
+# change whose markers are not objects. Prints {result, differs}: differs names the addresses,
+# index keys removed, and outputs that differ: names only, no value leaves this program.
 # shellcheck disable=SC2016 # a jq program
 PDIFF_JQ='
 def nokey: gsub("\\[(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)\\]"; "");
 def rc: [.resource_changes[] | select(type == "object" and (.address | type == "string"))];
 def part: .change | {actions, after, after_unknown, after_sensitive, replace_paths};
 def marker: . == null or . == false or type == "object";
+def has_true: [.. | select(. == true)] != [];
+# Every true leaf of an after_unknown value at block level ($blk) sits in a computed-only attribute.
+def computed_only($blk):
+  if . == null or . == false then true
+  elif type != "object" then false
+  elif $blk == null then has_true | not
+  else all(to_entries[]; .key as $k | .value as $v
+    | if ($blk.attributes[$k] | type) == "object" then
+        ($v | has_true | not) or ($blk.attributes[$k] | .computed == true and (.optional | not) and (.required | not))
+      elif ($blk.block_types[$k] | type) == "object" then
+        $blk.block_types[$k].block as $nb
+        | if $v == null or $v == false then true
+          elif ($v | type) == "array" then all($v[]; computed_only($nb))
+          elif ($v | type) == "object" then ($v | computed_only($nb))
+          else false end
+      else ($v | has_true | not) end)
+  end;
+def block_of($c): ($s[0].provider_schemas[$c.provider_name // ""]
+    | if $c.mode == "data" then .data_source_schemas else .resource_schemas end | .[$c.type // ""].block) // null;
 $a[0] as $A | $b[0] as $B
 | if any(($A, $B); type != "object" or .errored == true or (.resource_changes | type) != "array"
       or (((.deferred_changes // []) | length) > 0)
       or any(.resource_changes[]; type != "object" or (.change | type) != "object"
              or (.change.after_unknown | marker | not) or (.change.after_sensitive | marker | not)))
+  then {result: "unknown", differs: []}
+  elif any(($A, $B) | rc[]; block_of(.) as $blk | ($blk == null) or (.change.after_unknown | computed_only($blk) | not))
   then {result: "unknown", differs: []}
   else ($A | rc | map({key: .address, value: part}) | from_entries) as $x
     | ($B | rc | map({key: .address, value: part}) | from_entries) as $y
@@ -997,13 +1020,22 @@ pd_show() {
   CAP_BYTES=16777216 CAP_QUIET_ERR=1 run_capped "$(left 120)" "$PLAN/out/$1-show.json" "${TFENV[@]}" \
     terraform show -json -no-color "$PLAN/saved/$1.tfplan"
 }
-# pd_compare <base show> <head module show>: prints the plan-diff line and, for equal, sets
-# PDADDR to the head module plan's addresses as {"addresses": [...]} (ADDR_JQ, names only).
+# pd_schema <key>: the provider schema of the key's example directory, read with no credentials
+# and no network from the providers its init installed, into out/<key>-schema.json; a failure
+# leaves the file empty, which the comparison reads as no schema.
+pd_schema() {
+  AK=; SK=; ST=; set_env "$1"
+  CAP_BYTES=268435456 CAP_QUIET_ERR=1 run_capped "$(left 120)" "$PLAN/out/$1-schema.json" "${TFENV[@]}" \
+    terraform providers schema -json -no-color || : > "$PLAN/out/$1-schema.json"
+}
+# pd_compare <base show> <head module show> <schema>: prints the plan-diff line and, for equal,
+# sets PDADDR to the head module plan's addresses and local module calls, the merge base
+# example's, as {"addresses": [...], "module_calls": {...}} (ADDR_JQ, names only).
 pd_compare() {
   PDADDR=
-  r="$(jq -n -c --slurpfile a "$1" --slurpfile b "$2" "$PDIFF_JQ" 2> /dev/null)" || r='{"result":"unknown","differs":[]}'
+  r="$(jq -n -c --slurpfile a "$1" --slurpfile b "$2" --slurpfile s "$3" "$PDIFF_JQ" 2> /dev/null)" || r='{"result":"unknown","differs":[]}'
   case "$(printf '%s' "$r" | jq -r .result)" in
-    equal) PDADDR="$(jq -c --arg h '' --arg e '' "$ADDR_JQ"' | {addresses}' "$2" 2> /dev/null)"
+    equal) PDADDR="$(jq -c --arg h '' --arg e '' "$ADDR_JQ"' | {addresses, module_calls}' "$2" 2> /dev/null)"
       if [ -n "$PDADDR" ]; then echo "plan-diff: equal"; else echo "plan-diff: not-run show"; fi ;;
     differs) printf '%s' "$r" | jq -r '"plan-diff: differs" + (.differs | map(" " + .) | join(""))' ;;
     *) echo "plan-diff: unknown" ;;
@@ -1025,8 +1057,9 @@ mixed_ready() {
 example_changed() {
   ! clone_git diff --quiet --no-ext-diff --no-textconv "$BASESHA" HEAD -- "$1" > /dev/null 2>&1
 }
-# The plan diff directories (--diff-dir), one per line; reaches <example> <addresses file>: the
-# example is one of them, or a local module call of its root module resolves to one.
+# The plan diff directories (--diff-dir), one per line; reaches <example> <addresses file>: a
+# local module call of the example's root module resolves to one, outside the example's own
+# directory, whose files the plan diff restores from the merge base.
 reaches() {
   printf '%s\n' "$DIFFDIRS" | jq -R -s -e --arg d "$1" --slurpfile x "$2" '
     def resolve($d): ($d + "/" + .) | split("/")
@@ -1034,7 +1067,8 @@ reaches() {
           elif $p == ".." then (if length == 0 then null else .[:-1] end) else . + [$p] end)
       | if . == null then null elif length == 0 then "." else join("/") end;
     (split("\n") | map(select(. != ""))) as $dd
-    | ($d | IN($dd[])) or any(($x[0].module_calls // {}) | to_entries[] | .value | strings | resolve($d); IN($dd[]))' \
+    | any(($x[0].module_calls // {}) | to_entries[] | .value | strings | resolve($d)
+        | select(. != $d and (startswith($d + "/") | not)); IN($dd[]))' \
     > /dev/null 2>&1
 }
 SHOWTO=
@@ -1088,7 +1122,7 @@ pe_plan() { # key: the credentials and the plan, then the kept line and the deni
   # plan has ended, with no credentials (plan-pass.md, Saved plans and addresses). run_capped
   # sets out, so this comes after the kept line.
   if [ -n "$SHOWTO" ]; then
-    case "$CLASS" in planned|planned-no-changes) pe_show "$1" > "$SHOWTO" ;; esac
+    case "$CLASS" in planned|planned-no-changes) pe_show "$1" > "$SHOWTO"; [ -z "$DIFFDIRS" ] || pd_schema "$1" ;; esac
   fi
 }
 plan_example() { # absolute example directory, key, root (the clone or the base worktree), saved g0 file
@@ -1126,15 +1160,17 @@ base_ready() { # the base worktree for a re-run, added once with its G0 saved fi
 pd_side() { # absolute example directory, key, root, saved g0 file: one plan of the plan diff and
   # its show, before the lock file this pass wrote is removed. Status 2: no plan; 1: no show.
   pe_init "$@"; pe_plan "$2"; rc=2
-  case "$CLASS" in planned|planned-no-changes) pd_show "$2" && rc=0 || rc=1 ;; esac
+  case "$CLASS" in planned|planned-no-changes) pd_show "$2" && rc=0 || rc=1; pd_schema "$2" ;; budget) rc=3 ;; esac
   [ -z "$INCD" ] || git ls-files --error-unmatch .terraform.lock.hcl > /dev/null 2>&1 || rm -f .terraform.lock.hcl
   return "$rc"
 }
-pd_laptop() { # repository-relative example, key: the plan diff of an example whose head planned
+pd_laptop() { # repository-relative example, key, place: the plan diff of an example whose head planned
   printf '%s\n' "$BASESHA" | grep -Eqx '[0-9a-f]{40}' && base_ready || { echo "plan-diff: not-run no-base"; return; }
   B="$(cd "$RUN/base" && pwd -P)"
   [ -d "$B/$1" ] || { echo "plan-diff: not-run absent-at-base"; return; }
+  [ "$(left 1)" -gt 0 ] || { echo "plan-diff: not-run budget"; return; }
   pd_side "$B/$1" "$2-base" "$B" "$RUN/g0-base.txt"; rc=$?
+  [ "$rc" = 3 ] && { echo "plan-diff: not-run budget"; return; }
   [ "$rc" = 2 ] && { echo "plan-diff: not-run base-plan"; return; }
   [ "$rc" = 0 ] || { echo "plan-diff: not-run show"; return; }
   hk=$2
@@ -1143,11 +1179,12 @@ pd_laptop() { # repository-relative example, key: the plan diff of an example wh
     mixed_ready "$1" || { echo "plan-diff: not-run head-module-plan"; return; }
     M="$(cd "$RUN/mixed" && pwd -P)"; hk=$2-mixed
     pd_side "$M/$1" "$hk" "$M" "$RUN/g0-mixed.txt"; rc=$?
+    [ "$rc" = 3 ] && { echo "plan-diff: not-run budget"; return; }
     [ "$rc" = 2 ] && { echo "plan-diff: not-run head-module-plan"; return; }
     [ "$rc" = 0 ] || { echo "plan-diff: not-run show"; return; }
   fi
-  pd_compare "$PLAN/out/$2-base-show.json" "$PLAN/out/$hk-show.json"
-  [ -z "$PDADDR" ] || printf '%s\n' "$PDADDR" > "$RUN/plan-addresses/plan-diff-$EXN.json"
+  pd_compare "$PLAN/out/$2-base-show.json" "$PLAN/out/$hk-show.json" "$PLAN/out/$hk-schema.json"
+  [ -z "$PDADDR" ] || printf '%s\n' "$PDADDR" > "$RUN/plan-addresses/plan-diff-$3.json"
 }
 DENIED=; NPLAN=0; NEXC=0; EXN=0; HROOT=$CROOT # plan_example moves CROOT to the base worktree for a re-run
 PHEAD=; PEX= # the head commit and the example directory for the addresses files, laptop mode only
@@ -1227,13 +1264,15 @@ if [ "$PHASE" = diff-init ]; then
   # The plan diff of an example whose head planned (Plan diff): the merge base example at the
   # base, and, when the change touches the example, the merge base example in the head tree.
   # No credentials.
+  # The decision is recorded before any init: diff reads a missing one as no evidence.
   rel_ex=$1; key="e$INDEX"
   case "$rel_ex" in /*|*..*) exit 0 ;; esac
-  base_ready || { : > "$PLAN/state/$key-diff.nobase"; exit 0; }
+  { printf '%s\n' "$BASESHA" | grep -Eqx '[0-9a-f]{40}' && base_ready; } || { : > "$PLAN/state/$key-diff.nobase"; exit 0; }
   B="$(cd "$RUN/base" && pwd -P)"
   [ -d "$B/$rel_ex" ] || { : > "$PLAN/state/$key-diff.absent"; exit 0; }
+  if example_changed "$rel_ex"; then : > "$PLAN/state/$key-diff.mixed"; else : > "$PLAN/state/$key-diff.unchanged"; fi
   init_state "$B/$rel_ex" "$key-base" "$B" "$RUN/g0-base.txt"
-  if example_changed "$rel_ex"; then
+  if [ -f "$PLAN/state/$key-diff.mixed" ]; then
     if mixed_ready "$rel_ex"; then
       M="$(cd "$RUN/mixed" && pwd -P)"; init_state "$M/$rel_ex" "$key-mixed" "$M" "$RUN/g0-mixed.txt"
     else printf '%s\n' 'plan gate G0 not evaluated' "" "" "" "" > "$PLAN/state/$key-mixed.vars"; fi
@@ -1258,13 +1297,15 @@ if [ "$PHASE" = diff ]; then
   case "$rel_ex" in /*|*..*) exit 0 ;; esac
   if [ -f "$PLAN/state/$key-diff.nobase" ]; then echo "plan-diff: not-run no-base"; exit 0; fi
   if [ -f "$PLAN/state/$key-diff.absent" ]; then echo "plan-diff: not-run absent-at-base"; exit 0; fi
-  hk=$key hd=$HROOT/$rel_ex
-  [ ! -f "$PLAN/state/$key-mixed.vars" ] || { hk=$key-mixed; hd=$RUN/mixed/$rel_ex; }
+  if [ -f "$PLAN/state/$key-diff.mixed" ]; then hk=$key-mixed hd=$RUN/mixed/$rel_ex
+  elif [ -f "$PLAN/state/$key-diff.unchanged" ]; then hk=$key hd=$HROOT/$rel_ex
+  else echo "plan-diff: not-run head-module-plan"; exit 0; fi
   { cd "$RUN/base/$rel_ex" 2> /dev/null && [ -f "$PLAN/saved/$key-base.tfplan" ]; } || { echo "plan-diff: not-run base-plan"; exit 0; }
   pd_show "$key-base" || { echo "plan-diff: not-run show"; exit 0; }
   { cd "$hd" 2> /dev/null && [ -f "$PLAN/saved/$hk.tfplan" ]; } || { echo "plan-diff: not-run head-module-plan"; exit 0; }
   pd_show "$hk" || { echo "plan-diff: not-run show"; exit 0; }
-  pd_compare "$PLAN/out/$key-base-show.json" "$PLAN/out/$hk-show.json"
+  pd_schema "$hk"
+  pd_compare "$PLAN/out/$key-base-show.json" "$PLAN/out/$hk-show.json" "$PLAN/out/$hk-schema.json"
   [ -z "$PDADDR" ] || echo "plan-diff-json: $PDADDR"
   exit 0
 fi
@@ -1289,10 +1330,13 @@ fi
 rm -rf -- "$RUN/plan-addresses" && mkdir -m 700 "$RUN/plan-addresses"
 [ "$GMODE" = laptop ] && PHEAD="$(clone_git rev-parse --verify -q 'HEAD^{commit}' 2> /dev/null)"
 NALL=$#
-for rel_ex in "$@"; do
-  EXN=$((EXN + 1))
+STOP=; : > "$PLAN/out/pdq"
+# example_block <example>: one example's record lines, written to its block file so a plan diff,
+# run after every head, joins its own block (Plan diff).
+example_block() {
+  rel_ex=$1
   echo "example: $rel_ex"
-  case "$rel_ex" in /*|*..*) echo "plan: plan gate G0 not an example directory"; continue ;; esac
+  case "$rel_ex" in /*|*..*) echo "plan: plan gate G0 not an example directory"; return ;; esac
   key="e$EXN" # unique per example: two directories may share a last name
   SHOWTO=; PEX=; [ "$GMODE" = laptop ] && SHOWTO="$RUN/plan-addresses/addresses-$EXN.json" && PEX=$rel_ex
   plan_example "$HROOT/$rel_ex" "$key" "$HROOT" "$RUN/g0.txt"
@@ -1303,13 +1347,12 @@ for rel_ex in "$@"; do
   [ -n "$VERSIONS" ] && echo "modules: ${VERSIONS%;}"
   # A denial on data source reads alone is re-run at the merge base too (Design skips)
   [ -n "$DENIED" ] && echo "denied: $DENIED"
-  # The plan diff of a planned example that reaches a plan diff directory (Plan diff); the
-  # head's class, kept line and scope stay the example's.
+  # The plan diff of a planned example that reaches a plan diff directory waits for every head
   case "$CLASS" in
     planned|planned-no-changes)
       if [ -n "$DIFFDIRS" ] && [ -f "$RUN/plan-addresses/addresses-$EXN.json" ] &&
           reaches "$rel_ex" "$RUN/plan-addresses/addresses-$EXN.json"; then
-        HC=$CLASS; pd_laptop "$rel_ex" "$key"; CLASS=$HC; DENIED=
+        printf '%s %s\n' "$EXN" "$rel_ex" >> "$PLAN/out/pdq"
       fi ;;
   esac
   if [ "$CLASS" = code-error ] || [ -n "$DENIED" ]; then
@@ -1329,8 +1372,21 @@ for rel_ex in "$@"; do
       echo "base: not available"
     fi
   fi
-  if [ "$CLASS" = 'plan pass ended: credentials' ]; then echo "credentials: $CREDWHY"; break; fi
+  if [ "$CLASS" = 'plan pass ended: credentials' ]; then echo "credentials: $CREDWHY"; STOP=1; fi
+}
+for rel_ex in "$@"; do
+  EXN=$((EXN + 1))
+  example_block "$rel_ex" > "$PLAN/out/block.$EXN"
+  [ -z "$STOP" ] || break
 done
+# The plan diffs, each in its own example's block, once every head has planned
+if [ -z "$STOP" ]; then
+  while read -r n rel_ex <&3; do
+    pd_laptop "$rel_ex" "e$n" "$n" >> "$PLAN/out/block.$n"
+  done 3< "$PLAN/out/pdq"
+fi
+n=0
+while [ "$n" -lt "$EXN" ]; do n=$((n + 1)); cat "$PLAN/out/block.$n"; done
 # The examples after the one that ended the pass: never started, unlike one the caller left out
 shift "$EXN"
 for rel_ex in "$@"; do echo "not reached: $rel_ex"; done

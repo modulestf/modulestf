@@ -51,7 +51,7 @@ addr="$(mktemp)"; pdaddr="$(mktemp)"; trap 'rm -f "$addr" "$pdaddr"' EXIT
 for af in "$record"/addresses-*.json "$record"/plan-diff-*.json; do
   an="${af##*/addresses-}"; an="${an##*/plan-diff-}"; an="${an%.json}"
   [[ "$an" =~ ^[1-9][0-9]{0,5}$ ]] && [ -f "$af" ] && [ ! -L "$af" ] && [ "$(wc -c < "$af")" -le 1048576 ] || continue
-  case "$af" in */plan-diff-*) to="$pdaddr" ;; *) to="$addr" ;; esac
+  case "${af##*/}" in plan-diff-*) to="$pdaddr" ;; *) to="$addr" ;; esac
   jq -c --arg n "$an" '{($n): .}' "$af" >> "$to" 2> /dev/null || true
 done
 
@@ -86,6 +86,8 @@ def clean: . as $x
        and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z"))] | unique | .[:1000]
   | . as $s
   | {addresses: $s,
+     module_calls: ($x.module_calls? | if type == "object" then with_entries(select((.key | test("^[A-Za-z0-9_-]{1,64}$"))
+                  and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$")))) else {} end),
      attributes: (($x.attributes? | if type == "object" then . else {} end)
        | with_entries(select(.key as $k | ($s | index($k)) != null)
            | .value |= ([(if type == "array" then .[] else empty end)
@@ -114,7 +116,7 @@ def main:
   | map(
       if .plan == null then error("refused: a block with no plan line") else . end
       | (.plan | split(" | ")[0] | head_class) as $c
-      | (if $c == "planned" or $c == "planned-no-changes" then ($addr[.n | tostring] // {}) | clean
+      | (if $c == "planned" or $c == "planned-no-changes" then ($addr[.n | tostring] // {}) | clean | del(.module_calls)
          else {addresses: [], attributes: {}} end) as $ad
       | {path,
          head: {class: $c, plan: (if $c == "planned" then (.plan | split(" | ")[1:] | join(" | ") | counts) // null else null end)},
@@ -123,8 +125,8 @@ def main:
         + (if .pdiff == null then {} else (.pdiff | pdiff) as $d
            | if $d.result == "equal" and ($c | IN("planned", "planned-no-changes") | not)
              then error("refused: a plan diff of an example that did not plan") else . end
-           | {plan_diff: ($d + {addresses: (if $d.result == "equal" then ($pd[.n | tostring] // {}) | clean | .addresses
-                                             else [] end)})} end))
+           | (if $d.result == "equal" then ($pd[.n | tostring] // {}) | clean else {addresses: [], module_calls: {}} end) as $pc
+           | {plan_diff: ($d + {addresses: $pc.addresses, module_calls: $pc.module_calls})} end))
   | {schema_version: 1, head: $head, merge_base: $mb, refused_hosts: $refused, examples: .};
 try main catch (if type == "string" and startswith("refused: ") then . else "refused: a malformed record" end)
 '

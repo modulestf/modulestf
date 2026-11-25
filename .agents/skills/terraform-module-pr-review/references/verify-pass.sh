@@ -630,7 +630,7 @@ def pnorm: if test("^(equal|unknown)$") then {result: ., reason: null}
             addr: {addresses: .addresses, attributes: .attributes},
             pd: (.plan_diff? // null | if type == "object" then {result: (.result | if type == "string" then . else "unknown" end),
                    reason: (.reason // null)} else null end),
-            pdaddr: (.plan_diff.addresses? // null)}]
+            pdaddr: (.plan_diff | if type == "object" then {addresses, module_calls} else null end)}]
       else error("not a plan record") end' "$HOSTED" > "$W/blocks.json" 2> /dev/null || die "--hosted is not a plan record"
   fi
   # The planned addresses of each block, from addresses-<n>.json in --addresses: data only
@@ -679,11 +679,14 @@ def pnorm: if test("^(equal|unknown)$") then {result: ., reason: null}
          module_calls: ($ad.module_calls | with_entries(.value |= resolve($d)) | with_entries(select(.value != null))),
          # The plan diff of a planned example (plan-pass.md, Plan diff): an equal one with no
          # addresses to read is not-run show.
+         # The module calls are those of the merge base example, resolved as at the head.
          pd: (if $k == null or $k.pd == null or ($h | planned | not) then null
-              else ($k.pdaddr // ($pdaddr[$k.n | tostring].addresses? // null)) as $pa
-              | if $k.pd.result != "equal" then $k.pd + {addresses: []}
-                elif $pa == null then {result: "not-run", reason: "show", addresses: []}
-                else $k.pd + {addresses: ({addresses: $pa} | clean | .addresses)} end end),
+              else ($k.pdaddr // $pdaddr[$k.n | tostring] // null) as $pa
+              | if $k.pd.result != "equal" then $k.pd + {addresses: [], module_calls: {}}
+                elif ($pa | type) != "object" or ($pa.addresses | type) != "array" then {result: "not-run", reason: "show", addresses: [], module_calls: {}}
+                else ($pa | clean) as $pc
+                  | $k.pd + {addresses: $pc.addresses,
+                      module_calls: ($pc.module_calls | with_entries(.value |= resolve($d)) | with_entries(select(.value != null)))} end end),
          covered: (($h | planned) or ($h == "code-error"
            and ($bs | IN("reproduces at base", "new under this change", "new under this change (absent at base)")))),
          why: (if $noplan != "" then "no AWS profile named" elif $h == "not run" then "not reached by the plan pass"

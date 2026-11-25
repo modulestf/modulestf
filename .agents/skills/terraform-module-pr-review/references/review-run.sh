@@ -564,10 +564,11 @@ cmd_plan() {
   if [ -n "$profile" ] && [ "$(depth)" != light ]; then
     while IFS= read -r d; do plain_ok "$d" && dirs+=("$d"); done < <(plan_dirs)
     # The directories of the changes a plan diff can clear (plan-pass.md, Plan diff), from the
-    # classifier; none when it did not run.
+    # classifier; none when it did not run. One outside the pattern loses only its own plan diff.
     if [ -f "$RUN/behaviour/behaviour.json" ] && [ -n "$MB" ]; then
-      while IFS= read -r d; do pdd+=(--diff-dir "$d"); done < <(bash "$HERE/behaviour-pass.sh" diff-dirs \
-        --out "$RUN/behaviour" --prefix "$PREFIX" 2> /dev/null)
+      while IFS= read -r d; do
+        [[ "$d" =~ ^(\.|[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*)$ ]] && pdd+=(--diff-dir "$d")
+      done < <(bash "$HERE/behaviour-pass.sh" diff-dirs --out "$RUN/behaviour" --prefix "$PREFIX" 2> /dev/null)
     fi
     if [ "${#dirs[@]}" -gt 0 ] && [ "$mode" = runner ]; then
       bash "$HERE/plan-runner/run-pass.sh" --build --clone "$RUN/runner-clone" --record "$RUN/plan-record" \

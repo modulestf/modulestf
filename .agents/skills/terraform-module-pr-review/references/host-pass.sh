@@ -664,10 +664,13 @@ def addrs: type == "array" and length <= 1000 and all(.[]; type == "string" and 
   and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z"));
 # The plan diff of an example, when present (plan-pass.md, Plan diff): a result, a reason only
 # for not-run, and addresses only for equal, of an example whose head planned.
-def pdiff($head): type == "object" and keys == ["addresses", "reason", "result"]
+def pdiff($head): type == "object" and keys == ["addresses", "module_calls", "reason", "result"]
   and (if .result == "not-run" then .reason | IN("no-base", "absent-at-base", "base-plan", "head-module-plan", "show", "budget")
        else (.result | IN("equal", "differs", "unknown")) and .reason == null end)
   and (.addresses | addrs) and (.result == "equal" or .addresses == [])
+  and (.module_calls | type == "object" and length <= 1000 and all(keys[]; test("^[A-Za-z0-9_-]{1,64}\\z"))
+       and all(.[]; type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?\\z")))
+  and (.result == "equal" or .module_calls == {})
   and (.result != "equal" or ($head.class | IN("planned", "planned-no-changes")));
 "examples/" as $ex
 | if ($p | length) != 1 or ($p[0] | type) != "object" then "plan record content"

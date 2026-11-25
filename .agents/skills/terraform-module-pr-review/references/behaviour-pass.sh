@@ -126,23 +126,29 @@ def covers($files):
       | select(test("(^|/)\\.(git|terraform)(/|$)") | not)]
      - [$o.entries[] | .path, (.previous_path // empty)]) == [];
 # The closed list of the plan diff (behaviour-pass.md, The Run Object): an added change whose claim is
-# that existing callers are unaffected. An added variable; an added output; an argument, a block
-# or a module call argument the change adds that reads one variable the change adds in the same
-# directory and nothing else. Never a changed default or type of an existing variable.
+# that existing callers are unaffected. An added variable; an added output; an argument or block
+# the change adds to a managed resource whose value has the shape the unexercised mark reads:
+# exactly var.<name>, or a dynamic block null-guarded on it, where the change adds that variable
+# with a null default in the same directory ($nv). Never a module call argument, which the plan
+# shows only through the child, nor a changed default or type of an existing variable.
 def tdir: if test("/") then sub("/[^/]*$"; "") else "." end;
 def meta_args: ["provider", "count", "for_each", "depends_on", "lifecycle", "provisioner", "connection"];
-def added_vars($b): [$b.triggers[] | select(.change_kind == "added" and (.address | type == "string" and test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$")))
-  | {dir: (.file | tdir), name: (.address | ltrimstr("var."))}];
-def diff_kind($t; $b): if $t.change_kind != "added" or ($t.address | type != "string") then null
+def diff_kind($t; $b; $nv): if $t.change_kind != "added" or ($t.address | type != "string") then null
   elif ($t.address | test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$")) and $t.category == "unclassified-change"
     and (($t.also_categories // []) == []) then "variable"
   elif ($t.address | test("^output\\.[A-Za-z_][A-Za-z0-9_-]*$")) and $t.category == "locals-outputs-change"
     and (($t.also_categories // []) == []) then "output"
-  elif ($t.address | test("^([a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*|module\\.[A-Za-z_][A-Za-z0-9_-]*)$"))
+  elif ($t.address | test("^[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*$"))
     and ([$t.category, ($t.also_categories // [])[]] - ["unclassified-change", "dynamic-block-change"] == [])
     and ($t.attribute | type == "string" and (sub("^dynamic\\."; "") | split(".")[0] | IN(meta_args[]) == false))
-    and $t.contextual_refs == [] and ($t.referenced_inputs | type == "array" and length == 1)
-    and ({dir: ($t.file | tdir), name: $t.referenced_inputs[0].name} | IN(added_vars($b)[])) then "argument"
+    and $t.contextual_refs == [] and ($t.head_expr | type == "string")
+    and (($t.referenced_inputs | type) == "array" and ($t.referenced_inputs | length) == 1)
+    and ($t.referenced_inputs[0] | .name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]*$"))
+    and ($t.referenced_inputs[0].name as $n | $t.head_expr as $h
+      | ([{dir: ($t.file | tdir), name: $n}] - $nv == [])
+      and (if $t.category == "dynamic-block-change"
+           then ($h | test("^var\\.\($n) == null \\? \\[\\] : \\[[^?:]*\\]$") or test("^var\\.\($n) != null \\? \\[[^?:]*\\] : \\[\\]$"))
+           else $h == ("var." + $n) end)) then "argument"
   else null end;
 def valid_claims: type == "object" and (.claims | type == "array" and length <= 48
   and all(.[]; type == "object" and (.claim_id | cid)) and (map(.claim_id) | length == (unique | length)));
@@ -324,10 +330,13 @@ evaluate() {
     pd="$(jq -c --arg p "$prefix" '
       def rel: if $p == "" then . elif . == $p then "." elif startswith($p + "/") and (split("/") | all(. != "..")) then .[($p | length) + 1:]
         else "/" + . end;
+      def relm: if $p == "" then . elif . == $p then "." elif startswith($p + "/") and (split("/") | all(. != "..")) then .[($p | length) + 1:]
+        else null end;
       if (.plan_diff | type == "array" and all(.[]; type == "object" and (.dir | type == "string")
             and (.result | IN("equal", "differs", "unknown", "not-run")) and (.reason == null or (.reason | type == "string"))
-            and (.addresses | type == "array" and length <= 1000 and all(.[]; type == "string"))))
-      then .plan_diff | map(.dir |= rel) else [] end' "$pdiff" 2> /dev/null)" || pd='[]'
+            and (.addresses | type == "array" and length <= 1000 and all(.[]; type == "string"))
+            and (.module_calls | type == "object" and all(.[]; type == "string"))))
+      then .plan_diff | map((.dir |= rel) | .module_calls |= with_entries((.value |= relm) | select(.value != null))) else [] end' "$pdiff" 2> /dev/null)" || pd='[]'
   fi
   set -- claims-eval --behaviour "$out/behaviour.json" --ladder "$ladder" --head-sha "$head" --base-sha "$bsha"
   [ -n "$claims" ] && set -- "$@" --claims "$claims"
@@ -412,30 +421,37 @@ evaluate() {
            and $t.levels == [] and $et.state == "unverifiable" and ($et | has("complete") or has("outstanding") or has("evidence_digest") | not)
            and ($t.follows | type == "array" and length > 0 and all(.[]; IN($m[]))) and loaded($t);
     # Identical (behaviour-pass.md, The Run Object): a trigger on the closed list whose merge base
-    # examples planned the same against the base and the head module. Every example planned
-    # with its addresses read whole; the eligible ones are those that are the directory of the trigger
-    # or call it directly, less those absent at the base; at least one, each equal, and one of
-    # them plans the address the change sits in: the resource, the instances of the module call, or
-    # for a variable or an output any address of that module instance.
+    # examples planned the same against the base and the head module. Every example planned with
+    # its addresses read whole, and the trigger sits in no example directory. An example counts by
+    # the HCL that was compared: one whose plan diff is equal and whose merge base module calls
+    # call the directory of the trigger is eligible; one absent at the base, or equal and not
+    # calling it, is not; any other example that calls it at the head, or whose files the change
+    # touches, leaves the trigger as it was. At least one is eligible, and one of them plans the
+    # address the change sits in under its call: the resource, or for a variable or an output any
+    # address of that module instance. The examples are listed sorted, at most 20.
     def pd_of($d): first($pd[] | select(.dir == $d)) // null;
     def repo_dir: if startswith("/") then .[1:] elif $pre == "" then . elif . == "." then $pre else $pre + "/" + . end;
-    def prefixes($e; $d): (if $e.dir == $d then [""] else [] end)
-      + [(($e.module_calls // {}) | to_entries[] | select(.value == $d) | "module.\(.key).")];
-    def identical($t; $et): ($t.file | tdir) as $d | diff_kind($t; $b) as $k
+    def calls($mc; $d): [($mc // {}) | to_entries[] | select(.value == $d) | "module.\(.key)."];
+    def under($x): . == $x or startswith($x + "/");
+    def identical($t; $et): ($t.file | tdir) as $d | diff_kind($t; $b; $nv) as $k
       | if $k == null or $et.state != "unverifiable" or ($et | has("complete") or has("outstanding") or has("evidence_digest"))
            or ($l.coverage.class != "complete")
            or (all($l.coverage.examples[]; (.head | IN("planned", "planned-no-changes"))
                  and (.addresses | type == "array" and length > 0 and length < 1000)) | not)
+           or any($l.coverage.examples[]; .dir as $x | $d | under($x))
         then [] else
-          [$l.coverage.examples[] | select(.dir == $d or ((.module_calls // {}) | to_entries | any(.value == $d)))
-           | {e: ., p: pd_of(.dir)} | select(.p.reason != "absent-at-base")] as $el
+          [$l.coverage.examples[] | . as $e | pd_of($e.dir) as $p
+           | (calls($e.module_calls; $d) != []) as $head
+           | any($b.entries[]; .path | startswith($e.dir + "/")) as $edited
+           | if $p.reason == "absent-at-base" then empty
+             elif $p.result == "equal" then (if calls($p.module_calls; $d) != [] then {e: $e, p: $p} else empty end)
+             elif $head or $edited then {block: true}
+             else empty end] as $el
           | ($t.address | gsub("\\[[^\\]]*\\]"; "")) as $a
-          | if $el != [] and all($el[]; .p.result == "equal")
-               and any($el[]; .e as $e | .p.addresses as $pa | prefixes($e; $d)[] as $x
-                     | if $k == "argument" and ($a | startswith("module.") | not) then any($pa[]; . == $x + $a)
-                       elif $k == "argument" then any($pa[]; startswith($x + $a + "."))
-                       else any($pa[]; startswith($x)) end)
-            then [$el[].e.dir | repo_dir] else [] end end;
+          | if $el != [] and all($el[]; has("block") | not)
+               and any($el[]; .p.addresses as $pa | calls(.p.module_calls; $d)[] as $x
+                     | if $k == "argument" then any($pa[]; . == $x + $a) else any($pa[]; startswith($x)) end)
+            then [$el[].e.dir | repo_dir] | unique | .[:20] else [] end end;
     {run: {status: "ran", reason: null,
        triggers: [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
                   | {id: $t.id, file: $t.file, line: $t.line, category: $t.category, state: $et.state}
@@ -630,8 +646,11 @@ diff_dirs() {
   [ -f "$out/behaviour.json" ] || die "run classify first"
   prefix="${prefix%/}"
   case "$prefix" in /* | *..* | .) die "--prefix must be repository-relative" ;; esac
-  jq -r --arg pre "$prefix" "$JQ_DEFS"' . as $b
-    | [.triggers[] | select(diff_kind(.; $b) != null) | .file | tdir
+  # The null-default variables classify read; none when it wrote none
+  local nv='[]'
+  [ ! -f "$out/nullvars.json" ] || nv="$(jq -c 'if type == "array" then . else [] end' "$out/nullvars.json" 2> /dev/null)" || nv='[]'
+  jq -r --arg pre "$prefix" --argjson nv "${nv:-[]}" "$JQ_DEFS"' . as $b
+    | [.triggers[] | select(diff_kind(.; $b; $nv) != null) | .file | tdir
        | if $pre == "" then . elif . == "." then $pre else $pre + "/" + . end] | unique[]' "$out/behaviour.json"
 }
 

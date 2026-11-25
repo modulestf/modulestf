@@ -94,9 +94,12 @@ done
 pname="${profile:-smoke}"
 [[ "$pname" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]] || die "invalid profile name"
 [ -z "$base" ] || [[ "$base" =~ ^[0-9a-f]{40}$ ]] || die "--base must be a full commit SHA"
+# A plan diff directory outside the pattern loses only its own plan diff
+kept=()
 for d in ${diffdirs[@]+"${diffdirs[@]}"}; do
-  [[ "$d" =~ ^(\.|[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*)$ ]] || die "refusing plan diff directory: $d"
+  [[ "$d" =~ ^(\.|[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*)$ ]] && kept+=("$d")
 done
+diffdirs=(${kept[@]+"${kept[@]}"})
 [[ "$budget_min" =~ ^[1-9][0-9]{0,3}$ ]] || die "--budget-minutes must be a whole number of minutes, 1 to 9999"
 budget=$((budget_min * 60))
 if [ -n "$tmp_parent" ]; then
@@ -506,14 +509,15 @@ for ex in "$@"; do
 done
 
 # The plan diff (../plan-pass.md, Plan diff): each example whose head planned, with the
-# addresses this script accepted, that is a plan diff directory or calls one through a local
-# module source of its root module, resolved against the example directory.
+# addresses this script accepted, that calls a plan diff directory through a local module source
+# of its root module, resolved against the example directory, outside the example's own directory.
 # shellcheck disable=SC2016 # a jq program
 reaches_jq='def resolve($d): ($d + "/" + .) | split("/")
     | reduce .[] as $p ([]; if . == null then null elif $p == "" or $p == "." then .
         elif $p == ".." then (if length == 0 then null else .[:-1] end) else . + [$p] end)
     | if . == null then null elif length == 0 then "." else join("/") end;
-  ($d | IN($dd[])) or any((.module_calls // {}) | to_entries[] | .value | strings | resolve($d); IN($dd[]))'
+  any((.module_calls // {}) | to_entries[] | .value | strings | resolve($d)
+    | select(. != $d and (startswith($d + "/") | not)); IN($dd[]))'
 diffs=()
 if [ -n "$base" ] && [ "${#diffdirs[@]}" -gt 0 ]; then
   dd="$(printf '%s\n' "${diffdirs[@]}" | jq -R . | jq -s -c .)"
@@ -576,7 +580,7 @@ if [ "${#deferred[@]}" -gt 0 ] || [ "${#diffs[@]}" -gt 0 ]; then
 fi
 # The comparison of each plan diff, read outside the containers that ran the head's code, as
 # the show phase is. Only a plan-diff line in its grammar reaches the record, and only an equal
-# one's addresses, reduced by clean_addresses; anything else is not-run show.
+# one's addresses and local module calls, reduced by clean_addresses; anything else is not-run show.
 pdiff_re='^plan-diff: (equal|unknown|differs( [A-Za-z0-9_.-]+){0,50}|not-run (no-base|absent-at-base|base-plan|head-module-plan|show|budget))$'
 for n in ${diffs[@]+"${diffs[@]}"}; do
   rem=$(left)
@@ -591,7 +595,7 @@ for n in ${diffs[@]+"${diffs[@]}"}; do
   line="$(grep -E -m 1 '^plan-diff: ' "$TMPRUN/diff.out" || true)"
   [[ "$line" =~ $pdiff_re ]] || line='plan-diff: not-run show'
   if [ "$line" = 'plan-diff: equal' ]; then
-    sed -n 's/^plan-diff-json: //p' "$TMPRUN/diff.out" | head -n 1 | jq -c "$clean_addresses"' | {addresses}' \
+    sed -n 's/^plan-diff-json: //p' "$TMPRUN/diff.out" | head -n 1 | jq -c "$clean_addresses"' | {addresses, module_calls}' \
       > "$TMPRUN/pdaddr.$n" 2> /dev/null || true
     if [ -s "$TMPRUN/pdaddr.$n" ]; then mv "$TMPRUN/pdaddr.$n" "$record/plan-diff-$n.json"; else line='plan-diff: not-run show'; fi
     rm -f "$TMPRUN/pdaddr.$n"
