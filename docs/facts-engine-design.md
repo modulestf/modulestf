@@ -1,6 +1,6 @@
 # Deterministic facts engine for the module reviewer
 
-Status: design, not implemented.
+Status: P0, P1, P2 and P5 are built. The P2 A/B and P3 are open, and P4 is built in part. No phase is dropped. [Phases](#phases) gives each phase's state, checked on 2026-11-25 against `modulestf/facts` v0.8.0, its changelog and README, and this repository. The engine has since grown commands this design did not plan: `affected`, `depth`, `behaviour`, `claims-eval`, `fixture-check`, `profile-check` and `profile-snapshot`. The facts README describes them.
 
 ## Problem
 
@@ -288,14 +288,14 @@ Expected levers, largest first: a smaller static prefix (cache writes); fewer tu
 
 ## Phases
 
-| Phase | Scope | Exit |
-|-------|-------|------|
-| P0 | Rule audit (all registry columns), synthetic oracles, merge fixtures, handoff and interface-diff JSON schemas, core-feature table. Docs and fixtures only. | Every rule classified, and the audit reviewed by a second agent |
-| P1 | `mtf-facts` step, pristine extraction, manifest, envelope, `tool` tier, schema handoff. Shadow mode: output logged, not merged. `lint` ships for local use on the same code path. | Golden tests green; runtime and memory targets met; failure rate measured |
-| P2 | Candidates, output envelope, merge, judgment variant. A/B test against the full variant. | Acceptance criteria met on the baseline PR and the fixtures |
-| P3 | Candidate promotions; `confirm` step; per-rule `confirm_class` moves; Sonnet-class evaluation of the judgment pass; checked triage model variable. | Per-rule promotion gate; match rule per rule and class |
-| P4 | Incremental reuse with a dependency contract; large-change split threshold tuned again with the new projected context. | Cost and time measured again |
-| P5 | `ledger` and `schema-diff`; profile constants blocks; maintainer skill steps name the commands with their fallbacks. Can start after P1, independent of P2 to P4. | Parity and maintainer acceptance criteria met; maintainer skill change reviewed by a second agent |
+| Phase | Scope | Exit | State |
+|-------|-------|------|-------|
+| P0 | Rule audit (all registry columns), synthetic oracles, merge fixtures, handoff and interface-diff JSON schemas, core-feature table. Docs and fixtures only. | Every rule classified, and the audit reviewed by a second agent | Built. The audit is the reviewer's `rule-facts.md`. The schemas and the core-feature table shipped in facts v0.1.0-rc.1, and the oracle and merge fixtures now live in facts `testdata/`. |
+| P1 | `mtf-facts` step, pristine extraction, manifest, envelope, `tool` tier, schema handoff. Shadow mode: output logged, not merged. `lint` ships for local use on the same code path. | Golden tests green; runtime and memory targets met; failure rate measured | Built. `lint` shipped in facts v0.1.0-rc.1; the registry, change map and schema handoff in v0.2.0-rc.1. Shadow mode is the reviewer's Facts comparison note in `facts-engine.md`. |
+| P2 | Candidates, output envelope, merge, judgment variant. A/B test against the full variant. | Acceptance criteria met on the baseline PR and the fixtures | Built, exit open. Candidates, `bundle` and `merge` shipped in facts v0.2.0-rc.2. The judgment variant is in the skills behind `MODULESTF_FACTS_VARIANT`, which stays `full`. The A/B has not run. |
+| P3 | Candidate promotions; `confirm` step; per-rule `confirm_class` moves; Sonnet-class evaluation of the judgment pass; checked triage model variable. | Per-rule promotion gate; match rule per rule and class | Open. Only the confirm output schema exists (facts v0.1.0-rc.1). There is no `confirm` command, and every `candidate` rule's `confirm_class` is still `lead`. |
+| P4 | Incremental reuse with a dependency contract; large-change split threshold tuned again with the new projected context. | Cost and time measured again | Built in part, in the skills, not the engine. Incremental reviews carry findings by the registry's Carry column since modulestf v0.9.1. A large change is reviewed over a budget, not split, since v0.12.14. Cost and time are not measured again. |
+| P5 | `ledger` and `schema-diff`; profile constants blocks; maintainer skill steps name the commands with their fallbacks. Can start after P1, independent of P2 to P4. | Parity and maintainer acceptance criteria met; maintainer skill change reviewed by a second agent | Built. `ledger` and `schema-diff` shipped in facts v0.2.0-rc.2, and the profile constants input in v0.2.0-rc.1. The maintainer skill runs `lint`, `ledger` and `schema-diff` with their fallbacks (`facts-commands.md`). |
 
 Leftover P1 items move to P2.
 
