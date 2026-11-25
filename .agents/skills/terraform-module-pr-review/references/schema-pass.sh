@@ -383,7 +383,8 @@ cache_trim() {
     tail -n +$((MAX_CACHE_ENTRIES + 1)) | while IFS= read -r x; do rm -rf "$x"; done
 }
 # A cache directory: not a symbolic link, owned by the user, writable by neither group nor others.
-private_dir() { [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -z "$(find "$1" -maxdepth 0 \( -perm -0020 -o -perm -0002 \))" ]; }
+# find -H reads a link's target, so each test holds alone on any find: a link's own mode differs.
+private_dir() { [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -z "$(find -H "$1" -maxdepth 0 \( -perm -0020 -o -perm -0002 \))" ]; }
 
 # One provider version's schema from the mirror into an empty directory: the three assets,
 # the checksums, the manifest, the decompressed size and the JSON shape, as schema-pass.md

@@ -783,7 +783,7 @@ k_bad() { k_croot && [ -z "$(find "$TMP/cache-shared" -mindepth 1)" ]; }
 mutant cache-unchecked 's/^    if \[ -z "\$r" \]; then/    if :; then/' c_cache k_tamper
 mutant cache-no-fallback 's/^    rm -rf "\$e"$/    echo "$r"; return/' c_cache k_tamper
 mutant cache-not-stored 's/^  \[ -z "\$e" \] || cache_put "\$e" "\$d" "\$sf"$/  :/' c_cache k_tamper
-mutant cache-root-unchecked 's/ && \[ -z "\$(find "\$1" -maxdepth 0 .*$/; }/' c_bad k_bad
+mutant cache-root-unchecked 's/ && \[ -z "\$(find -H "\$1" -maxdepth 0 .*$/; }/' c_bad k_bad
 mutant cache-link-followed 's/ && \[ ! -L "\$1" \]//' c_lbad k_croot
 mutant cache-subdirectory-unchecked 's/^      private_dir "\$SCHEMA_CACHE\/\${MODULESTF_SCHEMA_MIRROR%\/\*}" && //' c_sbad k_sbad
 mutant cache-partial-used 's/^  rm -f "\$2\/manifest.json" "\$2\/\$3"$/  :/; s/^    \[ "\$f" != SHA256SUMS \] || \[ ! -f "\$d\/\$f" \] || continue/    [ ! -f "$d\/$f" ] || continue/' c_pcache k_partial
