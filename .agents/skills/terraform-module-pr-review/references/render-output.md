@@ -146,5 +146,5 @@ The [repair turn](facts-variant.md#repair-turn) writes one file, `model-output.r
 
 - The run is still render-only. It never posts, never runs the command in [Writing](github-io.md#writing), and proposes no action beside the body.
 - [Rule 1](../SKILL.md#rule-1-nothing-is-posted-without-confirmation), [Rule 3](../SKILL.md#rule-3-the-never-do-list) and [Rule 4](../SKILL.md#rule-4-identity-is-asserted-twice) are unchanged. Writing these files is not a confirmation, not a write to the host, and not an identity check.
-- [Cleanup](github-io.md#cleanup) still deletes the run directory. The output directory lies outside it, so the files written there outlive the run; nothing else does.
+- [Cleanup](github-io.md#cleanup) still deletes the run directory. The output directory lies outside it, so the files written there outlive the run; nothing else does but the schema pass's [mirror cache](schema-pass.md#mirror-cache).
 - The adapter owns the rest: who may start a run, which event it sends, if any, any footer it adds to the body, and the write itself. `proposed_event` is data for the adapter, computed without the render-only rows and the self-authored row of [verdict.md](verdict.md#clamps), not a proposal this run makes.

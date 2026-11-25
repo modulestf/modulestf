@@ -379,12 +379,15 @@ cache_put() { # entry, directory, schema file name
 # entry used), and the temporary directory of a run killed part-way removed after an hour.
 cache_trim() {
   find "$CACHE" -mindepth 1 -maxdepth 1 -type d -name '.put.*' -mmin +60 -exec rm -rf {} + 2> /dev/null
-  find "$CACHE" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -exec ls -1dt {} + 2> /dev/null |
+  find "$CACHE" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -name '*_*-v[0-9]*' -exec ls -1dt {} + 2> /dev/null |
     tail -n +$((MAX_CACHE_ENTRIES + 1)) | while IFS= read -r x; do rm -rf "$x"; done
 }
-# A cache directory: not a symbolic link, owned by the user, writable by neither group nor others.
-# find -H reads a link's target, so each test holds alone on any find: a link's own mode differs.
-private_dir() { [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -z "$(find -H "$1" -maxdepth 0 \( -perm -0020 -o -perm -0002 \))" ]; }
+# A cache directory: owned by the user and writable by neither group nor others, read as a
+# positive answer, so a find that fails refuses it.
+private_dir() { [ -d "$1" ] && [ -O "$1" ] && [ -n "$(find -H "$1" -maxdepth 0 ! -perm -0020 ! -perm -0002 2> /dev/null)" ]; }
+# A path that is its own physical path: no symbolic link in any component, no . or .., no
+# trailing or doubled slash.
+physical() { [ "$(CDPATH= cd -P -- "$1" 2> /dev/null && pwd -P)" = "$1" ]; }
 
 # One provider version's schema from the mirror into an empty directory: the three assets,
 # the checksums, the manifest, the decompressed size and the JSON shape, as schema-pass.md
@@ -403,7 +406,7 @@ get_schema() { # provider, version, directory
       echo "$r"; return
     fi
     r="$(check_schema "$prov" "$ver" "$d" "$sf")"
-    if [ -z "$r" ]; then touch "$e" 2> /dev/null; return 0; fi
+    if [ -z "$r" ]; then touch -c "$e" 2> /dev/null; return 0; fi
     rm -rf "$e"
     rm -f "$d/manifest.json" "$d/$sf" "$d/sums" "$d/schema.json"
   elif [ -n "$e" ]; then rm -rf "$e" # an entry not usable whole is dropped, so the download stores it again
@@ -449,17 +452,18 @@ if [[ -n "$MODULESTF_SCHEMA_MIRROR" && ! "$MODULESTF_SCHEMA_MIRROR" =~ $mirror_r
   echo "schema pass: MODULESTF_SCHEMA_MIRROR is not owner/name; no mirror"
   MODULESTF_SCHEMA_MIRROR=""
 fi
-# The mirror cache across runs (schema-pass.md, Mirror Cache): an absolute path with no trailing
-# slash, and it and its <owner>/<name> directories each private_dir, else not used and one line
-# says so. The directories under the root are made only once the root passed.
+# The mirror cache across runs (schema-pass.md, Mirror Cache): an absolute physical path, and it
+# and its <owner>/<name> directories each private_dir, else not used and one line says so. The
+# directories under the root are made only once the root passed.
 CACHE=""
 if [ -n "$MODULESTF_SCHEMA_MIRROR" ] && [ -n "${SCHEMA_CACHE:-}" ]; then
-  if [[ "$SCHEMA_CACHE" == /?* && "$SCHEMA_CACHE" != */ ]]; then
+  if [[ "$SCHEMA_CACHE" == /?* ]]; then
     (umask 077 && mkdir -p "$SCHEMA_CACHE") 2> /dev/null
-    if private_dir "$SCHEMA_CACHE"; then
+    if physical "$SCHEMA_CACHE" && private_dir "$SCHEMA_CACHE"; then
       (umask 077 && mkdir -p "$SCHEMA_CACHE/${MODULESTF_SCHEMA_MIRROR%/*}") 2> /dev/null
       private_dir "$SCHEMA_CACHE/${MODULESTF_SCHEMA_MIRROR%/*}" && (umask 077 && mkdir -p "$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR") 2> /dev/null &&
-        private_dir "$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR" && CACHE="$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR"
+        private_dir "$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR" && physical "$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR" &&
+        CACHE="$SCHEMA_CACHE/$MODULESTF_SCHEMA_MIRROR"
     fi
   fi
   [ -n "$CACHE" ] || echo "schema pass: mirror cache not used"

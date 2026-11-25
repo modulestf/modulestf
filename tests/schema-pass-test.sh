@@ -36,6 +36,8 @@ chmod +x "$TMP/bin/terraform"
 cat > "$TMP/bin/cp" <<'EOF2'
 #!/bin/bash
 if [ -n "${CP_FAIL:-}" ] && [ "$#" = 3 ] && [ "$2" = "$CP_FAIL" ]; then /bin/cp "$1" "$3"; exit 1; fi
+# CP_MAKE names an entry another run stores while this one copies into its temporary directory.
+if [ -n "${CP_MAKE:-}" ] && [[ "${@: -1}" == */.put.*/ ]]; then mkdir -p "$CP_MAKE" && echo other > "$CP_MAKE/marker"; fi
 exec /bin/cp "$@"
 EOF2
 chmod +x "$TMP/bin/cp"
@@ -427,7 +429,8 @@ ln -s "$C" "$TMP/cache-link"
 mkdir -p "$TMP/cache-g" "$TMP/cache-o" && chmod 0770 "$TMP/cache-g" && chmod 0702 "$TMP/cache-o"
 mkdir -p "$TMP/cache-sub/modulestf" && chmod 0700 "$TMP/cache-sub" && chmod 0777 "$TMP/cache-sub/modulestf"
 nbad=0
-for bad in relative/cache "$TMP/cache-shared" "$TMP/cache-link" "$TMP/cache-link/" "$TMP/cache-g" "$TMP/cache-o" "$TMP/cache-sub"; do
+for bad in relative/cache "$TMP/cache-shared" "$TMP/cache-link" "$TMP/cache-link/" "$TMP/cache-link/." "$TMP/cache-g/../cache-link" \
+  "$TMP/cache-g" "$TMP/cache-o" "$TMP/cache-sub"; do
   SCHEMA_CACHE="$bad" D="$(mk hist_thing "$HP" "$HT" "")" run "cache-bad-$((++nbad))"
   k_croot && [ -z "$(find "$TMP/cache-shared" "$TMP/cache-g" "$TMP/cache-o" -mindepth 1)" ] && [ ! -e relative ] &&
     [ -z "$(find "$TMP/cache-sub/modulestf" -mindepth 1)" ]
@@ -452,14 +455,24 @@ c_trim() {
     touch -t 202101010000 "$C/modulestf/terraform-schema-mirror/example_old-v1.0.$i"; done
   touch -t 202001010000 "$(entry 1.0.0)" "$(entry 1.8.0)"
   mkdir -p "$C/modulestf/terraform-schema-mirror/.put.stale" && touch -t 202001010000 "$C/modulestf/terraform-schema-mirror/.put.stale"
+  mkdir -p "$C/modulestf/terraform-schema-mirror/.put.fresh" "$C/modulestf/terraform-schema-mirror/notes" &&
+    touch -t 201901010000 "$C/modulestf/terraform-schema-mirror/notes"
   SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run "${1:-cache-trim}"
 }
 k_trim() {
-  same_as_since && [ "$(assets)" = 6 ] && [ "$(find "$C/modulestf/terraform-schema-mirror" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 64 ] &&
-    [ "$(find "$C/modulestf/terraform-schema-mirror" -mindepth 1 -maxdepth 1 -name 'example_hist-v*' | wc -l | tr -d ' ')" = 5 ]
+  local m="$C/modulestf/terraform-schema-mirror"
+  same_as_since && [ "$(assets)" = 6 ] && [ "$(find "$m" -mindepth 1 -maxdepth 1 -name 'example_*' | wc -l | tr -d ' ')" = 64 ] &&
+    [ "$(find "$m" -mindepth 1 -maxdepth 1 -name 'example_hist-v*' | wc -l | tr -d ' ')" = 5 ] &&
+    [ ! -e "$m/.put.stale" ] && [ -d "$m/.put.fresh" ] && [ -d "$m/notes" ]
 }
 c_trim; k_trim
-check "cache: at most 64 entries, the least recently used removed first, a read entry kept, a stale temporary directory swept" "$?"
+check "cache: at most 64 entries, the least recently used removed first, a read entry kept, a stale temporary directory swept, a fresh one and another directory kept" "$?"
+# Another run stores the entry while this one copies into its temporary directory: that entry is
+# kept, and no temporary directory is left inside it.
+c_race() { rm -rf "$(entry 1.8.0)"; CP_MAKE="$(entry 1.8.0)" SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run "${1:-cache-race}"; }
+k_race() { same_as_since && [ "$(assets)" = 2 ] && [ -f "$(entry 1.8.0)/marker" ] && [ -z "$(find "$(entry 1.8.0)" -name '.put.*')" ]; }
+c_race; k_race
+check "cache: an entry another run stores meanwhile is kept, with no temporary directory left inside it" "$?"
 
 # --- The newest release is not in the mirror yet (it runs once a day). At deep the latest stays
 # not_in_mirror, so every rule on the latest schema is an unknown as before, but the minimum, the
@@ -775,7 +788,8 @@ mutant since-counted-in-cap "s/^MAX_SHEET_BYTES=49152\$/MAX_SHEET_BYTES=$fb/;"'s
 c_cache() { rm -rf "$C" "$TMP"/run-m-cache-cold && SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run m-cache-cold && c_tamper m-cache; }
 c_pcache() { rm -rf "$C" "$TMP"/run-m-cache-cold && SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run m-cache-cold && c_partial m-cache; }
 c_tcache() { rm -rf "$C" "$TMP"/run-m-cache-cold && SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run m-cache-cold && c_trim m-cache; }
-c_lbad() { SCHEMA_CACHE="$TMP/cache-link" D="$(mk hist_thing "$HP" "$HT" "")" run m-cache-bad; }
+c_rcache() { rm -rf "$C" "$TMP"/run-m-cache-cold && SCHEMA_CACHE="$C" D="$(mk hist_thing "$HP" "$HT" "")" run m-cache-cold && c_race m-cache; }
+c_dbad() { SCHEMA_CACHE="$TMP/cache-link/." D="$(mk hist_thing "$HP" "$HT" "")" run m-cache-bad; }
 c_sbad() { SCHEMA_CACHE="$TMP/cache-sub" D="$(mk hist_thing "$HP" "$HT" "")" run m-cache-bad; }
 k_sbad() { k_croot && [ -z "$(find "$TMP/cache-sub/modulestf" -mindepth 1)" ]; }
 c_bad() { SCHEMA_CACHE="$TMP/cache-shared" D="$(mk hist_thing "$HP" "$HT" "")" run m-cache-bad; }
@@ -783,12 +797,15 @@ k_bad() { k_croot && [ -z "$(find "$TMP/cache-shared" -mindepth 1)" ]; }
 mutant cache-unchecked 's/^    if \[ -z "\$r" \]; then/    if :; then/' c_cache k_tamper
 mutant cache-no-fallback 's/^    rm -rf "\$e"$/    echo "$r"; return/' c_cache k_tamper
 mutant cache-not-stored 's/^  \[ -z "\$e" \] || cache_put "\$e" "\$d" "\$sf"$/  :/' c_cache k_tamper
-mutant cache-root-unchecked 's/ && \[ -z "\$(find -H "\$1" -maxdepth 0 .*$/; }/' c_bad k_bad
-mutant cache-link-followed 's/ && \[ ! -L "\$1" \]//' c_lbad k_croot
+mutant cache-root-unchecked 's/ && \[ -n "\$(find -H "\$1" -maxdepth 0 .*$/; }/' c_bad k_bad
+mutant cache-path-not-physical 's/^physical() { .*$/physical() { :; }/' c_dbad k_croot
+mutant cache-concurrent-store 's/ && \[ ! -e "\$1" \] && mv / \&\& mv /; s/^    \[ ! -e "\$1\/\${t##\*\/}" \] || rm -rf "\$1\/\${t##\*\/}"$/    :/' c_rcache k_race
+mutant cache-trim-any-directory "s/ ! -name '\.\*' -name '\*_\*-v\[0-9\]\*' / ! -name '.*' /" c_tcache k_trim
+mutant cache-trim-fresh-temporary 's/ -mmin +60 / /' c_tcache k_trim
 mutant cache-subdirectory-unchecked 's/^      private_dir "\$SCHEMA_CACHE\/\${MODULESTF_SCHEMA_MIRROR%\/\*}" && //' c_sbad k_sbad
 mutant cache-partial-used 's/^  rm -f "\$2\/manifest.json" "\$2\/\$3"$/  :/; s/^    \[ "\$f" != SHA256SUMS \] || \[ ! -f "\$d\/\$f" \] || continue/    [ ! -f "$d\/$f" ] || continue/' c_pcache k_partial
 mutant cache-untrimmed 's/^    cache_trim; return 0$/    return 0/' c_tcache k_trim
-mutant cache-read-not-marked 's/ touch "\$e" 2> \/dev\/null;//' c_tcache k_trim
+mutant cache-read-not-marked 's/ touch -c "\$e" 2> \/dev\/null;//' c_tcache k_trim
 mutant since-overflow-silent 's/^MAX_SINCE_DOWNLOADS=12$/MAX_SINCE_DOWNLOADS=1/; s/{ print p, \$1, "unresolved", \$3 }/{ next }/' c_since k_sover
 
 if [ "$fails" = 0 ]; then echo "all passed"; else echo "$fails failed"; exit 1; fi
