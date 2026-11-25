@@ -1265,11 +1265,17 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   [ ! -f "$RUN/state/profile.json" ] || prof="$(cat "$RUN/state/profile.json")"
   [ "$TRIAGE" = true ] || fl="$(floors_of)" || fl=null
   mode="$(plan_mode)"
-  jq -n --argjson triage "$triage" --argjson counts "$1" --argjson beh "$beh" --argjson ver "$ver" \
-    --argjson cov "$cov" --argjson skip "$skip" --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
-    --argjson floors "$fl" --argjson skipped "$sk" \
+  # The behaviour, verify, coverage, skip check and skipped files values have no size cap that
+  # keeps them under one argument's limit (128 KiB on Linux), so they reach jq on a descriptor,
+  # each held to exactly one JSON value as --argjson held it.
+  jq -n --argjson triage "$triage" --argjson counts "$1" --slurpfile beh <(printf '%s' "$beh") --slurpfile ver <(printf '%s' "$ver") \
+    --slurpfile cov <(printf '%s' "$cov") --slurpfile skip <(printf '%s' "$skip") --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
+    --argjson floors "$fl" --slurpfile skipped <(printf '%s' "$sk") \
     --argjson planned "$( [ -f "$RUN/state/plan" ] && echo true || echo false)" \
     --slurpfile sel "$RUN/selection.json" "
+    def one: if length == 1 then .[0] else error(\"not one JSON value\") end;
+    (\$beh | one) as \$beh | (\$ver | one) as \$ver | (\$cov | one) as \$cov | (\$skip | one) as \$skip
+    | (\$skipped | one) as \$skipped |
     {format: 1, triage: \$triage, plan_ran: \$planned,
      verify_gaps: (if \$triage then []
        elif \$ver != null then (\$ver | $GAPS_JQ)
