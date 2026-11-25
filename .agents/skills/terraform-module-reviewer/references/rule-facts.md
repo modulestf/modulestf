@@ -111,6 +111,9 @@ The registry columns are for the deterministic facts engine designed in [the fac
 | `structure.insecure-default` | none | - | - | never | llm | config-semantic | touched-expression | no | root, submodule | interface-diff | CRITICAL | - | - |
 | `structure.missing-description` | none | - | - | file | tool | config-semantic | newly-introduced | no | root, submodule | tool-findings | MEDIUM | - | - |
 | `structure.multi-provider` | none | - | - | file | candidate | config-semantic | newly-introduced | no | root, submodule | candidates | MEDIUM | lead | small |
+| `structure.non-hcl-logic-error` | none | - | - | never | llm | path | touched-block | no | root, submodule | none | HIGH, MEDIUM | - | - |
+| `structure.non-hcl-test-missing` | none | - | - | never | llm | path | touched-block | no | root, submodule | none | LOW | - | - |
+| `structure.non-hcl-unsafe-subprocess` | none | - | - | never | llm | path | touched-block | no | root, submodule | none | CRITICAL, HIGH | - | - |
 | `structure.output-no-try` | none | - | - | never | candidate | config-semantic | newly-introduced | no | root, submodule | candidates, interface-diff | HIGH | lead | small |
 | `structure.passthrough-default-drift` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule | candidates, interface-diff | HIGH, MEDIUM, LOW | lead | lead |
 | `structure.passthrough-field-drift` | none | - | - | never | candidate | config-semantic | touched-block | yes | root, submodule | candidates, interface-diff | HIGH, MEDIUM | lead | lead |

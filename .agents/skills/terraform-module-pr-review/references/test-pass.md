@@ -3,7 +3,7 @@
 > **Part of:** [terraform-module-pr-review](../SKILL.md)
 > **Purpose:** The second exception of Rule 3: the repository's own Python unit tests, run inside the isolated runner for a change to a module's embedded code, and the one fixed result line they leave.
 
-A change to a file outside HCL that HCL reads, such as a Lambda function's source, is a `non-hcl-dependency` trigger ([behaviour-pass.md](behaviour-pass.md)). No level of the ladder can verify it. Its evidence is the repository's own tests. The Checks signal reads them when the head has check runs ([verdict.md](verdict.md#the-ladder)); this pass runs them itself, in the runner, so the review has test evidence of its own.
+A change to a file outside HCL that HCL reads, such as a Lambda function's source, is a `non-hcl-dependency` trigger ([behaviour-pass.md](behaviour-pass.md)). No level of the ladder can verify it. Its evidence is the repository's own tests. The Checks signal is read as a gate only when the head has check runs ([verdict.md](verdict.md#the-ladder)); this pass runs the tests itself, in the runner, so the review has test evidence of its own.
 
 ## When It Runs
 
@@ -57,7 +57,7 @@ No test name, message or other output prose crosses into the record, the reviewe
 
 ## Verdict
 
-[verdict.md](verdict.md#behaviour-evidence): `passed <n>` marks the Python `non-hcl-dependency` triggers of the tested directory `tested`, no gap of rule 4; `failed <n>` marks them `refuted`, a block at rule 2; `error` and `not run` change nothing, so the Checks signal stays their evidence as before. The comment gives one fixed line, `tests-passed` or `tests-failed` ([comment-format.md](comment-format.md#host-render-strings)).
+[verdict.md](verdict.md#behaviour-evidence): `passed <n>` marks the Python `non-hcl-dependency` triggers of the tested directory `tested`, no gap of rule 4; `failed <n>` marks them `refuted`, a block at rule 2; `error` and `not run` change nothing, so the Checks signal stays their evidence as before. The comment gives one fixed line, `tests-passed` or `tests-failed` ([comment-format.md](comment-format.md#host-render-strings)). Which examples a change outside Terraform still needs planned is another question, the one of [Changes outside Terraform](verdict.md#changes-outside-terraform): only the module profile clears an example there, and this pass's result clears none.
 
 ## Limits of the Evidence
 

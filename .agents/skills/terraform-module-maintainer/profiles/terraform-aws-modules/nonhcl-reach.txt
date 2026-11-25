@@ -1,0 +1,8 @@
+# Example directories that run no changed file outside Terraform (profile-format.md, Reach of
+# changes outside Terraform), both paths repository-relative:
+# not-run <owner/name> <file> <example directory> root-calls <arg>=<literal> gated-by var.<name>
+# The review takes a line only while both guards hold at the head and the merge base: every module
+# call of the example has the module root as its source and sets the argument to the literal, and
+# every block of the module root that names the file has a count or for_each reading the variable.
+# An example that also calls another module, such as container-image or code-signing, never passes.
+not-run terraform-aws-modules/terraform-aws-lambda package.py examples/triggers root-calls create_package=false gated-by var.create_package

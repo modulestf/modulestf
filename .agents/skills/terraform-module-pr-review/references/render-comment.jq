@@ -277,6 +277,16 @@ def valid_covered:
           and (.attribute | type == "string" and test("^[a-z0-9_]{1,128}$")) and (.example | canon_path)
           and (.address | type == "string" and length > 0 and length <= 300 and (test("[\\x00-\\x1f\\x7f`]") | not)))));
 
+# --- Changes outside Terraform (verdict.md). The evidence review-run.sh writes as nonhcl
+# (nonhcl-reach.sh): per changed file outside HCL, the example directories the module profile proves
+# run no such file, each line's guard checked at the head and the merge base. Bound to the head and
+# host.json's merge base.
+def valid_nonhcl: type == "object" and keys == ["base_sha", "files", "head_sha"] and all(.head_sha, .base_sha; sha40)
+  and (.files | type == "array" and length <= 40 and all(.[]; type == "object" and keys == ["file", "unreached"]
+        and (.file | canon_path)
+        and (.unreached | type == "array" and length <= 1000 and all(.[]; canon_path) and . == unique))
+        and (map(.file) | length == (unique | length)));
+
 # --- Depth (depth.md). The object depth.sh writes, which the run file may carry as "depth". The
 # reason tokens: mtf-facts depth's list, then the host's own raises. depth.md holds the same list
 # and tests/depth-test.sh checks the two are equal.
@@ -384,7 +394,7 @@ def earlier_cleared($e): $e != null and $e.record == "ok" and $e.items != [] and
 
 def valid_run:
   type == "object"
-  and ((keys - ["behaviour", "depth", "earlier", "examples", "floors", "plan_mode", "profile", "skipped_files", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
+  and ((keys - ["behaviour", "depth", "earlier", "examples", "floors", "nonhcl", "plan_mode", "profile", "skipped_files", "tests"]) == ["counts", "coverage", "format", "plan_ran", "triage", "verify_gaps"])
   and ((has("earlier") | not) or (.earlier | valid_earlier))
   # The reviewer's profile line, as the run checked it against its handover.
   and ((has("profile") | not) or (.profile | type == "object" and keys == ["label", "tree"]
@@ -393,6 +403,7 @@ def valid_run:
   and ((has("tests") | not) or (.tests | valid_tests))
   and ((has("behaviour") | not) or (.behaviour | valid_behaviour))
   and ((has("floors") | not) or (.floors | valid_floors))
+  and ((has("nonhcl") | not) or (.nonhcl | valid_nonhcl))
   # The changed files over the review budget, repository-relative, which the reviewer was not handed.
   and ((has("skipped_files") | not) or (.skipped_files | type == "array" and length > 0 and length <= 3000
         and all(.[]; type == "string" and length > 0 and length <= 1024 and (test("[\\x00-\\x1f\\x7f`]") | not))
@@ -528,7 +539,7 @@ def ladder:
     then {rule: 4, verdict: "inconclusive"}
   elif ($m | not) and .unresolved > 0 then {rule: 5, verdict: "changes suggested"}
   elif has_sev("MEDIUM") then {rule: 6, verdict: "block"}
-  elif has_sev("LOW") or .covered > 0 or .undemonstrated > 0 or $g.checks == "jobless" then {rule: 7, verdict: "approve with nits"}
+  elif has_sev("LOW") or .covered > 0 or .undemonstrated > 0 or $g.checks == "jobless" or .nonhcl_cap then {rule: 7, verdict: "approve with nits"}
   else {rule: 8, verdict: "approve"} end;
 
 def verdict_line: {
@@ -578,6 +589,7 @@ def texts: {
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
   "rationale-7-undemonstrated": "No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-covered": "No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7).",
+  "rationale-7-nonhcl": "No finding is open, and a behaviour change is outside Terraform, where a plan does not show what the changed file does. With such a change, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-jobless": "No finding is open, and a workflow ended without starting a job, so the repository's CI did not run. While it has not run, approve with nits is the best verdict (ladder rule 7).",
   "rationale-8": "No finding is open. With nothing open, the change is approved (ladder rule 8).",
   "signal-name-checks": "checks",
@@ -627,6 +639,8 @@ def texts: {
   "unplanned-covered-exception": "- Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}).",
   "unplanned-covered-design": "- Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}).",
   "unplanned-covered-refused": "- Not planned: {dir} (the plan proxy refused a host its data sources read, by design, `environment ({reason})`, at head {head} and at base {base}).",
+  "nonhcl-unreached-one": "- By the module profile, 1 example above runs no changed file outside Terraform, so it leaves nothing unknown.",
+  "nonhcl-unreached-many": "- By the module profile, {count} examples above run no changed file outside Terraform, so they leave nothing unknown.",
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
   "behaviour-trigger": "- Behaviour change at {location} ({category}): not verified.",
   "behaviour-trigger-groups": "- {count} behaviour changes not verified: {categories}.",
@@ -804,6 +818,7 @@ def rationale($in):
     # Rule 7 with no LOW finding: covered skips alone keep the verdict off rule 8.
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.covered > 0 then tx("rationale-7-covered")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.undemonstrated > 0 then tx("rationale-7-undemonstrated")
+    elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.nonhcl_cap then tx("rationale-7-nonhcl")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) then tx("rationale-7-jobless")
     else tx("rationale-\($r)") end;
 
@@ -1092,7 +1107,7 @@ def evidence_lines($b):
      # The changes over the classifier cap, reported once beside the classified ones.
      + (if $b.capped > 0 then " " + tx(if $b.capped == 1 then "behaviour-evidence-capped-one" else "behaviour-evidence-capped" end; {count: $b.capped}) else "" end)]
     + ([$b.triggers[] | select(ci_gated)] | length
-       | if . > 0 then ["Changes outside Terraform left to the repository's own tests, which the Checks signal reads: \(.)."] else [] end)
+       | if . > 0 then ["Changes outside Terraform the Checks signal gates, with no test run of them read: \(.)."] else [] end)
     + ([$b.triggers[] | select(floor_ok)] | length | if . > 0 then [tx("behaviour-floor-judged"; {count: .})] else [] end)
     + ([$b.triggers[] | select(demo_ok)] | length | if . > 0 then [tx("behaviour-undemonstrated"; {count: .})] else [] end)
   end;
@@ -1376,6 +1391,32 @@ def covered_of($in; $l; $b):
        and (any($l.findings[]; .rule_id | startswith("review.") and . != "review.tool-disputed") | not)
     then $cs else [] end;
 
+# --- Changes outside Terraform (verdict.md). A change with any non-hcl-dependency trigger that is not
+# inert is capped at approve with nits: no plan shows what the changed file does. When every such
+# trigger is outside Terraform alone and no other rule 4 unknown is open, each example not planned
+# that the module profile proves runs none of the changed files leaves rule 4, whatever its reason;
+# every other example not planned stays an unknown. Covered skips take precedence.
+def nonhcl_only: .category == "non-hcl-dependency" and (((.also_categories // []) - ["non-hcl-dependency"]) == []);
+def nonhcl_triggers($b): [($b // {triggers: []}).triggers[] | select(.state != "inert")];
+def nonhcl_cap($b): $b != null and $b.status == "ran"
+  and any(nonhcl_triggers($b)[]; .category == "non-hcl-dependency" or any((.also_categories // [])[]; . == "non-hcl-dependency"));
+def nonhcl_of($in; $l; $b; $cov):
+  $in.run as $run | ($run.nonhcl // null) as $n | $run.coverage.unplanned as $u | nonhcl_triggers($b) as $t
+  | if $n != null and $cov == [] and $n.head_sha == $in.host.head_sha and $in.host.merge_base != null and $n.base_sha == $in.host.merge_base
+       and ($run.triage | not) and $run.plan_ran and ($run.coverage.inert | not)
+       and $b != null and $b.status == "ran" and $t != [] and all($t[]; nonhcl_only) and $b.capped == 0
+       and ($l | has_unknown | not)
+    then
+      ([$t[].file] | unique) as $fs
+      | [$fs[] as $f | $n.files[] | select(.file == $f)] as $e
+      | if ($e | length) != ($fs | length) then []
+        else [$u[] | select(.reason != "no example directory") | .dir as $d
+              | select(all($e[]; any(.unreached[]; . == $d))) | . + {by: "profile"}] end
+    else [] end;
+def nonhcl_lines($nh):
+  ($nh | length) as $p
+  | if $p == 0 then [] elif $p == 1 then [tx("nonhcl-unreached-one")] else [tx("nonhcl-unreached-many"; {count: $p})] end;
+
 # --- The whole render. $in: {findings, host, checks, run, assessment, standard, registry}.
 
 def render($in):
@@ -1406,7 +1447,8 @@ def render($in):
      else $in | .run.coverage |= . + {inert: true, by_triggers: true} end) as $in
   | ledger($in) as $l
   | covered_of($in; $l; $b) as $cov
-  | ($l + {covered: ($cov | length)} | .unplanned_open = .unplanned - .covered) as $l
+  | nonhcl_of($in; $l; $b; $cov) as $nh
+  | ($l + {covered: ($cov | length), nonhcl: ($nh | length), nonhcl_cap: nonhcl_cap($b)} | .unplanned_open = .unplanned - .covered - .nonhcl) as $l
   | ($l | ladder) as $v
   | earlier_of($in) as $e
   # APPROVE replaces the block only where the ladder itself would approve: every earlier blocking
@@ -1437,11 +1479,12 @@ def render($in):
      + evidence_lines($b)
      + tests_lines($in.run.tests; $b)
      # Rule 7 reached by covered skips alone has no optional item to list.
-     + (if $v.rule == 8 or $quiet or (($cov != [] or $l.undemonstrated > 0) and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items; $h.state.state == "closed" and ($h.state.merged | not))] end)
+     + (if $v.rule == 8 or $quiet or (($cov != [] or $l.undemonstrated > 0 or $l.nonhcl_cap) and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items; $h.state.state == "closed" and ($h.state.merged | not))] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
      # Covered skips leave no gap, so section 5 then holds only their witness lines, which no
      # check that could not run describes.
-     + section(if $cov != [] then "Examples not planned" else "Checks that could not run" end; gap_lines($h; $in.run; $b; $p; $cov)
+     + section(if $cov != [] or ($nh != [] and $l.unplanned_open == 0) then "Examples not planned" else "Checks that could not run" end; gap_lines($h; $in.run; $b; $p; $cov)
+       + nonhcl_lines($nh)
        + [$unreg_all[] | tx(if .severity == "LOW" then "rule-unregistered-low" else "rule-unregistered" end;
                             {rule_id, severity, location: loc($p)})]
        + skipped_lines($in.run; $p); "\n")

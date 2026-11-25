@@ -1448,6 +1448,20 @@ earlier_of() {
             at: (if $x != null and $x.judgment == "resolved" then {file: $x.file, line: $x.line} else null end)}]}' "$RUN/earlier.json"
 }
 
+# The evidence of a change outside Terraform (verdict.md, Changes outside Terraform): nonhcl-reach.sh
+# on the clone's objects at the head and the merge base, with the reach file of the run's shipped
+# module profile from this skill checkout, never from the workspace; a custom profile has none.
+# Prints nothing and fails when there is no merge base or the script refuses.
+nonhcl_of() {
+  local pid reach=()
+  [ -n "$MB" ] || return 1
+  pid="$(jq -r '.label | if startswith("shipped:") then .[8:] else "" end' "$RUN/state/profile.json" 2> /dev/null)"
+  [ -z "$pid" ] || [ -z "$MAINT" ] || reach=(--reach "$MAINT/profiles/$pid/nonhcl-reach.txt")
+  bash "$HERE/nonhcl-reach.sh" --git "$RUN/clone" --head "$HEAD_SHA" --base "$MB" --repo "$(arg repo)" \
+    --behaviour "$RUN/behaviour/behaviour.json" --files "$RUN/host/files.json" --prefix "$PREFIX" \
+    ${reach[@]+"${reach[@]}"} 2> /dev/null
+}
+
 build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   local triage beh='null' ver='null' cov='null' skip='null' dj='null' tj='null' mode
   triage="$TRIAGE"
@@ -1458,17 +1472,19 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   [ ! -f "$RUN/depth.json" ] || dj="$(cat "$RUN/depth.json")"
   [ "$TRIAGE" = true ] || [ ! -f "$RUN/tests.json" ] || tj="$(cat "$RUN/tests.json")"
   local sk; sk="$(cat "$RUN/skipped.json")" || return 1
-  local prof=null fl=null ear=null
+  local prof=null fl=null ear=null nh=null
   [ ! -f "$RUN/state/profile.json" ] || prof="$(cat "$RUN/state/profile.json")"
   [ ! -f "$RUN/earlier.json" ] || ear="$(earlier_of)" || return 1
   [ "$TRIAGE" = true ] || fl="$(floors_of)" || fl=null
+  [ "$TRIAGE" = true ] || ! needs_tests || nh="$(nonhcl_of)" || nh=null
+  [ -n "$nh" ] || nh=null
   mode="$(plan_mode)"
   # The behaviour, verify, coverage, skip check, skipped files and earlier values have no size cap that
   # keeps them under one argument's limit (128 KiB on Linux), so they reach jq on a descriptor,
   # each held to exactly one JSON value as --argjson held it.
   jq -n --argjson triage "$triage" --argjson counts "$1" --slurpfile beh <(printf '%s' "$beh") --slurpfile ver <(printf '%s' "$ver") \
     --slurpfile cov <(printf '%s' "$cov") --slurpfile skip <(printf '%s' "$skip") --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
-    --argjson floors "$fl" --slurpfile skipped <(printf '%s' "$sk") \
+    --argjson floors "$fl" --argjson nonhcl "$nh" --slurpfile skipped <(printf '%s' "$sk") \
     --slurpfile earlier <(printf '%s' "$ear") \
     --argjson planned "$( [ -f "$RUN/state/plan" ] && echo true || echo false)" \
     --slurpfile sel "$RUN/selection.json" "
@@ -1493,6 +1509,7 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
     + (if \$depth != null then {depth: \$depth} else {} end)
     + (if \$tests != null then {tests: \$tests} else {} end)
     + (if \$floors != null then {floors: \$floors} else {} end)
+    + (if \$nonhcl != null then {nonhcl: \$nonhcl} else {} end)
     + (if \$skipped != [] then {skipped_files: \$skipped} else {} end)
     + (if \$earlier != null then {earlier: \$earlier} else {} end)
     + (if \$prof != null and (\$prof.label != \"shipped:terraform-aws-modules\" or \$prof.tree != \"none\")
