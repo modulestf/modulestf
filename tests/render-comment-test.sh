@@ -2940,14 +2940,14 @@ mutate "the mark on a trigger that passed accepted" 's/\(\.unexercised == true a
 # reads as an undemonstrated one does, under the same conditions: approve with nits at best,
 # listed with its examples as information. Anything else keeps it an unknown.
 IT='{id: "T-001", file: "variables.tf", line: 40, category: "unclassified-change", state: "unverifiable", identical: ["examples/complete", "examples/minimal"]}'
-RID() { runf "id-$1" '.plan_ran = true | .behaviour.triggers = ['"$IT"', ('"$IT"' | .id = "T-002" | .file = "outputs.tf" | .line = 9 | .category = "locals-outputs-change" | .identical = ["examples/complete"])] | '"${2:-.}"; }
-IDL='Added inputs or outputs the existing examples plan the same as before, on their default only: 2.'
-IDRAT='No finding is open, and an added input or output planned the same as before in the existing examples, which shows only its default. With such a change, approve with nits is the best verdict (ladder rule 7).'
+RID() { runf "id-$1" '.plan_ran = true | .behaviour.triggers = ['"$IT"', ('"$IT"' | .id = "T-002" | .file = "main.tf" | .line = 9 | .category = "dynamic-block-change" | .identical = ["examples/complete"])] | '"${2:-.}"; }
+IDL='Added inputs the existing examples plan the same as before, on their default only: 2.'
+IDRAT='No finding is open, and an added input planned the same as before in the existing examples, which shows only its default. With such a change, approve with nits is the best verdict (ladder rule 7).'
 cat > "$TMP/want-id.txt" <<'WANT'
 ### Changes the examples plan the same
 
 - Same plan: `variables.tf:40` (unclassified-change): `examples/complete`, `examples/minimal`, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown.
-- Same plan: `outputs.tf:9` (locals-outputs-change): `examples/complete`, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown.
+- Same plan: `main.tf:9` (dynamic-block-change): `examples/complete`, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown.
 WANT
 idsec() { awk '/^### Changes the examples plan the same$/ { on = 1 } on && /^### / && !/plan the same/ { exit } on' "$O/comment.md" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'; }
 t_id() {

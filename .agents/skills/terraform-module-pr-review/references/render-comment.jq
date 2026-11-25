@@ -446,7 +446,7 @@ def mark_floors($findings; $run; $h):
 # A trigger behaviour-pass.sh marked identical (verdict.md, Identical plans) reads the same way,
 # under the same conditions, on its own categories.
 def demo_categories: ["dynamic-block-change", "unclassified-change"];
-def same_categories: ["dynamic-block-change", "unclassified-change", "locals-outputs-change"];
+def same_categories: ["dynamic-block-change", "unclassified-change"];
 def mark_undemonstrated($findings; $run):
   if . == null or .status != "ran" then . else
     (($run.triage | not) and $run.plan_ran and $run.coverage.class == "complete"
@@ -554,7 +554,7 @@ def texts: {
   "rationale-5": "Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5).",
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
   "rationale-7-undemonstrated": "No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7).",
-  "rationale-7-identical": "No finding is open, and an added input or output planned the same as before in the existing examples, which shows only its default. With such a change, approve with nits is the best verdict (ladder rule 7).",
+  "rationale-7-identical": "No finding is open, and an added input planned the same as before in the existing examples, which shows only its default. With such a change, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-covered": "No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-jobless": "No finding is open, and a workflow ended without starting a job, so the repository's CI did not run. While it has not run, approve with nits is the best verdict (ladder rule 7).",
   "rationale-8": "No finding is open. With nothing open, the change is approved (ladder rule 8).",
@@ -620,7 +620,7 @@ def texts: {
   "behaviour-floor-judged": "Provider floor changes judged by Check A, which no behaviour level verifies: {count}.",
   "behaviour-undemonstrated": "Changes to a resource no planned example creates, which no plan can show: {count}.",
   "undemonstrated-trigger": "- Not demonstrated: {location} ({category}): no planned example creates this resource, so no plan shows the change.",
-  "behaviour-identical": "Added inputs or outputs the existing examples plan the same as before, on their default only: {count}.",
+  "behaviour-identical": "Added inputs the existing examples plan the same as before, on their default only: {count}.",
   "identical-trigger": "- Same plan: {location} ({category}): {examples}, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown.",
   "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "thread-match": "- {location}: this review has a finding at the same path and line.",

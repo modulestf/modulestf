@@ -964,12 +964,13 @@ def nokey: gsub("\\[(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)\\]"; ""); # a whole quoted o
 # example's HCL, against the base module ($a) and against the head module ($b), compared here and
 # nowhere else, with the provider schema of the head module plan ($s). Per address, index keys
 # kept, the address sets and each change's actions, after, after_unknown, after_sensitive and
-# replace_paths; then the root outputs whole. A value unknown on either side is equal only when
-# the schema marks its attribute computed-only, never set by configuration: an unknown
-# configurable attribute, one the schema does not name, a wholly unknown nested block and a type
-# the schema lacks are unknown, and so are a plan that errored, one that deferred a change and a
-# change whose markers are not objects. Prints {result, differs}: differs names the addresses,
-# index keys removed, and outputs that differ: names only, no value leaves this program.
+# replace_paths; then the root outputs whole. A value unknown on either side is equal only in an
+# attribute the schema marks computed that neither plan's configuration sets on that resource (a
+# computed-only attribute never is), or in a nested block neither configuration writes: an
+# attribute the configuration sets, one the schema does not name, a resource whose configuration
+# cannot be found and a type the schema lacks are unknown, and so are a plan that errored, one that
+# deferred a change and a change whose markers are not objects. Prints {result, differs}: differs
+# names the addresses, index keys removed, and outputs that differ: names only, no value leaves.
 # shellcheck disable=SC2016 # a jq program
 PDIFF_JQ='
 def nokey: gsub("\\[(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)\\]"; "");
@@ -977,31 +978,50 @@ def rc: [.resource_changes[] | select(type == "object" and (.address | type == "
 def part: .change | {actions, after, after_unknown, after_sensitive, replace_paths};
 def marker: . == null or . == false or type == "object";
 def has_true: [.. | select(. == true)] != [];
-# Every true leaf of an after_unknown value at block level ($blk) sits in a computed-only attribute.
-def computed_only($blk):
+# The keys a block of the configuration sets: an object of expressions, or a list of them for a
+# nested block; null when the configuration is not known.
+def set_keys: if type == "object" then . elif type == "array" then (map(objects | keys) | add // [] | map({key: ., value: true}) | from_entries) else {} end;
+# Every true leaf of an after_unknown value at block level ($blk) is in an attribute the schema
+# marks computed that the configuration at this level ($ex, null when not known) does not set, or
+# in a nested block it does not write.
+def computed_only($blk; $ex):
   if . == null or . == false then true
   elif type != "object" then false
   elif $blk == null then has_true | not
   else all(to_entries[]; .key as $k | .value as $v
+    | ($ex != null and ($ex | has($k))) as $set
     | if ($blk.attributes[$k] | type) == "object" then
-        ($v | has_true | not) or ($blk.attributes[$k] | .computed == true and (.optional | not) and (.required | not))
+        ($v | has_true | not)
+        or ($blk.attributes[$k] | .computed == true and (.required | not)
+            and ((.optional | not) or ($ex != null and ($set | not))))
       elif ($blk.block_types[$k] | type) == "object" then
-        $blk.block_types[$k].block as $nb
+        $blk.block_types[$k] as $bt | $bt.block as $nb
+        | (if $ex == null then null elif $set then ($ex[$k] | set_keys) else {} end) as $nex
         | if $v == null or $v == false then true
-          elif ($v | type) == "array" then all($v[]; computed_only($nb))
-          elif ($v | type) == "object" then ($v | computed_only($nb))
+          elif $v == true then $ex != null and ($set | not)
+          elif $bt.nesting_mode == "map" then ($v | type) == "object" and all($v[]; computed_only($nb; $nex))
+          elif ($v | type) == "array" then all($v[]; computed_only($nb; $nex))
+          elif ($v | type) == "object" then ($v | computed_only($nb; $nex))
           else false end
       else ($v | has_true | not) end)
   end;
 def block_of($c): ($s[0].provider_schemas[$c.provider_name // ""]
     | if $c.mode == "data" then .data_source_schemas else .resource_schemas end | .[$c.type // ""].block) // null;
+# The expressions of a change'"'"'s resource in a plan'"'"'s configuration, through its module calls; null
+# when they cannot be found.
+def cfg_of($P; $c): ($c.module_address // "" | gsub("\\[[^\\]]*\\]"; "")
+    | if . == "" then [] else split(".") | [range(1; length; 2) as $i | .[$i]] end) as $mods
+  | (reduce $mods[] as $m ($P.configuration.root_module; if type == "object" then .module_calls[$m].module else null end)) as $mod
+  | if ($mod | type) != "object" then null
+    else first($mod.resources[]? | select(.address == "\($c.type).\($c.name)" and .mode == $c.mode) | (.expressions // {})) // null end;
 $a[0] as $A | $b[0] as $B
 | if any(($A, $B); type != "object" or .errored == true or (.resource_changes | type) != "array"
       or (((.deferred_changes // []) | length) > 0)
       or any(.resource_changes[]; type != "object" or (.change | type) != "object"
              or (.change.after_unknown | marker | not) or (.change.after_sensitive | marker | not)))
   then {result: "unknown", differs: []}
-  elif any(($A, $B) | rc[]; block_of(.) as $blk | ($blk == null) or (.change.after_unknown | computed_only($blk) | not))
+  elif any(($A, $B) | rc[]; . as $c | block_of($c) as $blk
+      | ($blk == null) or any(cfg_of($A; $c), cfg_of($B; $c); . as $ex | $c.change.after_unknown | computed_only($blk; $ex) | not))
   then {result: "unknown", differs: []}
   else ($A | rc | map({key: .address, value: part}) | from_entries) as $x
     | ($B | rc | map({key: .address, value: part}) | from_entries) as $y

@@ -605,6 +605,22 @@ t_pd_edited() { pdx '.plan_diff |= .[:1]' '.coverage.examples[1].module_calls = 
 t_pd_edited; check "identical: an example the change edits with no plan diff marks nothing" $?
 t_pd_inex() { pdx '.plan_diff[0].dir = "."' '.coverage.examples[0].dir = "."' && nosame; }
 t_pd_inex; check "identical: a trigger in an example directory is never marked" $?
+# A variable the change adds with a validation block, which can fail a caller that never sets
+# it (the classifier gives it a level), is never marked, nor is the argument that passes it.
+t_pd_valid() { pdx . . '.triggers |= map(if .id == "T-017" then .levels = ["L4"] else . end)' \
+  && q '.triggers[] | select(.id == "T-017") | has("identical") | not' | grep -qx 0; }
+t_pd_valid; check "identical: an added variable with a validation block is not marked" $?
+t_pd_output() { pdx . . '.triggers += [{id: "T-021", file: "outputs.tf", line: 1, category: "locals-outputs-change", change_kind: "added",
+    address: "output.arn", attribute: "value", base_expr: null, head_expr: "aws_lb_listener.secondary.arn", levels: [],
+    referenced_inputs: [], contextual_refs: ["aws_lb_listener.secondary"], reason: null}]
+  | .entries += [{path: "outputs.tf", change_kind: "modified", inert: false, trigger_ids: ["T-021"]}]' '.triggers += [{id: "T-021", state: "unverifiable", reason: "x"}]' \
+  && q '.triggers[] | select(.id == "T-021") | has("identical") | not' | grep -qx 0; }
+t_pd_output; check "identical: an added output is not marked" $?
+t_pd_nocalls() { pdx . '.coverage.examples |= map(.module_calls = {})' && nosame; }
+t_pd_nocalls; check "identical: coverage with no head module calls, as a hosted record gives, marks nothing" $?
+t_pd_l1() { pdx . . '.triggers |= map(if .id == "T-008" then .levels = ["L1", "L4"] else . end)' \
+  && q '.triggers[] | select(.id == "T-008") | has("identical") | not' | grep -qx 0; }
+t_pd_l1; check "identical: an argument with a level besides L4 is not marked" $?
 t_pd_sort() { pdx '.plan_diff |= reverse' '.coverage.examples |= reverse' \
   && q '.triggers[] | select(.id == "T-017") | .identical == ["examples/complete", "examples/minimal"]' | grep -qx 0; }
 t_pd_sort; check "identical: the examples are listed sorted" $?
@@ -613,7 +629,7 @@ t_pd_cap() { pdx '.plan_diff += [range(25) as $i | .plan_diff[1] | .dir = "examp
   && q '.triggers[] | select(.id == "T-017") | (.identical | length) == 20' | grep -qx 0 \
   && q '.triggers[] | select(.id == "T-017") | .identical == (.identical | sort)' | grep -qx 0; }
 t_pd_cap; check "identical: at most 20 examples are listed" $?
-t_pd_type() { pdx . . . '.triggers |= map(if .id == "T-015" then .state = "unverifiable" else . end)' \
+t_pd_type() { pdx . . '.triggers |= map(if .id == "T-015" then .levels = [] else . end)' '.triggers |= map(if .id == "T-015" then .state = "unverifiable" else . end)' \
   && q '.triggers[] | select(.id == "T-015") | has("identical") | not' | grep -qx 0; }
 t_pd_type; check "identical: a type or validation change of a variable is not marked" $?
 t_pd_differs() { pdx '.plan_diff[1].result = "differs"' && nosame; }
@@ -649,11 +665,11 @@ t_pd_unex; check "identical: an unexercised trigger is not also identical" $?
 t_pd_dirs() { local SCHEMA="$TMP/schema-u.json"; setup
   jq '.triggers += [{id: "T-021", file: "modules/a/main.tf", line: 2, category: "literal-argument-change", change_kind: "modified",
         address: "aws_s3_bucket.a", attribute: "acl", base_expr: "\"a\"", head_expr: "\"b\"", levels: ["L4"], referenced_inputs: [], contextual_refs: [], reason: null},
-      {id: "T-022", file: "modules/b/outputs.tf", line: 1, category: "locals-outputs-change", change_kind: "added",
-        address: "output.arn", attribute: "value", base_expr: null, head_expr: "aws_s3_bucket.b.arn", levels: ["L4"], referenced_inputs: [], contextual_refs: ["aws_s3_bucket.b"], reason: null}]
+      {id: "T-022", file: "modules/b/variables.tf", line: 1, category: "unclassified-change", change_kind: "added",
+        address: "var.arn", attribute: null, base_expr: null, head_expr: null, levels: [], referenced_inputs: [], contextual_refs: [], reason: null}]
     | .entries += [{path: "modules/a/main.tf", change_kind: "modified", inert: false, trigger_ids: ["T-021"]},
-                   {path: "modules/b/outputs.tf", change_kind: "modified", inert: false, trigger_ids: ["T-022"]}]' "$TMP/behaviour-unex.json" > "$TMP/behaviour.out"
-  jq '. + [{filename: "modules/a/main.tf", status: "modified"}, {filename: "modules/b/outputs.tf", status: "modified"}]' "$TMP/files-unex.json" > "$TMP/files-dirs.json"
+                   {path: "modules/b/variables.tf", change_kind: "modified", inert: false, trigger_ids: ["T-022"]}]' "$TMP/behaviour-unex.json" > "$TMP/behaviour.out"
+  jq '. + [{filename: "modules/a/main.tf", status: "modified"}, {filename: "modules/b/variables.tf", status: "modified"}]' "$TMP/files-unex.json" > "$TMP/files-dirs.json"
   local keep="$MOD"; MOD="$UMOD"; DIFF="$TMP/files-dirs.json" classify; MOD="$keep"
   [ "$(bash "$BP" diff-dirs --out "$O")" = "$(printf '.\nmodules/b')" ] \
     && [ "$(bash "$BP" diff-dirs --out "$O" --prefix mods/x/)" = "$(printf 'mods/x\nmods/x/modules/b')" ]; }
@@ -1287,10 +1303,13 @@ wmutate "identical: an example with no addresses accepted" 's/and \(\.addresses 
 wmutate "identical: a variable not null by default read as one" 's/\(\[\{dir: \(\$t\.file \| tdir\), name: \$n\}\] - \$nv == \[\]\)/true/' t_pd_shape
 wmutate "identical: any value shape" 's/else \$h == \("var\." \+ \$n\) end/else true end/' t_pd_wrap
 wmutate "identical: any address for an argument" 's/  elif \(\$t\.address \| test\("\^\[a-z\][^\n]*\n/  elif true\n/' t_pd_call
-wmutate "identical: a variable of any category" 's/ and \$t\.category == "unclassified-change"\n    and \(\(\$t\.also_categories \/\/ \[\]\) == \[\]\) then "variable"/ then "variable"/' t_pd_type
+wmutate "identical: a variable of any category" 's/ and \$t\.category == "unclassified-change"\n    and \(\(\$t\.also_categories \/\/ \[\]\) == \[\]\) and \$t\.levels == \[\] then "variable"/ and \$t.levels == [] then "variable"/' t_pd_type
 wmutate "identical: the head module calls read for the base" 's/elif \$p\.result == "equal" then \(if calls\(\$p\.module_calls; \$d\) != \[\] then/elif \$p.result == "equal" then (if true then/' t_pd_base
 wmutate "identical: an edited example with no plan diff ignored" 's/elif \$head or \$edited then/elif \$head then/' t_pd_edited
 wmutate "identical: a trigger in an example directory marked" 's/\n           or any\(\$l\.coverage\.examples\[\]; \.dir as \$x \| \$d \| under\(\$x\)\)//' t_pd_inex
+wmutate "identical: a variable with a level marked" 's/ and \$t\.levels == \[\] then "variable"/ then "variable"/' t_pd_valid
+wmutate "identical: an argument at any level marked" 's/-\]\*\$"\)\) and \$t\.levels == \["L4"\]\n/-]*\$"))\n/' t_pd_l1
+wmutate "identical: coverage with no head calls read" 's/\n           or \(any\(\$l\.coverage\.examples\[\]; \(\.module_calls \| type\) == "object" and \.module_calls != \{\}\) \| not\)//' t_pd_nocalls
 wmutate "identical: the list not sorted" 's/\| unique \| \.\[:20\]/| .[:20]/' t_pd_sort
 wmutate "identical: the list not capped" 's/\| unique \| \.\[:20\]/| unique/' t_pd_cap
 wmutate "identical: beside unexercised" 's/if \$i != \[\] and \(unex\(\$t; \$et\) \| not\) then \{identical/if \$i != [] then {identical/' t_pd_unex

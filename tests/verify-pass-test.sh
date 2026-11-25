@@ -496,6 +496,16 @@ $BASE" --out "$R3/x.json")"
       {dir: "examples/net", result: "unknown", reason: null, addresses: [], module_calls: {}},
       {dir: "examples/net2", result: "not-run", reason: "show", addresses: [], module_calls: {}}]
       and all(.examples[]; has("plan_diff") | not)')"
+  # The files are told apart by their base name: a directory whose path holds plan-diff- routes
+  # nothing wrong, and a copy that routes by the whole path is caught.
+  rm -rf "$TMP/plan-diff-x"; mkdir -p "$TMP/plan-diff-x/a"; cp "$TMP/addr/addresses-1.json" "$TMP/addrpd/plan-diff-1.json" "$TMP/plan-diff-x/a/"
+  pdroute() { # script -> 0 when the head addresses and the plan diff addresses each reach their place
+    PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$1" coverage "$R4" --files "$TMP/files.json" --out "$TMP/cov-r.json" --plan "$TMP/rec.txt" --addresses "$TMP/plan-diff-x/a" > /dev/null 2>&1
+    jq -e '(.examples[] | select(.dir == "examples/codeok") | .addresses | length > 1) and .plan_diff[0].addresses == ["module.b.aws_s3_bucket.this"]' "$TMP/cov-r.json" > /dev/null 2>&1
+  }
+  check "$sh: addresses files are routed by their base name" "$(pdroute "$VP"; echo $?)"
+  perl -0pe 's/case "\$\{af##\*\/\}" in plan-diff-\*\)/case "\$af" in *\/plan-diff-*)/' "$VP" > "$TMP/vp-route.sh"
+  check "$sh: the mutation that routes by the whole path is caught" "$( ! cmp -s "$VP" "$TMP/vp-route.sh" && ! pdroute "$TMP/vp-route.sh"; echo $?)"
   jq -n '{schema_version:1, head:"x", merge_base:"y", refused_hosts:0, examples:[
     {path:"examples/codeok", head:{class:"planned", plan:null}, base:null, addresses:["aws_a.b"], attributes:{},
      plan_diff:{result:"equal", reason:null, addresses:["aws_a.b"], module_calls:{m:"../../"}}}]}' > "$TMP/hosted.json"

@@ -126,19 +126,19 @@ def covers($files):
       | select(test("(^|/)\\.(git|terraform)(/|$)") | not)]
      - [$o.entries[] | .path, (.previous_path // empty)]) == [];
 # The closed list of the plan diff (behaviour-pass.md, The Run Object): an added change whose claim is
-# that existing callers are unaffected. An added variable; an added output; an argument or block
-# the change adds to a managed resource whose value has the shape the unexercised mark reads:
+# that existing callers are unaffected. An added variable with no level, so no validation block;
+# an argument or block the change adds to a managed resource, at L4 alone, whose value has the
+# shape the unexercised mark reads:
 # exactly var.<name>, or a dynamic block null-guarded on it, where the change adds that variable
 # with a null default in the same directory ($nv). Never a module call argument, which the plan
-# shows only through the child, nor a changed default or type of an existing variable.
+# shows only through the child, an output, which the engine takes to L1, nor a changed default or
+# type of an existing variable.
 def tdir: if test("/") then sub("/[^/]*$"; "") else "." end;
 def meta_args: ["provider", "count", "for_each", "depends_on", "lifecycle", "provisioner", "connection"];
 def diff_kind($t; $b; $nv): if $t.change_kind != "added" or ($t.address | type != "string") then null
   elif ($t.address | test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$")) and $t.category == "unclassified-change"
-    and (($t.also_categories // []) == []) then "variable"
-  elif ($t.address | test("^output\\.[A-Za-z_][A-Za-z0-9_-]*$")) and $t.category == "locals-outputs-change"
-    and (($t.also_categories // []) == []) then "output"
-  elif ($t.address | test("^[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*$"))
+    and (($t.also_categories // []) == []) and $t.levels == [] then "variable"
+  elif ($t.address | test("^[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*$")) and $t.levels == ["L4"]
     and ([$t.category, ($t.also_categories // [])[]] - ["unclassified-change", "dynamic-block-change"] == [])
     and ($t.attribute | type == "string" and (sub("^dynamic\\."; "") | split(".")[0] | IN(meta_args[]) == false))
     and $t.contextual_refs == [] and ($t.head_expr | type == "string")
@@ -442,6 +442,9 @@ evaluate() {
            or (all($l.coverage.examples[]; (.head | IN("planned", "planned-no-changes"))
                  and (.addresses | type == "array" and length > 0 and length < 1000)) | not)
            or any($l.coverage.examples[]; .dir as $x | $d | under($x))
+           # The direct-caller check reads the head module calls: coverage with none, as a
+           # hosted record gives, is no evidence.
+           or (any($l.coverage.examples[]; (.module_calls | type) == "object" and .module_calls != {}) | not)
         then [] else
           [$l.coverage.examples[] | . as $e | pd_of($e.dir) as $p
            | (calls($e.module_calls; $d) != []) as $head

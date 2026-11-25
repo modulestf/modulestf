@@ -643,7 +643,7 @@ def pnorm: if test("^(equal|unknown)$") then {result: ., reason: null}
       an="${af##*/addresses-}"; an="${an##*/plan-diff-}"; an="${an%.json}"
       printf '%s\n' "$an" | grep -Eqx '[1-9][0-9]{0,5}' || continue
       [ -f "$af" ] && [ ! -L "$af" ] && [ "$(wc -c < "$af")" -le 1048576 ] || continue
-      case "$af" in */plan-diff-*) to="$W/pdaddr.jsonl" ;; *) to="$W/addr.jsonl" ;; esac
+      case "${af##*/}" in plan-diff-*) to="$W/pdaddr.jsonl" ;; *) to="$W/addr.jsonl" ;; esac
       jq -c --arg n "$an" '{($n): .}' "$af" >> "$to" 2> /dev/null || true
     done
   fi
