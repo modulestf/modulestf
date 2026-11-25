@@ -2214,7 +2214,7 @@ for n in 1 2; do
 done
 check "hosted-record: addresses over the argument size limit are read whole" \
   "$([ "$(hr "$big")" = 0 ] && [ "$(jq '.examples[0].addresses | length' "$TMP/hr.json")" = 1000 ]; echo $?)"
-perl -0pe 's/--slurpfile addr <\(jq -s \x27add \/\/ \{\}\x27 "\$addr"\) \\\n  \x27\(\$addr \| if length == 1 then \.\[0\] else error\("not one JSON value"\) end\) as \$addr \| \x27"\$REDUCE"/--argjson addr "\$(jq -s \x27add \/\/ {}\x27 "\$addr")" "\$REDUCE"/' "$HR" > "$TMP/hr-mut2.sh"
+perl -0pe 's/--slurpfile addr <\(jq -s \x27add \/\/ \{\}\x27 "\$addr"\)/--argjson addr "\$(jq -s \x27add \/\/ {}\x27 "\$addr")"/; s/\x27\(\$addr \| if length == 1 then \.\[0\] else error\("not one JSON value"\) end\) as \$addr\n   \| /\x27/' "$HR" > "$TMP/hr-mut2.sh"
 check "mutation hosted-record-argv changes the script" "$(cmp -s "$HR" "$TMP/hr-mut2.sh"; test $? -eq 1; echo $?)"
 check "mutation hosted-record-argv is caught" \
   "$(rm -f "$TMP/hr.json"; bash "$TMP/hr-mut2.sh" --record "$big" --head "$HH" --merge-base "$HM" --out "$TMP/hr.json" 2> /dev/null; [ $? != 0 ]; echo $?)"
