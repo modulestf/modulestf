@@ -1,3 +1,12 @@
+## [0.12.26](https://github.com/modulestf/modulestf/compare/v0.12.25...v0.12.26) (2026-11-25)
+
+
+### Bug Fixes
+
+* **reviewer:** Calibrate five bands against open changes held over a correct module change ([#216](https://github.com/modulestf/modulestf/issues/216)) ([3cf0940](https://github.com/modulestf/modulestf/commit/3cf09403037bd3a3d82ae47fed49fa5099bc6949))
+
+
+
 ## [0.12.25](https://github.com/modulestf/modulestf/compare/v0.12.24...v0.12.25) (2026-11-25)
 
 
