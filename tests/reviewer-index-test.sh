@@ -260,6 +260,20 @@ references/large-changes.md|A type of a called module the review cannot read is 
 references/large-changes.md|a module call no such rule reaches is not listed and is no unknown
 references/engine/check-a-compatibility.md|HIGH wins and this LOW does not apply
 references/engine/check-a-compatibility.md|widens access, or blocks or restricts what callers could do before: those keep the bands above
+references/check-g-behaviour.md|With no page read for the type, the band does not hold.
+references/check-g-behaviour.md|none may be an argument the type's page marks as forcing a new resource
+references/check-g-behaviour.md|a security or data protection control (a policy, a principal, a key or encryption setting, public access, deletion protection, backup, retention, versioning or logging), or one that sets a count, a size, failover, network placement or an identity
+references/check-g-behaviour.md|so a create still applies the caller's value
+references/check-g-behaviour.md|A new list, `all`, or any other added name takes the other bands as written.
+references/check-g-behaviour.md|the change edits nothing else in the block
+references/check-b-coverage.md|with no default but null and no fallback
+references/check-b-coverage.md|and none grants or restricts access or is a security control
+references/check-b-coverage.md|A pair the page says conflict, or a rule where the module supplies a side, stays HIGH.
+references/check-c-structure.md|a commented-out block stays MEDIUM
+references/check-d-examples.md|one the base had stays HIGH
+references/engine/check-e-profile.md|The root module, submodules and `tests/` keep HIGH
+references/judgment/prefix.md|A pair the page says conflict, or a rule where the module supplies a side, stays HIGH.
+references/judgment/prefix.md|LOW under `examples/`, HIGH elsewhere.
 GUARDS
 }
 
@@ -457,6 +471,20 @@ calibration guard 18 dropped~calibration guard~references/large-changes.md~s#A t
 calibration guard 19 dropped~calibration guard~references/large-changes.md~s#a module call no such rule reaches is not listed and is no unknown#dropped#g
 calibration guard 20 dropped~calibration guard~references/engine/check-a-compatibility.md~s#HIGH wins and this LOW does not apply#dropped#g
 calibration guard 21 dropped~calibration guard~references/engine/check-a-compatibility.md~s#widens access, or blocks or restricts what callers could do before: those keep the bands above#dropped#g
+calibration guard 22 dropped~calibration guard~references/check-g-behaviour.md~s#With no page read for the type, the band does not hold\.#dropped#g
+calibration guard 23 dropped~calibration guard~references/check-g-behaviour.md~s#none may be an argument the type's page marks as forcing a new resource#dropped#g
+calibration guard 24 dropped~calibration guard~references/check-g-behaviour.md~s#a security or data protection control (a policy, a principal, a key or encryption setting, public access, deletion protection, backup, retention, versioning or logging), or one that sets a count, a size, failover, network placement or an identity#dropped#g
+calibration guard 25 dropped~calibration guard~references/check-g-behaviour.md~s#so a create still applies the caller's value#dropped#g
+calibration guard 26 dropped~calibration guard~references/check-g-behaviour.md~s#A new list, `all`, or any other added name takes the other bands as written\.#dropped#g
+calibration guard 27 dropped~calibration guard~references/check-g-behaviour.md~s#the change edits nothing else in the block#dropped#g
+calibration guard 28 dropped~calibration guard~references/check-b-coverage.md~s#with no default but null and no fallback#dropped#g
+calibration guard 29 dropped~calibration guard~references/check-b-coverage.md~s#and none grants or restricts access or is a security control#dropped#g
+calibration guard 30 dropped~calibration guard~references/check-b-coverage.md~s#A pair the page says conflict, or a rule where the module supplies a side, stays HIGH\.#dropped#g
+calibration guard 31 dropped~calibration guard~references/check-c-structure.md~s#a commented-out block stays MEDIUM#dropped#g
+calibration guard 32 dropped~calibration guard~references/check-d-examples.md~s#one the base had stays HIGH#dropped#g
+calibration guard 33 dropped~calibration guard~references/engine/check-e-profile.md~s#The root module, submodules and `tests/` keep HIGH#dropped#g
+calibration guard 34 dropped~calibration guard~references/judgment/prefix.md~s#A pair the page says conflict, or a rule where the module supplies a side, stays HIGH\.#dropped#g
+calibration guard 35 dropped~calibration guard~references/judgment/prefix.md~s#LOW under `examples/`, HIGH elsewhere\.#dropped#g
 EOF
 
 echo

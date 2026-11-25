@@ -47,6 +47,7 @@ Scope is the change. Pre-existing gaps in resources the change does not touch ar
 **Severity:**
 - CRITICAL for a block no allowed version accepts: moved to `coverage.unknown-argument` and `coverage.block-attribute-mismatch` in [engine/check-b-coverage.md](engine/check-b-coverage.md).
 - HIGH when a required argument is unreachable, a deprecated argument is newly used, or mutually exclusive arguments are unguarded. HIGH too when the module defaults an argument the schema marks Required (`coverage.default-for-required-argument`).
+- LOW for a conditional rule, where the page makes an argument required or valid only for a value of another argument, when each argument it names takes the caller's value unchanged with no default but null and no fallback, and none grants or restricts access or is a security control. A pair the page says conflict, or a rule where the module supplies a side, stays HIGH.
 - HIGH for an argument above the declared minimum: moved to `coverage.argument-above-min-version` in [engine/check-b-coverage.md](engine/check-b-coverage.md#coverageargument-above-min-version).
 - HIGH for an output wrong in a supported mode: moved to `coverage.attribute-not-output` in [engine/check-b-coverage.md](engine/check-b-coverage.md#coverageattribute-not-output).
 - MEDIUM for an unexposed optional argument or computed attribute: moved to `coverage.optional-argument-unexposed` and `coverage.attribute-not-output` in [engine/check-b-coverage.md](engine/check-b-coverage.md).

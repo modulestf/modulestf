@@ -108,10 +108,11 @@ copy() {
 # the rule a judgment run needs: a derived or copied wrapper has no finding.
 # Its new-module owner identifier bullet and MEDIUM band are the A new module on-demand read, and
 # the name and exact fix lines of the provider_meta rule are read when a versions.tf changes.
+# Check B's paragraph on what a page gives is read before judging a block, with Which blocks.
 drops_of() {
   case "$1" in
     a-compatibility) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:No base|l:^[*][*]Reverts:[*][*] |l:^1[.] A commit in the change carries git.s own revert line|l:^2[.] .git merge-base --is-ancestor|l:^3[.] .git describe --tags|l:^4[.] Each line the finding would rest on|l:^Condition 3 reads tags|l:^If any of the four cannot be established" ;;
-    b-coverage) echo "u:Reads|h:Which blocks|h:Documented omissions|h:Suggested Fixes" ;;
+    b-coverage) echo "u:Reads|h:Which blocks|h:Documented omissions|h:Suggested Fixes|l:^In this file the schema is what Rule 2" ;;
     c-structure) echo "u:Reads, Fails When and Severity|h:Embedded Code|h:Suggested Fixes" ;;
     e-profile) echo "u:Reads, Fails When and Severity|h:Host Wrapper Evidence|h:Suggested Fixes|l:^- In a new-module review, the task shape|l:^  - a .user_agent. entry of a .provider_meta. block in any|l:^  - the .source. of a .module. block inside a fenced code block|l:^  - a value in a .tags. map in an .examples.|l:^  - a .--module-repo-org=|l:^  One finding per file, .line. the first occurrence, the .summary. naming every line|l:^- MEDIUM when a new module names an owner other than the family.s organization|l:^  - .<name>. is the repository name after .terraform-aws-.|l:^  - The .suggested_fix. is exact" ;;
     d-examples) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:Plan evidence" ;;
