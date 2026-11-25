@@ -539,12 +539,12 @@ def verdict_line: {
 
 # render-output.md: block proposes REQUEST_CHANGES, approve APPROVE, the rest COMMENT; of the
 # clamps only draft and closed or merged apply, each turning the event into COMMENT. Over the
-# posting login's own block (verdict.md, Our Earlier Block), APPROVE needs every earlier blocking
-# finding resolved, and then approve with nits proposes it too, so the block is replaced.
-def proposed_event($state; $own; $cleared):
+# posting login's own block (verdict.md, Our Earlier Block), $replace says whether APPROVE may
+# replace it; every other non-block verdict proposes COMMENT.
+def proposed_event($state; $own; $replace):
   if $state.draft or $state.state == "closed" or $state.merged then "COMMENT"
   elif . == "block" then "REQUEST_CHANGES"
-  elif $own then (if $cleared and IN("approve", "approve with nits") then "APPROVE" else "COMMENT" end)
+  elif $own then (if $replace then "APPROVE" else "COMMENT" end)
   elif . == "approve" then "APPROVE" else "COMMENT" end;
 
 def count_word: if . == 1 then "A"
@@ -1160,7 +1160,7 @@ def state_lines($h; $c; $event):
 
 # The Earlier review section, only over the posting login's own block: its record's blocking
 # findings with the reviewer's judgment at the head, or why the review could not be checked, and
-# under a COMMENT the line that the block stands. Names render only in the comment's charset.
+# under a COMMENT, which never replaces it, the line that the block stands. Names render only in the comment's charset.
 def earlier_lines($h; $e; $event; $p):
   if $e == null then [] else
     ($h.own_review.commit_id[:7]) as $sha
@@ -1172,7 +1172,7 @@ def earlier_lines($h; $e; $event; $p):
                   else tx("earlier-" + .judgment) end) + " |"] | join("\n")))]
          + (if earlier_cleared($e) then [tx("earlier-all-resolved")] else [] end)
        else [tx("earlier-unchecked"; {sha: $sha, reason: tx("earlier-reason-" + $e.record)})] end)
-    + (if $event == "COMMENT" and (earlier_cleared($e) | not) then [tx("earlier-stands")] else [] end)
+    + (if $event == "COMMENT" then [tx("earlier-stands")] else [] end)
   end;
 
 # A thread's path comes from the host already repository-relative (GitHub's own path), so only
@@ -1407,7 +1407,13 @@ def render($in):
   | ($l + {covered: ($cov | length)} | .unplanned_open = .unplanned - .covered) as $l
   | ($l | ladder) as $v
   | earlier_of($in) as $e
-  | ($v.verdict | proposed_event($h.state; own_block($h); earlier_cleared($e))) as $event
+  # APPROVE replaces the block only where the ladder itself would approve: every earlier blocking
+  # finding resolved, and approve, or approve with nits whose only cause is LOW findings, so that
+  # without them the ladder lands at rule 8. A covered skip, a jobless Checks signal or any other
+  # rule 7 cause proposes COMMENT.
+  | (earlier_cleared($e) and ($v.verdict == "approve"
+       or ($v.verdict == "approve with nits" and (($l | .findings = [] | ladder).rule == 8)))) as $replace
+  | ($v.verdict | proposed_event($h.state; own_block($h); $replace)) as $event
   | ($in + {event: $event}) as $in
   | ($v | rationale($l)
      + (if $cov != [] then " " + covered_sentence("rationale-covered"; $in.run; $cov) else "" end)) as $why

@@ -293,29 +293,6 @@ check "count.index wraps the subject in a counted terraform_data" "$(grep -q "co
 echo '{"class":"partial","examples":[{"dir":"examples/a","head":"plan-ok","base":null,"addresses":[]}]}' > "$TMP/cov.json"
 trig 'x' 'y' '[]' wrapper-change '["L3"]'; run --coverage "$TMP/cov.json" > /dev/null
 check "a coverage object passes into the record" "$(q "$TMP/l.json" '.coverage.class == "partial" and (.coverage.examples | length) == 1')"
-# The coverage reaches jq on a descriptor, exactly one JSON value: a file of two values writes no
-# record, as --argjson refused it, and one over the argument size limit (1 MiB on macOS, 128 KiB
-# for one argument on Linux) passes whole.
-cat "$TMP/cov.json" "$TMP/cov.json" > "$TMP/cov2.json"
-jq -c '.examples[0].addresses = [range(6000) | "aws_s3_bucket.b\(.)_" + ("x" * 180)]' "$TMP/cov.json" > "$TMP/covbig.json"
-t_cov_ladder() { # the ladder-pass.sh to run
-  local s=0
-  reset; trig 'x' 'y' '[]' wrapper-change '["L3"]'; rm -f "$TMP/l.json"
-  bash "$1" run "$RUND" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" --coverage "$TMP/cov2.json" > "$TMP/run.out" 2>&1 && s=1
-  grep -q 'cannot write' "$TMP/run.out" && [ ! -e "$TMP/l.json" ] || s=1
-  reset; trig 'x' 'y' '[]' wrapper-change '["L3"]'; rm -f "$TMP/l.json"
-  bash "$1" run "$RUND" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" --coverage "$TMP/covbig.json" > "$TMP/run.out" 2>&1 || s=1
-  [ "$(q "$TMP/l.json" '(.coverage.examples[0].addresses | length) == 6000')" = 0 ] || s=1
-  return "$s"
-}
-t_cov_ladder "$LP"; check "a coverage file of two values writes no record, one over the argument size limit passes whole" $?
-for m in 's/^ONE=\x27def one: [^\n]*$/ONE=\x27def one: .[0];\x27/' \
-  's/--slurpfile cov <\(printf \x27%s\x27 "\$COVJ"\)/--argjson cov "\$COVJ"/; s/\(\$cov \| one\) as \$cov \| //'; do
-  rm -rf "$TMP/cmut"; mkdir -p "$TMP/cmut"; cp -R "$REF"/. "$TMP/cmut/"; perl -pi -e "$m" "$TMP/cmut/ladder-pass.sh"
-  t_cov_ladder "$TMP/cmut/ladder-pass.sh" > /dev/null 2>&1; st=$?
-  check "the coverage mutation $m is caught" "$( ! cmp -s "$LP" "$TMP/cmut/ladder-pass.sh" && [ "$st" != 0 ]; echo $?)"
-done
-rm -rf "$TMP/cmut"
 
 # --- dynamic blocks: L1 on the for_each expression, never when only the content changed
 reset; trig 'var.vpc_security_group_ids' 'var.vpc_security_group_ids' '[]' dynamic-block-change; jq '.triggers[0].for_each_only = true' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run > /dev/null

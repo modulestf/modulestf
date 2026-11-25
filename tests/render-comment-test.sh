@@ -3284,11 +3284,30 @@ t_own_refused() {
 }
 t_own_refused; check "earlier review: a run file earlier outside its grammar is refused, nothing written" $?
 mutate "APPROVE over an earlier block with a finding not resolved" 's/all\(\$e\.items\[\]; \.judgment == "resolved"\)/true/' t_own_part
-mutate "an earlier block left out of the event" 's/elif \$own then \(if \$cleared/elif false then (if \$cleared/' t_own_missing
-mutate "approve with nits never replacing the block" 's/IN\("approve", "approve with nits"\) then "APPROVE"/IN("approve") then "APPROVE"/' t_own_nits
+mutate "an earlier block left out of the event" 's/elif \$own then \(if \$replace/elif false then (if \$replace/' t_own_missing
+mutate "approve with nits never replacing the block" 's/\n       or \(\$v\.verdict == "approve with nits" and \(\(\$l \| \.findings = \[\] \| ladder\)\.rule == 8\)\)//' t_own_nits
 mutate "a record of another review read" 's/\$e\.review_id == \$h\.own_review\.id and //' t_own_unbound
 mutate "COMPACT over an earlier block" 's/ and \(\$l\.own_block \| not\)//' t_own_compact
 mutate "the stands line dropped" 's/\[tx\("earlier-stands"\)\]/[]/' t_own_missing
+# Over a cleared earlier block, APPROVE only where the ladder itself would approve: approve with nits
+# that also rests on a jobless Checks signal, a covered skip or an undemonstrated trigger proposes
+# COMMENT with the stands line, LOW findings with a covered skip included.
+STANDS='That request for changes stands until this account replaces it or it is dismissed.'
+EOKX='.earlier = {review_id: 41, commit_id: "'"$BASE"'", record: "ok", items: ['"$(eitem F-001 resolved main.tf 9)"']}'
+t_own_jobless() { render "$NONE" "$HOWN" "$(checks ojl unknown "$JL"' | .check_runs = []')" "$(runf ojl "$EOKX")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md"; }
+t_own_jobless; check "earlier review: a jobless Checks signal over a cleared block proposes COMMENT and says the block stands" $?
+t_own_covered() { jq ".own_review = $OWNC" "$H556N" > "$TMP/own-cov.json"; rc "$(F556C)" "$(R556K ocov "$EOKX")" "$TMP/own-cov.json"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md"; }
+t_own_covered; check "earlier review: LOW findings beside a covered skip over a cleared block propose COMMENT and say the block stands" $?
+t_own_undemo() { render "$NONE" "$HOWN" "" "$(RUX own "$EOKX")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md"; }
+t_own_undemo; check "earlier review: an undemonstrated trigger over a cleared block proposes COMMENT and says the block stands" $?
+mutate "APPROVE over a block with a jobless Checks signal" 's/\(\(\$l \| \.findings = \[\] \| ladder\)\.rule == 8\)/true/' t_own_jobless
+mutate "APPROVE over a block with a covered skip" 's/\(\(\$l \| \.findings = \[\] \| ladder\)\.rule == 8\)/true/' t_own_covered
+mutate "APPROVE over a block with an undemonstrated trigger" 's/\(\(\$l \| \.findings = \[\] \| ladder\)\.rule == 8\)/true/' t_own_undemo
+mutate "an ok record with no item accepted" 's/\n  and \(\(\.record == "ok"\) == \(\.items != \[\]\)\);/\n  and true;/' t_own_refused
+mutate "a partly item with a place accepted" 's/             else \.at == null end\)\)/             else true end))/' t_own_refused
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

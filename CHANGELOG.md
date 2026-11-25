@@ -1,12 +1,3 @@
-## [0.12.27](https://github.com/modulestf/modulestf/compare/v0.12.26...v0.12.27) (2026-11-25)
-
-
-### Bug Fixes
-
-* **pr-review:** Pass large JSON values to jq on a descriptor ([#217](https://github.com/modulestf/modulestf/issues/217)) ([bd4a88f](https://github.com/modulestf/modulestf/commit/bd4a88f040a4550811afb213e7292428527c1841))
-
-
-
 ## [0.12.26](https://github.com/modulestf/modulestf/compare/v0.12.25...v0.12.26) (2026-11-25)
 
 

@@ -112,11 +112,8 @@ def main:
   | {schema_version: 1, head: $head, merge_base: $mb, refused_hosts: $refused, examples: .};
 try main catch (if type == "string" and startswith("refused: ") then . else "refused: a malformed record" end)
 '
-# The merged addresses can pass one argument's size limit (128 KiB on Linux), so they reach jq on
-# a descriptor, held to exactly one JSON value as --argjson held them.
 result="$(jq -R -s -c --arg head "$head" --arg mb "$mb" --argjson refused "$refused" \
-  --slurpfile addr <(jq -s 'add // {}' "$addr") \
-  '($addr | if length == 1 then .[0] else error("not one JSON value") end) as $addr | '"$REDUCE" \
+  --argjson addr "$(jq -s 'add // {}' "$addr")" "$REDUCE" \
   "$record/plan-pass.txt")" || refuse "a malformed record"
 case "$result" in
   '"refused: '*) refuse "$(jq -r '.[9:]' <<< "$result")" ;;

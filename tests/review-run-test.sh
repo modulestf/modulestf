@@ -1029,34 +1029,6 @@ run_rr handover "$RUN" > /dev/null 2>&1
 check "handover at deep accepts a skipped schema and names no fact sheets" "$([ $? = 0 ] && ! grep -q '^Provider fact sheets:' "$RUN/handover/task.md"; echo $?)"
 render_to "$TMP/render-ev"
 check "render accepts a skipped schema" "$([ $? = 0 ] && [ -f "$TMP/render-ev/comment.md" ]; echo $?)"
-# The run file's values reach jq on a descriptor, each exactly one JSON value: an empty
-# coverage.json and one of two values refuse the run file, as --argjson refused them, and one over
-# the argument size limit (1 MiB on macOS, 128 KiB for one argument on Linux) still builds it.
-t_cov_one() {
-  local c="$RUN/coverage.json" k="$TMP/coverage-keep.json" n=0 o rc=0
-  cp "$c" "$k"
-  for v in empty two big; do
-    n=$((n + 1)); o="$TMP/render-cov-$n-$$"; rm -rf "$o"
-    case "$v" in
-      empty) : > "$c" ;;
-      two) cat "$k" "$k" > "$c" ;;
-      big) jq -c '.pad = ("x" * 1200000)' "$k" > "$c" ;;
-    esac
-    render_to "$o"; local st=$?
-    if [ "$v" = big ]; then [ "$st" = 0 ] && [ -f "$o/comment.md" ] || rc=1
-    else [ "$st" != 0 ] && grep -qF 'the run file could not be built' "$TMP/re.out" && [ ! -f "$o/comment.md" ] || rc=1; fi
-    rm -rf "$o"
-  done
-  cp "$k" "$c"; return "$rc"
-}
-t_cov_one; check "render: an empty or two-value coverage.json refuses the run file, one over the argument size limit builds it" $?
-for m in 's/def one: if length == 1 then \.\[0\] else error\(\\"not one JSON value\\"\) end;/def one: .[0];/' \
-  's/--slurpfile cov <\(printf \x27%s\x27 "\$cov"\)/--argjson cov "\$cov"/; s/ \| \(\\\$cov \| one\) as \\\$cov//'; do
-  perl -pe "$m" "$SK/review-run.sh" > "$SK/review-run-cmut.sh"
-  keep="$RR"; RR="$SK/review-run-cmut.sh"; t_cov_one > /dev/null 2>&1; s=$?; RR="$keep"
-  check "render: the run file mutation $m is caught" "$( ! cmp -s "$SK/review-run.sh" "$SK/review-run-cmut.sh" && [ "$s" != 0 ]; echo $?)"
-done
-rm -f "$SK/review-run-cmut.sh"
 run_rr cleanup "$RUN" > /dev/null
 
 DEPTH_STUB=focused prep
@@ -1666,10 +1638,12 @@ check "prepare: the record of the own block checks out, its one blocking finding
 check "prepare: one line names the earlier review and its record" \
   "$(grep -qx "earlier review: changes requested on ${HEADC:0:12}, record ok, 1 blocking findings for the reviewer to judge" "$TMP/p.out"; echo $?)"
 T="$RUN/handover/task.md"
-check "handover: the Earlier review line and the judgments file on the Output line, before the block" \
-  "$(sed '/^UNTRUSTED-[0-9a-f]\{12\} BEGIN$/,$d' "$T" | grep -qx "Earlier review: $RUN/handover/earlier-task.json" &&
+ET="$RUN/handover/earlier-task.txt"
+check "handover: the Earlier review line and the judgments file on the Output line, before the block, the findings in an untrusted block" \
+  "$(sed '/^UNTRUSTED-[0-9a-f]\{12\} BEGIN$/,$d' "$T" | grep -qx "Earlier review: $ET" &&
      sed '/^UNTRUSTED-[0-9a-f]\{12\} BEGIN$/,$d' "$T" | grep -q "and the earlier review judgments as JSON to $RUN/review/earlier.json, and nothing else.\$" &&
-     cmp -s <(jq -c . "$RUN/handover/earlier-task.json") <(jq -c .findings "$RUN/earlier.json"); echo $?)"
+     es="$(sed -n '1s/^UNTRUSTED-\([0-9a-f]\{12\}\) BEGIN$/\1/p' "$ET")" && [ -n "$es" ] && [ "$(tail -n 1 "$ET")" = "UNTRUSTED-$es END" ] &&
+     cmp -s <(sed '1d;$d' "$ET" | jq -c .) <(jq -c .findings "$RUN/earlier.json"); echo $?)"
 echo '[{"id": "F-001", "judgment": "resolved", "file": "README.md", "line": 2}]' > "$RUN/review/earlier.json"
 run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/rec-r1" > /dev/null 2>&1
 check "render: the reviewer's judgment of each earlier finding renders in the Earlier review table" \
@@ -1679,6 +1653,10 @@ run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out 
 check "render: judgments that do not name each earlier finding leave every one not judged, the block standing" \
   "$(grep -q '| not judged |$' "$TMP/rec-r2/comment.md" && grep -qxF 'That request for changes stands until this account replaces it or it is dismissed.' "$TMP/rec-r2/comment.md" &&
      [ "$(jq -r .proposed_event "$TMP/rec-r2/result.json")" != APPROVE ]; echo $?)"
+jq '.record = "edited" | .findings = []' "$RUN/earlier.json" > "$TMP/e.tmp" && cat "$TMP/e.tmp" > "$RUN/earlier.json"
+run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/rec-r3" > "$TMP/rec-r3.out" 2>&1
+check "render: an earlier.json changed after the handover stops the run" \
+  "$([ $? = 1 ] && grep -q 'the run stops: earlier.json changed after the handover' "$TMP/rec-r3.out" && [ ! -e "$TMP/rec-r3/comment.md" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null
 printf 'edited' > "$TMP/edited.txt"; own_list "$TMP/edited.txt"; earlier_run
 check "prepare: an own review whose body changed since it was posted is edited, no Earlier review line" \
@@ -1714,6 +1692,203 @@ er_mut() { # name, perl -0 expression, case: edited | body
 er_mut "prepare without the edit check" 's/if \[ "\$\(jq -r \x27\.body_sha256\x27 "\$m"\)" != "\$\(jq -r \x27\.own_review\.body_sha256\x27 "\$h"\)" \]; then rec=edited\n        elif/if false; then rec=edited\n        elif/' edited
 er_mut "record without the body check" 's/cmp -s "\$w\/body" "\$w\/sent" \|\|/true ||/' body
 ghfiles open false APPROVED
+
+# --- 5c3. The post record's fail-closed branches, one case each, on the functions taken from
+# review-run.sh (read_earlier, earlier_of, records_dir, store_private and cmd_record), each with a
+# mutation of a copy of the script that must make its case fail.
+ER_SRC() { # [script]: the post record functions and what they use
+  local f="${1:-$RR}"
+  sed -n '/^repo_re=/p; /^die() /p; /^fail() /p' "$f"
+  awk '/^# --- the post record/ { on = 1 } /^# --- prepare/ { on = 0 } on' "$f"
+  awk '/^earlier_of\(\) \{$/ { on = 1 } on { print } on && /^}$/ { exit }' "$f"
+  awk '/^# --- record ---/ { on = 1 } /^# --- cleanup/ { on = 0 } on' "$f"
+}
+ERS="" # the script the cases take their functions from; a mutation sets it to a copy
+ER="$TMP/er"; PLAN0="$TMP/rec-out/plan.json"; PH="$(jq -r .pin.head_sha "$PLAN0")"
+ERR="$ER/state/modulestf/pr-review/records"; ERD="$ERR/example-org/widget/7"
+hex64() { printf '%s' "$1" | openssl dgst -sha256 -r | cut -d' ' -f1; }
+resha() { jq --arg p "$(openssl dgst -sha256 -r < "$ERD/41.plan.json" | cut -d' ' -f1)" '.plan_sha256 = $p' "$ERD/41.json" > "$ER/m.tmp" && cat "$ER/m.tmp" > "$ERD/41.json"; }
+mset() { jq "$1" "$ERD/41.json" > "$ER/m.tmp" && cat "$ER/m.tmp" > "$ERD/41.json"; }
+pset() { jq "$1" "$ERD/41.plan.json" > "$ER/p.tmp" && cat "$ER/p.tmp" > "$ERD/41.plan.json" && resha; }
+hset() { jq "$1" "$ER/run/host/host.json" > "$ER/h.tmp" && cat "$ER/h.tmp" > "$ER/run/host/host.json"; }
+er_base() { # a store and a run whose record checks out
+  rm -rf "$ER"; mkdir -p "$ER/run/host"
+  ( umask 077 && mkdir -p "$ERD" && cp "$PLAN0" "$ERD/41.plan.json" &&
+    jq -n --arg b "$(hex64 posted)" '{format: 1, review_id: 41, target: "example-org/widget#7", state: "CHANGES_REQUESTED",
+      body_sha256: $b, plan_sha256: ""}' > "$ERD/41.json" ) && resha
+  jq -n --arg c "$PH" --arg b "$(hex64 posted)" '{prefix: "", own_review: {id: 41, state: "CHANGES_REQUESTED", commit_id: $c, body_sha256: $b}}' \
+    > "$ER/run/host/host.json"
+}
+er_read() { # [token user id] [prefix] -> the record read_earlier wrote; ER_ENV, shell words, runs first
+  rm -f "$ER/run/earlier.json"
+  ( export RUN="$ER/run" HERE="$SK" XDG_STATE_HOME="$ER/state"; eval "${ER_ENV-}"
+    bash -c "$(ER_SRC "$ERS"); read_earlier example-org/widget 7 '${1-5}' '${2-}'" ) > /dev/null 2>&1
+  jq -r '.record' "$ER/run/earlier.json" 2> /dev/null
+}
+erc() { # case name, expected record, setup command words..., then -- and read_earlier arguments
+  local want="$1" a=() b=() seen=false; shift
+  for x in "$@"; do if [ "$x" = -- ]; then seen=true; elif $seen; then b+=("$x"); else a+=("$x"); fi; done
+  er_base; [ ${#a[@]} = 0 ] || eval "${a[*]}"
+  [ "$(er_read ${b[@]+"${b[@]}"})" = "$want" ]
+}
+r_ok() { erc ok : && [ "$(jq '.findings | length' "$ER/run/earlier.json")" = 1 ]; }
+r_missing() { erc missing 'rm -rf "$ERD"'; }
+r_metalink() { erc unreadable 'mv "$ERD/41.json" "$ER/m.keep"; ln -s "$ER/m.keep" "$ERD/41.json"'; }
+r_planlink() { erc unreadable 'mv "$ERD/41.plan.json" "$ER/p.keep"; ln -s "$ER/p.keep" "$ERD/41.plan.json"'; }
+r_metabig() { erc unreadable 'printf "%5000s\n" "" >> "$ERD/41.json"'; }
+r_planbig() { erc unreadable 'pset ".handover_block += (\"x\" * 4200000)"'; }
+r_metabad() { erc unreadable 'mset ". + {extra: 1}"'; }
+r_planbad() { erc unreadable 'pset ".kind = \"applied\""'; }
+r_plansha() { erc unreadable 'jq ".verdict = \"approve\"" "$ERD/41.plan.json" > "$ER/p.tmp"; cat "$ER/p.tmp" > "$ERD/41.plan.json"'; }
+r_permdir() { erc unreadable 'chmod 770 "$ERD"'; }
+r_permfile() { erc unreadable 'chmod 664 "$ERD/41.json"'; }
+r_permtop() { erc unreadable 'chmod 777 "$ERR"'; }
+r_edited() { erc edited 'hset ".own_review.body_sha256 = \"$(hex64 edited)\""'; }
+r_mmid() { erc mismatch 'mset ".review_id = 40"'; }
+r_mmstate() { erc mismatch 'mset ".state = \"APPROVED\""'; }
+r_mmtarget() { erc mismatch 'mset ".target = \"example-org/other#7\""'; }
+r_mmpin() { erc mismatch 'pset ".pin.target = \"example-org/widget#8\" | .pin.number = 8"'; }
+r_mmhead() { erc mismatch 'hset ".own_review.commit_id = \"$BASEC\""'; }
+r_mmuidnone() { erc mismatch : -- ""; }
+r_mmuid() { erc mismatch : -- 6; }
+r_mmprefix() { erc mismatch 'pset ".findings[0].file = \"mod/a.tf\""' -- 5 mod; }
+r_empty() { erc empty 'pset ".findings |= map(.severity = \"LOW\")"'; }
+r_grammar() { erc unreadable 'pset ".findings[0].id = \"X-1\""'; }
+r_dup() { erc unreadable 'pset ".findings += .findings"'; }
+r_outside() { erc mismatch 'pset ".module_prefix = \"mod\" | .findings[0].file = \"other/x.tf\""' -- 5 mod; }
+r_medium() { erc ok 'pset ".findings += [(.findings[0] | .id = \"F-002\" | .severity = \"MEDIUM\"), (.findings[0] | .id = \"F-003\" | .severity = \"LOW\")]"' &&
+  [ "$(jq -c '[.findings[].id]' "$ER/run/earlier.json")" = '["F-001","F-002"]' ]; }
+# records_dir alone: a usable home, and each refusal.
+rd() { ( eval "$1"; bash -c "$(ER_SRC "$ERS"); records_dir '${2:-example-org/widget}' 7" ) 2> /dev/null; }
+rd_ok() { [ "$(rd 'export XDG_STATE_HOME=/s')" = /s/modulestf/pr-review/records/example-org/widget/7 ]; }
+rd_nohome() { [ -z "$(rd 'unset XDG_STATE_HOME; export HOME=')" ] && [ -z "$(rd 'unset XDG_STATE_HOME HOME')" ] && [ "$(rd 'unset XDG_STATE_HOME; export HOME=/h')" = /h/.local/state/modulestf/pr-review/records/example-org/widget/7 ]; }
+rd_relative() { [ -z "$(rd 'export XDG_STATE_HOME=rel HOME=')" ] && [ -z "$(rd 'export XDG_STATE_HOME=/')" ]; }
+rd_dotdot() { [ -z "$(rd 'export XDG_STATE_HOME=/s/../t')" ] && [ -z "$(rd 'export XDG_STATE_HOME=/s/./t')" ]; }
+rd_dots() { [ -z "$(rd 'export XDG_STATE_HOME=/s' example-org/..)" ] && [ -z "$(rd 'export XDG_STATE_HOME=/s' example-org/.)" ]; }
+# earlier_of: two blocking findings, the clone at the head holding main.tf of 5 lines, mod/main.tf of 2
+# and a directory sub/.
+EO="$TMP/eo"; rm -rf "$EO"; mkdir -p "$EO/run/review" "$EO/repo/mod" "$EO/repo/sub"
+printf '1\n2\n3\n4\n5\n' > "$EO/repo/main.tf"; printf 'a\nb\n' > "$EO/repo/mod/main.tf"; : > "$EO/repo/sub/x.tf"
+git init -q "$EO/repo" && git -C "$EO/repo" add -A && git -C "$EO/repo" -c user.name=t -c user.email=t@t commit -q -m t && mv "$EO/repo" "$EO/run/clone"
+jq -n --arg c "$PH" '{review_id: 41, commit_id: $c, record: "ok", findings: [
+  {id: "F-001", rule_id: "structure.wrong-file", severity: "HIGH", file: "main.tf", line: 1, summary: "S.", suggested_fix: "F."},
+  {id: "F-002", rule_id: "structure.wrong-file", severity: "MEDIUM", file: "main.tf", line: 2, summary: "S.", suggested_fix: "F."}]}' > "$EO/run/earlier.json"
+J1='{"id": "F-001", "judgment": "resolved", "file": "main.tf", "line": 3}'
+J2='{"id": "F-002", "judgment": "resolved", "file": "main.tf", "line": 5}'
+eo() { # judgments file text (printf format) -> the judgments earlier_of gives, joined; EO_PREFIX sets the prefix
+  rm -f "$EO/run/review/earlier.json"; [ "$1" = - ] || printf '%s' "$1" > "$EO/run/review/earlier.json"
+  ( export RUN="$EO/run" PREFIX="${EO_PREFIX-}"; bash -c "$(ER_SRC "$ERS"); earlier_of" ) 2> /dev/null | jq -r '[.items[].judgment] | join(",")'
+}
+NJ=not-judged,not-judged
+e_ok() { [ "$(eo "[$J1, $J2]")" = resolved,resolved ]; }
+e_missing() { [ "$(eo -)" = "$NJ" ]; }
+e_link() { printf '%s' "[$J1, $J2]" > "$EO/j.json"; rm -f "$EO/run/review/earlier.json"; ln -s "$EO/j.json" "$EO/run/review/earlier.json"
+  [ "$( ( export RUN="$EO/run" PREFIX=; bash -c "$(ER_SRC "$ERS"); earlier_of" ) 2> /dev/null | jq -r '[.items[].judgment] | join(",")')" = "$NJ" ]; }
+e_big() { [ "$(eo "[$J1, $J2]$(printf '%270000s' '')")" = "$NJ" ]; }
+e_two() { [ "$(eo "[$J1, $J2] [$J1, $J2]")" = "$NJ" ]; }
+e_short() { [ "$(eo "[$J1]")" = "$NJ" ]; }
+e_idset() { [ "$(eo "[$J1, ${J2/F-002/F-009}]")" = "$NJ" ]; }
+e_extra() { [ "$(eo "[$J1, ${J2%\}}, \"why\": \"x\"}]")" = "$NJ" ]; }
+e_enum() { [ "$(eo "[$J1, ${J2/resolved/fixed}]")" = "$NJ" ]; }
+e_noloc() { [ "$(eo "[${J1/\"main.tf\"/null}, $J2]")" = "$NJ" ]; }
+e_climb() { [ "$(eo "[${J1/main.tf/..\/main.tf}, $J2]")" = "$NJ" ]; }
+e_nofile() { [ "$(eo "[${J1/main.tf/nope.tf}, $J2]")" = not-judged,resolved ]; }
+e_line() { [ "$(eo "[${J1/: 3/: 99}, $J2]")" = not-judged,resolved ]; }
+e_dir() { [ "$(eo "[${J1/main.tf/sub}, $J2]")" = not-judged,resolved ]; }
+e_partly() { [ "$(eo "[{\"id\": \"F-001\", \"judgment\": \"partly\", \"file\": null, \"line\": null}, $J2]")" = partly,resolved ]; }
+e_prefix() { [ "$(EO_PREFIX=mod eo "[${J1/: 3/: 4}, ${J2/: 5/: 2}]")" = not-judged,resolved ]; }
+# cmd_record: the output directory of the render above, the review read back from the gh stub.
+rec_fn() { # out directory [, review id] -> exit status, messages in $ER/rec.out; RC_ENV runs first
+  ( export HERE="$SK" XDG_STATE_HOME="$ER/rstate"; eval "${RC_ENV-}"; umask 022
+    bash -c "$(ER_SRC "$ERS"); cmd_record --out '$1' --review-id '${2:-41}'" ) > "$ER/rec.out" 2>&1
+}
+RCO="$ER/rec-o"
+rc_base() { rm -rf "$ER/rstate" "$RCO"; mkdir -p "$ER"; cp -R "$TMP/rec-out" "$RCO"; own_review 41 5 "$PH" "$TMP/posted.txt"
+  echo '{"login": "octo-reviewer", "type": "User", "id": 5}' > "$GHD/user"; }
+refused_with() { [ "$1" = 1 ] && grep -qxF "review-run.sh: record refused: $2" "$ER/rec.out" && [ ! -e "$ER/rstate/modulestf/pr-review/records/example-org/widget/7/41.json" ]; }
+mode_of() { stat -c %a "$1" 2> /dev/null || stat -f %Lp "$1"; }
+c_ok() { rc_base; rec_fn "$RCO"; local s=$? r="$ER/rstate/modulestf/pr-review/records"; [ $s = 0 ] &&
+  [ "$(mode_of "$r") $(mode_of "$r/example-org") $(mode_of "$r/example-org/widget") $(mode_of "$r/example-org/widget/7")" = "700 700 700 700" ] &&
+  [ "$(mode_of "$r/example-org/widget/7/41.json") $(mode_of "$r/example-org/widget/7/41.plan.json")" = "600 600" ]; }
+c_noplan() { rc_base; rm "$RCO/plan.json"; rec_fn "$RCO"; refused_with $? "the output directory holds no plan.json and comment.md"; }
+c_commentlink() { rc_base; mv "$RCO/comment.md" "$ER/c.keep"; ln -s "$ER/c.keep" "$RCO/comment.md"; rec_fn "$RCO"; refused_with $? "the output directory holds no plan.json and comment.md"; }
+c_noid() { rc_base; jq '.reviewer_id = null' "$TMP/rec-out/plan.json" > "$RCO/plan.json"; rec_fn "$RCO"; refused_with $? "plan.json is not a review plan with the token user's id"; }
+c_uid() { rc_base; echo '{"login": "octo-reviewer", "type": "User", "id": 6}' > "$GHD/user"; rec_fn "$RCO"; local s=$?
+  echo '{"login": "octo-reviewer", "type": "User", "id": 5}' > "$GHD/user"; refused_with $s "the token user is not the one the plan was rendered for"; }
+c_user() { rc_base; own_review 41 6 "$PH" "$TMP/posted.txt"; rec_fn "$RCO"; refused_with $? "review 41 is not the token user's review of the plan's head"; }
+c_commit() { rc_base; own_review 41 5 "$BASEC" "$TMP/posted.txt"; rec_fn "$RCO"; refused_with $? "review 41 is not the token user's review of the plan's head"; }
+c_state() { rc_base; jq '.state = "PENDING"' "$GHD/review-41" > "$ER/r.tmp" && mv "$ER/r.tmp" "$GHD/review-41"; rec_fn "$RCO"; refused_with $? "review 41 is not the token user's review of the plan's head"; }
+c_rid() { rc_base; jq '.id = 99' "$GHD/review-41" > "$ER/r.tmp" && mv "$ER/r.tmp" "$GHD/review-41"; rec_fn "$RCO"; refused_with $? "review 41 is not the token user's review of the plan's head"; }
+c_body() { rc_base; printf 'other\n' > "$RCO/comment.md"; rec_fn "$RCO"; refused_with $? "review 41 does not carry the rendered body"; }
+c_home() { rc_base; RC_ENV='export XDG_STATE_HOME= HOME=' rec_fn "$RCO"; refused_with $? "no absolute XDG_STATE_HOME or HOME"; }
+c_again() { rc_base; rec_fn "$RCO" && rec_fn "$RCO"; [ $? = 1 ] && grep -qxF "review-run.sh: record refused: review 41 is already recorded" "$ER/rec.out"; }
+c_loose() { rc_base; mkdir -p "$ER/rstate/modulestf/pr-review/records/example-org"; chmod 777 "$ER/rstate/modulestf/pr-review/records"; c_ok_after; }
+c_ok_after() { rec_fn "$RCO" && [ "$(mode_of "$ER/rstate/modulestf/pr-review/records")" = 700 ]; }
+for c in r_ok r_missing r_metalink r_planlink r_metabig r_planbig r_metabad r_planbad r_plansha r_permdir r_permfile r_permtop r_edited \
+    r_mmid r_mmstate r_mmtarget r_mmpin r_mmhead r_mmuidnone r_mmuid r_mmprefix r_empty r_grammar r_dup r_outside r_medium \
+    rd_ok rd_nohome rd_relative rd_dotdot rd_dots \
+    e_ok e_missing e_link e_big e_two e_short e_idset e_extra e_enum e_noloc e_climb e_nofile e_line e_dir e_partly e_prefix \
+    c_ok c_noplan c_commentlink c_noid c_uid c_user c_commit c_state c_rid c_body c_home c_again c_loose; do
+  "$c"; check "post record: case $c" $?
+done
+erm() { # name, perl -0 expression on a copy of review-run.sh, case function that holds on the original
+  local c="$TMP/er-mut.sh"; perl -0pe "$2" "$RR" > "$c"
+  if cmp -s "$c" "$RR"; then check "self-check: post record mutation $1 (the mutation changed nothing)" 1; return; fi
+  ERS="$c"; "$3" > /dev/null 2>&1; local s=$?; ERS=""
+  check "self-check: post record mutation $1 is caught" "$([ "$s" != 0 ]; echo $?)"
+}
+erm missing-default 's/rid d m pl rec=missing/rid d m pl rec=ok/' r_missing
+erm no-link-checks 's/\[ -f "\$m" \] && \[ ! -L "\$m" \] && \[ -f "\$pl" \] && \[ ! -L "\$pl" \] && /[ -f "\$m" ] \&\& [ -f "\$pl" ] \&\& /; s/\[ -O "\$p" \] && \[ ! -L "\$p" \]/[ -O "\$p" ]/' r_metalink
+erm no-link-checks-plan 's/\[ -f "\$m" \] && \[ ! -L "\$m" \] && \[ -f "\$pl" \] && \[ ! -L "\$pl" \] && /[ -f "\$m" ] \&\& [ -f "\$pl" ] \&\& /; s/\[ -O "\$p" \] && \[ ! -L "\$p" \]/[ -O "\$p" ]/' r_planlink
+erm no-meta-cap 's/\[ "\$\(wc -c < "\$m"\)" -le 4096 \]/true/' r_metabig
+erm no-plan-cap 's/\[ "\$\(wc -c < "\$pl"\)" -le 4194304 \]/true/' r_planbig
+erm no-meta-keys 's/type == "object" and keys == \["body_sha256", "format", "plan_sha256", "review_id", "state", "target"\]\n  and/type == "object"\n  and/' r_metabad
+erm no-stage-check 's/jq -e -L "\$HERE" \x27include "stage-contract"; stage_ok\("review-plan"\)\x27 "\$pl"/true/' r_planbad
+erm no-plan-digest 's/\[ "\$\(sha_file "\$pl"\)" = "\$\(jq -r \x27\.plan_sha256\x27 "\$m"\)" \]/true/' r_plansha
+erm no-perm-check 's/\[ -z "\$\(find "\$p" -prune [^\n]*\|\| return 1/true/' r_permdir
+erm no-perm-check-file 's/\[ -z "\$\(find "\$p" -prune [^\n]*\|\| return 1/true/' r_permfile
+erm leaf-only-perm 's/for p in "\$top" "\$\{d%\/\*\/\*\}" "\$\{d%\/\*\}" "\$d" "\$@"/for p in "\$d" "\$@"/' r_permtop
+erm no-edit-check 's/if \[ "\$\(jq -r \x27\.body_sha256\x27 "\$m"\)" != "\$\(jq -r \x27\.own_review\.body_sha256\x27 "\$h"\)" \]; then rec=edited\n        elif/if false; then rec=edited\n        elif/' r_edited
+erm no-id-bind 's/\$m\[0\]\.review_id == \$h\[0\]\.own_review\.id and //' r_mmid
+erm no-state-bind 's/\$m\[0\]\.state == "CHANGES_REQUESTED" and //' r_mmstate
+erm no-target-bind 's/ and \$m\[0\]\.target == \$t\n/\n/' r_mmtarget
+erm no-pin-bind 's/\$p\[0\]\.pin\.target == \$t and //' r_mmpin
+erm no-head-bind 's/ and \$p\[0\]\.pin\.head_sha == \$h\[0\]\.own_review\.commit_id//' r_mmhead
+erm no-user-bind 's/            and \(\$p\[0\]\.reviewer_id \| tostring\) == \$u and /            and /' r_mmuid
+erm no-prefix-bind 's/ and \$p\[0\]\.module_prefix == \$pre//' r_mmprefix
+erm no-empty 's/elif \$f == \[\] then "empty" //' r_empty
+erm no-grammar 's/elif \(\$g \| not\) then "unreadable"\n       //' r_grammar
+erm no-dup-ids 's/\n       and \(\$f \| map\(\.id\) \| length == \(unique \| length\)\)\) as \$g/) as \$g/' r_dup
+erm no-outside 's/\n       elif any\(\$f\[\]; \.file == null\) then "mismatch"//' r_outside
+erm no-medium-filter 's/ \| select\(\.severity \| IN\("CRITICAL", "HIGH", "MEDIUM"\)\)//' r_medium
+erm home-unset 's/\$\{XDG_STATE_HOME:-\$\{HOME:\+\$HOME\/\.local\/state\}\}/\${XDG_STATE_HOME:-\${HOME-}\/.local\/state}/' rd_nohome
+erm no-dot-segment 's/  case "\/\$b\/" in \*\/\.\/\* \| \*\/\.\.\/\*\) return 1 ;; esac\n//' rd_dotdot
+erm no-dots-repo 's/ && ! \[\[ "\$\{1#\*\/\}" =~ \^\[\.\]\+\$ \]\]//' rd_dots
+erm judgments-link 's/if \[ -f "\$j" \] && \[ ! -L "\$j" \] && /if [ -f "\$j" ] \&\& /' e_link
+erm judgments-cap 's/-le 262144/-le 999999999/' e_big
+erm judgments-two-docs 's/jq -c -s \x27if length == 1 then \.\[0\] else null end\x27 "\$j"/jq -c . "\$j"/' e_two
+erm judgments-ids 's/\n       and \(\(map\(\.id\) \| sort\) == \(\$f \| map\(\.id\) \| sort\)\)\) as \$ok/) as \$ok/' e_idset
+erm judgments-keys 's/and keys == \["file", "id", "judgment", "line"\] //' e_extra
+erm judgments-enum 's/and \(\.judgment \| IN\("resolved", "partly", "not resolved"\)\)//' e_enum
+erm judgments-place 's/\n         and \(\.judgment != "resolved" or \(\.file != null and \.line != null\)\)\)/)/' e_noloc
+erm judgments-climb 's/def plain: type == "string" and length > 0 and length <= 1024 and test\("\^\[A-Za-z0-9\._\]\[A-Za-z0-9\._\/-\]\*\$"\) and \(test\("\(\^\|\/\)\[\.\]\[\.\]\(\/\|\$\)"\) \| not\);/def plain: type == "string";/' e_climb
+erm resolved-unchecked 's/\n         \| \(if \$x != null and \$x\.judgment == "resolved" and \(\$heads\[[^\n]*//' e_nofile
+erm resolved-line-unchecked 's/\[\[ "\$n" =~ \^\[0-9\]\+\$ \]\] && \[ "\$l" -le "\$n" \] 2> \/dev\/null \|\| continue/true/' e_line
+erm resolved-no-prefix 's/HEAD:\$\{PREFIX:\+\$PREFIX\/\}\$f/HEAD:\$f/g' e_prefix
+erm record-plan-check 's/\[ -f "\$p" \] && \[ ! -L "\$p" \] && \[ -f "\$c" \] && \[ ! -L "\$c" \] \|\| fail "record refused: the output directory holds no plan\.json and comment\.md"/true/' c_noplan
+erm record-comment-link 's/ && \[ -f "\$c" \] && \[ ! -L "\$c" \] \|\|/ \&\& [ -f "\$c" ] ||/' c_commentlink
+erm record-reviewer-id 's/ and \(\.reviewer_id \| type == "number"\)//' c_noid
+erm record-token-user 's/uid="\$\(gh api user --jq \x27\.id\x27 2> \/dev\/null\)" && \[ "\$uid" = "\$\(jq -r \x27\.reviewer_id\x27 "\$p"\)" \] \|\|/uid="\$(gh api user --jq \x27.id\x27 2> \/dev\/null)" ||/' c_uid
+erm record-user 's/ and \.user\.id == \$u\n/\n/' c_user
+erm record-commit 's/      and \.commit_id == \$p\[0\]\.pin\.head_sha and /      and /' c_commit
+erm record-state 's/ and \(\.state \| IN\("APPROVED", "CHANGES_REQUESTED", "COMMENTED"\)\)\n/\n/' c_state
+erm record-review-id 's/\x27\.id == \$id and \.user\.id/\x27.user.id/' c_rid
+erm record-body 's/cmp -s "\$w\/body" "\$w\/sent" \|\|/true ||/' c_body
+erm record-home 's/\$\{XDG_STATE_HOME:-\$\{HOME:\+\$HOME\/\.local\/state\}\}/\${XDG_STATE_HOME:-\${HOME-}\/.local\/state}/' c_home
+erm record-again 's/  \[ ! -e "\$d\/\$id\.json" \] && \[ ! -L "\$d\/\$id\.json" \] && \[ ! -e "\$d\/\$id\.plan\.json" \] && \[ ! -L "\$d\/\$id\.plan\.json" \] \|\|\n    \{ rm -rf "\$w"; fail "record refused: review \$id is already recorded"; \}\n//' c_again
+erm record-no-chmod 's/    chmod 700 "\$\{d%\/\*\/\*\/\*\}" "\$\{d%\/\*\/\*\}" "\$\{d%\/\*\}" "\$d" 2> \/dev\/null && store_private "\$d" \|\|/    store_private "\$d" ||/' c_loose
+erm record-file-mode 's/\( umask 077 && cp -- "\$p" "\$d\/\$id\.plan\.json\.tmp" \)/cp -- "\$p" "\$d\/\$id.plan.json.tmp"/' c_ok
+own_review 41 5 "$HEADC" "$TMP/posted.txt"
 
 # --- 5d. A large change: a files list over 1 MiB gets a focused review over the budget, not a refusal.
 # depth.sh takes the list and hands mtf-facts names and line counts; prepare names the files past the
