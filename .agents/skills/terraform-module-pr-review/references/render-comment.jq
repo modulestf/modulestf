@@ -112,7 +112,7 @@ def valid_behaviour:
   type == "object" and keys == ["capped", "claims", "reason", "status", "triggers"]
   and (.capped | nat)
   and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object"
-        and (keys - ["also_categories", "complete", "evidence_digest", "outstanding", "unexercised"]) == ["category", "file", "id", "line", "state"]
+        and (keys - ["also_categories", "complete", "evidence_digest", "identical", "outstanding", "unexercised"]) == ["category", "file", "id", "line", "state"]
         and (.id | type == "string" and test("^T-[0-9]{3}$"))
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0))
         and (.category | IN(behaviour_categories[]))
@@ -130,7 +130,11 @@ def valid_behaviour:
         and ((has("evidence_digest") | not) or ((.evidence_digest | digest) and (.outstanding // []) != []))
         # Contract 6: behaviour-pass.sh's mark of a trigger no plan of a whole selection reaches.
         and ((has("unexercised") | not) or (.unexercised == true and .state == "unverifiable"
-              and (has("complete") or has("outstanding") or has("evidence_digest") | not))))
+              and (has("complete") or has("outstanding") or has("evidence_digest") | not)))
+        # Contract 7: the examples a plan diff found the same in, never beside unexercised.
+        and ((has("identical") | not) or ((.identical | type == "array" and length > 0 and length <= 20
+              and all(.[]; plain_path) and . == unique) and .state == "unverifiable"
+              and (has("complete") or has("outstanding") or has("evidence_digest") or has("unexercised") | not))))
         and (map(.id) | length == (unique | length)))
   and (.claims | type == "array" and length <= 48 and all(.[]; type == "object"
         and keys == ["claim_id", "state"] and (.claim_id | type == "string" and test("^C-[0-9]+$"))
@@ -156,12 +160,14 @@ def ci_gated: .ci == true;
 def floor_ok: .floor == true;
 # A trigger the host reads as undemonstrated (mark_undemonstrated): no gap either.
 def demo_ok: .demo == true;
+# A trigger the host reads as identical (mark_undemonstrated): no gap either.
+def same_ok: .same == true;
 # A workflow that never started a job ran no test, so with one the trigger stays a gap.
 def mark_ci($checks): if . == null or .status != "ran" or (($checks.runs // 0) == 0) or (($checks.jobless // []) != []) then .
   else .triggers |= map(if .category == "non-hcl-dependency" and .state == "unverifiable" then . + {ci: true} else . end) end;
 def behaviour_gaps: if . == null then 0 elif .status == "not-run" then 1
   # The changes over the classifier cap are one cause, so one gap however many they are.
-  else ([(.triggers[] | select((ci_gated or floor_ok or demo_ok) | not)), .claims[] | select(.state == "unverifiable")] | length)
+  else ([(.triggers[] | select((ci_gated or floor_ok or demo_ok or same_ok) | not)), .claims[] | select(.state == "unverifiable")] | length)
     + (if .capped > 0 then 1 else 0 end) end;
 def behaviour_refuted: if . == null then 0 else [.triggers[], .claims[] | select(.state == "refuted")] | length end;
 
@@ -437,18 +443,25 @@ def mark_floors($findings; $run; $h):
 # planned example can create. It leaves the gaps for rule 7 at best when the whole selection was
 # planned, it is no triage run, its categories are on the list, and no compat.* finding, at any
 # severity, sits in its directory.
+# A trigger behaviour-pass.sh marked identical (verdict.md, Identical plans) reads the same way,
+# under the same conditions, on its own categories.
 def demo_categories: ["dynamic-block-change", "unclassified-change"];
+def same_categories: ["dynamic-block-change", "unclassified-change", "locals-outputs-change"];
 def mark_undemonstrated($findings; $run):
   if . == null or .status != "ran" then . else
     (($run.triage | not) and $run.plan_ran and $run.coverage.class == "complete"
      and (($run.depth.examples_out_of_scope // []) == [])) as $whole
     | .triggers |= map(. as $t
+        | (any($findings[]; (.rule_id | startswith("compat.")) and (.file | file_dir) == ($t.file | file_dir)) | not) as $nocompat
         | if $whole and .state == "unverifiable" and .unexercised == true
-             and ([.category, (.also_categories // [])[]] - demo_categories == [])
-             and (any($findings[]; (.rule_id | startswith("compat.")) and (.file | file_dir) == ($t.file | file_dir)) | not)
-          then . + {demo: true} else . end)
+             and ([.category, (.also_categories // [])[]] - demo_categories == []) and $nocompat
+          then . + {demo: true}
+          elif $whole and .state == "unverifiable" and (.identical | type == "array")
+             and ([.category, (.also_categories // [])[]] - same_categories == []) and $nocompat
+          then . + {same: true} else . end)
   end;
 def demo_count: if . == null then 0 else [.triggers[] | select(demo_ok)] | length end;
+def same_count: if . == null then 0 else [.triggers[] | select(same_ok)] | length end;
 # A location is a code span; under --links (link_base set) a link to the file at the head when
 # the path is in the allowed set, and is not the module root `.`, so the URL holds no character the pull request could choose.
 def link_base: $ARGS.named.link_base // "";
@@ -496,7 +509,7 @@ def ladder:
     then {rule: 4, verdict: "inconclusive"}
   elif ($m | not) and .unresolved > 0 then {rule: 5, verdict: "changes suggested"}
   elif has_sev("MEDIUM") then {rule: 6, verdict: "block"}
-  elif has_sev("LOW") or .covered > 0 or .undemonstrated > 0 or $g.checks == "jobless" then {rule: 7, verdict: "approve with nits"}
+  elif has_sev("LOW") or .covered > 0 or .undemonstrated > 0 or .identical > 0 or $g.checks == "jobless" then {rule: 7, verdict: "approve with nits"}
   else {rule: 8, verdict: "approve"} end;
 
 def verdict_line: {
@@ -541,6 +554,7 @@ def texts: {
   "rationale-5": "Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5).",
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
   "rationale-7-undemonstrated": "No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7).",
+  "rationale-7-identical": "No finding is open, and an added input or output planned the same as before in the existing examples, which shows only its default. With such a change, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-covered": "No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-jobless": "No finding is open, and a workflow ended without starting a job, so the repository's CI did not run. While it has not run, approve with nits is the best verdict (ladder rule 7).",
   "rationale-8": "No finding is open. With nothing open, the change is approved (ladder rule 8).",
@@ -606,6 +620,8 @@ def texts: {
   "behaviour-floor-judged": "Provider floor changes judged by Check A, which no behaviour level verifies: {count}.",
   "behaviour-undemonstrated": "Changes to a resource no planned example creates, which no plan can show: {count}.",
   "undemonstrated-trigger": "- Not demonstrated: {location} ({category}): no planned example creates this resource, so no plan shows the change.",
+  "behaviour-identical": "Added inputs or outputs the existing examples plan the same as before, on their default only: {count}.",
+  "identical-trigger": "- Same plan: {location} ({category}): {examples}, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown.",
   "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
   "thread-match": "- {location}: this review has a finding at the same path and line.",
   "thread-no-match": "- {location}: this review has no finding at the same path and line.",
@@ -752,6 +768,7 @@ def rationale($in):
     # Rule 7 with no LOW finding: covered skips alone keep the verdict off rule 8.
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.covered > 0 then tx("rationale-7-covered")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.undemonstrated > 0 then tx("rationale-7-undemonstrated")
+    elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.identical > 0 then tx("rationale-7-identical")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) then tx("rationale-7-jobless")
     else tx("rationale-\($r)") end;
 
@@ -1011,7 +1028,7 @@ def gap_lines($h; $run; $b; $p; $cov):
   | (if $invalid then "-invalid" else "" end) as $why
   | $b | if . == null then []
      elif .status == "not-run" then [tx("behaviour-not-run"; {reason})]
-     else [ ([.triggers[] | select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok) | not))]
+     else [ ([.triggers[] | select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok or same_ok) | not))]
              | if length <= 5 then .[] | tx("behaviour-trigger" + $why; trigger_at($p))
                # More than five: one line counting them per category; the locations are noise.
                else tx("behaviour-trigger-groups" + $why; {count: length, categories: (group_by(.category)
@@ -1043,6 +1060,7 @@ def evidence_lines($b):
        | if . > 0 then ["Changes outside Terraform left to the repository's own tests, which the Checks signal reads: \(.)."] else [] end)
     + ([$b.triggers[] | select(floor_ok)] | length | if . > 0 then [tx("behaviour-floor-judged"; {count: .})] else [] end)
     + ([$b.triggers[] | select(demo_ok)] | length | if . > 0 then [tx("behaviour-undemonstrated"; {count: .})] else [] end)
+    + ([$b.triggers[] | select(same_ok)] | length | if . > 0 then [tx("behaviour-identical"; {count: .})] else [] end)
   end;
 
 # The test pass's line under the evidence line, when it marked a trigger tested or refuted.
@@ -1317,7 +1335,7 @@ def render($in):
      skipped: ($in.run | skipped_gap),
      gaps: (($in.run | skipped_gap) + ($h.could_not_run | cnr_count) + ($unreg | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
      unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end),
-     undemonstrated: ($b | demo_count)};
+     undemonstrated: ($b | demo_count), identical: ($b | same_count)};
   # Triggers that are all inert make the change inert for plan coverage (triggers_inert), unless
   # another rule 4 unknown is present: then the coverage stays required.
   ledger($in) as $l0
@@ -1344,7 +1362,7 @@ def render($in):
      + evidence_lines($b)
      + tests_lines($in.run.tests; $b)
      # Rule 7 reached by covered skips alone has no optional item to list.
-     + (if $v.rule == 8 or $quiet or (($cov != [] or $l.undemonstrated > 0) and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items; $h.state.state == "closed" and ($h.state.merged | not))] end)
+     + (if $v.rule == 8 or $quiet or (($cov != [] or $l.undemonstrated > 0 or $l.identical > 0) and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items; $h.state.state == "closed" and ($h.state.merged | not))] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
      # Covered skips leave no gap, so section 5 then holds only their witness lines, which no
      # check that could not run describes.
@@ -1354,6 +1372,9 @@ def render($in):
        + skipped_lines($in.run; $p); "\n")
      # Undemonstrated changes are information, no gap: their own section, one line per trigger.
      + section("Changes no example creates"; [($b // {triggers: []}).triggers[] | select(demo_ok) | tx("undemonstrated-trigger"; trigger_at($p))]; "\n")
+     # Identical plans are information too: one line per trigger, naming its examples.
+     + section("Changes the examples plan the same"; [($b // {triggers: []}).triggers[] | select(same_ok)
+         | tx("identical-trigger"; trigger_at($p) + {examples: (.identical | map("`" + . + "`") | join(", "))})]; "\n")
      + section("Review depth"; depth_lines($in.run); "\n\n")
      + section("Profile"; profile_lines($in.run); "\n\n")
      + section("Pull request state"; state_lines($h; $in.checks); "\n\n")

@@ -7,6 +7,8 @@
 #       (--diff <files.json> [--prefix <module root prefix>] | --base <dir>) [--schema <schema.json>] --out <dir>
 #   behaviour-pass.sh eval --facts <mtf-facts> --out <dir> --head <sha> --base-sha <sha>
 #       [--claims <claims.json>] [--ladder <ladder.json>] [--wrappers <wrappers.txt>] [--prefix <module root prefix>]
+#       [--plan-diff <coverage.json>]
+#   behaviour-pass.sh diff-dirs --out <dir> [--prefix <module root prefix>]
 #   behaviour-pass.sh wrappers --clone <dir> --head <sha> --diff <files.json> [--prefix <p>] --out <dir>
 #
 # wrappers writes <out>/wrappers.txt, one line per wrapper versions.tf the change touches: its
@@ -14,6 +16,12 @@
 # Wrapper Versions). It reads the head tree with the git form of the reviewer's git-safety.md and
 # runs nothing from the clone. eval with --wrappers makes an unverifiable trigger at a derived or
 # copied wrapper inert.
+#
+# diff-dirs prints, one per line and repository-relative, the directory of each trigger in
+# <out>/behaviour.json whose category is on the plan diff's closed list (behaviour-pass.md, The
+# Run Object), for the plan pass's --diff-dir. eval with --plan-diff reads the coverage's
+# plan_diff and marks such a trigger identical when every merge base example that reaches it
+# planned the same against the base and the head module.
 #
 # classify writes <out>/behaviour.json, the checked classifier output, or <out>/status, the reason
 # nothing was classified, and prints one line. eval writes <out>/run-behaviour.json, the run file's
@@ -33,19 +41,20 @@ deadline="${BEHAVIOUR_PASS_TIMEOUT:-120}"
 die() { echo "behaviour-pass.sh: $1" >&2; exit 2; }
 
 cmd="${1-}"; shift 2> /dev/null
-facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder="" wrappers="" clone=""
+facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder="" wrappers="" clone="" pdiff=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --facts) facts="${2-}" ;; --dir) dir="${2-}" ;; --diff) diff="${2-}" ;; --prefix) prefix="${2-}" ;; --base) base="${2-}" ;; --schema) schema="${2-}" ;;
     --out) out="${2-}" ;; --head) head="${2-}" ;; --base-sha) bsha="${2-}" ;;
     --claims) claims="${2-}" ;; --ladder) ladder="${2-}" ;; --wrappers) wrappers="${2-}" ;; --clone) clone="${2-}" ;;
+    --plan-diff) pdiff="${2-}" ;;
     *) die "unexpected argument" ;;
   esac
   [ $# -ge 2 ] || die "$1 needs a value"; shift 2
 done
 abs() { case "$1" in /?*) ;; *) die "$2 must be an absolute path" ;; esac; }
 abs "$out" --out; [ -d "$out" ] && [ ! -L "$out" ] || die "--out is not a directory"
-[ "$cmd" = wrappers ] || abs "$facts" --facts
+case "$cmd" in wrappers | diff-dirs) ;; *) abs "$facts" --facts ;; esac
 
 # Shared checks, in jq: a clean module-relative path, and the classifier output of contract 2.
 JQ_DEFS='
@@ -116,6 +125,25 @@ def covers($files):
   | ([$files[] | select(.status != "unchanged") | .filename, (.previous_filename // empty)
       | select(test("(^|/)\\.(git|terraform)(/|$)") | not)]
      - [$o.entries[] | .path, (.previous_path // empty)]) == [];
+# The closed list of the plan diff (behaviour-pass.md, The Run Object): an added change whose claim is
+# that existing callers are unaffected. An added variable; an added output; an argument, a block
+# or a module call argument the change adds that reads one variable the change adds in the same
+# directory and nothing else. Never a changed default or type of an existing variable.
+def tdir: if test("/") then sub("/[^/]*$"; "") else "." end;
+def meta_args: ["provider", "count", "for_each", "depends_on", "lifecycle", "provisioner", "connection"];
+def added_vars($b): [$b.triggers[] | select(.change_kind == "added" and (.address | type == "string" and test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$")))
+  | {dir: (.file | tdir), name: (.address | ltrimstr("var."))}];
+def diff_kind($t; $b): if $t.change_kind != "added" or ($t.address | type != "string") then null
+  elif ($t.address | test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$")) and $t.category == "unclassified-change"
+    and (($t.also_categories // []) == []) then "variable"
+  elif ($t.address | test("^output\\.[A-Za-z_][A-Za-z0-9_-]*$")) and $t.category == "locals-outputs-change"
+    and (($t.also_categories // []) == []) then "output"
+  elif ($t.address | test("^([a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*|module\\.[A-Za-z_][A-Za-z0-9_-]*)$"))
+    and ([$t.category, ($t.also_categories // [])[]] - ["unclassified-change", "dynamic-block-change"] == [])
+    and ($t.attribute | type == "string" and (sub("^dynamic\\."; "") | split(".")[0] | IN(meta_args[]) == false))
+    and $t.contextual_refs == [] and ($t.referenced_inputs | type == "array" and length == 1)
+    and ({dir: ($t.file | tdir), name: $t.referenced_inputs[0].name} | IN(added_vars($b)[])) then "argument"
+  else null end;
 def valid_claims: type == "object" and (.claims | type == "array" and length <= 48
   and all(.[]; type == "object" and (.claim_id | cid)) and (map(.claim_id) | length == (unique | length)));
 '
@@ -287,6 +315,20 @@ evaluate() {
       "$ladder" > "$out/ladder-module.json" 2> /dev/null || not_run "ladder refused"
     ladder="$out/ladder-module.json"
   fi
+  # The plan diff of the coverage (plan-pass.md, Plan diff), each dir moved into the module root's
+  # frame as the coverage is. A file that is not a coverage object with a plan_diff list in its
+  # shape is no evidence, as with no file.
+  local pd='[]'
+  if [ -n "$pdiff" ]; then
+    abs "$pdiff" --plan-diff; [ -f "$pdiff" ] && [ ! -L "$pdiff" ] || die "--plan-diff is not a regular file"
+    pd="$(jq -c --arg p "$prefix" '
+      def rel: if $p == "" then . elif . == $p then "." elif startswith($p + "/") and (split("/") | all(. != "..")) then .[($p | length) + 1:]
+        else "/" + . end;
+      if (.plan_diff | type == "array" and all(.[]; type == "object" and (.dir | type == "string")
+            and (.result | IN("equal", "differs", "unknown", "not-run")) and (.reason == null or (.reason | type == "string"))
+            and (.addresses | type == "array" and length <= 1000 and all(.[]; type == "string"))))
+      then .plan_diff | map(.dir |= rel) else [] end' "$pdiff" 2> /dev/null)" || pd='[]'
+  fi
   set -- claims-eval --behaviour "$out/behaviour.json" --ladder "$ladder" --head-sha "$head" --base-sha "$bsha"
   [ -n "$claims" ] && set -- "$@" --claims "$claims"
   case "$(run_facts "$out/eval.raw" "$@" --json)" in
@@ -307,7 +349,7 @@ evaluate() {
   if [ -f "$out/required.json" ]; then
     rq="$(jq -c 'if type == "array" and all(.[]; type == "string") then . else ["*"] end' "$out/required.json" 2> /dev/null)" || rq='["*"]'
   fi
-  jq -n --slurpfile b "$out/behaviour.json" --slurpfile e "$out/eval.raw" --slurpfile l "$ladder" --argjson c "$cf" --argjson w "$wj" --argjson nv "${nv:-[]}" --argjson rq "${rq:-[\"*\"]}" "$JQ_DEFS"'
+  jq -n --slurpfile b "$out/behaviour.json" --slurpfile e "$out/eval.raw" --slurpfile l "$ladder" --argjson c "$cf" --argjson w "$wj" --argjson nv "${nv:-[]}" --argjson rq "${rq:-[\"*\"]}" --argjson pd "${pd:-[]}" --arg pre "$prefix" "$JQ_DEFS"'
     $b[0] as $b | $l[0] as $l
     # An unverifiable trigger at a wrapper versions.tf the host found equal to its generator output
     # is inert, with no outstanding difference: the wrapper is the module file, as the hook writes it.
@@ -323,15 +365,13 @@ evaluate() {
     # The value reads one variable the change adds with a null default ($nv), and nothing else: an
     # argument is exactly var.<name>; a dynamic block is null-guarded to no block. A literal, another
     # variable, a local, a resource or any function changes what existing callers get: never marked.
-    def tdir: if test("/") then sub("/[^/]*$"; "") else "." end;
     def null_pass($t): ($t.contextual_refs == []) and ($t.head_expr | type == "string")
       and ($t.referenced_inputs | type == "array" and length == 1 and (.[0].name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]*$")))
       and ($t.referenced_inputs[0].name as $n | ({dir: ($t.file | tdir), name: $n} | IN($nv[]))
         and (if $t.category == "dynamic-block-change"
              then ($t.head_expr | test("^var\\.\($n) == null \\? \\[\\] : \\[[^?:]*\\]$") or test("^var\\.\($n) != null \\? \\[[^?:]*\\] : \\[\\]$"))
              else $t.head_expr == "var.\($n)" end));
-    # Meta-arguments change how a resource is created, not what it sets: never marked.
-    def meta_args: ["provider", "count", "for_each", "depends_on", "lifecycle", "provisioner", "connection"];
+    # Meta-arguments (meta_args) change how a resource is created, not what it sets: never marked.
     # A managed resource address, [module.<call>[<key>].]...<type>.<name>[<key>], with no keyword root.
     def managed: test("^(module\\.[A-Za-z0-9_-]+(\\[[^\\]]*\\])?\\.)*[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*(\\[[^\\]]*\\])?$");
     def bare: gsub("\\[[^\\]]*\\]"; "");
@@ -371,12 +411,38 @@ evaluate() {
            and $t.change_kind == "added" and $t.category == "unclassified-change" and (($t.also_categories // []) == [])
            and $t.levels == [] and $et.state == "unverifiable" and ($et | has("complete") or has("outstanding") or has("evidence_digest") | not)
            and ($t.follows | type == "array" and length > 0 and all(.[]; IN($m[]))) and loaded($t);
+    # Identical (behaviour-pass.md, The Run Object): a trigger on the closed list whose merge base
+    # examples planned the same against the base and the head module. Every example planned
+    # with its addresses read whole; the eligible ones are those that are the directory of the trigger
+    # or call it directly, less those absent at the base; at least one, each equal, and one of
+    # them plans the address the change sits in: the resource, the instances of the module call, or
+    # for a variable or an output any address of that module instance.
+    def pd_of($d): first($pd[] | select(.dir == $d)) // null;
+    def repo_dir: if startswith("/") then .[1:] elif $pre == "" then . elif . == "." then $pre else $pre + "/" + . end;
+    def prefixes($e; $d): (if $e.dir == $d then [""] else [] end)
+      + [(($e.module_calls // {}) | to_entries[] | select(.value == $d) | "module.\(.key).")];
+    def identical($t; $et): ($t.file | tdir) as $d | diff_kind($t; $b) as $k
+      | if $k == null or $et.state != "unverifiable" or ($et | has("complete") or has("outstanding") or has("evidence_digest"))
+           or ($l.coverage.class != "complete")
+           or (all($l.coverage.examples[]; (.head | IN("planned", "planned-no-changes"))
+                 and (.addresses | type == "array" and length > 0 and length < 1000)) | not)
+        then [] else
+          [$l.coverage.examples[] | select(.dir == $d or ((.module_calls // {}) | to_entries | any(.value == $d)))
+           | {e: ., p: pd_of(.dir)} | select(.p.reason != "absent-at-base")] as $el
+          | ($t.address | gsub("\\[[^\\]]*\\]"; "")) as $a
+          | if $el != [] and all($el[]; .p.result == "equal")
+               and any($el[]; .e as $e | .p.addresses as $pa | prefixes($e; $d)[] as $x
+                     | if $k == "argument" and ($a | startswith("module.") | not) then any($pa[]; . == $x + $a)
+                       elif $k == "argument" then any($pa[]; startswith($x + $a + "."))
+                       else any($pa[]; startswith($x)) end)
+            then [$el[].e.dir | repo_dir] else [] end end;
     {run: {status: "ran", reason: null,
        triggers: [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
                   | {id: $t.id, file: $t.file, line: $t.line, category: $t.category, state: $et.state}
                     + ($t | with_entries(select(.key == "also_categories")))
                     + ($et | with_entries(select(.key | IN("complete", "outstanding", "evidence_digest"))))
-                    + (if unex($t; $et) then {unexercised: true} else {} end)],
+                    + (if unex($t; $et) then {unexercised: true} else {} end)
+                    + (identical($t; $et) as $i | if $i != [] and (unex($t; $et) | not) then {identical: $i} else {} end)],
        claims: [$c.claims[] | {claim_id, state: (kstate(.claim_id) | if . == "discarded" then "unverifiable" else . end)}],
        capped: $b.capped},
      record: (["behaviour: ran, \($b.triggers | length) triggers, \($b.capped) over the cap\(if $b.inert then ", inert" else "" end)"]
@@ -385,6 +451,7 @@ evaluate() {
             + (if $et.wrapper != null then ", wrapper \($et.wrapper)" else "" end)
             + (if $et.complete == true then ", complete" else "" end)
             + (if unex($t; $et) then ", unexercised" else "" end)
+            + (identical($t; $et) as $i | if $i != [] and (unex($t; $et) | not) then ", identical" else "" end)
             + (if ($et.outstanding // []) != [] and $et.evidence_digest != null
                then ", outstanding \($et.outstanding | length), digest \($et.evidence_digest)" else "" end)]
        # Each base and head difference claims-eval found, for the compatibility judgement; no input crosses.
@@ -558,9 +625,20 @@ wrapper_pairs() {
   cat "$out/wrappers.txt"
 }
 
+# diff_dirs: the directories of the closed list's triggers, repository-relative, for --diff-dir.
+diff_dirs() {
+  [ -f "$out/behaviour.json" ] || die "run classify first"
+  prefix="${prefix%/}"
+  case "$prefix" in /* | *..* | .) die "--prefix must be repository-relative" ;; esac
+  jq -r --arg pre "$prefix" "$JQ_DEFS"' . as $b
+    | [.triggers[] | select(diff_kind(.; $b) != null) | .file | tdir
+       | if $pre == "" then . elif . == "." then $pre else $pre + "/" + . end] | unique[]' "$out/behaviour.json"
+}
+
 case "$cmd" in
   classify) classify ;;
+  diff-dirs) diff_dirs ;;
   eval) evaluate ;;
   wrappers) wrapper_pairs ;;
-  *) die "the first argument is classify, eval or wrappers" ;;
+  *) die "the first argument is classify, eval, wrappers or diff-dirs" ;;
 esac

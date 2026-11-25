@@ -24,6 +24,8 @@ A run file with a `depth` key ([depth.md](depth.md)) adds the Review depth secti
 
 A behaviour object with an undemonstrated trigger ([verdict.md](verdict.md#undemonstrated-features)) adds the Changes no example creates section between sections 5 and the Review depth section: one `undemonstrated-trigger` row per such trigger, with its file, line and category. It is information and no gap. A run file with a `profile` key adds the Profile section after the Review depth section: the `profile-line` row with the reviewer's profile label, `shipped:<id>` or `custom`, and its `profile_tree_sha256`, which the run checked against what it handed over ([github-io.md](github-io.md#handover)). In COMPACT the row is one more evidence note. A run file without the key renders no such section and nothing else changes.
 
+A behaviour object with an identical trigger ([verdict.md](verdict.md#identical-plans)) adds the Changes the examples plan the same section after the Changes no example creates section: one `identical-trigger` row per such trigger, with its file, line, category and the examples the plan diff compared. It is information and no gap.
+
 Sections 1 to 3 carry no heading: the assessment and the rationale are paragraphs and the verdict line is bold. The What to do section and sections 4 to 8 each open with a `###` heading naming the section: `### What to do`, `### Findings`, `### Checks that could not run` (`### Examples not planned` when it holds covered skips only), `### Changes no example creates`, `### Review depth`, `### Profile`, `### Pull request state`, `### Existing threads`, `### Conversation comments`. An omitted section drops its heading too. Where a section above says one line, it means the content under that heading. Inside section 4 each severity is a bold label on its own line, not a heading.
 
 Nothing else. No checklist outside the What to do section, no emoji, no closing pleasantry, no offer to make the change.
@@ -469,6 +471,7 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `rationale-5` | Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5). |
 | `rationale-7` | Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7). |
 | `rationale-7-undemonstrated` | No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7). |
+| `rationale-7-identical` | No finding is open, and an added input or output planned the same as before in the existing examples, which shows only its default. With such a change, approve with nits is the best verdict (ladder rule 7). |
 | `rationale-7-covered` | No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7). |
 | `rationale-7-jobless` | No finding is open, and a workflow ended without starting a job, so the repository's CI did not run. While it has not run, approve with nits is the best verdict (ladder rule 7). |
 | `rationale-8` | No finding is open. With nothing open, the change is approved (ladder rule 8). |
@@ -534,6 +537,8 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `behaviour-floor-judged` | Provider floor changes judged by Check A, which no behaviour level verifies: {count}. |
 | `behaviour-undemonstrated` | Changes to a resource no planned example creates, which no plan can show: {count}. |
 | `undemonstrated-trigger` | - Not demonstrated: {location} ({category}): no planned example creates this resource, so no plan shows the change. |
+| `behaviour-identical` | Added inputs or outputs the existing examples plan the same as before, on their default only: {count}. |
+| `identical-trigger` | - Same plan: {location} ({category}): {examples}, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown. |
 | `behaviour-evidence` | Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified. |
 | `thread-match` | - {location}: this review has a finding at the same path and line. |
 | `thread-no-match` | - {location}: this review has no finding at the same path and line. |

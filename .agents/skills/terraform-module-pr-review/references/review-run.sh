@@ -558,18 +558,24 @@ plan_dirs() { # the examples to plan, repository-relative, in selection order
 cmd_plan() {
   need_full plan
   [ ! -e "$RUN/coverage.json" ] || fail "plan already ran in this run"
-  local profile role mode src=(--no-plan) d dirs=() base=() rc=0 missed=""
+  local profile role mode src=(--no-plan) d dirs=() base=() rc=0 missed="" pdd=()
   profile="$(arg profile)"; role="$(arg role_arn)"; mode="$(cat "$RUN/state/mode")"
   [ -z "$MB" ] || base=(--base "$MB")
   if [ -n "$profile" ] && [ "$(depth)" != light ]; then
     while IFS= read -r d; do plain_ok "$d" && dirs+=("$d"); done < <(plan_dirs)
+    # The directories of the changes a plan diff can clear (plan-pass.md, Plan diff), from the
+    # classifier; none when it did not run.
+    if [ -f "$RUN/behaviour/behaviour.json" ] && [ -n "$MB" ]; then
+      while IFS= read -r d; do pdd+=(--diff-dir "$d"); done < <(bash "$HERE/behaviour-pass.sh" diff-dirs \
+        --out "$RUN/behaviour" --prefix "$PREFIX" 2> /dev/null)
+    fi
     if [ "${#dirs[@]}" -gt 0 ] && [ "$mode" = runner ]; then
       bash "$HERE/plan-runner/run-pass.sh" --build --clone "$RUN/runner-clone" --record "$RUN/plan-record" \
-        --tmp "$RUN" --profile "$profile" --role-arn "$role" ${base[@]+"${base[@]}"} "${dirs[@]}" \
+        --tmp "$RUN" --profile "$profile" --role-arn "$role" ${base[@]+"${base[@]}"} ${pdd[@]+"${pdd[@]}"} "${dirs[@]}" \
         > "$RUN/state/plan.out" 2> "$RUN/state/plan.err" || rc=$?
       [ -f "$RUN/plan-record/plan-pass.txt" ] && src=(--plan "$RUN/plan-record/plan-pass.txt" --addresses "$RUN/plan-record")
     elif [ "${#dirs[@]}" -gt 0 ]; then
-      bash "$HERE/plan-pass.sh" plan "$RUN" "$profile" --role-arn "$role" --mode laptop ${base[@]+"${base[@]}"} \
+      bash "$HERE/plan-pass.sh" plan "$RUN" "$profile" --role-arn "$role" --mode laptop ${base[@]+"${base[@]}"} ${pdd[@]+"${pdd[@]}"} \
         "${dirs[@]}" > "$RUN/plan-out.txt" 2> "$RUN/state/plan.err" || rc=$?
       # A record is usable when the pass printed its mode line or a plan line for an example.
       if grep -qE '^(plan pass mode:|plan:)' "$RUN/plan-out.txt"; then
@@ -662,6 +668,8 @@ cmd_ladder() {
   bash "$HERE/behaviour-pass.sh" wrappers --clone "$RUN/clone" --head "$HEAD_SHA" --diff "$RUN/host/files.json" \
     --prefix "$PREFIX" --out "$RUN/behaviour" > /dev/null 2>&1 || rm -f "$RUN/behaviour/wrappers.txt"
   [ ! -f "$RUN/behaviour/wrappers.txt" ] || wr=(--wrappers "$RUN/behaviour/wrappers.txt")
+  # The plan diff of the coverage, for the identical mark (behaviour-pass.md, The Run Object)
+  [ ! -f "$RUN/coverage.json" ] || wr+=(--plan-diff "$RUN/coverage.json")
   bash "$HERE/behaviour-pass.sh" eval --facts "$facts" --out "$RUN/behaviour" --head "$HEAD_SHA" \
     --base-sha "${MB:-$HEAD_SHA}" --prefix "$PREFIX" ${cl[@]+"${cl[@]}"} ${ld[@]+"${ld[@]}"} ${wr[@]+"${wr[@]}"} > /dev/null 2> "$RUN/state/eval.err" ||
     fail "behaviour-pass.sh eval failed"

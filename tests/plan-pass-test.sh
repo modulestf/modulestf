@@ -1222,6 +1222,125 @@ nocont "$PP" | perl -0pe 's/terraform validate -no-color; then/true; then/' > "$
 check "runner phases: the mutation that passes every validate is caught" \
   "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && [ "$(vphase "$TMP/pp-runner-m.sh" | tail -n 1)" = 'validate: passed' ]; echo $?)"
 
+# The plan diff (plan-pass.md, Plan diff): the merge base example planned against the base and
+# the head module, compared in the pass. Its own upstream: examples/same is unchanged by the
+# change, examples/edited is edited at the head, examples/fresh is new. The stubbed terraform
+# prints the show JSON of the tree it runs in: the base worktree, the mixed tree or the clone.
+pdu="$TMP/pdup"; mkdir -p "$pdu/examples/same" "$pdu/examples/edited" "$TMP/pd" "$TMP/pdbin"
+git -C "$pdu" init -q
+echo 'resource "aws_s3_bucket" "this" {}' > "$pdu/main.tf"
+for e in same edited; do echo 'module "b" { source = "../../" }' > "$pdu/examples/$e/main.tf"; done
+git -C "$pdu" add -A && git -C "$pdu" -c user.name=t -c user.email=t@example.invalid commit -qm base
+PDBASE="$(git -C "$pdu" rev-parse HEAD)"
+printf 'variable "new" {\n  default = null\n}\n' > "$pdu/variables.tf"
+printf 'module "b" {\n  source = "../../"\n}\n' > "$pdu/examples/edited/main.tf"
+mkdir -p "$pdu/examples/fresh"; echo 'module "b" { source = "../../" }' > "$pdu/examples/fresh/main.tf"
+git -C "$pdu" add -A && git -C "$pdu" -c user.name=t -c user.email=t@example.invalid commit -qm head
+cat > "$TMP/pdbin/terraform" <<PDEOF
+#!/bin/sh
+case "\$PWD" in */base/*) w=base ;; */mixed/*) w=mixed ;; *) w=head ;; esac
+echo "\$w \${PWD##*/} \$1" >> "$TMP/pd.log"
+case "\$1" in
+init) printf 'provider "registry.terraform.io/hashicorp/aws" {\n}\n' >> .terraform.lock.hcl ;;
+plan) [ -n "\$AWS_ACCESS_KEY_ID" ] || { echo "Error: no valid credential sources"; exit 1; }
+  for a; do case "\$a" in -out=*) echo saved > "\${a#-out=}" ;; esac; done
+  echo "Plan: 1 to add, 0 to change, 0 to destroy." ;;
+show) [ -z "\$AWS_ACCESS_KEY_ID" ] || echo "show with credentials" >> "$TMP/pd.log"
+  if [ -f "$TMP/pd/\$w-\${PWD##*/}.json" ]; then cat "$TMP/pd/\$w-\${PWD##*/}.json"; else cat "$TMP/pd/\$w.json"; fi ;;
+esac
+exit 0
+PDEOF
+cp "$TMP/bin/aws" "$TMP/pdbin/aws"; chmod +x "$TMP/pdbin/terraform"
+pdj() { # after object -> show JSON with one resource of module b and its call
+  jq -n -c --argjson a "$1" '{resource_changes: [{address: "module.b.aws_s3_bucket.this", change: {actions: ["create"],
+    after: $a, after_unknown: {arn: true}, after_sensitive: {}}}], output_changes: {},
+    configuration: {root_module: {module_calls: {b: {source: "../../"}}}}}'
+}
+pdset() { # base after, mixed after, head after
+  rm -f "$TMP/pd"/*.json
+  pdj "$1" > "$TMP/pd/base.json"; pdj "$2" > "$TMP/pd/mixed.json"; pdj "$3" > "$TMP/pd/head.json"
+}
+pdrun() { # shell, script, arguments... -> the record; R set
+  R="$(mktemp -d "$TMP/pr-review.XXXXXX")"; git clone -q "$pdu" "$R/clone"; : > "$TMP/pd.log"; echo "$R" > "$TMP/pd-last"
+  PATH="$TMP/pdbin:/usr/bin:/bin" "$1" "$PP" g0 "$R" > /dev/null
+  PATH="$TMP/pdbin:/usr/bin:/bin" "$1" "$2" plan "$R" demo --role-arn "$ROLE" "${@:3}" 2>&1
+}
+blk() { printf '%s\n' "$1" | awk -v e="example: ${2//\\/}" '/^(example: |plan summary)/ { on = ($0 == e) } on && /^plan-diff/'; }
+for sh in bash zsh; do
+  command -v "$sh" > /dev/null 2>&1 || continue
+  pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}'
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir . examples/same examples/edited examples/fresh)"
+  check "$sh: plan diff: an unchanged example equal" "$([ "$(blk "$out" examples\\/same)" = 'plan-diff: equal' ]; echo $?)"
+  check "$sh: plan diff: an edited example compared in the mixed tree" \
+    "$([ "$(blk "$out" examples\\/edited)" = 'plan-diff: equal' ] && grep -qx 'mixed edited show' "$TMP/pd.log" && ! grep -qx 'mixed same show' "$TMP/pd.log"; echo $?)"
+  check "$sh: plan diff: a new example is absent at the base" "$([ "$(blk "$out" examples\\/fresh)" = 'plan-diff: not-run absent-at-base' ]; echo $?)"
+  check "$sh: plan diff: the head module plan's addresses kept for equal" \
+    "$(jq -e '. == {addresses: ["module.b.aws_s3_bucket.this"]}' "$(cat "$TMP/pd-last")/plan-addresses/plan-diff-1.json" > /dev/null 2>&1; echo $?)"
+  check "$sh: plan diff: shows run with no credentials" "$(grep -q 'show with credentials' "$TMP/pd.log" && echo 1 || echo 0)"
+  check "$sh: plan diff: the head's class and summary stay" "$(has "$out" 'plan summary: 3 examples, 3 planned, 0 exceptions, 0 other')"
+  # The frozen caller: the edited head example plans otherwise, the merge base example does not
+  pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"y"}'
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir . examples/same examples/edited)"
+  check "$sh: plan diff: an edited example is read as it was at the merge base" "$([ "$(blk "$out" examples\\/edited)" = 'plan-diff: equal' ]; echo $?)"
+  check "$sh: plan diff: an unchanged example whose plan moved differs, naming the address" \
+    "$([ "$(blk "$out" examples\\/same)" = 'plan-diff: differs module.b.aws_s3_bucket.this' ]; echo $?)"
+  check "$sh: plan diff: no value crosses" "$(lacks "$out" '"y"')"
+  pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}'; jq '.errored = true' "$TMP/pd/base.json" > "$TMP/pd/base-same.json"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir . examples/same)"
+  check "$sh: plan diff: a plan that errored is unknown" "$([ "$(blk "$out" examples\\/same)" = 'plan-diff: unknown' ]; echo $?)"
+  pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}'
+  jq '.resource_changes[0].change.after_unknown = {arn: true, bucket: true}' "$TMP/pd/head.json" > "$TMP/pd/head-same.json"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir . examples/same)"
+  check "$sh: plan diff: a value unknown on one side differs" "$(blk "$out" examples\\/same | grep -q '^plan-diff: differs'; echo $?)"
+  out="$(pdrun "$sh" "$PP" --diff-dir . examples/same)"
+  check "$sh: plan diff: no merge base is not-run" "$([ "$(blk "$out" examples\\/same)" = 'plan-diff: not-run no-base' ]; echo $?)"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" examples/same)"
+  check "$sh: plan diff: no plan diff directory runs no base plan" "$(lacks "$out" 'plan-diff')"
+  check "$sh: plan diff: and touches no base worktree" "$(grep -q '^base ' "$TMP/pd.log" && echo 1 || echo 0)"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir modules/other examples/same)"
+  check "$sh: plan diff: an example that reaches no plan diff directory gets none" "$(lacks "$out" 'plan-diff')"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir ../x examples/same)"
+  check "$sh: plan diff: a directory outside the pattern stops the pass" "$(has "$out" 'plan pass not run: plan diff directory refused')"
+done
+# Mutations of the comparison and the frozen caller, each caught by the laptop pass under bash
+pdmut() { # name, perl substitution, base after, mixed after, head after, example, line it must not print
+  rm -rf "$TMP/ppd"; cp -R "${PP%/*}" "$TMP/ppd"; perl -0pe "$2" "$PP" > "$TMP/ppd/plan-pass.sh"
+  pdset "$3" "$4" "$5"
+  local o; o="$(pdrun bash "$TMP/ppd/plan-pass.sh" --base "$PDBASE" --diff-dir . "examples/$6")"
+  check "plan diff: the mutation $1 is caught" "$( ! cmp -s "$PP" "$TMP/ppd/plan-pass.sh" && [ "$(blk "$o" "examples\\/$6")" != "$7" ]; echo $?)"
+}
+pdmut "that ignores after" 's/\{actions, after, after_unknown/{actions, after_unknown/' '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"z"}' same 'plan-diff: differs module.b.aws_s3_bucket.this'
+pdmut "that reads the head example" 's/example_changed\(\) \{\n  !/example_changed() {\n  false \&\& !/' '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"z"}' edited 'plan-diff: equal'
+pdmut "that ignores errored plans" 's/ or \.errored == true//' '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}' same 'plan-diff: unknown'
+
+# The runner phases of the plan diff, from a copy without the container check: diff-init adds the
+# base worktree and the mixed tree, diff-plan saves both plans, diff compares them in a phase of
+# its own and prints one line and, for equal, the addresses.
+pdphases() { # script copy, example -> the diff phase's output
+  local R; R="$(mktemp -d "$TMP/pr-review.XXXXXX")"; git clone -q "$pdu" "$R/clone"
+  rp() { PATH="$TMP/pdbin:/usr/bin:/bin" PLAN_PASS_AWS_ACCESS_KEY_ID=ASIAFIXTUREFIXTURE01 PLAN_PASS_AWS_SECRET_ACCESS_KEY=s3cr3t-value-xyz \
+    PLAN_PASS_AWS_SESSION_TOKEN=tok-fixture bash "$1" plan "$R" demo --role-arn "$ROLE" --mode runner "${@:2}" 2>&1; }
+  PATH="$TMP/pdbin:/usr/bin:/bin" bash "$PP" g0 "$R" > /dev/null
+  rp "$1" --phase init "$2" > /dev/null
+  rp "$1" --phase plan --index 1 --base "$PDBASE" "$2" > /dev/null
+  rp "$1" --phase diff-init --index 1 --base "$PDBASE" "$2" > /dev/null
+  rp "$1" --phase diff-plan --index 1 "$2" > /dev/null
+  rp "$1" --phase diff --index 1 "$2"
+}
+pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"y"}'; : > "$TMP/pd.log"
+check "runner phases: plan diff of an edited example equal in the mixed tree, with its addresses" \
+  "$([ "$(pdphases "$TMP/pp-runner.sh" examples/edited)" = "$(printf 'plan-diff: equal\nplan-diff-json: {"addresses":["module.b.aws_s3_bucket.this"]}')" ]; echo $?)"
+check "runner phases: the diff phase reads with no credentials" "$(grep -q 'show with credentials' "$TMP/pd.log" && echo 1 || echo 0)"
+check "runner phases: plan diff of an unchanged example that moved differs" \
+  "$([ "$(pdphases "$TMP/pp-runner.sh" examples/same)" = 'plan-diff: differs module.b.aws_s3_bucket.this' ]; echo $?)"
+check "runner phases: plan diff of a new example is absent at the base" \
+  "$([ "$(pdphases "$TMP/pp-runner.sh" examples/fresh)" = 'plan-diff: not-run absent-at-base' ]; echo $?)"
+nocont "$PP" | perl -0pe 's/  pd_show "\$key-base" \|\| \{/  pd_show "\$hk" || {/' > "$TMP/pp-runner-m.sh"
+pdset '{"bucket":"x"}' '{"bucket":"y"}' '{"bucket":"y"}'
+check "runner phases: the mutation that compares the head module plan with itself is caught" \
+  "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && [ "$(pdphases "$TMP/pp-runner.sh" examples/edited)" = 'plan-diff: differs module.b.aws_s3_bucket.this' ] \
+     && [ "$(pdphases "$TMP/pp-runner-m.sh" examples/edited | head -n 1)" != 'plan-diff: differs module.b.aws_s3_bucket.this' ]; echo $?)"
+
 # Negative self-check of the relaxations: each weakened copy of the script must let its case
 # through, and the real script must refuse it.
 mkdir -p "$TMP/mut"
@@ -1946,6 +2065,42 @@ d="$TMP/hr-many"; mkdir -p "$d"
   echo 'plan summary: 15000 examples, 0 planned, 0 exceptions, 15000 other'; } > "$d/plan-pass.txt"
 : > "$d/plan-refused-hosts.txt"
 hrefused "an output over the size cap" "$d" "the output is over the size cap"
+
+# The plan diff in the hosted record (plan-pass.md, Plan diff): a line in its grammar becomes the
+# example's plan_diff, with an equal one's addresses; no differing name crosses; a line outside
+# the grammar or two in a block refuse the record. host-pass.sh takes the result and refuses it
+# outside its shape.
+d="$(hrec pd 'host example 1: examples/a' 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.' 'plan-diff: equal' \
+  'host example 2: examples/b' 'plan: planned-no-changes' 'plan-diff: differs module.b.aws_x.y output.secret_name' \
+  'host example 3: examples/c' 'plan: planned-no-changes' 'plan-diff: not-run absent-at-base' \
+  'host example 4: examples/d' 'plan: budget')"
+echo '{"addresses":["module.b.aws_x.y","bad address"]}' > "$d/plan-diff-1.json"
+echo '{"addresses":["module.b.aws_x.y"]}' > "$d/addresses-1.json"
+check "hosted-record: plan diffs are kept with an equal one's addresses, and no name of a difference" \
+  "$([ "$(hr "$d")" = 0 ] && hq '.examples[0].plan_diff == {result: "equal", reason: null, addresses: ["module.b.aws_x.y"]}
+     and .examples[1].plan_diff == {result: "differs", reason: null, addresses: []}
+     and .examples[2].plan_diff == {result: "not-run", reason: "absent-at-base", addresses: []}
+     and (.examples[3] | has("plan_diff") | not)' | grep -qx 0 && ! grep -q secret_name "$TMP/hr.json"; echo $?)"
+cp "$TMP/hr.json" "$TMP/hp-pd.json"
+check "host-pass: a hosted record with plan diffs is accepted" "$([ "$(hp "$TMP/hp-pd.json")" = ok ] && echo 0 || echo 1)"
+for u in '.examples[1].plan_diff.result = "same"' '.examples[2].plan_diff.reason = "because"' '.examples[1].plan_diff.reason = "show"' \
+  '.examples[1].plan_diff.addresses = ["module.b.aws_x.y"]' '.examples[0].plan_diff.addresses += ["a b"]' '.examples[0].plan_diff.extra = 1' \
+  '.examples[3].plan_diff = {result: "equal", reason: null, addresses: []}'; do
+  jq "$u" "$TMP/hp-pd.json" > "$TMP/hp-pd-bad.json"
+  check "host-pass: a plan diff outside its shape is refused ($u)" "$([ "$(hp "$TMP/hp-pd-bad.json")" = "plan record content" ] && echo 0 || echo 1)"
+done
+hrefused "a plan-diff line outside the grammar" "$(hrec pdbad 'host example 1: examples/a' 'plan: planned-no-changes' 'plan-diff: same as before')" "a plan-diff line outside the grammar"
+hrefused "a not-run plan diff with a free reason" "$(hrec pdwhy 'host example 1: examples/a' 'plan: planned-no-changes' 'plan-diff: not-run account 123456789012')" "a plan-diff line outside the grammar"
+hrefused "two plan-diff lines in a block" "$(hrec pdtwo 'host example 1: examples/a' 'plan: planned-no-changes' 'plan-diff: differs' 'plan-diff: equal')" "two plan-diff lines in a block"
+hrefused "an equal plan diff of an example that did not plan" "$(hrec pdnp 'host example 1: examples/a' 'plan: code-error' 'plan-diff: equal')" "a plan diff of an example that did not plan"
+HPD="$(printf '%s\n' "$HPJ" | perl -pe 's/\n?  and \(\.result != "equal" or \(\$head\.class \| IN\("planned", "planned-no-changes"\)\)\);/;/' )"
+check "mutation host-pass-plan-diff-head changes the rule" "$([ "$HPD" != "$HPJ" ]; echo $?)"
+jq '.examples[3].plan_diff = {result: "equal", reason: null, addresses: []}' "$TMP/hp-pd.json" > "$TMP/hp-pd-bad.json"
+check "mutation host-pass-plan-diff-head is caught" \
+  "$([ "$(jq -n -r --arg head "$HH" --slurpfile p "$TMP/hp-pd-bad.json" --slurpfile h "$TMP/hp-host.json" --slurpfile f "$TMP/hp-files.json" "$HPD")" = ok ]; echo $?)"
+perl -pe 's/error\("refused: a plan-diff line outside the grammar"\)/{result: "equal", reason: null}/' "$HR" > "$TMP/hr-mut.sh"
+rm -f "$TMP/hr.json"; bash "$TMP/hr-mut.sh" --record "$TMP/hr-pdbad" --head "$HH" --merge-base "$HM" --out "$TMP/hr.json" 2> /dev/null
+check "mutation hosted-record-plan-diff-grammar is caught" "$( ! cmp -s "$HR" "$TMP/hr-mut.sh" && [ -e "$TMP/hr.json" ]; echo $?)"
 
 # host-records.jq's caps on the untrusted block, as github-io.md's Caps states them: the body
 # item 8000 bytes, the title and a thread comment 4000, 16000 in total, in block order.
