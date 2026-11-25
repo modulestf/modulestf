@@ -471,6 +471,12 @@ cmd_schema() {
   # read pass as "-", which it refuses as inputs.
   mbs="$(jq -r '.binding.merge_base // ""' "$RUN/depth.json" 2> /dev/null)"
   if [[ "$mbs" =~ $sha_re ]]; then ins="$(schema_inputs "$HEAD_SHA" "$mbs")" || ins=-; else mbs=""; fi
+  # The mirror cache across runs (schema-pass.md, Mirror Cache): each cached asset is checked as a
+  # download is. No cache directory to name, no cache.
+  local sc=""
+  if [ -n "${XDG_CACHE_HOME:-}" ]; then sc="$XDG_CACHE_HOME/modulestf/schema-mirror"
+  elif [ -n "${HOME:-}" ]; then sc="$HOME/.cache/modulestf/schema-mirror"; fi
+  SCHEMA_CACHE="$sc" \
   SCHEMA_DEPTH="$RUN/depth.json" SCHEMA_HEAD="$HEAD_SHA" SCHEMA_MERGE_BASE="$mbs" SCHEMA_INPUTS="$ins" SCHEMA_ROOT="$PREFIX" \
     bash "$HERE/schema-pass.sh" "$RUN/facts" "$RUN/schema-work" "$RUN/schema-handoff" > "$RUN/state/schema.out" 2>&1
   rc=$?
@@ -1268,11 +1274,17 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   [ ! -f "$RUN/state/profile.json" ] || prof="$(cat "$RUN/state/profile.json")"
   [ "$TRIAGE" = true ] || fl="$(floors_of)" || fl=null
   mode="$(plan_mode)"
-  jq -n --argjson triage "$triage" --argjson counts "$1" --argjson beh "$beh" --argjson ver "$ver" \
-    --argjson cov "$cov" --argjson skip "$skip" --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
-    --argjson floors "$fl" --argjson skipped "$sk" \
+  # The behaviour, verify, coverage, skip check and skipped files values have no size cap that
+  # keeps them under one argument's limit (128 KiB on Linux), so they reach jq on a descriptor,
+  # each held to exactly one JSON value as --argjson held it.
+  jq -n --argjson triage "$triage" --argjson counts "$1" --slurpfile beh <(printf '%s' "$beh") --slurpfile ver <(printf '%s' "$ver") \
+    --slurpfile cov <(printf '%s' "$cov") --slurpfile skip <(printf '%s' "$skip") --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
+    --argjson floors "$fl" --slurpfile skipped <(printf '%s' "$sk") \
     --argjson planned "$( [ -f "$RUN/state/plan" ] && echo true || echo false)" \
     --slurpfile sel "$RUN/selection.json" "
+    def one: if length == 1 then .[0] else error(\"not one JSON value\") end;
+    (\$beh | one) as \$beh | (\$ver | one) as \$ver | (\$cov | one) as \$cov | (\$skip | one) as \$skip
+    | (\$skipped | one) as \$skipped |
     {format: 1, triage: \$triage, plan_ran: \$planned,
      verify_gaps: (if \$triage then []
        elif \$ver != null then (\$ver | $GAPS_JQ)

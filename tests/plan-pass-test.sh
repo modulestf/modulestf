@@ -2205,6 +2205,20 @@ cp "$TMP/hr.json" "$TMP/hr-real.json"; rm -f "$TMP/hr.json"
 bash "$TMP/hr-mut.sh" --record "$good" --head "$HH" --merge-base "$HM" --out "$TMP/hr.json" 2> /dev/null
 check "mutation hosted-record-grammar is caught" "$(hq '.examples[4].addresses | index("data.aws_bad")')"
 mv "$TMP/hr-real.json" "$TMP/hr.json"
+# Addresses files that together pass the argument size limit (1 MiB on macOS, 128 KiB for one
+# argument on Linux) reach jq whole: the planned example keeps its 1000 addresses.
+big="$(hrec big 'host example 1: examples/complete' 'example: examples/complete' 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.' \
+  'host example 2: examples/broken' 'example: examples/broken' 'plan: code-error')"
+for n in 1 2; do
+  jq -n -c --arg n "$n" '{addresses: [range(1000) | "aws_s3_bucket.b\($n)_\(.)_" + ("x" * 180)], pad: ("p" * 700000)}' > "$big/addresses-$n.json"
+done
+check "hosted-record: addresses over the argument size limit are read whole" \
+  "$([ "$(hr "$big")" = 0 ] && [ "$(jq '.examples[0].addresses | length' "$TMP/hr.json")" = 1000 ]; echo $?)"
+perl -0pe 's/--slurpfile addr <\(jq -s \x27add \/\/ \{\}\x27 "\$addr"\) \\\n  \x27\(\$addr \| if length == 1 then \.\[0\] else error\("not one JSON value"\) end\) as \$addr \| \x27"\$REDUCE"/--argjson addr "\$(jq -s \x27add \/\/ {}\x27 "\$addr")" "\$REDUCE"/' "$HR" > "$TMP/hr-mut2.sh"
+check "mutation hosted-record-argv changes the script" "$(cmp -s "$HR" "$TMP/hr-mut2.sh"; test $? -eq 1; echo $?)"
+check "mutation hosted-record-argv is caught" \
+  "$(rm -f "$TMP/hr.json"; bash "$TMP/hr-mut2.sh" --record "$big" --head "$HH" --merge-base "$HM" --out "$TMP/hr.json" 2> /dev/null; [ $? != 0 ]; echo $?)"
+rm -f "$TMP/hr.json"; hr "$good" > /dev/null
 check "hosted-record: an import count is not kept" "$(hq '.examples[5].head.plan == {add: 1, change: 0, destroy: 4}')"
 check "hosted-record: a code-error keeps its class and its base result" \
   "$(hq '.examples[1] == {path: "examples/broken", head: {class: "code-error", plan: null}, base: {class: "reproduces at base", plan: null},
