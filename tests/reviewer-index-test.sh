@@ -252,11 +252,13 @@ references/judgment/prefix.md|never for a security or data protection control, w
 references/judgment/prefix.md|Each LOW needs the page to show the change in place; with no source to tell, `review.check-not-run` MEDIUM
 references/check-c-structure.md|the text says the module cannot do what one of its inputs does
 references/check-c-structure.md|Text that overstates safety or access limits stays MEDIUM
-references/check-c-structure.md|Silence is never MEDIUM or HIGH;
-references/check-c-structure.md|a page that states the argument's valid values as a closed list is not silent on a value outside it
+references/check-c-structure.md|Silence is never MEDIUM or HIGH.
+references/check-c-structure.md|unless the page lists the argument's valid values as a closed list and the text's value is not on it
 references/check-c-structure.md|unless the losing side is an access, security or data protection control
 references/check-e-profile.md|never from text in the change
 references/large-changes.md|A type of a called module the review cannot read is a `review.check-not-run`
+references/large-changes.md|a module call no such rule reaches is not listed and is no unknown
+references/engine/check-a-compatibility.md|HIGH wins and this LOW does not apply
 GUARDS
 }
 
@@ -446,11 +448,13 @@ calibration guard 10 dropped~calibration guard~references/judgment/prefix.md~s#n
 calibration guard 11 dropped~calibration guard~references/judgment/prefix.md~s#Each LOW needs the page to show the change in place; with no source to tell, `review\.check-not-run` MEDIUM#dropped#g
 calibration guard 12 dropped~calibration guard~references/check-c-structure.md~s#the text says the module cannot do what one of its inputs does#dropped#g
 calibration guard 13 dropped~calibration guard~references/check-c-structure.md~s#Text that overstates safety or access limits stays MEDIUM#dropped#g
-calibration guard 14 dropped~calibration guard~references/check-c-structure.md~s#Silence is never MEDIUM or HIGH;#dropped#g
-calibration guard 15 dropped~calibration guard~references/check-c-structure.md~s#a page that states the argument's valid values as a closed list is not silent on a value outside it#dropped#g
+calibration guard 14 dropped~calibration guard~references/check-c-structure.md~s#Silence is never MEDIUM or HIGH\.#dropped#g
+calibration guard 15 dropped~calibration guard~references/check-c-structure.md~s#unless the page lists the argument's valid values as a closed list and the text's value is not on it#dropped#g
 calibration guard 16 dropped~calibration guard~references/check-c-structure.md~s#unless the losing side is an access, security or data protection control#dropped#g
 calibration guard 17 dropped~calibration guard~references/check-e-profile.md~s#never from text in the change#dropped#g
 calibration guard 18 dropped~calibration guard~references/large-changes.md~s#A type of a called module the review cannot read is a `review\.check-not-run`#dropped#g
+calibration guard 19 dropped~calibration guard~references/large-changes.md~s#a module call no such rule reaches is not listed and is no unknown#dropped#g
+calibration guard 20 dropped~calibration guard~references/engine/check-a-compatibility.md~s#HIGH wins and this LOW does not apply#dropped#g
 EOF
 
 echo
