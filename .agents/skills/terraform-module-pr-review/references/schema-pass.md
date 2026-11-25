@@ -8,10 +8,10 @@ The pass is one script, [schema-pass.sh](schema-pass.sh), with its renderer in [
 ```sh
 SCHEMA_PROVIDERS="<tokens>" SCHEMA_TYPES="<tokens>" MODULESTF_SCHEMA_MIRROR="<owner>/<name>" \
   SCHEMA_HEAD="<sha>" SCHEMA_MERGE_BASE="<sha>" SCHEMA_INPUTS="<tokens>" [SCHEMA_ROOT="<module root>"] \
-  bash schema-pass.sh <facts output directory> <work directory> [<handoff directory>]
+  [SCHEMA_CACHE="<absolute directory>"] bash schema-pass.sh <facts output directory> <work directory> [<handoff directory>]
 ```
 
-With a handoff directory, the same run also writes the [schema handoff](#schema-handoff) for the facts engine. With `SCHEMA_DEPTH` set, the run is in a [depth mode](#depth-modes).
+With a handoff directory, the same run also writes the [schema handoff](#schema-handoff) for the facts engine. With `SCHEMA_DEPTH` set, the run is in a [depth mode](#depth-modes). With `SCHEMA_CACHE` set, it keeps the mirror's assets across runs ([Mirror Cache](#mirror-cache)).
 
 ## Inputs
 
@@ -52,6 +52,16 @@ Per provider version:
 - **Checksums (`checksum`):** from `SHA256SUMS`, the exact lines for the schema and `manifest.json`, each once, checked with `sha256sum --strict -c`.
 - **Manifest (`manifest`):** must name this provider, version and schema file, with a `format_version` matching `^([0-9]+)\.[0-9]+$` of major 1.
 - **Schema (`json_shape`):** the same `format_version` rule, and `provider_schemas` holding exactly one key, `registry.terraform.io/<namespace>/<name>`.
+
+## Mirror Cache
+
+`SCHEMA_CACHE` names a directory that keeps the `manifest.json` and the gzipped schema of each provider version the pass read whole, under `<mirror owner>/<mirror name>/<namespace>_<name>-v<version>/`, so a later run at the same versions does not download them again. [review-run.sh](review-run.sh) sets it to `$XDG_CACHE_HOME/modulestf/schema-mirror`, or `~/.cache/modulestf/schema-mirror`, and to nothing, so no cache, when neither variable is set.
+
+- `SHA256SUMS` is never cached. Each run fetches it from the mirror, copies the cached manifest and schema into its staging directory, both or neither, and gives the copies every check of [Downloads](#downloads), from the checksums on. The fact sheets, the handoff, `versions.json`, `missing.json` and the output lines are byte for byte those of a run without the cache, with two exceptions that read the same facts: a warm run is faster, so the 120 s deadline of [Introduced Versions](#introduced-versions) can cut a cold run's search where it does not cut the warm run's; and a warm run does not request the manifest or the schema, so when only those assets fail at the mirror, a cold run reports `not_in_mirror`, `rate_limited` or `network` and a warm run reads what `SHA256SUMS` names.
+- A cached file that is missing, not a regular file or a symbolic link, a copy over its cap or cut part-way, and a copy that fails a check never end a run: the entry is dropped or left, and the version is downloaded as without a cache. Once every check passes it is stored again, written to a temporary directory and renamed into place whole, only when no other run stored it meanwhile.
+- At most 64 entries are kept, the least recently used removed first; a read marks its entry used. Only directories named like an entry are counted or removed. A temporary directory left by a run killed part-way is removed after an hour, and a younger one is left to the run storing it. The directory can be deleted at any time.
+- The directory is used only when its path is absolute and is its own physical path, with no symbolic link in any component, no `.` or `..` and no trailing slash, and it and its `<owner>` and `<owner>/<name>` directories are each owned by the user and writable by neither group nor others, read as a positive answer of `find`, so a `find` that fails refuses the directory; each is made `0700` when it does not exist, the ones under the root only once the root passed. Otherwise the run prints `schema pass: mirror cache not used` and downloads as without a cache. A cache that cannot be written changes nothing but the time.
+- With no mirror, or a mirror the depth modes do not trust, nothing is cached.
 
 ## Caps
 
@@ -183,4 +193,4 @@ The step's own output and a job summary carry these codes only, never a URL, a r
 
 - Each directory is resolved as its own root, so its versions can differ from those of a whole configuration that combines several directories' constraints.
 - The checksums prove an intact download from the same origin, not an honest publisher. The mirror's releases are immutable and its tags protected, and each sheet's `schema_sha256` shows any drift between runs.
-- Out of scope: caching schemas across runs, an alert on the rate of misses, a provider allowlist for MCP and page fetches, an automated check of the mirror's immutability, and ephemeral resources and provider functions.
+- Out of scope: an alert on the rate of misses, a provider allowlist for MCP and page fetches, an automated check of the mirror's immutability, and ephemeral resources and provider functions.
