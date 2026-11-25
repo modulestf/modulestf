@@ -425,6 +425,8 @@ s{(?:#|//)[^\n]*}{}g;
 print "$1\n" while /^[ \t]*data[ \t]+"([A-Za-z0-9_-]+)"[ \t]+"/mg;
 '
 : > "$W/types.jsonl"
+# a file, not an -e argument: GNU find refuses a second {} in the -exec arguments
+printf '%s' "$TYPES_PL" > "$W/types.pl"
 if [ "$MODE" = runner ]; then
   jq -r '.unplanned[] | select(.reason == "environment (refused-host)") | .dir
     | select(type == "string" and test("^[A-Za-z0-9._/-]{1,300}$") and (split("/") | index("..") == null))' "$COV" | sort -u |
@@ -432,7 +434,7 @@ if [ "$MODE" = runner ]; then
     t=
     r="$(cd "$CLONE/$d" 2> /dev/null && pwd -P)" || r=
     if [ "$r" = "$CLONE/$d" ]; then
-      t="$(find "$CLONE/$d" -maxdepth 1 -type f -name '*.tf' -exec perl -0777 -ne "$TYPES_PL" {} + 2> /dev/null | sort -u)"
+      t="$(find "$CLONE/$d" -maxdepth 1 -type f -name '*.tf' -exec perl -0777 -n "$W/types.pl" {} + 2> /dev/null | sort -u)"
     fi
     printf '%s\n' "$t" | jq -R -s -c --arg d "$d" '{($d): (split("\n") | map(select(length > 0)))}' >> "$W/types.jsonl"
   done
