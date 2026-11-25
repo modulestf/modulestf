@@ -41,7 +41,7 @@ With a `non-hcl-dependency` trigger, `tests` joins every depth but triage, besid
 | `skip-coverage <run>` | `coverage.json`, the plan record | `<run>/skip-check.json` ([skip-coverage.md](skip-coverage.md)), only for gate, exception or design skips |
 | `ladder <run>` | `behaviour.json`, `claims.json` | The ladder record at focused and deep ([ladder-pass.md](ladder-pass.md)), then the claims evaluation at every depth: `behaviour/run-behaviour.json` and `behaviour/record.txt` |
 | `handover <run>` | Every output above | `<run>/handover/task.md`, `record.txt`, `change.diff` and the reviewer's [reference bundle](github-io.md#reference-bundle); `<run>/review/` for the reviewer's output. With an empty base the task states the new module shape and has no diff, `Diff:` or `Merge base:` line ([github-io.md](github-io.md#handover)) |
-| `render <run> --assessment <file> --out <dir> [--findings <file>] [--summary <file>] [--standard]` | The reviewer's output, the run's files | The body, `findings.json`, `result.json`, `plan.json` and `fix-plan.md` in `--out`, outside the run directory ([render-comment.sh](render-comment.sh)) |
+| `render <run> --assessment <file> --out <dir> [--findings <file>] [--summary <file>] [--standard] [--event <EVENT>]` | The reviewer's output, the run's files | The body, `findings.json`, `result.json`, `plan.json`, `carried.json` and `fix-plan.md` in `--out`, outside the run directory ([render-comment.sh](render-comment.sh)) |
 | `record --out <dir> --review-id <id>` | The posted review, `plan.json` | The [post record](github-io.md#the-post-record) `prepare` reads back |
 | `cleanup <run>` | Nothing | Deletes the run directory |
 
@@ -53,7 +53,7 @@ The `Output:` line names where the reviewer writes, all under `<run>/review/`: `
 
 ## The Assessment
 
-The assessment is section 1 of the comment and the only text the model writes for it ([comment-format.md](comment-format.md#section-order)): what the change does and what matters in it, from the findings and the diff, never a finding of its own. Write it to a file outside the clone, such as `<run>/assessment.txt`. Printable ASCII, at most two short paragraphs and 700 characters, and no line that starts like a heading, a bold line, HTML, a list item, a quote or a table row. The COMPACT tier takes at most 350 characters in one paragraph; over a cap the render refuses and says which.
+The assessment is section 1 of the comment and the only text the model writes for it ([comment-format.md](comment-format.md#section-order)): what the change does and what matters in it, from the findings and the diff, never a finding of its own. Write it to a file outside the clone, such as `<run>/a.txt`. Printable ASCII, at most two short paragraphs and 700 characters, and no line that starts like a heading, a bold line, HTML, a list item, a quote or a table row. The COMPACT tier takes at most 350 characters in one paragraph; over a cap the render refuses and says which.
 
 ## Render and Confirm
 

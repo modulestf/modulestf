@@ -361,7 +361,7 @@ def valid_earlier:
   and (.review_id | nat and . > 0) and (.commit_id | sha40) and (.record | IN(earlier_records[]))
   and (.items | type == "array" and length <= 1000 and all(.[]; type == "object"
         and keys == ["at", "file", "id", "judgment", "line", "rule_id", "severity"]
-        and (.id | type == "string" and test("^F-[0-9]{3,4}$"))
+        and (.id | type == "string" and test("^F-[0-9]{3,4}(@[0-9]{1,16})?$"))
         and (.rule_id | type == "string" and test("^[a-z][a-z0-9_.-]{0,127}$"))
         and (.severity | IN("CRITICAL", "HIGH", "MEDIUM"))
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0))
@@ -1167,7 +1167,8 @@ def earlier_lines($h; $e; $event; $p):
     | (if $e.record == "ok" then
          [tx("earlier-intro"; {sha: $sha}),
           ("| Earlier finding | Severity | Location | At this head |\n|---|---|---|---|\n"
-           + ([$e.items[] | "| \(.id) `\(.rule_id)` | \(.severity) | \(safe_loc($p)) | "
+           # A carried id holds an @, which the at-mention step would wrap: it renders as one code span.
+           + ([$e.items[] | "| \(if .id | test("@") then "`\(.id)`" else .id end) `\(.rule_id)` | \(.severity) | \(safe_loc($p)) | "
                + (if .judgment == "resolved" then tx("earlier-resolved"; {location: (.at | safe_loc($p))})
                   else tx("earlier-" + .judgment) end) + " |"] | join("\n")))]
          + (if earlier_cleared($e) then [tx("earlier-all-resolved")] else [] end)
@@ -1413,7 +1414,10 @@ def render($in):
   # rule 7 cause proposes COMMENT.
   | (earlier_cleared($e) and ($v.verdict == "approve"
        or ($v.verdict == "approve with nits" and (($l | .findings = [] | ladder).rule == 8)))) as $replace
-  | ($v.verdict | proposed_event($h.state; own_block($h); $replace)) as $event
+  | ($v.verdict | proposed_event($h.state; own_block($h); $replace)) as $proposed
+  # The body follows the event the user confirmed when they confirmed another: section 6 and the
+  # Earlier review section say whether it replaces our earlier review (comment-format.md, section 6).
+  | ($in.confirmed // $proposed) as $event
   | ($in + {event: $event}) as $in
   | ($v | rationale($l)
      + (if $cov != [] then " " + covered_sentence("rationale-covered"; $in.run; $cov) else "" end)) as $why
@@ -1455,7 +1459,7 @@ def render($in):
   | (if $fit and $over == null then "COMPACT" else "STANDARD" end) as $tier
   | (if $tier == "COMPACT" then compact_body($in; $l; $v; $c; $b; $p; $cov)
      else {body: $standard, findings: ($in.findings | body_order($p))} end) as $out
-  | {rule: $v.rule, verdict: $v.verdict, event: $event, tier: $tier,
+  | {rule: $v.rule, verdict: $v.verdict, event: $proposed, tier: $tier,
      fallback: $over,
      body: $out.body, findings: $out.findings,
      parts: ([{src: "the assessment", text: $in.assessment}]

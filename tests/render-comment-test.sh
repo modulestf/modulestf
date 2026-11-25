@@ -3308,6 +3308,28 @@ mutate "APPROVE over a block with a covered skip" 's/\(\(\$l \| \.findings = \[\
 mutate "APPROVE over a block with an undemonstrated trigger" 's/\(\(\$l \| \.findings = \[\] \| ladder\)\.rule == 8\)/true/' t_own_undemo
 mutate "an ok record with no item accepted" 's/\n  and \(\(\.record == "ok"\) == \(\.items != \[\]\)\);/\n  and true;/' t_own_refused
 mutate "a partly item with a place accepted" 's/             else \.at == null end\)\)/             else true end))/' t_own_refused
+# The record is bound to the earlier review's commit as well as its id; a carried finding keeps its
+# id with @ and the review that raised it; and the body follows the event the user confirmed.
+t_own_commit() { render "$NONE" "$HOWN" "" "$(runf ecommit '.earlier = {review_id: 41, commit_id: "'"$HEAD"'", record: "ok", items: ['"$(eitem F-001 resolved main.tf 9)"']}')"
+  [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ] && grep -qF 'cannot be checked against this head: the record kept of it does not match it.' "$O/comment.md"; }
+t_own_commit; check "earlier review: a record of another commit is not read, approve proposes COMMENT" $?
+t_own_carried() { render "$NONE" "$HOWN" "" "$(erun ecar ok "[$(eitem F-001 resolved main.tf 9), $(eitem F-002@40 not-resolved)]")"
+  [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ] && grep -qxF '| `F-002@40` `structure.wrong-file` | HIGH | `main.tf:3` | not resolved |' "$O/comment.md"; }
+t_own_carried; check "earlier review: a carried finding renders with its id and origin and keeps the block" $?
+t_own_confirmed() { render "$NONE" "$HOWN" "" "$EOK" "" --event COMMENT
+  [ "$ST" = 0 ] && [ "$(verdict)" = "approve APPROVE" ] && grep -qxF "$STANDS" "$O/comment.md" &&
+  grep -qxF "Earlier review from this account: changes requested on ${BASE:0:7}; it stays in effect until this account replaces it or it is dismissed." "$O/comment.md" &&
+  ! grep -qF 'this review replaces it' "$O/comment.md"; }
+t_own_confirmed; check "earlier review: a confirmed COMMENT carries the stands lines and no replace line, result.json keeps APPROVE" $?
+t_own_confirmed_ap() { render "$NONE" "$HOWN" "" "$EPART" "" --event APPROVE
+  [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ] && grep -qF 'this review replaces it.' "$O/comment.md" && ! grep -qxF "$STANDS" "$O/comment.md"; }
+t_own_confirmed_ap; check "earlier review: a confirmed APPROVE over the block says it replaces it and drops the stands line" $?
+t_own_badevent() { render "$NONE" "$HOWN" "" "$EOK" "" --event DISMISS; [ "$ST" = 2 ] && empty_out; }
+t_own_badevent; check "earlier review: an --event outside the three events is refused" $?
+mutate "a record of another commit read" 's/ and \$e\.commit_id == \$h\.own_review\.commit_id//' t_own_commit
+mutate "a carried id refused" 's/\(@\[0-9\]\{1,16\}\)\?\$"\)\)/\$"))/' t_own_carried
+mutate "the confirmed event ignored" 's/\(\$in\.confirmed \/\/ \$proposed\) as \$event/\$proposed as \$event/' t_own_confirmed
+mutate "result.json taking the confirmed event" 's/event: \$proposed, tier: \$tier,/event: \$event, tier: \$tier,/' t_own_confirmed
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi
