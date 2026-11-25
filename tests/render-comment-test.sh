@@ -2341,7 +2341,7 @@ mutate "a dir listed twice accepted" 's/type == "array" and \(map\(\.dir\?\) \| 
 mutate "the one form of the covered sentence dropped" 's/\+ \(if \$n == 1 then "-one" else "-many" end\); \{count: \$n, total/+ "-many"; {count: \$n, total/' t_cov_one
 mutate "STANDARD section 5 keeps its gap heading" 's/section\(if \$cov != \[\] then "Examples not planned" else/section(if false then "Examples not planned" else/' t_cov_one
 mutate "witnesses not deduplicated" 's/if any\(\.\[\]; \. == \$w\) then \. else \. \+ \[\$w\] end/. + [\$w]/' t_cov_gold
-mutate "the downloaded flag ignored" 's/elif \$c\.downloaded then "-downloaded" elif/elif false then "-downloaded" elif/' t_cov_dl
+mutate "the downloaded flag ignored" 's/if \$c\.downloaded then "-downloaded" else/if false then "-downloaded" else/' t_cov_dl
 mutate "the one witness example not allowlisted" 's/ and \(\$e\[0\] \| allowed\)//' t_cov_names
 mutate "one example named for several witness examples" 's/if \(\$e \| length\) == 1 and/if true and/' t_cov_two
 
@@ -2972,8 +2972,8 @@ t_cov_exc_floor; check "covered: a floor trigger judged by Check A does not stop
 refused "a covered gate outside the list" "$(F556C)" "$H556N" "" "$(R556X xbad '.coverage.covered_skips[0].gate = "G4"')" "$TMP/assess-556.txt"
 mutate "exceptions never covered" 's/"role": "exception: example assumes a role in another account", //' t_cov_exc
 mutate "the exception mode not checked" 's/if IN\("role", "docker"\) then "runner" else "laptop" end/"laptop"/' t_cov_exc
-mutate "the exception lines dropped" 's/ elif \(\$c\.gate \| skip_mode\) == "runner" then "-exception"//' t_cov_exc
-mutate "the exception sentence dropped" 's/elif \(\.gate \| skip_mode\) == "runner" then "-exception" else "" end\]/else "" end]/' t_cov_exc
+mutate "the exception lines dropped" 's/\$c \| covered_kind end/"" end/' t_cov_exc
+mutate "the exception sentence dropped" 's/\[\$cov\[\] \| covered_kind\]/[\$cov[] | ""]/' t_cov_exc
 mutate "a laptop run takes exception entries" 's/and all\(\$cs\[\]; \.gate == "design" or \(\.gate \| skip_mode == \$run\.plan_mode\)\)//' t_cov_exc_laptop
 
 # --- Design skips join the covered skips (verdict.md, Covered safety-gate skips): an example whose
@@ -3027,12 +3027,46 @@ t_cov_des_exc; check "covered: a design skip beside a covered recorded exception
 refused "a design entry with a path" "$(F556C)" "$H556N" "" "$(R556D dbadp '.coverage.covered_skips[0].path = "main.tf"')" "$TMP/assess-556.txt"
 refused "a gate entry with a reason" "$(F556C)" "$H556N" "" "$(R556K kbadr '.coverage.covered_skips[0].reason = "access-denied"')" "$TMP/assess-556.txt"
 mutate "design skips never covered" 's/def entry_reason: if \.gate == "design" then "environment \(\\\(\.reason\)\)" else/def entry_reason: if false then "" else/' t_cov_des
-mutate "a transient reason accepted for a design entry" 's/def design_reasons: \["access-denied"\];/def design_reasons: ["access-denied", "timeout"];/' t_cov_des_tok
+mutate "a transient reason accepted for a design entry" 's/def design_reasons: \["access-denied", "refused-host"\];/def design_reasons: ["access-denied", "refused-host", "timeout"];/' t_cov_des_tok
 mutate "a design entry taken for another reason" 's/and \.reason == \(\$x \| entry_reason\)/and true/; s/any\(\$cs\[\]; \.dir == \$x\.dir and entry_reason == \$x\.reason\)/any(\$cs[]; .dir == \$x.dir)/' t_cov_des_trans
-mutate "the design lines dropped" 's/if \$c\.gate == "design" then "-design" elif/if false then "" elif/' t_cov_des
-mutate "the design sentence dropped" 's/\[\$cov\[\] \| if \.gate == "design" then "-design" elif/[\$cov[] | if false then "" elif/' t_cov_des
+mutate "the design lines dropped" 's/\$c \| covered_kind end/"" end/' t_cov_des
+mutate "the design sentence dropped" 's/\[\$cov\[\] \| covered_kind\]/[\$cov[] | ""]/' t_cov_des
 mutate "a design skip taken with no plan mode" 's/       and \(\$run\.plan_mode \| IN\("laptop", "runner"\)\)\n//' t_cov_des_nomode
 mutate "a design skip held to the plan mode" 's/and all\(\$cs\[\]; \.gate == "design" or \(/and all(\$cs[]; (/' t_cov_des_runner
+
+# A design skip of reason refused-host: the runner's plan proxy refused, by design, a host the
+# example's data sources read, at head and at base. Only after a runner pass.
+COVR='[{dir: "examples/eks-capabilities", gate: "design", reason: "refused-host", witnesses: ['"$W1"']}]'
+R556R() { R556 "$1" '.plan_mode = "runner" | .coverage.unplanned = [{dir: "examples/eks-capabilities", reason: "environment (refused-host)"}]
+  | .coverage += {covered_skips: '"$COVR"', skip_head_sha: "'"$HEAD"'", skip_base_sha: "'"$BASE"'"} | '"${2:-.}"; }
+cat > "$TMP/want-556r.txt" <<'WANT'
+**Good to merge, with nits.** `validate` passed in all 9 examples; 8 were planned. 1 of 9 examples was not planned because the plan proxy refuses, by design, a host its data sources read, at head and at base; the changed code was planned in `examples/autoscaling` (see notes).
+- Not planned: `examples/eks-capabilities` (the plan proxy refused a host its data sources read, by design, `environment (refused-host)`, at head 0123456 and at base 89abcde).
+- Covered by: `vpc_security_group_ids` planned in `examples/autoscaling` as `module.aurora.aws_rds_cluster.this` at 0123456.
+WANT
+t_cov_ref() {
+  rc "$(F556C)" "$(R556R rgold)" "$H556N"
+  [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] \
+    && grep -E '^\*\*Good|^- (Not planned|Covered by): ' "$O/comment.md" | cmp -s - "$TMP/want-556r.txt" || return 1
+  rc "$(F556C)" "$(R556R rstd)" "$H556N" --standard
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qxF -- '- Not planned: `examples/eks-capabilities` (the plan proxy refused a host its data sources read, by design, `environment (refused-host)`, at head 0123456 and at base 89abcde).' "$O/comment.md" \
+    && grep -qF '1 of 9 examples was not planned because the plan proxy refuses, by design, a host its data sources read, at head and at base; the changed code was planned in `examples/autoscaling`, as listed below.' "$O/comment.md"
+}
+t_cov_ref; check "covered: a refused-host design skip after a runner pass is approve with nits at rule 7, named with its reason token" $?
+t_cov_ref_laptop() { unch x "$(F556C)" "$(R556R rl '.plan_mode = "laptop"')"; }
+t_cov_ref_laptop; check "covered: a refused-host design entry after a laptop pass is ignored" $?
+t_cov_ref_mixed() { # a refused-host and an access-denied design skip: one mixed sentence
+  rc "$(F556C)" "$(R556R rm '.coverage.unplanned += [{dir: "examples/vpc-endpoint", reason: "environment (access-denied)"}]
+    | .coverage.covered_skips += [{dir: "examples/vpc-endpoint", gate: "design", reason: "access-denied", witnesses: ['"$W1"']}]')" "$H556N"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qF '2 of 9 examples were not planned, for the reasons in the notes;' "$O/comment.md" \
+    && grep -qF '`environment (refused-host)`' "$O/comment.md" && grep -qF '`environment (access-denied)`' "$O/comment.md"
+}
+t_cov_ref_mixed; check "covered: a refused-host design skip beside an access-denied one is approve with nits, one mixed sentence" $?
+t_cov_ref_net() { unch x "$(F556C)" "$(R556R rn '.coverage.unplanned[0].reason = "environment (network)"')"; }
+t_cov_ref_net; check "covered: a refused-host entry for an example recorded environment (network) is ignored" $?
+mutate "a refused-host design skip taken after a laptop pass" 's/\n       and all\(\$cs\[\]; \.gate != "design" or \.reason != "refused-host" or \$run\.plan_mode == "runner"\)//' t_cov_ref_laptop
+mutate "refused-host never a design reason" 's/def design_reasons: \["access-denied", "refused-host"\];/def design_reasons: ["access-denied"];/' t_cov_ref
+mutate "refused-host lines worded as a denial" 's/then \(if \.reason == "refused-host" then "-refused" else "-design" end\)/then "-design"/' t_cov_ref
 
 # --- Review follow-ups: a job-less list at host-pass.sh's cap may have lost an entry, so it stays
 # unknown; an unresolved provider keeps its directory's floor triggers unknown; review.path-missing
@@ -3113,6 +3147,7 @@ acc_case "a covered recorded exception, approve with nits" t_cov_exc
 acc_case "a covered design skip, approve with nits" t_cov_des
 acc_case "a covered design skip beside a covered gate skip, approve with nits" t_cov_des_mixed
 acc_case "a covered design skip beside a covered recorded exception, approve with nits" t_cov_des_exc
+acc_case "a covered refused-host design skip, approve with nits" t_cov_ref
 acc_case "a MEDIUM review.path-missing beside an unknown, inconclusive" t_pm_unknown
 acc_case "a MEDIUM review.verification-incomplete, inconclusive" t_bvi
 acc_case "an unregistered MEDIUM alone, inconclusive" t_unreg_alone

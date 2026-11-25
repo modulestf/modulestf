@@ -366,7 +366,12 @@ eks module's `eks-capabilities` example and the emr module's `studio` example re
 account's Identity Center directory (`aws_ssoadmin_instances`, then `aws_identitystore_group`),
 so the `sso` and `identitystore` hosts stay refused, and the eks module's `karpenter` example
 reads a public registry token (`aws_ecrpublic_authorization_token`), which is a credential, so
-`api.ecr-public` stays refused. Those examples end this way.
+`api.ecr-public` stays refused. Those examples end this way. When every host refused during the
+plan is one of these three, as a whole AWS name on port 443, the example is recorded
+`plan: environment (refused-host)` instead, with a `refused:` line naming the hosts, a
+`validate:` line from `terraform validate` in a container with no network and no credentials,
+and a merge base re-run, so the review can cover it as a
+[design skip](../skip-coverage.md#design-skips).
 
 ## The bare runner
 

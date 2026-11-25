@@ -982,9 +982,13 @@ t_skip_gate() { # 0 when both modes check a design skip and neither checks a tim
     skip_gate "$m" 'environment (access-denied)' | grep -qE '^skip-coverage: [0-9]+ covered, [0-9]+ not covered' || return 1
     skip_gate "$m" 'environment (timeout)' | grep -qE '^skip-coverage: nothing to check' || return 1
   done
+  # a host the plan proxy refused by design: only a runner pass has a plan proxy
+  skip_gate runner 'environment (refused-host)' | grep -qE '^skip-coverage: [0-9]+ covered, [0-9]+ not covered' || return 1
+  skip_gate laptop 'environment (refused-host)' | grep -qE '^skip-coverage: nothing to check' || return 1
 }
-t_skip_gate; check "skip-coverage: a design skip alone is checked in both modes, a timeout is not" $?
-for m in 's/, "environment \(access-denied\)"\)\)/))/' 's/ or \. == "environment \(access-denied\)"\)/)/'; do
+t_skip_gate; check "skip-coverage: a design skip alone is checked in both modes, refused-host in runner mode only, a timeout is not" $?
+for m in 's/, "environment \(access-denied\)"\)\)/))/' 's/ or IN\("environment \(access-denied\)", "environment \(refused-host\)"\)\)/)/' \
+  's/, "environment \(refused-host\)"\)\)/))/' 's/"plan gate G3", "environment \(access-denied\)"\)/"plan gate G3", "environment (access-denied)", "environment (refused-host)")/'; do
   perl -pe "$m" "$SK/review-run.sh" > "$SK/review-run-smut.sh"
   keep="$RR"; RR="$SK/review-run-smut.sh"; t_skip_gate > /dev/null 2>&1; s=$?; RR="$keep"
   check "skip-coverage: the mutation $m is caught" "$( ! cmp -s "$SK/review-run.sh" "$SK/review-run-smut.sh" && [ "$s" != 0 ]; echo $?)"

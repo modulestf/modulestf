@@ -90,7 +90,7 @@ def gap_reasons: ["terraform was not installed", "init failed", "not run: enviro
 
 # plan-pass.sh ENV_REASONS, each as its class
 def env_classes: ["credentials", "access-denied", "throttling", "registry", "plugin", "sandbox", "network",
-  "timeout", "output-cap"] | map("environment (\(.))");
+  "timeout", "output-cap", "refused-host"] | map("environment (\(.))");
 
 # The fixed reasons verify-pass.sh coverage gives an example that was not planned.
 # "plan pass did not run: refused" and "...: failed" are the host's, for a profile named and a plan
@@ -257,8 +257,12 @@ def skip_reason: {"G1": "plan gate G1", "G2": "plan gate G2", "G3": "plan gate G
 def skip_gates: ["G1", "G2", "G3", "role", "docker"];
 def skip_mode: if IN("role", "docker") then "runner" else "laptop" end;
 # A design skip (skip-coverage.md, Design skips): an example that cannot plan by design, gate
-# "design" with the reason token of its environment class, in either mode. The closed list.
-def design_reasons: ["access-denied"];
+# "design" with the reason token of its environment class, in either mode; refused-host only
+# after a runner pass, whose plan proxy refused the host. The closed list.
+def design_reasons: ["access-denied", "refused-host"];
+# The suffix of a covered entry's strings: a gate skip, a recorded exception or a design skip by reason.
+def covered_kind: if .gate == "design" then (if .reason == "refused-host" then "-refused" else "-design" end)
+  elif (.gate | skip_mode) == "runner" then "-exception" else "" end;
 # The unplanned reason a covered entry stands for.
 def entry_reason: if .gate == "design" then "environment (\(.reason))" else .gate | skip_reason end;
 def valid_covered:
@@ -586,6 +590,7 @@ def texts: {
   "unplanned-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
   "unplanned-covered-exception": "- Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}).",
   "unplanned-covered-design": "- Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}).",
+  "unplanned-covered-refused": "- Not planned: {dir} (the plan proxy refused a host its data sources read, by design, `environment ({reason})`, at head {head} and at base {base}).",
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
   "behaviour-trigger": "- Behaviour change at {location} ({category}): not verified.",
   "behaviour-trigger-groups": "- {count} behaviour changes not verified: {categories}.",
@@ -672,6 +677,10 @@ def texts: {
   "compact-covered-design-many": "{count} of {total} examples were not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where} (see notes).",
   "rationale-covered-design-one": "1 of {total} examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where}, as listed below.",
   "rationale-covered-design-many": "{count} of {total} examples were not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where}, as listed below.",
+  "compact-covered-refused-one": "1 of {total} examples was not planned because the plan proxy refuses, by design, a host its data sources read, at head and at base; the changed code was planned {where} (see notes).",
+  "compact-covered-refused-many": "{count} of {total} examples were not planned because the plan proxy refuses, by design, a host their data sources read, at head and at base; the changed code was planned {where} (see notes).",
+  "rationale-covered-refused-one": "1 of {total} examples was not planned because the plan proxy refuses, by design, a host its data sources read, at head and at base; the changed code was planned {where}, as listed below.",
+  "rationale-covered-refused-many": "{count} of {total} examples were not planned because the plan proxy refuses, by design, a host their data sources read, at head and at base; the changed code was planned {where}, as listed below.",
   "compact-covered-mixed-many": "{count} of {total} examples were not planned, for the reasons in the notes; the changed code was planned {where} (see notes).",
   "rationale-covered-mixed-many": "{count} of {total} examples were not planned, for the reasons listed below; the changed code was planned {where}.",
   "evidence-covered": "- Not planned: {dir} ({gate} hit in {path}, same at base {base}).",
@@ -679,6 +688,7 @@ def texts: {
   "evidence-covered-by": "- Covered by: `{attribute}` planned in {example} as {address} at {head}.",
   "evidence-covered-exception": "- Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}).",
   "evidence-covered-design": "- Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}).",
+  "evidence-covered-refused": "- Not planned: {dir} (the plan proxy refused a host its data sources read, by design, `environment ({reason})`, at head {head} and at base {base}).",
   "evidence-reported": "Behaviour change at {location} reported: judged in {findings} ({count} differences).",
   "evidence-claims-one": "1 claim verified.",
   "evidence-claims-many": "{count} claims verified.",
@@ -955,7 +965,7 @@ def skipped_lines($run; $p): ($run.skipped_files // []) as $s
 
 def covered_lines($key; $cov; $run):
   [ ($cov[] as $c
-     | tx($key + (if $c.gate == "design" then "-design" elif $c.downloaded then "-downloaded" elif ($c.gate | skip_mode) == "runner" then "-exception" else "" end);
+     | tx($key + (if $c.downloaded then "-downloaded" else $c | covered_kind end);
          {dir: ($c.dir | nm(allowed)), gate: $c.gate, path: (($c.path // "") | nm(allowed)), base: $run.coverage.skip_base_sha[:7], head: $run.coverage.skip_head_sha[:7], reason: $c.reason,
           exception: ({"role": "a role in another account", "docker": "a Docker daemon"}[$c.gate] // "")})),
     (witnesses($cov)[]
@@ -969,7 +979,7 @@ def not_planned($run): [$run.coverage.unplanned[] | select(.reason != "no exampl
 def covered_sentence($k; $run; $cov): (not_planned($run) | length) as $n
   | ([witnesses($cov)[].example] | unique) as $e
   # one sentence per kind of skip: gate skips, recorded exceptions or design skips; several kinds, the mixed one
-  | ([$cov[] | if .gate == "design" then "-design" elif (.gate | skip_mode) == "runner" then "-exception" else "" end] | unique) as $kinds
+  | ([$cov[] | covered_kind] | unique) as $kinds
   | tx($k + (if ($kinds | length) > 1 then "-mixed" else $kinds[0] end)
        + (if $n == 1 then "-one" else "-many" end); {count: $n, total: $run.examples.count,
       where: (if ($e | length) == 1 and ($e[0] | allowed) then "in `\($e[0])`" else "in other examples" end)});
@@ -1266,6 +1276,8 @@ def covered_of($in; $l; $b):
        # skip stands beside either, and needs a mode too
        and ($run.plan_mode | IN("laptop", "runner"))
        and all($cs[]; .gate == "design" or (.gate | skip_mode == $run.plan_mode))
+       # only the runner has a plan proxy to refuse a host
+       and all($cs[]; .gate != "design" or .reason != "refused-host" or $run.plan_mode == "runner")
        # the witness lines stay bounded, and at least one example was planned
        and (witnesses($cs) | length) <= 100 and ($u | length) < ($run.examples.count // 0)
        and ($u | map(.dir) | length == (unique | length))

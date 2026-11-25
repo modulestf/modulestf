@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016 # the perl and jq programs below are single-quoted on purpose
 # The covered skip of terraform-module-pr-review: which examples skipped by a plan gate, kept
-# by a recorded exception or denied a data source read under the review role (a design skip)
-# are covered by the plan of other examples, as one file. Rules and reasons: skip-coverage.md.
+# by a recorded exception, or denied a data source read under the review role or refused a host
+# by the runner's plan proxy by design (a design skip) are covered by the plan of other examples,
+# as one file. Rules and reasons: skip-coverage.md.
 # Runs the same under bash and zsh. Invoke it by an absolute path in the skill as installed,
 # never from the head or the workspace:
 #
@@ -411,6 +412,23 @@ if [ -s "$W/pairs.txt" ]; then
   perl -e "$REFS_PL" "$CLONE" "$W/pairs.txt" > "$W/refs.txt" 2> /dev/null || cp "$W/pairs.txt" "$W/refs.txt"
 fi
 
+# The data source types the .tf files directly in each refused-host example directory declare
+# (skip-coverage.md, Design skips): one {dir: [type]} line per directory, from regular files only,
+# none for a directory reached through a link or one that climbs out
+: > "$W/types.jsonl"
+if [ "$MODE" = runner ]; then
+  jq -r '.unplanned[] | select(.reason == "environment (refused-host)") | .dir
+    | select(type == "string" and test("^[A-Za-z0-9._/-]{1,300}$") and (split("/") | index("..") == null))' "$COV" | sort -u |
+  while IFS= read -r d; do
+    t=
+    r="$(cd "$CLONE/$d" 2> /dev/null && pwd -P)" || r=
+    if [ "$r" = "$CLONE/$d" ]; then
+      t="$(find "$CLONE/$d" -maxdepth 1 -type f -name '*.tf' -exec perl -ne 'print "$1\n" if /^\s*data\s+"([A-Za-z0-9_-]+)"\s+"/' {} + 2> /dev/null | sort -u)"
+    fi
+    printf '%s\n' "$t" | jq -R -s -c --arg d "$d" '{($d): (split("\n") | map(select(length > 0)))}' >> "$W/types.jsonl"
+  done
+fi
+
 # The witness records: addresses-<n>.json from --addresses, data only, as the plan coverage reads them
 : > "$W/addr.jsonl"
 if [ -n "$ADDRS" ] && [ -d "$ADDRS" ] && [ ! -L "$ADDRS" ]; then
@@ -429,13 +447,13 @@ if [ -n "$BGATES" ] && [ -f "$BGATES" ] && [ ! -L "$BGATES" ] && [ "$(wc -c < "$
   BASEGATES="$(cat "$BGATES")"
 fi
 
-jq -n -L "$HERE" --slurpfile cov "$COV" --slurpfile cls "$W/classes.jsonl" --slurpfile a "$W/addr.jsonl" \
+jq -n -L "$HERE" --slurpfile cov "$COV" --slurpfile cls "$W/classes.jsonl" --slurpfile a "$W/addr.jsonl" --slurpfile types "$W/types.jsonl" \
   --rawfile rec "$PLANREC" --rawfile refs "$W/refs.txt" --arg hg "$HEADGATES" --arg bg "$BASEGATES" --arg mode "$MODE" \
   --arg head "$HEADSHA" --arg base "$BASESHA" --argjson headok "$HEADOK" --argjson nchanged "$NCHANGED" \
   --slurpfile files "$FILES" '
   include "skip-coverage";
   ($refs | split("\n") | map(select(length > 0))) as $r
-  | if $mode == "runner" then skip_coverage_runner($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged; $r)
+  | if $mode == "runner" then skip_coverage_runner($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged; $r; ($types | add // {}))
   else skip_coverage($cov[0]; $files[0]; $cls; ($a | add // {}); $rec; $hg; $bg; $head; $base; $headok; $nchanged; $r) end
 ' || die "cannot evaluate"
 exit 0

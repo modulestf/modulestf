@@ -589,7 +589,7 @@ case "$GMODE" in laptop|runner) ;; *) echo "plan pass not run: mode unknown"; ex
 case "$PHASE" in
   '') ;;
   init) [ "$GMODE" = runner ] || { echo "plan pass not run: phase needs runner mode"; exit 0; } ;;
-  plan|base-init|base-plan|show) [ "$GMODE" = runner ] || { echo "plan pass not run: phase needs runner mode"; exit 0; }
+  plan|base-init|base-plan|show|validate) [ "$GMODE" = runner ] || { echo "plan pass not run: phase needs runner mode"; exit 0; }
     printf '%s\n' "$INDEX" | grep -Eqx '[1-9][0-9]{0,3}' && [ "$#" -eq 1 ] ||
       { echo "plan pass not run: phase $PHASE needs --index and one example"; exit 0; } ;;
   *) echo "plan pass not run: phase unknown"; exit 0 ;;
@@ -1098,6 +1098,21 @@ if [ "$PHASE" = show ]; then
   cd "$HROOT/$rel_ex" 2> /dev/null || exit 0
   a="$(pe_show "$key")"
   [ -z "$a" ] || echo "addresses-json: $a"
+  exit 0
+fi
+if [ "$PHASE" = validate ]; then
+  # A container of its own, with no network and no credentials, for an example the runner ended
+  # because the plan proxy refused it hosts by design: the head's validate, the evidence that
+  # the early end hid no type error (skip-coverage.md, Design skips). One fixed line.
+  rel_ex=$1; key="e$INDEX"
+  case "$rel_ex" in /*|*..*) exit 0 ;; esac
+  { load_state "$key" > /dev/null && [ "$CLASS" = ready ] && cd "$HROOT/$rel_ex" 2> /dev/null; } || { echo "validate: failed"; exit 0; }
+  AK=; SK=; ST=; set_env "$key"
+  if run_capped "$(left 120)" "$PLAN/out/$key-validate.txt" "${TFENV[@]}" terraform validate -no-color; then
+    echo "validate: passed"
+  else
+    echo "validate: failed"
+  fi
   exit 0
 fi
 if [ "$PHASE" = base-plan ]; then

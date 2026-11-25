@@ -152,6 +152,13 @@ printf 'data "aws_iam_policy_document" "extra" {\n  version = var.policy_version
 # data.tf also reads two attributes of the root module: aws_lb.this.subnets by name, and the
 # whole aws_security_group.this object, so a change to either reaches a data source
 printf '\ndata "aws_iam_policy_document" "by_lb" {\n  policy_id               = aws_lb.this.subnets[0]\n  source_policy_documents = [jsonencode(one(aws_security_group.this[*]))]\n}\n' >> "$C/data.tf"
+# examples/h1 reads the account's Identity Center directory: the runner's plan proxy refuses its
+# hosts by design (skip-coverage.md, Design skips). examples/h2 reads none of the mapped types.
+mkdir -p "$C/examples/h1" "$C/examples/h2"
+printf 'data "aws_ssoadmin_instances" "this" {}\n\ndata "aws_identitystore_group" "g" {\n  identity_store_id = "d-1"\n}\n\nmodule "lb" {\n  source = "../../"\n}\n' > "$C/examples/h1/main.tf"
+printf 'module "lb" {\n  source = "../../"\n}\n' > "$C/examples/h2/main.tf"
+printf '# Example\n' > "$C/examples/h1/README.md"
+ln -s . "$C/examples/hl" # examples/hl/h1 is examples/h1 through a link
 G init -q && G add -A && G commit -qm base
 BASE="$(G rev-parse HEAD)"
 G worktree add -q --detach "$RUN/base" "$BASE"
@@ -737,6 +744,77 @@ t_v_runner_ref() { # runner mode reads the same attribute references
 }
 t_v_runner_ref; check "design skip: runner mode, a changed attribute a data source reads: attribute-referenced" $?
 
+# Runner mode: an example the plan proxy refused hosts by design, environment (refused-host)
+HOSTS='identitystore.eu-west-1.amazonaws.com:443 sso.eu-west-1.amazonaws.com:443'
+HDEF="refused: $HOSTS
+validate: passed
+base: environment (refused-host)
+base-refused: $HOSTS"
+HLINES=$HDEF HEX=examples/h1 HCLASS='environment (refused-host)'
+h_reset() { reset_knobs; HLINES=$HDEF; HEX=examples/h1; HCLASS='environment (refused-host)'; }
+h_runner() { # extra shell commands under the clone, then the check mode (default runner)
+  fresh; plain_change; (cd "$C" && eval "${1:-:}"); commit; filesjson
+  rm -rf "$TMP/addr"; mkdir -p "$TMP/addr"
+  { echo "plan pass mode: runner"; i=0
+    for e in examples/e1 examples/e2 "$HEX"; do
+      i=$((i + 1)); echo "host example $i: $e"; echo "example: $e"
+      case "$e" in
+        "$HEX") echo "plan: $HCLASS"; [ -z "$HLINES" ] || printf '%s\n' "$HLINES" ;;
+        *) echo "plan: planned | Plan: 3 to add, 0 to change, 0 to destroy."
+           jq -n --arg h "$HEAD" --arg e "$e" '{addresses: ["module.lb.aws_lb.this"], attributes: {"module.lb.aws_lb.this": ["security_groups"]},
+             module_calls: {lb: "../../"}, sensitive: {"module.lb.aws_lb.this": []}, head_sha: $h, example: $e} | '"$ADDRJQ" > "$TMP/addr/addresses-$i.json" ;;
+      esac
+    done; echo "plan summary: 3 examples, 2 planned, 0 exceptions, 1 other"; } > "$TMP/record.txt"
+  jq -n --arg d "$HEX" --arg r "$HCLASS" '{schema_version: 1, class: "partial", inert: false, unplanned: [{dir: $d, reason: $r}]}' > "$TMP/coverage.json"
+  "$SH" "$SC" gates "$RUN" --tree "$RUN/base" --base "$BASE" --coverage "$TMP/coverage.json" --out "$TMP/base-gates.txt" --mode runner
+  "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
+    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" \
+    --changed-files "$(jq length "$TMP/files.json")" --mode "${2:-runner}" > "$TMP/out.json"
+}
+h_why() { h_runner "${2:-:}" "${3:-runner}" && [ "$(why "$HEX")" = "$1" ]; }
+t_h() { h_reset; h_why covered && jq -e '.covered == [{dir: "examples/h1", gate: "design", reason: "refused-host",
+  witnesses: [{attribute: "security_groups", example: "examples/e1", address: "module.lb.aws_lb.this"}]}]' "$TMP/out.json" > /dev/null; }
+for sh in bash zsh; do
+  SH=$sh
+  t_h; check "$sh: refused-host design skip, the same hosts refused at head and base, validated, with a witness: covered" $?
+done
+SH=bash
+t_h_laptop() { h_reset; h_why wrong-gate-class : laptop; }
+t_h_laptop; check "refused-host: a laptop pass has no plan proxy, so no such design skip: wrong-gate-class" $?
+t_h_ecr() { h_reset; HLINES="${HDEF//$HOSTS/api.ecr-public.us-east-1.amazonaws.com:443}"; h_why denial-unproven; }
+t_h_ecr; check "refused-host: a refused host no data source of the example reads: denial-unproven" $?
+t_h_types() { h_reset; HEX=examples/h2; h_why denial-unproven; }
+t_h_types; check "refused-host: an example with no data block of a mapped type: denial-unproven" $?
+t_h_other() { h_reset; HLINES="${HDEF//$HOSTS/es.eu-west-1.amazonaws.com:443}"; h_why denial-unproven; }
+t_h_other; check "refused-host: a host off the closed list: denial-unproven" $?
+t_h_loose() { h_reset; HLINES="${HDEF//$HOSTS/sso.eu-west-1.amazonaws.com.attacker.example:443}"; h_why denial-unproven; }
+t_h_loose; check "refused-host: a host that only starts like a listed one: denial-unproven" $?
+t_h_noregion() { h_reset; HLINES="${HDEF//$HOSTS/sso.attacker.amazonaws.com:443}"; h_why denial-unproven; }
+t_h_noregion; check "refused-host: a listed service name with no region: denial-unproven" $?
+t_h_port() { h_reset; HLINES="${HDEF//$HOSTS/sso.eu-west-1.amazonaws.com:4430}"; h_why denial-unproven; }
+t_h_port; check "refused-host: a listed host on another port: denial-unproven" $?
+t_h_none() { h_reset; HLINES="${HDEF#*$'\n'}"; h_why denial-unproven; }
+t_h_none; check "refused-host: no refused line: denial-unproven" $?
+t_h_two() { h_reset; HLINES="refused: $HOSTS
+$HDEF"; h_why denial-unproven; }
+t_h_two; check "refused-host: two refused lines: denial-unproven" $?
+t_h_novalid() { h_reset; HLINES="${HDEF/validate: passed/validate: failed}"; h_why not-validated; }
+t_h_novalid; check "refused-host: validate failed at the head: not-validated" $?
+t_h_novalidline() { h_reset; HLINES="${HDEF/validate: passed$'\n'/}"; h_why not-validated; }
+t_h_novalidline; check "refused-host: no validate line: not-validated" $?
+t_h_basehosts() { h_reset; HLINES="${HDEF%$HOSTS}sso.eu-west-1.amazonaws.com:443"; h_why base-not-denied; }
+t_h_basehosts; check "refused-host: other hosts refused at the merge base: base-not-denied" $?
+t_h_basenet() { h_reset; HLINES="refused: $HOSTS
+validate: passed
+base: environment (network)"; h_why base-not-denied; }
+t_h_basenet; check "refused-host: a merge base ended for another refused host: base-not-denied" $?
+t_h_dir() { h_reset; h_why change-not-allowed 'printf "provider \"aws\" {\n  region = \"us-east-1\"\n}\n" >> examples/h1/main.tf'; }
+t_h_dir; check "refused-host: a provider block added under the example: change-not-allowed" $?
+t_h_readme() { h_reset; h_why dir-changed 'printf "More.\n" >> examples/h1/README.md'; }
+t_h_readme; check "refused-host: any change under the example: dir-changed" $?
+t_h_nowit() { h_reset; ADDRJQ='.module_calls = {}'; h_why no-witness; }
+t_h_nowit; check "refused-host: no planned example witnesses the change: no-witness" $?
+
 # The attribute scan itself, REFS_PL taken from the script under test: a negated read, tags_all
 # for tags, a .tf file that is a link, and a line of unclosed indexes that must stay linear.
 refs() { # pairs file -> the pairs the scan finds read in $TMP/refs, under a time limit of 5 seconds
@@ -852,14 +930,14 @@ mutate "a changed data source taken for a design skip" 's/ or any\(\$x\.cls\[\]\
 mutate "a second reason of a design skip ignored" 's/  \| \(if \(\$x\.rs \| length\) > 1 then "not-sole-reason"\n     elif/  | (if/' t_v_sole
 mutate "a moved clone ignored for a design skip" 's/     elif \(\$x\.headok \| not\) then "head-mismatch"\n//' t_v_head
 mutate "a short files list ignored for a design skip" 's/     elif \(\$x\.files \| length\) != \$x\.nchanged or \(\$x\.cls \| length\) != \(\$x\.files \| length\) then "files-incomplete"\n//' t_v_count
-mutate "the denial evidence not required" 's/     elif \(\$x\.blk\.denied \| length\) != 1 or \(\$x\.blk\.denied\[0\] \| denied_set\) == null then "denial-unproven"\n//' t_v_nodenied
+mutate "the denial evidence not required" 's/     elif \$k == "access-denied" and \(\(\$x\.blk\.denied \| length\) != 1 or \(\$x\.blk\.denied\[0\] \| denied_set\) == null\) then "denial-unproven"\n//' t_v_nodenied
 mutate "a second denied line ignored" 's/\(\$x\.blk\.denied \| length\) != 1 or //' t_v_twodenied
 mutate "a denial on a managed resource accepted" 's/safe_address and test\("[^"]*data[^"]*"\)\)/safe_address)/' t_v_baddenied
 mutate "a changed attribute a data source reads ignored" 's/     elif any\(\$x\.cls\[\]\.attrs\[\]; "\\\(\.address\) \\\(\.attribute\)" \| IN\(\$x\.refs\[\]\)\) then "attribute-referenced"\n//' t_v_ref
 mutate "the attribute scan finds no read" 's/\$hit\{"\$a \$at"\} = 1 if !defined \$3/\$hit{"\$a \$at"} = 1 if 0 and !defined \$3/' t_v_ref
 mutate "a whole-object read not counted" 's/ if !defined \$3 \|\| / if (defined \$3 \&\& 0) || /' t_v_whole
 mutate "an unresolved merge base ignored for a design skip" 's/(dir_changed\(\$x\.paths; \$x\.d; \$x\.h; null\) then "dir-changed"\n)     elif \(\$x\.base \| sha \| not\) then "merge-base-unresolved"\n/$1/' t_v_unres
-mutate "the merge base denial not required" 's/     elif \$x\.blk\.base != \["environment \(access-denied\)"\] or \$x\.blk\.base_denied != \$x\.blk\.denied then "base-not-denied"\n//' t_v_basenew
+mutate "the merge base denial not required" 's/     elif \$k == "access-denied" and \(\$x\.blk\.base != \["environment \(access-denied\)"\] or \$x\.blk\.base_denied != \$x\.blk\.denied\) then "base-not-denied"\n//' t_v_basenew
 mutate "a missing head gate record taken for a design skip" 's/elif \$x\.h == null or \$x\.h\.done != true or /elif /' t_v_nohead
 mutate "a negated read missed" 's/\(\?<!\[A-Za-z0-9_\.\]\)/(?<![A-Za-z0-9_.-])/' t_refs_minus
 mutate "tags_all not read as tags" 's/ \|\| \(\$at eq "tags" && \$3 eq "tags_all"\)//' t_refs_tags
@@ -867,6 +945,18 @@ mutate "a linked .tf file skipped" 's/\{ \$link = 1; return \}/{ return }/' t_re
 mutate "a .tf.json file not counted" 's/tf\\\.json/tf\\.nothing/' t_refs_json
 mutate "the index group unbounded" 's/\{0,255\}/*/' t_refs_big
 mutate "the base denied set not compared" 's/ or \$x\.blk\.base_denied != \$x\.blk\.denied//' t_v_baseother
+
+t_h_link() { h_reset; HEX=examples/hl/h1; h_why denial-unproven; }
+t_h_link; check "refused-host: an example directory reached through a link gives no data source types: denial-unproven" $?
+mutate "refused-host never a design skip" 's/ \/\/ \(\{"environment \(refused-host\)": "refused-host"\}\[\.\] \/\/ null\)//' t_h
+mutate "refused-host taken in laptop mode" 's/if \(\$rs\[0\] \| type == "string" and design_kind != null\) then/if ($rs[0] | type == "string" and design_kind_runner != null) then/' t_h_laptop
+mutate "the refused host list not anchored at its end" 's/:443\\\\z"\);/:443");/' t_h_port
+mutate "a refused host with no region part" 's/\[a-z\]\{2,4\}\(-\[a-z\]\+\)\{1,2\}-\[0-9\]\{1,2\}/[a-z.]+/' t_h_noregion
+mutate "the refused hosts not matched to the example's data sources" 's/\n       or any\(\$x\.blk\.refused\[0\] \| refused_set \| \.\[\]; \. as \$h \| any\(\$x\.types\[\]; \. as \$t \| \$h \| host_reads\(\$t\)\) \| not\)\)/)/' t_h_ecr
+mutate "the refused evidence not required" 's/\(\(\$x\.blk\.refused \| length\) != 1 or /((/' t_h_two
+mutate "validate not required" 's/     elif \$k == "refused-host" and \$x\.blk\.validate != \["passed"\] then "not-validated"\n//' t_h_novalid
+mutate "the merge base refusal not compared" 's/ or \$x\.blk\.base_refused != \$x\.blk\.refused//' t_h_basehosts
+mutate "the types read through a linked directory" 's/if \[ "\$r" = "\$CLONE\/\$d" \]; then/if [ -n "\$r" ]; then/' t_h_link
 
 # --- Recorded exceptions (skip-coverage.md, Recorded exceptions): a runner-mode record, its
 # blocks under the host's own lines, examples/r1 an exception for a role in another account, the

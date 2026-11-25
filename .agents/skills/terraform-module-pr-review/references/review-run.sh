@@ -616,7 +616,7 @@ cmd_skip_coverage() {
   local mode; mode="$(plan_mode)"
   case "$mode" in
     laptop) jq -e 'any(.unplanned[]; .reason | IN("plan gate G1", "plan gate G2", "plan gate G3", "environment (access-denied)"))' "$RUN/coverage.json" > /dev/null ;;
-    runner) jq -e 'any(.unplanned[]; .reason | startswith("exception: ") or . == "environment (access-denied)")' "$RUN/coverage.json" > /dev/null ;;
+    runner) jq -e 'any(.unplanned[]; .reason | startswith("exception: ") or IN("environment (access-denied)", "environment (refused-host)"))' "$RUN/coverage.json" > /dev/null ;;
     *) false ;;
   esac || { echo "skip-coverage: nothing to check"; return 0; }
   local changed; changed="$(jq -r '.counts.changed_files // ""' "$RUN/index.json")"

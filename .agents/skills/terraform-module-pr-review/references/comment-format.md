@@ -518,6 +518,7 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `unplanned-covered-by` | - Covered by: `{attribute}` planned in {example} as {address} at {head}. |
 | `unplanned-covered-exception` | - Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}). |
 | `unplanned-covered-design` | - Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}). |
+| `unplanned-covered-refused` | - Not planned: {dir} (the plan proxy refused a host its data sources read, by design, `environment ({reason})`, at head {head} and at base {base}). |
 | `behaviour-not-run` | - Behaviour check: {reason}, so no change was classified or verified. |
 | `behaviour-trigger` | - Behaviour change at {location} ({category}): not verified. |
 | `behaviour-trigger-groups` | - {count} behaviour changes not verified: {categories}. |
@@ -604,6 +605,10 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `compact-covered-design-many` | {count} of {total} examples were not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where} (see notes). |
 | `rationale-covered-design-one` | 1 of {total} examples was not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where}, as listed below. |
 | `rationale-covered-design-many` | {count} of {total} examples were not planned because the review role was denied a data source read there, at head and at base; the changed code was planned {where}, as listed below. |
+| `compact-covered-refused-one` | 1 of {total} examples was not planned because the plan proxy refuses, by design, a host its data sources read, at head and at base; the changed code was planned {where} (see notes). |
+| `compact-covered-refused-many` | {count} of {total} examples were not planned because the plan proxy refuses, by design, a host their data sources read, at head and at base; the changed code was planned {where} (see notes). |
+| `rationale-covered-refused-one` | 1 of {total} examples was not planned because the plan proxy refuses, by design, a host its data sources read, at head and at base; the changed code was planned {where}, as listed below. |
+| `rationale-covered-refused-many` | {count} of {total} examples were not planned because the plan proxy refuses, by design, a host their data sources read, at head and at base; the changed code was planned {where}, as listed below. |
 | `compact-covered-mixed-many` | {count} of {total} examples were not planned, for the reasons in the notes; the changed code was planned {where} (see notes). |
 | `rationale-covered-mixed-many` | {count} of {total} examples were not planned, for the reasons listed below; the changed code was planned {where}. |
 | `evidence-covered` | - Not planned: {dir} ({gate} hit in {path}, same at base {base}). |
@@ -611,6 +616,7 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `evidence-covered-by` | - Covered by: `{attribute}` planned in {example} as {address} at {head}. |
 | `evidence-covered-exception` | - Not planned: {dir} (recorded exception, it needs {exception}, in {path}, same at base {base}). |
 | `evidence-covered-design` | - Not planned: {dir} (the review role was denied a data source read, `environment ({reason})`, at head {head} and at base {base}). |
+| `evidence-covered-refused` | - Not planned: {dir} (the plan proxy refused a host its data sources read, by design, `environment ({reason})`, at head {head} and at base {base}). |
 | `evidence-reported` | Behaviour change at {location} reported: judged in {findings} ({count} differences). |
 | `evidence-claims-one` | 1 claim verified. |
 | `evidence-claims-many` | {count} claims verified. |
