@@ -1541,7 +1541,7 @@ check "runner phases: a merge base that is not a full SHA is no base, and a miss
 o="$(pdmark "$TMP/pp-runner.sh" none)"
 check "runner phases: with its decision the same example is equal" "$(printf '%s\n' "$o" | grep -qx 'plan-diff: equal'; echo $?)"
 # shown only when the case fails, so a failure under load says what the diff phase printed
-printf '%s\n' "$o" | grep -qx 'plan-diff: equal' || printf 'diff phase printed:\n%s\n' "$o" | sed 's/^/  | /
+printf '%s\n' "$o" | grep -qx 'plan-diff: equal' || printf 'diff phase printed:\n%s\n' "$o" | sed 's/^/  | /'
 nocont "$PP" | perl -0pe 's/  else echo "plan-diff: not-run head-module-plan"; exit 0; fi/  else hk=\$key hd=\$HROOT\/\$rel_ex; fi/' > "$TMP/pp-runner-m.sh"
 check "runner phases: the mutation that reads a missing decision as unchanged is caught" \
   "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && ! pdmark "$TMP/pp-runner-m.sh" e1-diff.unchanged | grep -qx 'plan-diff: not-run head-module-plan'; echo $?)"
