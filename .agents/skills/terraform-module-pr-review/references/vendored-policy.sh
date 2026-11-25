@@ -128,31 +128,37 @@ latest() {
   r="$(limit gh api "repos/$1/releases/latest" 2> /dev/null | jq -r '.tag_name // empty' 2> /dev/null)"
   [[ "$r" =~ $TAG_RE ]] && printf '%s\n' "$r"
 }
-# wiring <commit> <dir> <block> <file>: the reference lines of the document in the directory's .tf
-# files, trimmed and sorted, into the file; or prints why not: an override or JSON configuration
-# file, a file it cannot read, or more than 200 files.
+# wiring <commit> <dir> <block> <file>: the lines of policy-hcl.pl --wiring for the directory's .tf
+# files into the file; or prints why not. The whole directory is held to the reader's allowlist:
+# every entry name plain, read NUL-separated, no OpenTofu, JSON or override file, every .tf file a
+# regular file of at most 1 MiB, and at most 200 of them; --wiring holds each to the allowlist.
 wiring() {
-  local e name obj n=0 ref="data.aws_iam_policy_document.$3"
+  local x mode type obj name n=0 r files=() wd lst
   : > "$4"
+  wd="$(mktemp -d "$W/dir.XXXXXX")" && lst="$(mktemp "$W/list.XXXXXX")" || { echo "read failed"; return 1; }
   local ps=(); [ -z "$2" ] || ps=("$2/")
-  e="$(safe_git ls-tree -z "$1" -- ${ps[@]+"${ps[@]}"} 2> /dev/null | tr '\0' '\n')" || { echo "read failed"; return 1; }
-  while IFS= read -r x; do
-    [[ "$x" =~ ^([0-7]{6})\ ([a-z]+)\ ([0-9a-f]{40,64})$'\t'(.+)$ ]] || continue
-    name="${BASH_REMATCH[4]##*/}" obj="${BASH_REMATCH[3]}"
+  safe_git ls-tree -z "$1" -- ${ps[@]+"${ps[@]}"} > "$lst" 2> /dev/null || { echo "read failed"; return 1; }
+  while IFS= read -r -d '' x; do
+    [[ "$x" =~ ^([0-7]{6})\ ([a-z]+)\ ([0-9a-f]{40,64})$'\t'(.+)$ ]] || { echo "read failed"; return 1; }
+    mode="${BASH_REMATCH[1]}" type="${BASH_REMATCH[2]}" obj="${BASH_REMATCH[3]}" name="${BASH_REMATCH[4]##*/}"
+    [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "file name"; return 1; }
     case "$name" in
+      *.tofu | *.tofu.json) echo "opentofu file"; return 1 ;;
       override.tf | *_override.tf | override.tf.json | *_override.tf.json) echo "override file"; return 1 ;;
       *.tf.json) echo "json configuration"; return 1 ;;
       *.tf) ;;
       *) continue ;;
     esac
-    [ "${BASH_REMATCH[2]}" = blob ] || { echo "not a regular file"; return 1; }
+    [ "$mode" != 120000 ] || { echo link; return 1; }
+    [ "$type" = blob ] && [[ "$mode" =~ ^100(644|755)$ ]] || { echo "not a regular file"; return 1; }
     n=$((n + 1)); [ "$n" -le 200 ] || { echo "too many files"; return 1; }
-    safe_git cat-file blob "$obj" 2> /dev/null | head -c 1048577 > "$W/wire.tf" || { echo "read failed"; return 1; }
-    [ "$(wc -c < "$W/wire.tf")" -le 1048576 ] || { echo "file over 1 mib"; return 1; }
-    grep -F "$ref" "$W/wire.tf" | grep -E "${ref//./\\.}(\\[(0|\\*)\\])?\\.json" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' |
-      grep -vE '^(#|//|/\*|\*)' >> "$4"
-  done <<< "$e"
-  sort -o "$4" "$4"
+    safe_git cat-file blob "$obj" 2> /dev/null | head -c 1048577 > "$wd/$name" || { echo "read failed"; return 1; }
+    [ "$(wc -c < "$wd/$name")" -le 1048576 ] || { echo "file over 1 mib"; return 1; }
+    files+=("$wd/$name")
+  done < "$lst"
+  [ "${#files[@]}" -gt 0 ] || { echo "read failed"; return 1; }
+  limit perl "$HERE/policy-hcl.pl" --wiring "$3" "${files[@]}" > "$4" 2> /dev/null || { echo "unreadable"; return 1; }
+  r="$(unk "$4")"; [ -z "$r" ] || { echo "$r"; return 1; }
 }
 unk() { sed -n 's/^unknown \([a-z0-9 ]*\)$/\1/p' "$1"; }
 
@@ -200,8 +206,9 @@ while read -r path block up upath; do
     [ "$hg" = "$(jq -r '.gate // ""' "$d/base.json")" ] || { line "unknown gate changed"; continue; }
   elif [ -n "$hg" ]; then line "unknown gate without base"; continue
   fi
-  # The wiring: no override or JSON file beside the document, a policy that reads it, and the same
-  # reference lines at the base.
+  # The wiring: the directory passes the allowlist, a policy reads the document as the whole value of
+  # its "policy" argument, directly or through a merging document, and the same at the base, gates
+  # included.
   dir="$(dirname "$path")"; [ "$dir" != . ] || dir=""
   why="$(wiring "$head" "$dir" "$block" "$d/wire-head")" || { line "unknown $why"; continue; }
   [ -s "$d/wire-head" ] || { line "unknown not wired"; continue; }

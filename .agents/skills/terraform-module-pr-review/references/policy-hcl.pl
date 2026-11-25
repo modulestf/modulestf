@@ -7,6 +7,18 @@
 # merged document, a bare block label anywhere in the file, or more than 4000 action and resource pairs.
 #
 #   perl policy-hcl.pl <file.tf> <block name> <substitutions file>
+#   perl policy-hcl.pl --scan <file.tf>                    "ok", or "unknown <reason>"
+#   perl policy-hcl.pl --wiring <block name> <file.tf>...  the policies that read the block
+#
+# Every mode first holds the file to an allowlist of text, so the reader and Terraform cannot
+# disagree on where a string or a comment ends: plain ASCII, no heredoc, no "$${" or "%%{", an even
+# number of unescaped quotes on every line, and a "/*" only inside a quoted string of its line.
+# --wiring prints one sorted line per policy that reads the block, its whole "policy" value:
+#   direct <type>.<name> <gate>                              an aws_iam_policy or aws_iam_role_policy
+#   via <document> <gate> <digest> <type>.<name> <gate>      an element of the source_policy_documents
+#                                                           of a document such a policy reads
+# each <gate> the resource's or document's count or for_each text, or "none", and <digest> the
+# SHA-256 of the merging document's text and its source list; or "unknown <reason>".
 #
 # The substitutions file holds "<expression> <value>" lines from the module profile: each
 # expression, written alone as a list element or as ${<expression>} inside a string, reads as its
@@ -18,39 +30,58 @@ use strict;
 use warnings;
 use JSON::PP;
 
-@ARGV == 3 or do { print STDERR "usage: policy-hcl.pl <file> <block> <substitutions>\n"; exit 2 };
-my ($file, $name, $subfile) = @ARGV;
-$name =~ /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/ or do { print STDERR "policy-hcl.pl: bad block name\n"; exit 2 };
-
 sub unknown { print "unknown $_[0]\n"; exit 0 }
+sub usage { print STDERR "usage: policy-hcl.pl <file> <block> <substitutions> | --scan <file> | --wiring <block> <file>...\n"; exit 2 }
+my $NAME_RE = qr/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+my $mode = @ARGV && $ARGV[0] =~ /^--(scan|wiring)$/ ? $1 : 'document';
+shift @ARGV unless $mode eq 'document';
+my ($file, $name, $subfile);
+if ($mode eq 'scan') { @ARGV == 1 or usage(); $file = $ARGV[0] }
+elsif ($mode eq 'wiring') { @ARGV >= 2 or usage(); $name = shift @ARGV }
+else { @ARGV == 3 or usage(); ($file, $name, $subfile) = @ARGV }
+!defined $name || $name =~ $NAME_RE or do { print STDERR "policy-hcl.pl: bad block name\n"; exit 2 };
 
 my %sub;
-open(my $sf, '<', $subfile) or do { print STDERR "policy-hcl.pl: no substitutions file\n"; exit 2 };
-while (my $l = <$sf>) {
-  chomp $l;
-  next if $l eq '';
-  $l =~ /^(\S+) (\S+)$/ or do { print STDERR "policy-hcl.pl: bad substitution line\n"; exit 2 };
-  $sub{$1} = $2;
+if (defined $subfile) {
+  open(my $sf, '<', $subfile) or do { print STDERR "policy-hcl.pl: no substitutions file\n"; exit 2 };
+  while (my $l = <$sf>) {
+    chomp $l;
+    next if $l eq '';
+    $l =~ /^(\S+) (\S+)$/ or do { print STDERR "policy-hcl.pl: bad substitution line\n"; exit 2 };
+    $sub{$1} = $2;
+  }
+  close $sf;
 }
-close $sf;
 
-open(my $fh, '<', $file) or unknown("read failed");
-binmode $fh;
-local $/;
-our $text = <$fh>;
-close $fh;
-defined $text or unknown("read failed");
-length($text) <= 1048576 or unknown("file over 1 mib");
-$text =~ /[^\x09\x0a\x0d\x20-\x7e]/ and unknown("unsafe text");
-$text =~ s/\r\n/\n/g;
-# A heredoc anywhere: its body could hold any text, so the brace and quote scan below cannot be trusted.
-$text =~ /<<-?[A-Za-z_]/ and unknown("heredoc");
+our ($text, $i, $n);
+# read_text <file>: the file's text, held to the allowlist above.
+sub read_text {
+  my ($f) = @_;
+  open(my $fh, '<', $f) or unknown("read failed");
+  binmode $fh;
+  local $/;
+  my $t = <$fh>;
+  close $fh;
+  defined $t or unknown("read failed");
+  length($t) <= 1048576 or unknown("file over 1 mib");
+  $t =~ /[^\x09\x0a\x0d\x20-\x7e]/ and unknown("unsafe text");
+  $t =~ s/\r\n/\n/g;
+  $t =~ /<<-?[A-Za-z_]/ and unknown("heredoc");
+  $t =~ /\$\$\{|%%\{/ and unknown("escaped interpolation");
+  for my $l (split /\n/, $t) {
+    (my $q = $l) =~ s/\\["\\]//g;
+    my $c = () = $q =~ /"/g;
+    $c % 2 == 0 or unknown("unbalanced quotes");
+    while ($q =~ m{/\*}g) {
+      my $before = () = substr($q, 0, pos($q) - 2) =~ /"/g;
+      $before % 2 == 1 or unknown("block comment");
+    }
+  }
+  return $t;
+}
 
 # Comments out, strings kept: a string runs to its closing quote, an interpolation ${...} inside it
-# to its matching brace, with strings nested in the interpolation followed too.
-my $clean = '';
-our $i = 0;
-our $n = length $text;
+# to its matching brace on the same line, with strings nested in the interpolation followed too.
 sub scan_string {    # from the opening quote at $i; returns the string's raw text, quotes included
   my $s = $i;
   $i++;
@@ -64,6 +95,7 @@ sub scan_string {    # from the opening quote at $i; returns the string's raw te
       my $d = 1;
       while ($i < $n && $d > 0) {
         my $e = substr($text, $i, 1);
+        $e ne "\n" or unknown("multi-line interpolation");
         if ($e eq '"') { scan_string(); next }
         $d++ if $e eq '{';
         $d-- if $e eq '}';
@@ -76,24 +108,30 @@ sub scan_string {    # from the opening quote at $i; returns the string's raw te
   }
   unknown("unclosed string");
 }
-while ($i < $n) {
-  my $c = substr($text, $i, 1);
-  if ($c eq '"') { $clean .= scan_string(); next }
-  if ($c eq '#' || substr($text, $i, 2) eq '//') {
-    $i++ while $i < $n && substr($text, $i, 1) ne "\n";
-    next;
+sub clean_of {
+  local ($text, $n, $i) = ($_[0], length $_[0], 0);
+  my $clean = '';
+  while ($i < $n) {
+    my $c = substr($text, $i, 1);
+    if ($c eq '"') { $clean .= scan_string(); next }
+    if ($c eq '#' || substr($text, $i, 2) eq '//') {
+      $i++ while $i < $n && substr($text, $i, 1) ne "\n";
+      next;
+    }
+    if (substr($text, $i, 2) eq '/*') {
+      my $e = index($text, '*/', $i + 2);
+      $e >= 0 or unknown("unclosed comment");
+      my $body = substr($text, $i, $e + 2 - $i);
+      $clean .= "\n" x ($body =~ tr/\n//);
+      $i = $e + 2;
+      next;
+    }
+    $clean .= $c;
+    $i++;
   }
-  if (substr($text, $i, 2) eq '/*') {
-    my $e = index($text, '*/', $i + 2);
-    $e >= 0 or unknown("unclosed comment");
-    my $body = substr($text, $i, $e + 2 - $i);
-    $clean .= "\n" x ($body =~ tr/\n//);
-    $i = $e + 2;
-    next;
-  }
-  $clean .= $c;
-  $i++;
+  return $clean;
 }
+if ($mode eq 'scan') { read_text($file); print "ok\n"; exit 0 }
 
 # body($pos): the text from $pos to the brace that closes the block opened just before it.
 sub close_of {
@@ -162,8 +200,60 @@ sub items {
   return @out;
 }
 
+if ($mode eq 'wiring') {
+  require Digest::SHA;
+  my (%docs, %locals, @res);
+  for my $f (@ARGV) {
+    for my $it (items(clean_of(read_text($f)))) {
+      my ($k, $id, $labels, $v) = @$it;
+      next unless $k eq 'block';
+      my %a;
+      for my $x (items($v)) {
+        next unless $x->[0] eq 'attr';
+        (my $t = $x->[3]) =~ s/\s+//g;
+        $a{$x->[1]} = $t;
+      }
+      if ($id eq 'locals' && !@$labels) {
+        for my $l (keys %a) { !exists $locals{$l} or unknown("local repeated"); $locals{$l} = $a{$l} }
+        next;
+      }
+      next unless @$labels == 2;
+      if ($id eq 'data' && $labels->[0] eq 'aws_iam_policy_document') {
+        !exists $docs{$labels->[1]} or unknown("block repeated");
+        (my $b = $v) =~ s/\s+//g;
+        $docs{$labels->[1]} = { a => \%a, body => $v, digest => Digest::SHA::sha256_hex($b) };
+      } elsif ($id eq 'resource' && $labels->[0] =~ /^aws_iam_(policy|role_policy)$/) {
+        push @res, { type => $labels->[0], label => $labels->[1], a => \%a };
+      }
+    }
+  }
+  exists $docs{$name} or unknown("block missing");
+  my $gate = sub { my ($h) = @_; defined $h->{a}{count} ? "count=$h->{a}{count}" : defined $h->{a}{for_each} ? "for_each=$h->{a}{for_each}" : 'none' };
+  # A policy reads a document only as the whole value of its "policy" argument.
+  my $reads = sub { my ($v, $d) = @_; defined $v && $v =~ /^data\.aws_iam_policy_document\.\Q$d\E(\[0\])?\.json$/ };
+  # A merging document names the block as one element of its source_policy_documents, written as a
+  # list or as a local whose value holds the element.
+  my $elem = qr/(?:^|[,(\[])data\.aws_iam_policy_document\.\Q$name\E(?:\[0\]|\[\*\])?\.json(?=[,)\]]|$)/;
+  my @out;
+  for my $r (@res) { push @out, "direct $r->{type}.$r->{label} " . $gate->($r) if $reads->($r->{a}{policy}, $name) }
+  for my $d (sort keys %docs) {
+    next if $d eq $name;
+    my $src = $docs{$d}{a}{source_policy_documents} // next;
+    my $val = $src =~ /^local\.([A-Za-z_][A-Za-z0-9_-]*)$/ ? ($locals{$1} // next) : $src;
+    next unless $val =~ $elem;
+    # A statement of the same sid in the merging document or its overrides would replace one of the
+    # block's: a block with a sid is never read through a merge.
+    $docs{$name}{body} !~ /(^|\n)\s*sid\s*=/ or unknown("sid in merged document");
+    my $dig = Digest::SHA::sha256_hex("$docs{$d}{digest} $val");
+    for my $r (@res) { push @out, "via $d " . $gate->($docs{$d}) . " $dig $r->{type}.$r->{label} " . $gate->($r) if $reads->($r->{a}{policy}, $d) }
+  }
+  print "$_\n" for sort @out;
+  exit 0;
+}
+
 # The block: read the whole file as top-level blocks, so a block Terraform evaluates is never missed
 # (a bare label is unsupported syntax) and text inside another block is never taken for it.
+my $clean = clean_of(read_text($file));
 my @hits = grep { $_->[0] eq 'block' && $_->[1] eq 'data' && @{$_->[2]} == 2
   && $_->[2][0] eq 'aws_iam_policy_document' && $_->[2][1] eq $name } items($clean);
 @hits or unknown("block missing");
@@ -259,7 +349,11 @@ sub statement {
     !$seen{$id}++ or unknown("unsupported attribute");
     if ($id eq 'sid') { str($v) }
     elsif ($id eq 'effect') { $st{effect} = str($v) }
-    elsif ($id =~ /^(not_)?(actions|resources)$/) { $st{($1 // '') . substr($2, 0, -1)} = list($v) }
+    elsif ($id =~ /^(not_)?(actions|resources)$/) {
+      my $l = list($v);
+      @$l or unknown("empty list");
+      $st{($1 // '') . substr($2, 0, -1)} = $l;
+    }
     else { unknown("unsupported attribute") }
   }
   $st{effect} =~ /^(Allow|Deny)$/ or unknown("unsupported effect");

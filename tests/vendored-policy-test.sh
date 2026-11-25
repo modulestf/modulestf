@@ -83,7 +83,7 @@ data "aws_iam_policy_document" "widget" {
     # a comment with "quotes" and a brace }
     actions = [
       "ec2:DescribeVolumes",
-      "ec2:ValidateThing", /* a block comment } */
+      "ec2:ValidateThing", // a line comment } "with quotes"
     ]
     resources = ["*"]
   }
@@ -127,7 +127,7 @@ data "aws_iam_policy_document" "other" {
 }
 '
 # The base: the action ValidateThing missing, AttachVolume on "*".
-BASE_TF="$(printf '%s' "$HEAD_TF" | perl -0pe 's/      "ec2:ValidateThing", \/\* a block comment \} \*\/\n//; s/resources = \[\n      "arn:\$\{local.partition\}:ec2:\*:\*:instance\/\*",\n      "arn:\$\{local.partition\}:ec2:\*:\*:volume\/\*",\n    \]/resources = ["*"]/')"
+BASE_TF="$(printf '%s' "$HEAD_TF" | perl -0pe 's/      "ec2:ValidateThing", \/\/ a line comment \} "with quotes"\n//; s/resources = \[\n      "arn:\$\{local.partition\}:ec2:\*:\*:instance\/\*",\n      "arn:\$\{local.partition\}:ec2:\*:\*:volume\/\*",\n    \]/resources = ["*"]/')"
 
 # repo <name> <base text or -> <head text> [<extra file> <its head text>]: a clone with a base
 # commit and a head commit; prints "<clone> <base sha> <head sha>".
@@ -329,21 +329,109 @@ t_gate() {
 }
 t_gate; check "gate: a count or for_each that changed, or with no base, gives no evidence" $?
 
-t_wiring() {
+t_wiring() { # a policy reads the document only as the whole value of its policy argument
   local ok=0 o
-  read -r c b hh <<< "$(repo ovr "$BASE_TF" "$HEAD_TF" policies_override.tf 'data "aws_iam_policy_document" "widget" {}')"
-  [ "$(vp "$c" "$b" "$hh" | head -n 1)" = "policies.tf widget unknown override file" ] || ok=1
-  read -r c b hh <<< "$(repo json "$BASE_TF" "$HEAD_TF" extra.tf.json '{}')"
-  [ "$(vp "$c" "$b" "$hh" | head -n 1)" = "policies.tf widget unknown json configuration" ] || ok=1
   o="$(variant unwired 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  policy = "{}"/')"
   [ "$o" = "policies.tf widget unknown not wired" ] || ok=1
   o="$(variant commented 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  # policy = data.aws_iam_policy_document.widget[0].json\n  policy = "{}"/')"
   [ "$o" = "policies.tf widget unknown not wired" ] || ok=1
-  o="$(variant rewired 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  policy = data.aws_iam_policy_document.widget[*].json[0]/')"
+  o="$(variant instring 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  description = "data.aws_iam_policy_document.widget[0].json"\n  policy = "{}"/')"
+  [ "$o" = "policies.tf widget unknown not wired" ] || ok=1
+  o="$(variant output 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  policy = "{}"/; s/\z/\noutput "x" {\n  value = data.aws_iam_policy_document.widget[0].json\n}\n/')"
+  [ "$o" = "policies.tf widget unknown not wired" ] || ok=1
+  o="$(variant inexpr 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  policy = var.x != null ? var.x : data.aws_iam_policy_document.widget[0].json/')"
+  [ "$o" = "policies.tf widget unknown not wired" ] || ok=1
+  o="$(variant notwhole 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  policy = data.aws_iam_policy_document.widget[*].json[0]/')"
+  [ "$o" = "policies.tf widget unknown not wired" ] || ok=1
+  # the policy resource set to count = 0 beside a new inline policy: its gate changed
+  o="$(variant pgate 's/  count  = var.create \? 1 : 0\n  policy = data/  count  = 0\n  policy = data/; s/\z/\nresource "aws_iam_policy" "admin" {\n  policy = "{}"\n}\n/')"
   [ "$o" = "policies.tf widget unknown wiring changed" ] || ok=1
   return "$ok"
 }
-t_wiring; check "wiring: an override or JSON file, no policy reading the document, a changed reference" $?
+t_wiring; check "wiring: no policy, a comment, a string, an output, a value that is not the whole reference, a policy gate changed" $?
+
+# A merge through a local, as the iam module writes it: a document whose source_policy_documents is a
+# local holding the block's json, read whole by a policy.
+MERGE_TF='locals {
+  docs = flatten(concat(
+    data.aws_iam_policy_document.widget[*].json,
+    var.extra,
+  ))
+}
+
+data "aws_iam_policy_document" "this" {
+  count                     = var.create ? 1 : 0
+  source_policy_documents   = local.docs
+  override_policy_documents = var.overrides
+}
+
+resource "aws_iam_policy" "this" {
+  count  = var.create ? 1 : 0
+  policy = data.aws_iam_policy_document.this[0].json
+}'
+# mrepo <name> <base main.tf> <head main.tf> <head policies.tf>: base policies.tf unwired, as in t_merge.
+mrepo() {
+  local c="$TMP/$1" bb; G init -q "$c"; printf '%s\n' "$MB_TF" > "$c/policies.tf"; printf '%s\n' "$2" > "$c/main.tf"
+  G -C "$c" add -A; G -C "$c" commit -qm base; bb="$(git -C "$c" rev-parse HEAD)"
+  printf '%s\n' "$4" > "$c/policies.tf"; printf '%s\n' "$3" > "$c/main.tf"; G -C "$c" add -A; G -C "$c" commit -qm head
+  echo "$c $bb $(git -C "$c" rev-parse HEAD)"
+}
+MB_TF="$(printf '%s' "$BASE_TF" | perl -0pe 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  policy = "{}"/; s/    sid     = "Attach"\n//')"
+MH_TF="$(printf '%s' "$HEAD_TF" | perl -0pe 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  policy = "{}"/; s/    sid     = "Attach"\n//')"
+t_merge() {
+  local ok=0 o
+  read -r c bb hh <<< "$(mrepo merge "$MERGE_TF" "$MERGE_TF" "$MH_TF")"
+  o="$(vp "$c" "$bb" "$hh")"; grep -qxF 'policies.tf widget upstream equal' <<< "$o" || ok=1
+  # the merging document changed: its digest moves
+  read -r c bb hh <<< "$(mrepo merge2 "$MERGE_TF" "$(printf '%s' "$MERGE_TF" | sed 's/var.overrides/var.other/')" "$MH_TF")"
+  [ "$(vp "$c" "$bb" "$hh")" = "policies.tf widget unknown wiring changed" ] || ok=1
+  # a block with a sid is never read through a merge
+  read -r c bb hh <<< "$(mrepo merge3 "$MERGE_TF" "$MERGE_TF" "$(printf '%s' "$MH_TF" | sed 's/    actions = \["EC2:AttachVolume"\]/    sid     = "Attach"\n    actions = ["EC2:AttachVolume"]/')")"
+  [ "$(vp "$c" "$bb" "$hh")" = "policies.tf widget unknown sid in merged document" ] || ok=1
+  return "$ok"
+}
+t_merge; check "merge: a document merged through a local is wired; a changed merging document or a sid is not" $?
+
+t_dir() { # the whole directory is held to the reader's allowlist
+  local ok=0 x k=0 o f t r
+  for x in 'policies_override.tf|data "aws_iam_policy_document" "widget" {}|override file' \
+           'extra.tf.json|{}|json configuration' 'policies.tofu|x = 1|opentofu file' 'a b.tf|x = 1|file name' \
+           'c.tf|locals { a = 1 /* x */ }|block comment' 'c.tf|locals { a = "$${" }|escaped interpolation' \
+           'c.tf|locals { a = "%%{" }|escaped interpolation' 'c.tf|locals { a = "x" # "y }|unbalanced quotes' \
+           'c.tf|locals { a = <<EOT|heredoc' "c.tf|locals { a = \"$(printf '\303\251')\" }|unsafe text"; do
+    k=$((k + 1)); IFS='|' read -r f t r <<< "$x"
+    read -r c b hh <<< "$(repo "dir$k" "$BASE_TF" "$HEAD_TF" "$f" "$t")"
+    o="$(vp "$c" "$b" "$hh" | head -n 1)"
+    [ "$o" = "policies.tf widget unknown $r" ] || { echo "  dir: $f gave $o" >&2; ok=1; }
+  done
+  # a file name with a newline, read from the NUL-separated list
+  read -r c b hh <<< "$(repo dirnl "$BASE_TF" "$HEAD_TF" "$(printf 'a\n_override.tf')" 'data "aws_iam_policy_document" "widget" {}')"
+  [ "$(vp "$c" "$b" "$hh" | head -n 1)" = "policies.tf widget unknown file name" ] || ok=1
+  # a link named .tf
+  local c2="$TMP/dirlink" b2; G init -q "$c2"; printf '%s\n' "$BASE_TF" > "$c2/policies.tf"; G -C "$c2" add -A; G -C "$c2" commit -qm b
+  b2="$(git -C "$c2" rev-parse HEAD)"; printf '%s\n' "$HEAD_TF" > "$c2/policies.tf"; ln -s /etc/hosts "$c2/zz.tf"
+  G -C "$c2" add -A; G -C "$c2" commit -qm h
+  [ "$(vp "$c2" "$b2" "$(git -C "$c2" rev-parse HEAD)" | head -n 1)" = "policies.tf widget unknown link" ] || ok=1
+  # the escape that hid a real block in round 2: refused before any read
+  o="$(variant escape 's/\A/locals {\n  open = "\$\${" # " {\n}\n/')"
+  [ "$(head -n 1 <<< "$o")" = "policies.tf widget unknown escaped interpolation" ] || ok=1
+  # an ARN's "/*" inside its string is no comment
+  vp "$MAIN" "$MB" "$MH" | grep -qxF 'policies.tf widget upstream equal' || ok=1
+  return "$ok"
+}
+t_dir; check "directory: override, JSON, OpenTofu, odd names (a newline too), a link, block comments, escapes, quotes, heredocs, non-ASCII" $?
+
+t_empty() {
+  local ok=0
+  [ "$(variant emptyres 's/resources = \["\*"\]/resources = []/')" = "policies.tf widget unknown empty list" ] || ok=1
+  printf '%s' "$HEAD_TF" | perl -0pe 's/resources = \["\*"\]/resources = []/' > "$TMP/empty.tf"; printf 'local.partition aws\n' > "$TMP/subst"
+  [ "$(perl "$(dirname "$VP")/policy-hcl.pl" "$TMP/empty.tf" widget "$TMP/subst")" = "unknown empty list" ] || ok=1
+  up_file "$C2" '{"Statement": [{"Effect": "Allow", "Action": [], "Resource": "*"}]}'
+  [ "$(vp "$MAIN" "$MB" "$MH")" = "policies.tf widget unknown empty list" ] || ok=1
+  up_file "$C2" "$UPJ"
+  return "$ok"
+}
+t_empty; check "empty: an empty actions or resources list, in the head or upstream, gives no evidence" $?
 
 t_large() { # the tuple product is capped before it is built, by the reader and by the jq library
   local acts res f="$TMP/large.tf" ok=0
@@ -514,16 +602,27 @@ mutate "a removed Deny not widened" 's/\+ \[\$m\[\] \| select\(\.\[0\] == "Deny"
 mutate "a carried extra read as widened" 's/select\(\. as \$t \| \$b \| index\(\[\$t\]\) \| not\)\]/select(true)]/' vendored-policy.jq t_carried
 mutate "a dynamic condition read as static" 's/unknown\(\$k eq .block. && \$id eq .dynamic. \? "dynamic block" : "unsupported attribute"\);/1;/; s/unknown\(\$cid eq .dynamic. \? "dynamic block" : "unsupported attribute"\)/1/; s/unknown\("dynamic block"\) if \$id eq .dynamic.;//' policy-hcl.pl t_static
 mutate "a function read as a literal" 's/  unknown\("unevaluated expression"\);\n\}\nsub list/  return \$v;\n}\nsub list/' policy-hcl.pl t_static
-mutate "a heredoc outside the block read" 's/\$text =~ \/<<-\?\[A-Za-z_\]\/ and unknown\("heredoc"\);//' policy-hcl.pl t_static
+mutate "a heredoc outside the block read" 's/\$t =~ \/<<-\?\[A-Za-z_\]\/ and unknown\("heredoc"\);//' policy-hcl.pl t_static
 mutate "merged documents read" 's/  unknown\("merged documents"\) if /  next if /' policy-hcl.pl t_static
 mutate "a dynamic statement read" 's/    unknown\("dynamic statement"\) if \$id eq .dynamic.;\n//' policy-hcl.pl t_static
 mutate "the reader's product cap dropped" 's/    \$cells <= 4000 or unknown\("too large"\);\n//' policy-hcl.pl t_large
 mutate "the jq product cap dropped" 's/if cells > 4000 then error\("too large"\) else \. end/./' vendored-policy.jq t_large
 mutate "a changed gate read" 's/\|\| \{ line "unknown gate changed"; continue; \}/|| true/' vendored-policy.sh t_gate
-mutate "an override file read" 's/      override\.tf \| \*_override\.tf \| override\.tf\.json \| \*_override\.tf\.json\) echo "override file"; return 1 ;;\n//' vendored-policy.sh t_wiring
-mutate "an unwired document read" 's/\[ -s "\$d\/wire-head" \] \|\| \{ line "unknown not wired"; continue; \}//' vendored-policy.sh t_wiring
-mutate "a changed wiring read" 's/cmp -s "\$d\/wire-head" "\$d\/wire-base" \|\|/true ||/' vendored-policy.sh t_wiring
-mutate "a commented reference counted" "s/ \\|\\n      grep -vE '\\^\\(#\\|\\/\\/\\|\\/\\\\\\*\\|\\\\\\*\\)'//" vendored-policy.sh t_wiring
+mutate "an override file read" 's/      override\.tf \| \*_override\.tf \| override\.tf\.json \| \*_override\.tf\.json\) echo "override file"; return 1 ;;\n//' vendored-policy.sh t_dir
+mutate "an OpenTofu file read" 's/      \*\.tofu \| \*\.tofu\.json\) echo "opentofu file"; return 1 ;;\n//' vendored-policy.sh t_dir
+mutate "the list read by line" "s/while IFS= read -r -d '' x; do/while IFS= read -r x; do/" vendored-policy.sh t_dir
+mutate "any file name taken" 's/\[\[ "\$name" =~ \^\[A-Za-z0-9_\.-\]\+\$ \]\] \|\| \{ echo "file name"; return 1; \}//' vendored-policy.sh t_dir
+mutate "a linked .tf read" 's/    \[ "\$mode" != 120000 \] \|\| \{ echo link; return 1; \}\n//' vendored-policy.sh t_dir
+mutate "a block comment outside a string allowed" 's/      \$before % 2 == 1 or unknown\("block comment"\);\n//' policy-hcl.pl t_dir
+mutate "an escaped interpolation allowed" 's/  \$t =~ \/\\\$\\\$\\\{\|%%\\\{\/ and unknown\("escaped interpolation"\);\n//' policy-hcl.pl t_dir
+mutate "unbalanced quotes allowed" 's/    \$c % 2 == 0 or unknown\("unbalanced quotes"\);\n//' policy-hcl.pl t_dir
+mutate "an empty list read" 's/      \@\$l or unknown\("empty list"\);\n//' policy-hcl.pl t_empty
+mutate "an empty upstream list read" 's/      elif any\(\$s\.action, \$s\.not_action, \$s\.resource, \$s\.not_resource; \. == \[\]\) then error\("empty list"\)\n//' vendored-policy.jq t_empty
+mutate "any mention of the reference wires" 's/defined \$v && \$v =~ \/\^data/defined \$v \&\& \$v =~ \/data/' policy-hcl.pl t_wiring
+mutate "the policy gate not compared" 's/"direct \$r->\{type\}\.\$r->\{label\} " \. \$gate->\(\$r\)/"direct \$r->{type}.\$r->{label}"/' policy-hcl.pl t_wiring
+mutate "a not wired document read" 's/\[ -s "\$d\/wire-head" \] \|\| \{ line "unknown not wired"; continue; \}//' vendored-policy.sh t_wiring
+mutate "the merging document not digested" 's/Digest::SHA::sha256_hex\("\$docs\{\$d\}\{digest\} \$val"\)/"x"/' policy-hcl.pl t_merge
+mutate "a sid read through a merge" 's/    \$docs\{\$name\}\{body\} !~ \/\(\^\|\\n\)\\s\*sid\\s\*=\/ or unknown\("sid in merged document"\);\n//' policy-hcl.pl t_merge
 mutate "a tag not the latest accepted" 's/\[ "\$t" = "\$lt" \] \|\| \{ line "unknown tag not newest"; continue; \}//' vendored-policy.sh t_floor
 mutate "the older tag accepted" 's/if \[ -n "\$bt" \] && older "\$t" "\$bt"; then/if false; then/' vendored-policy.sh t_floor
 mutate "two tags take the first" 's/\[ "\$\(wc -l <<< "\$t" \| tr -d . .\)" = 1 \] \|\|/t="\$(head -n 1 <<< "\$t")"; true ||/' vendored-policy.sh t_tags

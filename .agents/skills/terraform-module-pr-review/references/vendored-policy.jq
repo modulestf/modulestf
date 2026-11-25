@@ -46,6 +46,7 @@ def tuples:
       elif ([($s.resource // [])[], ($s.not_resource // [])[], ($s.principal // [])[], ($s.not_principal // [])[],
              (($s.condition // [])[] | .test, .variable, .values[])] | all(.[]; atom_ok)) | not then error("unsafe text")
       elif ($s.action == null) == ($s.not_action == null) or ($s.resource == null) == ($s.not_resource == null) then error("unsupported attribute")
+      elif any($s.action, $s.not_action, $s.resource, $s.not_resource; . == []) then error("empty list")
       else . end
     | (if $s.action != null then ($s.action | low[] | ["action", .]) else ["notaction", ($s.not_action | low)] end) as $a
     | (if $s.resource != null then ($s.resource | sort[] | ["resource", .]) else ["notresource", ($s.not_resource | sort)] end) as $r
