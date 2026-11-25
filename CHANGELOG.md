@@ -1,3 +1,12 @@
+## [0.12.28](https://github.com/modulestf/modulestf/compare/v0.12.27...v0.12.28) (2026-11-25)
+
+
+### Performance Improvements
+
+* **pr-review:** Keep the schema mirror's checked assets across runs ([#219](https://github.com/modulestf/modulestf/issues/219)) ([a9bae08](https://github.com/modulestf/modulestf/commit/a9bae085cfa832d63768b99ed58c8d71592f61d1))
+
+
+
 ## [0.12.27](https://github.com/modulestf/modulestf/compare/v0.12.26...v0.12.27) (2026-11-25)
 
 
