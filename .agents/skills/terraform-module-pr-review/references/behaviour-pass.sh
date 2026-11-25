@@ -74,11 +74,11 @@ def valid_behaviour:
                            and (.inputs | type == "object"))
               and (map(.id) | length == (unique | length))))
         # caller_code (behaviour-pass.md, Caller Code), as the classifier sets it: a boolean, only on a
-        # literal argument change modified in place with no follows, every merged category one too, in
-        # a .tf file below examples/ or tests/ with no empty or dot segment.
+        # literal argument change the change modifies, adds or removes, with no follows, every merged
+        # category one too, in a .tf file below examples/ or tests/ with no empty or dot segment.
         and ((has("caller_code") | not) or ((.caller_code | type == "boolean") and .category == "literal-argument-change"
               and all((.also_categories // [])[]; . == "literal-argument-change")
-              and .change_kind == "modified" and (has("follows") | not)
+              and (.change_kind | IN("added", "removed", "modified")) and (has("follows") | not)
               and (.file | test("^(examples|tests)/(.+/)?[^/]+\\.tf$")) and (.file | split("/") | all(. != "" and . != ".")))))
         and (map(.id) | length == (unique | length)))
   and (.entries | type == "array" and all(.[]; type == "object" and (.path | plain_path)
@@ -221,7 +221,7 @@ caller_files_ok() {
 
 classify() {
   abs "$dir" --dir; [ -d "$dir" ] || die "--dir is not a directory"
-  [ ! -e "$out/behaviour.json" ] && [ ! -e "$out/status" ] && [ ! -e "$out/classify-prefix" ] || die "--out already holds a classification"
+  [ ! -e "$out/behaviour.json" ] && [ ! -e "$out/status" ] && [ ! -e "$out/classify-root.json" ] || die "--out already holds a classification"
   local cover=/dev/null
   if [ -n "$diff" ] && [ -z "$base" ]; then
     abs "$diff" --diff
@@ -236,8 +236,13 @@ classify() {
     cover="$out/files-module.json"
   elif [ -n "$base" ] && [ -z "$diff" ] && [ -z "$prefix" ]; then abs "$base" --base; set -- --base "$base"
   else die "classify needs one of --diff and --base, and --prefix only with --diff"; fi
-  # The prefix this classification is relative to, which eval compares with its own (Caller Code).
-  printf '%s\n' "${prefix%/}" > "$out/classify-prefix"
+  # The root this classification read (behaviour-pass.md, Caller Code): the canonical --dir, its prefix,
+  # and whether it is the repository root, which only the --diff form with no prefix at a directory
+  # holding .git can claim. eval keeps a caller_code mark only on that claim.
+  local rr=false
+  [ -n "$diff" ] && [ -z "${prefix%/}" ] && [ -e "$dir/.git" ] && rr=true
+  jq -n --arg d "$(cd "$dir" && pwd -P)" --arg p "${prefix%/}" --argjson r "$rr" '{dir: $d, prefix: $p, repository_root: $r}' \
+    > "$out/classify-root.json" || die "--out cannot be written"
   # The provider schema acquisition wrote, when there is one: a regular file, not a link.
   if [ -n "$schema" ]; then
     abs "$schema" --schema; [ -f "$schema" ] && [ ! -L "$schema" ] || die "--schema is not a regular file"
@@ -317,19 +322,27 @@ evaluate() {
     ladder="$out/ladder-module.json"
   fi
   # Caller code (behaviour-pass.md, Caller Code): claims-eval reads a caller_code trigger as inert. The
-  # mark is kept only at the repository root, where classify recorded no prefix and eval got none, and
-  # only when the verify record of this head shows validate passed in the trigger's own directory, an
-  # examples/<name> the default pass verifies. Any other trigger reaches claims-eval with no mark.
-  local cp=missing root=false vj='{"dirs": []}'
-  if [ -f "$out/classify-prefix" ] && [ ! -L "$out/classify-prefix" ]; then cp="$(cat "$out/classify-prefix")" || cp=missing; fi
-  [ "$cp" = "$prefix" ] && [ -z "$prefix" ] && root=true
+  # mark is kept only when classify recorded the repository root and eval got no prefix, and only when
+  # the verify record of this head, read with the rules of verify-pass.sh check, shows validate passed
+  # in the trigger's own directory, an examples/<name> the default pass verifies. A record outside
+  # those rules is no evidence. Any other trigger reaches claims-eval with no mark.
+  local root=false vj='{"dirs": []}'
+  if [ -f "$out/classify-root.json" ] && [ ! -L "$out/classify-root.json" ] && [ -z "$prefix" ]; then
+    jq -e '.repository_root == true and .prefix == ""' "$out/classify-root.json" > /dev/null 2>&1 && root=true
+  fi
   if [ -n "$verify" ]; then
-    vj="$(jq -c --arg h "$head" 'if type == "object" and .head_sha == $h and (.dirs | type == "array") then . else {dirs: []} end' \
-      "$verify" 2> /dev/null)" || vj='{"dirs": []}'
+    vj="$(jq -c -s --arg h "$head" '
+      def side: type == "object" and keys == ["init","line","record","validate"];
+      if length == 1 and (.[0] | type == "object" and keys == ["base_sha","dirs","head_sha","selection","terraform_version"]
+          and .head_sha == $h and (.dirs | type == "array"
+            and all(.[]; type == "object" and keys == ["affected","base","dir","head","outside","reason"]
+                  and (.dir | type == "string") and (.head == null or (.head | side)))
+            and (map(.dir) | length == (unique | length))))
+      then .[0] else {dirs: []} end' "$verify" 2> /dev/null)" || vj='{"dirs": []}'
   fi
   jq --argjson root "$root" --argjson v "${vj:-"{\"dirs\": []}"}" '
-    def validated($d): $d | test("^examples/[^/]+$") and any($v.dirs[]; type == "object" and .dir == $d and .reason == "verified"
-      and .head.record == "code-result" and .head.validate == 0);
+    def validated($d): $d | test("^examples/[^/]+$") and any($v.dirs[]; .dir == $d and .reason == "verified"
+      and .head.record == "code-result" and .head.init == 0 and .head.validate == 0);
     .triggers |= map(if .caller_code == true and $root and validated(.file | sub("/[^/]*$"; "")) then . else del(.caller_code) end)' \
     "$out/behaviour.json" > "$out/behaviour-eval.json" 2> /dev/null || not_run "output refused"
   set -- claims-eval --behaviour "$out/behaviour-eval.json" --ladder "$ladder" --head-sha "$head" --base-sha "$bsha"
