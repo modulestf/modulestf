@@ -238,7 +238,7 @@ Scope is the change. Pre-existing gaps in resources the change does not touch ar
 
 **Severity:**
 - HIGH when a required argument is unreachable, a deprecated argument is newly used, or mutually exclusive arguments are unguarded. HIGH too when the module defaults an argument the schema marks Required (`coverage.default-for-required-argument`).
-- LOW for a conditional rule only the caller can break, as [Conflicting pairs and conditional rules](../check-b-coverage.md#conflicting-pairs-and-conditional-rules) sets out; a conflicting pair in any wording stays HIGH.
+- LOW for a conditional rule only as [Conflicting pairs and conditional rules](../check-b-coverage.md#conflicting-pairs-and-conditional-rules) sets out; a conflicting pair in any wording stays HIGH.
 - LOW when a literal sits outside the documented value set (`coverage.enum-value-unknown`). Name the value and the set and ask which is stale; never assert the code is wrong.
 - MEDIUM when the schema could not be fetched, via `review.check-not-run` under Rule 4, or fell past the cap, as the [budget](../large-changes.md#budget) sets out. That includes fetching the latest schema but not the one at the declared minimum: the version comparison then did not run. The finding names the rules it leaves unevaluated, as **Provider facts** above says, never only the check.
 - No finding, at any severity, on an argument type or a nesting mode the page does not state.
@@ -572,7 +572,7 @@ The Confirm when part of each `candidate` rule's section in `references/engine/`
 - The change adds or edits the literal, and the literal is neither the profile's `regions` `primary` nor its `secondary`.
 - The literal chooses a region: a provider `region`, a `region` argument, a module input or an example's locals.
 - It is not a lookup map key, part of an ARN or part of a hostname.
-- LOW under `examples/` outside a `*.tftest.hcl` file, HIGH elsewhere.
+- LOW under `examples/` outside a `*.tftest.hcl` file, in an example no such file sources, HIGH elsewhere.
 
 ### Confirm when: `scope.provider`
 

@@ -285,12 +285,16 @@ references/check-c-structure.md|With no page read for the type, or for a comment
 references/check-c-structure.md|a commented-out block stays MEDIUM
 references/check-d-examples.md|when the change adds the example
 references/check-d-examples.md|counts as one the base had and stays HIGH
-references/engine/check-e-profile.md|when the literal is in a file under `examples/` that is not a `terraform test` file (`*.tftest.hcl`)
+references/engine/check-e-profile.md|when the literal is in a file under `examples/` that is not a `terraform test` file (`*.tftest.hcl`), in an example no `*.tftest.hcl` file uses as a module source
 references/engine/check-e-profile.md|The root module, submodules, `tests/` and every `*.tftest.hcl` file keep HIGH
 references/judgment/prefix.md|a conflicting pair in any wording stays HIGH
 references/judgment/prefix.md|LOW for `structure.validation-missing` only as
 references/judgment/prefix.md|counts as one the base had and stays HIGH
-references/judgment/prefix.md|LOW under `examples/` outside a `*.tftest.hcl` file, HIGH elsewhere.
+references/judgment/prefix.md|LOW under `examples/` outside a `*.tftest.hcl` file, in an example no such file sources, HIGH elsewhere.
+references/check-g-behaviour.md|one is the other followed by `_` and more
+references/check-g-behaviour.md|a task or container definition, an image, user data, a secret or parameter value, a policy or a configuration document
+references/check-g-behaviour.md|No version attribute (`version`, or a name ending `_version`), `name` or `name_prefix` takes this band, whatever stem it shares.
+references/judgment/prefix.md|LOW for a conditional rule only as
 GUARDS
 }
 
@@ -513,12 +517,16 @@ calibration guard 43 dropped~calibration guard~references/check-c-structure.md~s
 calibration guard 44 dropped~calibration guard~references/check-c-structure.md~s#a commented-out block stays MEDIUM#dropped#g
 calibration guard 45 dropped~calibration guard~references/check-d-examples.md~s#when the change adds the example#dropped#g
 calibration guard 46 dropped~calibration guard~references/check-d-examples.md~s#counts as one the base had and stays HIGH#dropped#g
-calibration guard 47 dropped~calibration guard~references/engine/check-e-profile.md~s#when the literal is in a file under `examples/` that is not a `terraform test` file (`\*\.tftest\.hcl`)#dropped#g
+calibration guard 47 dropped~calibration guard~references/engine/check-e-profile.md~s#when the literal is in a file under `examples/` that is not a `terraform test` file (`\*\.tftest\.hcl`), in an example no `\*\.tftest\.hcl` file uses as a module source#dropped#g
 calibration guard 48 dropped~calibration guard~references/engine/check-e-profile.md~s#The root module, submodules, `tests/` and every `\*\.tftest\.hcl` file keep HIGH#dropped#g
 calibration guard 49 dropped~calibration guard~references/judgment/prefix.md~s#a conflicting pair in any wording stays HIGH#dropped#g
 calibration guard 50 dropped~calibration guard~references/judgment/prefix.md~s#LOW for `structure\.validation-missing` only as#dropped#g
 calibration guard 51 dropped~calibration guard~references/judgment/prefix.md~s#counts as one the base had and stays HIGH#dropped#g
-calibration guard 52 dropped~calibration guard~references/judgment/prefix.md~s#LOW under `examples/` outside a `\*\.tftest\.hcl` file, HIGH elsewhere\.#dropped#g
+calibration guard 52 dropped~calibration guard~references/judgment/prefix.md~s#LOW under `examples/` outside a `\*\.tftest\.hcl` file, in an example no such file sources, HIGH elsewhere\.#dropped#g
+calibration guard 53 dropped~calibration guard~references/check-g-behaviour.md~s#one is the other followed by `_` and more#dropped#g
+calibration guard 54 dropped~calibration guard~references/check-g-behaviour.md~s#a task or container definition, an image, user data, a secret or parameter value, a policy or a configuration document#dropped#g
+calibration guard 55 dropped~calibration guard~references/check-g-behaviour.md~s#No version attribute (`version`, or a name ending `_version`), `name` or `name_prefix` takes this band, whatever stem it shares\.#dropped#g
+calibration guard 56 dropped~calibration guard~references/judgment/prefix.md~s#LOW for a conditional rule only as#dropped#g
 EOF
 
 echo

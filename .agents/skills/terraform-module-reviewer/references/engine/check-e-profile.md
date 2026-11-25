@@ -95,14 +95,14 @@ Engine: `candidate`
 
 **Severity:**
 - HIGH when a region literal the change touches is neither of the two the profile allows (`profile.region-not-allowed`), or the change carries a file format the profile's quality gate cannot read (`profile.nonstandard-config-file`).
-- LOW for `profile.region-not-allowed` when the literal is in a file under `examples/` that is not a `terraform test` file (`*.tftest.hcl`): it decides only where a run of the example creates resources. The root module, submodules, `tests/` and every `*.tftest.hcl` file keep HIGH, since `terraform test` applies by default.
+- LOW for `profile.region-not-allowed` when the literal is in a file under `examples/` that is not a `terraform test` file (`*.tftest.hcl`), in an example no `*.tftest.hcl` file uses as a module source: it decides only where a run of the example creates resources. The root module, submodules, `tests/` and every `*.tftest.hcl` file keep HIGH, since `terraform test` applies by default.
 
 ### Confirm when: `profile.region-not-allowed`
 
 - The change adds or edits the literal, and the literal is neither the profile's `regions` `primary` nor its `secondary`.
 - The literal chooses a region: a provider `region`, a `region` argument, a module input or an example's locals.
 - It is not a lookup map key, part of an ARN or part of a hostname.
-- LOW under `examples/` outside a `*.tftest.hcl` file, HIGH elsewhere.
+- LOW under `examples/` outside a `*.tftest.hcl` file, in an example no such file sources, HIGH elsewhere.
 
 ### Host templates: `profile.region-not-allowed`
 
@@ -120,7 +120,7 @@ Engine: `tool`
 
 **Severity:**
 - HIGH when a region literal the change touches is neither of the two the profile allows (`profile.region-not-allowed`), or the change carries a file format the profile's quality gate cannot read (`profile.nonstandard-config-file`).
-- LOW for `profile.region-not-allowed` when the literal is in a file under `examples/` that is not a `terraform test` file (`*.tftest.hcl`): it decides only where a run of the example creates resources. The root module, submodules, `tests/` and every `*.tftest.hcl` file keep HIGH, since `terraform test` applies by default.
+- LOW for `profile.region-not-allowed` when the literal is in a file under `examples/` that is not a `terraform test` file (`*.tftest.hcl`), in an example no `*.tftest.hcl` file uses as a module source: it decides only where a run of the example creates resources. The root module, submodules, `tests/` and every `*.tftest.hcl` file keep HIGH, since `terraform test` applies by default.
 
 ### Confirm when: `profile.nonstandard-config-file`
 
