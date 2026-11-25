@@ -38,6 +38,7 @@ Engine: `candidate`
 
 **Severity:**
 - MEDIUM when a must-pass structural convention is missed: missing `type`, missing `description`, wrong file, missing tag propagation, a scanner suppression with no reason for accepting the risk, a closed value set the module branches on with no `validation` block, or one commented out (`structure.validation-missing`; the wording of a message a present block does emit is `structure.validation-message-uninformative`).
+- LOW for `structure.validation-missing` only as [Branch values a provider checks](../check-c-structure.md#branch-values-a-provider-checks) sets out; a commented-out block stays MEDIUM.
 
 ### Confirm when: `structure.variable-untyped`
 
@@ -60,6 +61,7 @@ Engine: `tool`
 
 **Severity:**
 - MEDIUM when a must-pass structural convention is missed: missing `type`, missing `description`, wrong file, missing tag propagation, a scanner suppression with no reason for accepting the risk, a closed value set the module branches on with no `validation` block, or one commented out (`structure.validation-missing`; the wording of a message a present block does emit is `structure.validation-message-uninformative`).
+- LOW for `structure.validation-missing` only as [Branch values a provider checks](../check-c-structure.md#branch-values-a-provider-checks) sets out; a commented-out block stays MEDIUM.
 
 ### Confirm when: `structure.missing-description`
 
@@ -82,6 +84,7 @@ Engine: `candidate`
 
 **Severity:**
 - MEDIUM when a must-pass structural convention is missed: missing `type`, missing `description`, wrong file, missing tag propagation, a scanner suppression with no reason for accepting the risk, a closed value set the module branches on with no `validation` block, or one commented out (`structure.validation-missing`; the wording of a message a present block does emit is `structure.validation-message-uninformative`).
+- LOW for `structure.validation-missing` only as [Branch values a provider checks](../check-c-structure.md#branch-values-a-provider-checks) sets out; a commented-out block stays MEDIUM.
 
 ### Confirm when: `structure.wrong-file`
 
