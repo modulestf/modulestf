@@ -37,7 +37,7 @@ When any row below applies: [Reads, Fails When and Severity](../check-c-structur
 | `structure.sibling-block-asymmetry` | The change adds or edits a `dynamic` block. | schema | [Check C](../check-c-structure.md#reads-fails-when-and-severity) |
 | `structure.suppression-unexplained` | The change adds a comment that directs a scanner. | none | [Check C](../check-c-structure.md#reads-fails-when-and-severity) |
 | `structure.validation-message-uninformative` | The change adds or edits a `validation` or `precondition` block. | none | [Check C](../check-c-structure.md#reads-fails-when-and-severity) |
-| `structure.validation-missing` | The change adds or edits an input or a `validation` block, or comments one out. | none | [Check C](../check-c-structure.md#reads-fails-when-and-severity) |
+| `structure.validation-missing` | The change adds or edits an input or a `validation` block, or comments one out. | page; page entry when: The change adds or edits an input the module branches on whose value also reaches an argument of the type. | [Check C](../check-c-structure.md#reads-fails-when-and-severity), [Branch values](../check-c-structure.md#branch-values-a-provider-checks) |
 | `structure.validation-overreaching` | The change adds or edits a `validation` block. | none | [Check C](../check-c-structure.md#reads-fails-when-and-severity) |
 | `structure.variable-untyped` | The change adds a variable. | none | [engine](../engine/check-c-structure.md#structurevariable-untyped) |
 | `structure.version-floor-understated` | The change edits a `versions.tf`, or adds or edits a `module` block whose source is local. | none | [engine](../engine/check-c-structure.md#structureversion-floor-understated) |

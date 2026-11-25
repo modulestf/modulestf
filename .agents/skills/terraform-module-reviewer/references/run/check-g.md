@@ -19,7 +19,7 @@ When any row below applies: [Reads, Fails When and Severity](../check-g-behaviou
 |-----------|--------------|----------------|----------|
 | `claim.fix-not-effective` | The verification record has a `claim` line. | none | [Check G](../check-g-behaviour.md#reads-fails-when-and-severity) |
 | `claim.refuted` | The verification record has a `claim` line. | none | [Check G](../check-g-behaviour.md#reads-fails-when-and-severity) |
-| `compat.expression-behaviour-changed` | The change edits an expression in a resource, data, module, local, variable, output or provider block, or a file an HCL read site names, or the record has a `trigger` or `change` line. | none | [Check G](../check-g-behaviour.md#reads-fails-when-and-severity) |
+| `compat.expression-behaviour-changed` | The change edits an expression in a resource, data, module, local, variable, output or provider block, or a file an HCL read site names, or the record has a `trigger` or `change` line. | page; page entry when: The change adds a name to a `lifecycle` `ignore_changes` list of a block of the type. | [Check G](../check-g-behaviour.md#reads-fails-when-and-severity) |
 | `review.verification-incomplete` | The verification record has a `behaviour:` line. | none | [Check G](../check-g-behaviour.md#reads-fails-when-and-severity) |
 
 ## Other Sections
