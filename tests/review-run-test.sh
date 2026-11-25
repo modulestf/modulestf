@@ -1622,7 +1622,7 @@ check "record: the posted review is kept, plan.json byte for byte, with the body
   "$([ $? = 0 ] && cmp -s "$RECD/41.plan.json" "$TMP/rec-out/plan.json" &&
      jq -e --arg b "$(openssl dgst -sha256 -r < "$TMP/posted.txt" | cut -d' ' -f1)" --arg p "$(openssl dgst -sha256 -r < "$TMP/rec-out/plan.json" | cut -d' ' -f1)" \
        '. == {format: 1, review_id: 41, target: "example-org/widget#7", state: "CHANGES_REQUESTED", body_sha256: $b, plan_sha256: $p}' "$RECD/41.json" > /dev/null &&
-     [ "$(stat -f %Lp "$RECD" 2> /dev/null || stat -c %a "$RECD")" = 700 ]; echo $?)"
+     [ "$(stat -c %a "$RECD" 2> /dev/null || stat -f %Lp "$RECD")" = 700 ]; echo $?)"
 rec "$TMP/rec-out"
 check "record: a review already recorded is refused" "$([ $? = 1 ] && grep -q 'already recorded' "$TMP/rec.out"; echo $?)"
 # The reviews list as GitHub holds it after the post: the own review with its id, commit and body.
