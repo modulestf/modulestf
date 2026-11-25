@@ -72,7 +72,12 @@ def valid_behaviour:
         and ((has("cases") | not) or (.cases | type == "array" and length <= 32
               and all(.[]; type == "object" and (.id | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$"))
                            and (.inputs | type == "object"))
-              and (map(.id) | length == (unique | length)))))
+              and (map(.id) | length == (unique | length))))
+        # caller_code (behaviour-pass.md, Caller Code): a boolean, only on a literal argument change,
+        # every merged category one too, in a .tf file below examples/ or tests/.
+        and ((has("caller_code") | not) or ((.caller_code | type == "boolean") and .category == "literal-argument-change"
+              and all((.also_categories // [])[]; . == "literal-argument-change")
+              and (.file | test("^(examples|tests)/.+\\.tf$")))))
         and (map(.id) | length == (unique | length)))
   and (.entries | type == "array" and all(.[]; type == "object" and (.path | plain_path)
         and (.trigger_ids | type == "array" and all(.[]; tid))
@@ -287,7 +292,14 @@ evaluate() {
       "$ladder" > "$out/ladder-module.json" 2> /dev/null || not_run "ladder refused"
     ladder="$out/ladder-module.json"
   fi
-  set -- claims-eval --behaviour "$out/behaviour.json" --ladder "$ladder" --head-sha "$head" --base-sha "$bsha"
+  # The classifier seals caller code (behaviour-pass.md, Caller Code) on the module root alone. Under
+  # a prefix, configuration elsewhere in the repository may load it, so claims-eval gets no mark.
+  local bj="$out/behaviour.json"
+  if [ -n "$prefix" ]; then
+    jq 'del(.triggers[].caller_code)' "$bj" > "$out/behaviour-module.json" 2> /dev/null || not_run "output refused"
+    bj="$out/behaviour-module.json"
+  fi
+  set -- claims-eval --behaviour "$bj" --ladder "$ladder" --head-sha "$head" --base-sha "$bsha"
   [ -n "$claims" ] && set -- "$@" --claims "$claims"
   case "$(run_facts "$out/eval.raw" "$@" --json)" in
     big) not_run "output refused" ;;
