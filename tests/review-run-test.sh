@@ -1838,8 +1838,9 @@ erm() { # name, perl -0 expression on a copy of review-run.sh, case function tha
   check "self-check: post record mutation $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
 erm missing-default 's/rid d m pl rec=missing/rid d m pl rec=ok/' r_missing
-erm no-link-checks 's/\[ -f "\$m" \] && \[ ! -L "\$m" \] && \[ -f "\$pl" \] && \[ ! -L "\$pl" \] && /[ -f "\$m" ] \&\& [ -f "\$pl" ] \&\& /; s/\[ -O "\$p" \] && \[ ! -L "\$p" \]/[ -O "\$p" ]/' r_metalink
-erm no-link-checks-plan 's/\[ -f "\$m" \] && \[ ! -L "\$m" \] && \[ -f "\$pl" \] && \[ ! -L "\$pl" \] && /[ -f "\$m" ] \&\& [ -f "\$pl" ] \&\& /; s/\[ -O "\$p" \] && \[ ! -L "\$p" \]/[ -O "\$p" ]/' r_planlink
+# A symbolic link has mode 777 on Linux, so the permission test refuses it too: these drop both.
+erm no-link-checks 's/\[ -f "\$m" \] && \[ ! -L "\$m" \] && \[ -f "\$pl" \] && \[ ! -L "\$pl" \] && /[ -f "\$m" ] \&\& [ -f "\$pl" ] \&\& /; s/\[ -O "\$p" \] && \[ ! -L "\$p" \]/[ -O "\$p" ]/; s/\[ -z "\$\(find "\$p" -prune [^\n]*\|\| return 1/true/;' r_metalink
+erm no-link-checks-plan 's/\[ -f "\$m" \] && \[ ! -L "\$m" \] && \[ -f "\$pl" \] && \[ ! -L "\$pl" \] && /[ -f "\$m" ] \&\& [ -f "\$pl" ] \&\& /; s/\[ -O "\$p" \] && \[ ! -L "\$p" \]/[ -O "\$p" ]/; s/\[ -z "\$\(find "\$p" -prune [^\n]*\|\| return 1/true/;' r_planlink
 erm no-meta-cap 's/\[ "\$\(wc -c < "\$m"\)" -le 4096 \]/true/' r_metabig
 erm no-plan-cap 's/\[ "\$\(wc -c < "\$pl"\)" -le 4194304 \]/true/' r_planbig
 erm no-meta-keys 's/type == "object" and keys == \["body_sha256", "format", "plan_sha256", "review_id", "state", "target"\]\n  and/type == "object"\n  and/' r_metabad
