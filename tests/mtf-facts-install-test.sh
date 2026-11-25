@@ -2,11 +2,12 @@
 # shellcheck disable=SC2319 # "$(<test>; echo $?)" passes the test's own status to check
 # Self-check for references/mtf-facts-install.sh of terraform-module-pr-review, the checked
 # install of the pinned mtf-facts release, with curl and uname stubbed: the install for each
-# platform, the curl flags, and each refusal that installs nothing and keeps an existing
-# binary (a wrong pin hash, a corrupted download, a failed download, a binary that reports
-# another version, a pin of another schema, a bad version or hash, a URL that is not the
-# release asset, an unknown platform); then the shipped pin file itself; then a negative
-# self-check on mutated copies of the script. No network.
+# platform, the curl flags, and each failure and refusal, which keeps an existing binary and
+# leaves no file in TMPDIR or the target directory (a wrong pin hash and a corrupted download,
+# neither of which runs the download, a failed download, a binary that reports another
+# version, a pin of another schema, a bad version or hash, a URL that is not the release
+# asset, an unknown platform, a target that is a directory); then the shipped pin file
+# itself; then a negative self-check on mutated copies of the script. No network.
 # Run: tests/mtf-facts-install-test.sh
 set -uo pipefail
 
@@ -34,7 +35,7 @@ chmod 755 "$TMP/bin/curl" "$TMP/bin/uname"
 
 sha() { if command -v sha256sum > /dev/null; then sha256sum "$1" | cut -d ' ' -f 1; else shasum -a 256 "$1" | cut -d ' ' -f 1; fi; }
 V=v9.9.9
-payload() { printf '#!/bin/sh\necho %s\n' "$1" > "$TMP/payload"; } # a stand-in binary reporting $1
+payload() { printf '#!/bin/sh\ntouch "$STUB_MARK"\necho %s\n' "$1" > "$TMP/payload"; } # a stand-in binary reporting $1; running it leaves $TMP/ran
 payload "$V"
 GOOD="$(sha "$TMP/payload")"
 mkpin() { # sha -> $TMP/pin.json for $V, every platform pointing at its release asset
@@ -42,41 +43,44 @@ mkpin() { # sha -> $TMP/pin.json for $V, every platform pointing at its release 
     "darwin_amd64", "darwin_arm64", "linux_amd64", "linux_arm64"] | map({key: ., value:
     {url: "https://github.com/modulestf/facts/releases/download/\($v)/mtf-facts_\($v)_\(.)", sha256: $s}}) | from_entries)}' > "$TMP/pin.json"
 }
-run() { # [pin edit filter] -> runs the installer into a fresh $TMP/dest, status in $RC, output in $TMP/out
-  rm -rf "$TMP/dest"; mkdir "$TMP/dest"
+LEAKS=0 # runs that left a file in TMPDIR or a partial file in the target directory
+run() { # [pin edit filter] -> runs the installer into a fresh $TMP/dest holding an old binary,
+  # with TMPDIR an empty $TMP/tmpd; status in $RC, output in $TMP/out
+  rm -rf "$TMP/dest" "$TMP/tmpd" "$TMP/ran"; mkdir "$TMP/dest" "$TMP/tmpd"; printf 'old\n' > "$TMP/dest/mtf-facts"
   if [ -n "${1-}" ]; then jq "$1" "$TMP/pin.json" > "$TMP/pin.edit"; else cp "$TMP/pin.json" "$TMP/pin.edit"; fi
-  PATH="$TMP/bin:$PATH" STUB_LOG="$TMP/curl.log" STUB_PAYLOAD="$TMP/payload" STUB_OS="${OS:-Linux}" STUB_ARCH="${ARCH:-x86_64}" \
-    bash "$INST" "$TMP/dest" --pin "$TMP/pin.edit" > "$TMP/out" 2>&1
+  PATH="$TMP/bin:$PATH" TMPDIR="$TMP/tmpd" STUB_LOG="$TMP/curl.log" STUB_PAYLOAD="$TMP/payload" STUB_MARK="$TMP/ran" \
+    STUB_OS="${OS:-Linux}" STUB_ARCH="${ARCH:-x86_64}" bash "$INST" "$TMP/dest" --pin "$TMP/pin.edit" > "$TMP/out" 2>&1
   RC=$?
+  [ -z "$(ls -A "$TMP/tmpd")" ] && [ "$(ls -A "$TMP/dest")" = mtf-facts ] || LEAKS=$((LEAKS + 1))
 }
-none() { [ ! -e "$TMP/dest/mtf-facts" ] && [ -z "$(ls -A "$TMP/dest")" ]; } # nothing installed
+none() { [ "$(cat "$TMP/dest/mtf-facts")" = old ]; } # the old binary kept, nothing installed
+notrun() { [ ! -e "$TMP/ran" ]; } # the downloaded file never ran
 mkpin "$GOOD"
 
 for p in Linux:x86_64:linux_amd64 Linux:aarch64:linux_arm64 Darwin:x86_64:darwin_amd64 Darwin:arm64:darwin_arm64; do
   OS="${p%%:*}" ARCH="$(echo "$p" | cut -d : -f 2)" run
-  check "installs for ${p##*:}" "$([ "$RC" = 0 ] && [ -x "$TMP/dest/mtf-facts" ] && [ "$("$TMP/dest/mtf-facts")" = "$V" ] &&
+  check "installs for ${p##*:}" "$([ "$RC" = 0 ] && [ -x "$TMP/dest/mtf-facts" ] && [ "$(STUB_MARK=/dev/null "$TMP/dest/mtf-facts")" = "$V" ] &&
     grep -qF "/mtf-facts_${V}_${p##*:}" "$TMP/curl.log"; echo $?)"
 done
 run
-check "curl runs https only, fails on HTTP errors and has a time limit" \
-  "$(grep -qF -- "--proto =https" "$TMP/curl.log" && grep -qE -- '(^| )-[a-zA-Z]*f' "$TMP/curl.log" && grep -qF -- "--max-time" "$TMP/curl.log"; echo $?)"
+check "curl runs https only with TLS 1.2 or later, follows redirects, fails on HTTP errors and has a time limit" \
+  "$(grep -qF -- "--proto =https" "$TMP/curl.log" && grep -qF -- "--tlsv1.2" "$TMP/curl.log" &&
+    grep -qE -- '(^| )-[a-zA-Z]*f' "$TMP/curl.log" && grep -qE -- '(^| )-[a-zA-Z]*L' "$TMP/curl.log" && grep -qF -- "--max-time" "$TMP/curl.log"; echo $?)"
 
 mkpin 0000000000000000000000000000000000000000000000000000000000000000
 run
-check "a wrong hash in the pin fails with status 1 and installs nothing" "$([ "$RC" = 1 ] && none && grep -q 'sha256 mismatch' "$TMP/out"; echo $?)"
+check "a wrong hash in the pin fails with status 1, never runs the download and installs nothing" "$([ "$RC" = 1 ] && none && notrun && grep -q 'sha256 mismatch' "$TMP/out"; echo $?)"
 mkpin "$GOOD"
 printf 'tampered\n' >> "$TMP/payload"; run; payload "$V"
-check "a corrupted download fails with status 1 and installs nothing" "$([ "$RC" = 1 ] && none && grep -q 'sha256 mismatch' "$TMP/out"; echo $?)"
+check "a corrupted download fails with status 1, never runs and installs nothing" "$([ "$RC" = 1 ] && none && notrun && grep -q 'sha256 mismatch' "$TMP/out"; echo $?)"
 STUB_CURL_RC=22 run
 check "a failed download fails with status 1 and installs nothing" "$([ "$RC" = 1 ] && none; echo $?)"
 payload v9.9.8; mkpin "$(sha "$TMP/payload")"; run; payload "$V"; mkpin "$GOOD"
 check "a binary that reports another version is not installed" "$([ "$RC" = 1 ] && none && grep -q "reports 'v9.9.8'" "$TMP/out"; echo $?)"
-mkpin 0000000000000000000000000000000000000000000000000000000000000000
-rm -rf "$TMP/dest"; mkdir "$TMP/dest"; printf 'old\n' > "$TMP/dest/mtf-facts"
+rm -rf "$TMP/dest"; mkdir -p "$TMP/dest/mtf-facts"
 PATH="$TMP/bin:$PATH" STUB_LOG="$TMP/curl.log" STUB_PAYLOAD="$TMP/payload" STUB_OS=Linux STUB_ARCH=x86_64 \
   bash "$INST" "$TMP/dest" --pin "$TMP/pin.json" > /dev/null 2>&1; RC=$?
-check "a failed install keeps the existing binary" "$([ "$RC" = 1 ] && [ "$(cat "$TMP/dest/mtf-facts")" = old ]; echo $?)"
-mkpin "$GOOD"
+check "refuses a target whose mtf-facts is a directory" "$([ "$RC" = 2 ] && [ -d "$TMP/dest/mtf-facts" ] && [ -z "$(ls -A "$TMP/dest/mtf-facts")" ]; echo $?)"
 
 refused() { # label, pin edit filter: status 2, nothing installed, no download
   rm -f "$TMP/curl.log"; run "$2"
@@ -93,6 +97,7 @@ refused "a URL of another release" '.platforms.linux_amd64.url |= sub("/v9.9.9/"
 refused "a URL of another platform's asset" '.platforms.linux_amd64.url |= sub("linux_amd64$"; "linux_arm64")'
 OS=FreeBSD refused "an unknown system" '.'
 ARCH=riscv64 refused "an unknown machine" '.'
+check "every run left TMPDIR empty and no partial file in the target directory ($LEAKS did not)" "$LEAKS"
 
 # The shipped pin: schema 1, a release tag, the four platforms, each the release asset URL and
 # a 64 hex digit hash, and the installer accepts its form (the download stubbed to fail).
@@ -126,6 +131,12 @@ mutate "the version check dropped" 's/\[ "\$v" = "\$version" \] \|\|/true ||/' \
   'payload v9.9.8; mkpin "$(sha "$TMP/payload")"; run; payload "$V"; mkpin "$GOOD"; [ "$RC" = 1 ] && none'
 mutate "the URL check dropped" 's/  \*\) echo "mtf-facts-install: the pin.s URL.*\n//' \
   'rm -f "$TMP/curl.log"; run ".platforms.linux_amd64.url |= sub(\"github.com\"; \"example.com\")"; [ "$RC" = 2 ] && [ ! -e "$TMP/curl.log" ]'
+mutate "the download run before the hash check" 's/(\|\|\n  \{ echo "mtf-facts-install: download of)/|| true; chmod 755 "\$tmp\/mtf-facts"; "\$tmp\/mtf-facts" --version > \/dev\/null 2>&1 ||\n  { echo "mtf-facts-install: download of/' \
+  'printf "tampered\n" >> "$TMP/payload"; run; payload "$V"; notrun'
+mutate "the EXIT trap dropped" "s/^trap .*\\n//m" \
+  'LEAKS=0; run; mkpin 0000000000000000000000000000000000000000000000000000000000000000; run; mkpin "$GOOD"; [ "$LEAKS" = 0 ]'
+mutate "the directory target check dropped" 's/\[ ! -d "\$DIR\/mtf-facts" \] \|\|/true ||/' \
+  'rm -rf "$TMP/dest"; mkdir -p "$TMP/dest/mtf-facts"; PATH="$TMP/bin:$PATH" STUB_LOG="$TMP/curl.log" STUB_PAYLOAD="$TMP/payload" STUB_MARK="$TMP/ran" STUB_OS=Linux STUB_ARCH=x86_64 bash "$INST" "$TMP/dest" --pin "$TMP/pin.json"; [ $? = 2 ]'
 mutate "https-only dropped from curl" "s/--proto '=https' //" \
   'run; grep -qF -- "--proto =https" "$TMP/curl.log"'
 mutate "the binary moved before the check" 's/(curl [^\n]*\n[^\n]*\n)/$1mv -f "\$tmp\/mtf-facts" "\$DIR\/mtf-facts"; cp "\$DIR\/mtf-facts" "\$tmp\/mtf-facts"\n/' \

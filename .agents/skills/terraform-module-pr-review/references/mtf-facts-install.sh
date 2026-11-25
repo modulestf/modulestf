@@ -2,8 +2,8 @@
 # Installs the mtf-facts release that mtf-facts-pin.json pins: downloads the asset for this
 # machine's platform, checks its SHA-256 against the pin (the pin is the trust root, taken
 # from the release's SHA256SUMS when the pin was raised), and moves it to <dir>/mtf-facts
-# only after the check and a matching --version. Nothing is left behind on failure, and an
-# existing <dir>/mtf-facts stays as it was.
+# only after the check and a matching --version, by a rename inside <dir>. Nothing is left
+# behind on failure, and an existing <dir>/mtf-facts stays as it was.
 # Usage: bash mtf-facts-install.sh <dir> [--pin FILE]
 # Exits 0 when installed, 1 when the download, the hash or the version check fails, 2 on
 # bad usage or a pin it refuses.
@@ -20,6 +20,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$DIR" ] || { echo "usage: mtf-facts-install.sh <dir> [--pin FILE]" >&2; exit 2; }
 [ -d "$DIR" ] || { echo "mtf-facts-install: no directory $DIR" >&2; exit 2; }
+[ ! -d "$DIR/mtf-facts" ] || { echo "mtf-facts-install: $DIR/mtf-facts is a directory" >&2; exit 2; }
 command -v jq > /dev/null || { echo "mtf-facts-install: needs jq" >&2; exit 2; }
 
 case "$(uname -s)" in
@@ -48,7 +49,8 @@ case "$url" in
 esac
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/mtf-facts-install.XXXXXX")"
-trap 'rm -rf "$tmp"' EXIT
+part="$DIR/.mtf-facts.$$"
+trap 'rm -rf "$tmp"; rm -f "$part"' EXIT
 curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --max-time 300 -o "$tmp/mtf-facts" "$url" ||
   { echo "mtf-facts-install: download of $url failed" >&2; exit 1; }
 if command -v sha256sum > /dev/null; then got="$(sha256sum "$tmp/mtf-facts" | cut -d ' ' -f 1)"
@@ -58,5 +60,7 @@ else got="$(shasum -a 256 "$tmp/mtf-facts" | cut -d ' ' -f 1)"; fi
 chmod 755 "$tmp/mtf-facts"
 v="$("$tmp/mtf-facts" --version 2> /dev/null | head -n 1)" || v=""
 [ "$v" = "$version" ] || { echo "mtf-facts-install: the binary reports '$v', the pin says $version" >&2; exit 1; }
-mv -f "$tmp/mtf-facts" "$DIR/mtf-facts"
+# A copy in the same directory, then a rename: <dir>/mtf-facts is never partly written.
+cp "$tmp/mtf-facts" "$part" && chmod 755 "$part" && mv -f "$part" "$DIR/mtf-facts" ||
+  { echo "mtf-facts-install: could not install to $DIR/mtf-facts" >&2; exit 1; }
 echo "mtf-facts $version ($plat) installed to $DIR/mtf-facts"

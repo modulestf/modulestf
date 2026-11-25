@@ -65,7 +65,9 @@ How the skills fit together, and which skills come next: [docs/skills-architectu
    Without Homebrew, install the release this repository pins, its SHA-256 checked against [the pin file](.agents/skills/terraform-module-pr-review/references/mtf-facts-pin.json), into a directory on your `PATH`:
 
    ```bash
-   bash modulestf/.agents/skills/terraform-module-pr-review/references/mtf-facts-install.sh ~/.local/bin
+   # from the root of your clone of this repository
+   mkdir -p ~/.local/bin
+   bash .agents/skills/terraform-module-pr-review/references/mtf-facts-install.sh ~/.local/bin
    ```
 
 4. Ask your agent:
