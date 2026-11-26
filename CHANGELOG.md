@@ -1,3 +1,12 @@
+## [0.16.15](https://github.com/modulestf/modulestf/compare/v0.16.14...v0.16.15) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Pin mtf-facts v0.20.3 and read .tf files up to its 2 MiB cap ([#270](https://github.com/modulestf/modulestf/issues/270)) ([67f9142](https://github.com/modulestf/modulestf/commit/67f914258a712df680509e0e8a6952351c1124d1))
+
+
+
 ## [0.16.14](https://github.com/modulestf/modulestf/compare/v0.16.13...v0.16.14) (2026-11-26)
 
 
