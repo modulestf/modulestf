@@ -475,6 +475,55 @@ $BASE" --out "$R3/x.json")"
     "$(q "$TMP/cov.json" '.class == "partial" and (.examples[] | select(.dir == "examples/codeok") | .addresses == ["aws_a.b"] and .attributes == {"aws_a.b":["name"]})
       and (.unplanned[] | select(.dir == "examples/env") | .reason == "plan gate G1")
       and ([.unplanned[].dir] | index("examples/regress") == null)')"
+  # The plan diff of each planned example (plan-pass.md, Plan diff), kept beside the examples:
+  # an equal one with its addresses file, the others with none, a line outside the grammar or a
+  # second line unknown, an equal one with no addresses file not-run show, and nothing for an
+  # example whose head did not plan.
+  printf '%s\n' 'plan pass mode: laptop' 'example: examples/codeok' 'plan: planned' 'plan-diff: equal' \
+    'example: examples/env' 'plan: planned-no-changes' 'plan-diff: differs aws_a.b' \
+    'example: examples/net' 'plan: planned' 'plan-diff: same' \
+    'example: examples/net2' 'plan: planned' 'plan-diff: equal' \
+    'example: examples/linked' 'plan: planned' 'plan-diff: not-run budget' 'plan-diff: equal' \
+    'example: examples/regress' 'plan: code-error' 'plan-diff: equal' > "$TMP/rec.txt"
+  rm -rf "$TMP/addrpd"; mkdir -p "$TMP/addrpd"
+  echo '{"addresses":["module.b.aws_s3_bucket.this","x y"],"module_calls":{"b":"../../","out":"../../../x","reg":"terraform-aws-modules/x/aws"}}' > "$TMP/addrpd/plan-diff-1.json"
+  cov --plan "$TMP/rec.txt" --addresses "$TMP/addrpd"
+  check "$sh: coverage carries each plan diff, fail closed, outside the examples" \
+    "$(q "$TMP/cov.json" '.plan_diff == [
+      {dir: "examples/codeok", result: "equal", reason: null, addresses: ["module.b.aws_s3_bucket.this"], module_calls: {b: "."}},
+      {dir: "examples/env", result: "differs", reason: null, addresses: [], module_calls: {}},
+      {dir: "examples/linked", result: "unknown", reason: null, addresses: [], module_calls: {}},
+      {dir: "examples/net", result: "unknown", reason: null, addresses: [], module_calls: {}},
+      {dir: "examples/net2", result: "not-run", reason: "show", addresses: [], module_calls: {}}]
+      and all(.examples[]; has("plan_diff") | not)')"
+  # The files are told apart by their base name: a directory whose path holds plan-diff- routes
+  # nothing wrong, and a copy that routes by the whole path is caught.
+  rm -rf "$TMP/plan-diff-x"; mkdir -p "$TMP/plan-diff-x/a"; cp "$TMP/addr/addresses-1.json" "$TMP/addrpd/plan-diff-1.json" "$TMP/plan-diff-x/a/"
+  pdroute() { # script -> 0 when the head addresses and the plan diff addresses each reach their place
+    PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$1" coverage "$R4" --files "$TMP/files.json" --out "$TMP/cov-r.json" --plan "$TMP/rec.txt" --addresses "$TMP/plan-diff-x/a" > /dev/null 2>&1
+    jq -e '(.examples[] | select(.dir == "examples/codeok") | .addresses | length > 1) and .plan_diff[0].addresses == ["module.b.aws_s3_bucket.this"]' "$TMP/cov-r.json" > /dev/null 2>&1
+  }
+  check "$sh: addresses files are routed by their base name" "$(pdroute "$VP"; echo $?)"
+  perl -0pe 's/case "\$\{af##\*\/\}" in plan-diff-\*\)/case "\$af" in *\/plan-diff-*)/' "$VP" > "$TMP/vp-route.sh"
+  check "$sh: the mutation that routes by the whole path is caught" "$( ! cmp -s "$VP" "$TMP/vp-route.sh" && ! pdroute "$TMP/vp-route.sh"; echo $?)"
+  jq -n '{schema_version:1, head:"x", merge_base:"y", refused_hosts:0, examples:[
+    {path:"examples/codeok", head:{class:"planned", plan:null}, base:null, addresses:["aws_a.b"], attributes:{},
+     plan_diff:{result:"equal", reason:null, addresses:["aws_a.b"], module_calls:{m:"../../"}}}]}' > "$TMP/hosted.json"
+  cov --hosted "$TMP/hosted.json"
+  check "$sh: a hosted plan record gives its plan diffs" \
+    "$(q "$TMP/cov.json" '.plan_diff == [{dir: "examples/codeok", result: "equal", reason: null, addresses: ["aws_a.b"], module_calls: {m: "."}}]')"
+  # Negative self-check: a copy that reads the head's calls for the plan diff, and one that keeps
+  # an equal line with no addresses, are caught.
+  for m in 's/\(\$pc\.module_calls \| with_entries/(\$ad.module_calls | with_entries/' 's/elif \(\$pa \| type\) != "object" or \(\$pa\.addresses \| type\) != "array" then/elif false then/'; do
+    perl -0pe "$m" "$VP" > "$TMP/vp-pd.sh"
+    PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/vp-pd.sh" coverage "$R4" --files "$TMP/files.json" --out "$TMP/cov-m.json" --plan "$TMP/rec.txt" --addresses "$TMP/addrpd" > /dev/null 2>&1
+    check "$sh: plan diff mutation is caught ($m)" "$( ! cmp -s "$VP" "$TMP/vp-pd.sh" && ! jq -e '.plan_diff == [
+      {dir: "examples/codeok", result: "equal", reason: null, addresses: ["module.b.aws_s3_bucket.this"], module_calls: {b: "."}},
+      {dir: "examples/env", result: "differs", reason: null, addresses: [], module_calls: {}},
+      {dir: "examples/linked", result: "unknown", reason: null, addresses: [], module_calls: {}},
+      {dir: "examples/net", result: "unknown", reason: null, addresses: [], module_calls: {}},
+      {dir: "examples/net2", result: "not-run", reason: "show", addresses: [], module_calls: {}}]' "$TMP/cov-m.json" > /dev/null 2>&1; echo $?)"
+  done
   facts '{schema_version:1, inert:true, fallback:null, changed:["README.md"], examples:[$r[] | {dir:"examples/\(.)", reason:"all"}]}'
   PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$VP" coverage "$R4" --files "$TMP/files.json" --out "$TMP/cov.json" --no-plan > /dev/null 2>&1
   check "$sh: an inert change still lists its unplanned examples, recorded as inert" \

@@ -559,6 +559,123 @@ t_unex_reader() { t_unex_typedef && t_unex_desc && t_unex_obj && t_unex_b8 && t_
 t_unex_cmt() { t_unex_cmt_lead && t_unex_cmt_hide && t_unex_cmt_brace; }
 
 
+# --- Identical (behaviour-pass.md, The Run Object): a trigger on the plan diff's closed list whose
+# merge base examples all planned the same against the base and the head module, with one of
+# them planning the address the change sits in.
+LST=module.db.aws_lb_listener.secondary
+jq --arg l "$LST" '.coverage.examples[0].addresses += [$l]' "$TMP/ladder-unex.json" > "$TMP/ladder-pd.json"
+jq -n --arg l "$LST" '{schema_version: 1, class: "complete", examples: [], plan_diff: [
+  {dir: "examples/complete", result: "equal", reason: null, addresses: ["module.db.aws_db_subnet_group.this", $l], module_calls: {db: "."}},
+  {dir: "examples/minimal", result: "equal", reason: null, addresses: ["module.db.aws_db_subnet_group.this"], module_calls: {db: "."}}]}' > "$TMP/cov-pd.json"
+# pdx [coverage jq update] [ladder jq update] [behaviour jq update] [eval jq update]: sets O.
+pdx() {
+  local SCHEMA="$TMP/schema-u.json"
+  setup; jq "${3:-.}" "$TMP/behaviour-unex.json" > "$TMP/behaviour.out"; jq "${4:-.}" "$TMP/eval-unex.json" > "$TMP/eval.out"
+  jq "${2:-.}" "$TMP/ladder-pd.json" > "$TMP/ladder-p.json"; jq "${1:-.}" "$TMP/cov-pd.json" > "$TMP/cov-p.json"
+  local keep="$MOD"; MOD="$UMOD"; DIFF="$TMP/files-unex.json" classify; MOD="$keep"
+  evalp --ladder "$TMP/ladder-p.json" --plan-diff "$TMP/cov-p.json"
+}
+same() { jq -c '[.triggers[] | select(has("identical")) | .id]' "$O/run-behaviour.json" 2> /dev/null; }
+nosame() { [ "$(q '.status == "ran"')" = 0 ] && [ "$(same)" = '[]' ] && ! grep -q ', identical' "$O/record.txt"; }
+t_pd() { pdx && [ "$(same)" = '["T-008","T-014","T-017","T-018"]' ] \
+  && q '.triggers[] | select(.id == "T-008") | .identical == ["examples/complete", "examples/minimal"]' | grep -qx 0 \
+  && [ "$(grep -c ', identical$' "$O/record.txt")" = 4 ] \
+  && grep -qxF 'trigger T-008 `main.tf` line 10 unclassified-change: unverifiable, identical' "$O/record.txt"; }
+t_pd; check "identical: arguments and variables the change adds, every merge base example equal, are marked" $?
+t_pd_old() { pdx && q '[.triggers[] | select(.id | IN("T-012", "T-009", "T-007", "T-019", "T-020", "T-001")) | has("identical")] | any | not' | grep -qx 0; }
+t_pd_old; check "identical: an argument from an existing variable, a propagation candidate, a literal and the terraform block are not marked" $?
+t_pd_shape() { pdx && q '.triggers[] | select(.id == "T-010") | has("identical") | not' | grep -qx 0; }
+t_pd_shape; check "identical: an argument from a new variable whose default is not null is not marked" $?
+t_pd_wrap() { pdx . . '.triggers |= map(if .id == "T-008" then .head_expr = "coalesce(var.new_idle, 60)" else . end)' \
+  && q '.triggers[] | select(.id == "T-008") | has("identical") | not' | grep -qx 0; }
+t_pd_wrap; check "identical: a function around the new variable is not marked" $?
+t_pd_call() { pdx '.plan_diff[0].addresses += ["module.db.module.sub"]' . '.triggers += [{id: "T-021", file: "main.tf", line: 20, category: "unclassified-change", change_kind: "added",
+    address: "module.sub", attribute: "idle", base_expr: null, head_expr: "var.new_idle", levels: ["L4"],
+    referenced_inputs: [{name: "new_idle", type: "number"}], contextual_refs: [], reason: null}]
+  | .entries[0].trigger_ids += ["T-021"]' '.triggers += [{id: "T-021", state: "unverifiable", reason: "x"}]' \
+  && q '.triggers[] | select(.id == "T-021") | has("identical") | not' | grep -qx 0; }
+t_pd_call; check "identical: a module call argument is never marked" $?
+t_pd_base() { pdx '.plan_diff[1].module_calls = {db: "../other"}' && [ "$(same)" = '["T-008","T-014","T-017","T-018"]' ] \
+  && q '.triggers[] | select(.id == "T-008") | .identical == ["examples/complete"]' | grep -qx 0; }
+t_pd_base; check "identical: an example whose merge base HCL does not call the directory is not eligible" $?
+t_pd_basecall() { pdx '.plan_diff[0].module_calls = {db: "../other"} | .plan_diff[1].module_calls = {db: "../other"}' && nosame; }
+t_pd_basecall; check "identical: no example whose merge base HCL calls the directory marks nothing" $?
+t_pd_edited() { pdx '.plan_diff |= .[:1]' '.coverage.examples[1].module_calls = {}' \
+  '.entries += [{path: "examples/minimal/main.tf", change_kind: "modified", inert: true, trigger_ids: []}]' && nosame; }
+t_pd_edited; check "identical: an example the change edits with no plan diff marks nothing" $?
+t_pd_inex() { pdx '.plan_diff[0].dir = "."' '.coverage.examples[0].dir = "."' && nosame; }
+t_pd_inex; check "identical: a trigger in an example directory is never marked" $?
+# A variable the change adds with a validation block, which can fail a caller that never sets
+# it (the classifier gives it a level), is never marked; the level is set here by hand, and the
+# classifier's own reading of a validation block is held in the facts repository.
+t_pd_valid() { pdx . . '.triggers |= map(if .id == "T-017" then .levels = ["L4"] else . end)' \
+  && q '.triggers[] | select(.id == "T-017") | has("identical") | not' | grep -qx 0; }
+t_pd_valid; check "identical: an added variable with a validation block is not marked" $?
+t_pd_output() { pdx . . '.triggers += [{id: "T-021", file: "outputs.tf", line: 1, category: "locals-outputs-change", change_kind: "added",
+    address: "output.arn", attribute: "value", base_expr: null, head_expr: "aws_lb_listener.secondary.arn", levels: [],
+    referenced_inputs: [], contextual_refs: ["aws_lb_listener.secondary"], reason: null}]
+  | .entries += [{path: "outputs.tf", change_kind: "modified", inert: false, trigger_ids: ["T-021"]}]' '.triggers += [{id: "T-021", state: "unverifiable", reason: "x"}]' \
+  && q '.triggers[] | select(.id == "T-021") | has("identical") | not' | grep -qx 0; }
+t_pd_output; check "identical: an added output is not marked" $?
+t_pd_nocalls() { pdx . '.coverage.examples |= map(.module_calls = {})' && nosame; }
+t_pd_nocalls; check "identical: coverage with no head module calls, as a hosted record gives, marks nothing" $?
+t_pd_l1() { pdx . . '.triggers |= map(if .id == "T-008" then .levels = ["L1", "L4"] else . end)' \
+  && q '.triggers[] | select(.id == "T-008") | has("identical") | not' | grep -qx 0; }
+t_pd_l1; check "identical: an argument with a level besides L4 is not marked" $?
+t_pd_sort() { pdx '.plan_diff |= reverse' '.coverage.examples |= reverse' \
+  && q '.triggers[] | select(.id == "T-017") | .identical == ["examples/complete", "examples/minimal"]' | grep -qx 0; }
+t_pd_sort; check "identical: the examples are listed sorted" $?
+t_pd_cap() { pdx '.plan_diff += [range(25) as $i | .plan_diff[1] | .dir = "examples/x\($i)"]' \
+  '.coverage.examples += [range(25) as $i | .coverage.examples[1] | .dir = "examples/x\($i)"]' \
+  && q '.triggers[] | select(.id == "T-017") | (.identical | length) == 20' | grep -qx 0 \
+  && q '.triggers[] | select(.id == "T-017") | .identical == (.identical | sort)' | grep -qx 0; }
+t_pd_cap; check "identical: at most 20 examples are listed" $?
+t_pd_type() { pdx . . '.triggers |= map(if .id == "T-015" then .levels = [] else . end)' '.triggers |= map(if .id == "T-015" then .state = "unverifiable" else . end)' \
+  && q '.triggers[] | select(.id == "T-015") | has("identical") | not' | grep -qx 0; }
+t_pd_type; check "identical: a type or validation change of a variable is not marked" $?
+t_pd_differs() { pdx '.plan_diff[1].result = "differs"' && nosame; }
+t_pd_differs; check "identical: one eligible example that differs marks nothing" $?
+t_pd_notrun() { pdx '.plan_diff[1] |= (.result = "not-run" | .reason = "base-plan" | .addresses = [])' && nosame; }
+t_pd_notrun; check "identical: one eligible example whose base plan did not run marks nothing" $?
+t_pd_missing() { pdx '.plan_diff |= .[:1]' && nosame; }
+t_pd_missing; check "identical: an eligible example with no plan diff marks nothing" $?
+t_pd_absent() { pdx '.plan_diff[1] |= (.result = "not-run" | .reason = "absent-at-base" | .addresses = [])' \
+  && [ "$(same)" = '["T-008","T-014","T-017","T-018"]' ] \
+  && q '.triggers[] | select(.id == "T-008") | .identical == ["examples/complete"]' | grep -qx 0; }
+t_pd_absent; check "identical: an example absent at the merge base is not eligible" $?
+t_pd_consume() { pdx '.plan_diff[0].addresses = ["module.db.aws_db_subnet_group.this"]' \
+  && [ "$(same)" = '["T-017","T-018"]' ]; }
+t_pd_consume; check "identical: an argument whose resource no merge base example plans is not marked, its variable is" $?
+t_pd_noinst() { pdx '.plan_diff |= map(.addresses = ["aws_s3_bucket.other"])' && nosame; }
+t_pd_noinst; check "identical: no address of the module instance marks nothing" $?
+t_pd_partial() { pdx . '.coverage.class = "partial"' && nosame; }
+t_pd_partial; check "identical: coverage that is not complete marks nothing" $?
+t_pd_headfail() { pdx . '.coverage.examples[1].head = "code-error"' && nosame; }
+t_pd_headfail; check "identical: an example whose head did not plan marks nothing" $?
+t_pd_noaddr() { pdx . '.coverage.examples[1].addresses = []' && nosame; }
+t_pd_noaddr; check "identical: an example with no addresses read marks nothing" $?
+t_pd_none() { local SCHEMA="$TMP/schema-u.json"; setup; cp "$TMP/behaviour-unex.json" "$TMP/behaviour.out"; cp "$TMP/eval-unex.json" "$TMP/eval.out"
+  local keep="$MOD"; MOD="$UMOD"; DIFF="$TMP/files-unex.json" classify; MOD="$keep"; evalp --ladder "$TMP/ladder-pd.json" && nosame; }
+t_pd_none; check "identical: no plan diff file marks nothing" $?
+t_pd_bad() { pdx '.plan_diff = "x"' && nosame; }
+t_pd_bad; check "identical: a plan diff outside its shape is no evidence and the step still runs" $?
+t_pd_unex() { pdx . '.coverage.examples[0].addresses -= ["module.db.aws_lb_listener.secondary"]' '.' '.' \
+  && q '.triggers[] | select(.id == "T-008") | (.unexercised == true) and (has("identical") | not)' | grep -qx 0; }
+t_pd_unex; check "identical: an unexercised trigger is not also identical" $?
+# The directories of the closed list, for the plan pass's --diff-dir.
+t_pd_dirs() { local SCHEMA="$TMP/schema-u.json"; setup
+  jq '.triggers += [{id: "T-021", file: "modules/a/main.tf", line: 2, category: "literal-argument-change", change_kind: "modified",
+        address: "aws_s3_bucket.a", attribute: "acl", base_expr: "\"a\"", head_expr: "\"b\"", levels: ["L4"], referenced_inputs: [], contextual_refs: [], reason: null},
+      {id: "T-022", file: "modules/b/variables.tf", line: 1, category: "unclassified-change", change_kind: "added",
+        address: "var.arn", attribute: null, base_expr: null, head_expr: null, levels: [], referenced_inputs: [], contextual_refs: [], reason: null}]
+    | .entries += [{path: "modules/a/main.tf", change_kind: "modified", inert: false, trigger_ids: ["T-021"]},
+                   {path: "modules/b/variables.tf", change_kind: "modified", inert: false, trigger_ids: ["T-022"]}]' "$TMP/behaviour-unex.json" > "$TMP/behaviour.out"
+  jq '. + [{filename: "modules/a/main.tf", status: "modified"}, {filename: "modules/b/variables.tf", status: "modified"}]' "$TMP/files-unex.json" > "$TMP/files-dirs.json"
+  local keep="$MOD"; MOD="$UMOD"; DIFF="$TMP/files-dirs.json" classify; MOD="$keep"
+  [ "$(bash "$BP" diff-dirs --out "$O")" = "$(printf '.\nmodules/b')" ] \
+    && [ "$(bash "$BP" diff-dirs --out "$O" --prefix mods/x/)" = "$(printf 'mods/x\nmods/x/modules/b')" ]; }
+t_pd_dirs; check "identical: diff-dirs prints the directories of the closed list only, repository-relative" $?
+
 # --- Inert: no trigger, the record says so and the run object is empty.
 setup
 printf '{"schema_version":1,"inert":true,"entries":[{"path":"README.md","change_kind":"modified","inert":true,"trigger_ids":[]}],"triggers":[],"capped":0}\n' > "$TMP/behaviour.out"
@@ -1179,6 +1296,24 @@ wmutate "unexercised: a directly called directory not seen as loaded" 's/\.dir =
 wmutate "unexercised: strings matched without escapes" 's/s\/"\(\(\?:\[\^"\\\\\]\|\\\\\.\)\*\)"\//s\/"([^"]*)"\//' t_unex_escq
 wmutate "unexercised: a nested dynamic segment kept" 's/split\("\."\) \| map\(select\(\. != "dynamic"\)\) \| join\("\."\)/sub("^dynamic\\\\."; "")/' t_unex_nested_dyn
 wmutate "unexercised: a type the schema lacks requires nothing" 's/,\n         \(\$ty\[\] \| select\(IN\(\$have\[\]\) \| not\) \| "\\\(\.\)\.\*"\)//' t_unex_lacktype
+wmutate "identical: an example that differs not blocking" 's/ and all\(\$el\[\]; has\("block"\) \| not\)//' t_pd_differs
+wmutate "identical: the resource not consumed" 's/then any\(\$pa\[\]; \. == \$x \+ \$a\)/then true/' t_pd_consume
+wmutate "identical: an example absent at the base kept" 's/if \$p\.reason == "absent-at-base" then empty/if false then empty/' t_pd_absent
+wmutate "identical: partial coverage accepted" 's/\n           or \(\$l\.coverage\.class != "complete"\)//' t_pd_partial
+wmutate "identical: an example with no addresses accepted" 's/and \(\.addresses \| type == "array" and length > 0 and length < 1000\)\) \| not\)/) | not)/' t_pd_noaddr
+wmutate "identical: a variable not null by default read as one" 's/\(\[\{dir: \(\$t\.file \| tdir\), name: \$n\}\] - \$nv == \[\]\)/true/' t_pd_shape
+wmutate "identical: any value shape" 's/else \$h == \("var\." \+ \$n\) end/else true end/' t_pd_wrap
+wmutate "identical: any address for an argument" 's/  elif \(\$t\.address \| test\("\^\[a-z\][^\n]*\n/  elif true\n/' t_pd_call
+wmutate "identical: a variable of any category" 's/ and \$t\.category == "unclassified-change"\n    and \(\(\$t\.also_categories \/\/ \[\]\) == \[\]\) and \$t\.levels == \[\] then "variable"/ and \$t.levels == [] then "variable"/' t_pd_type
+wmutate "identical: the head module calls read for the base" 's/elif \$p\.result == "equal" then \(if calls\(\$p\.module_calls; \$d\) != \[\] then/elif \$p.result == "equal" then (if true then/' t_pd_base
+wmutate "identical: an edited example with no plan diff ignored" 's/elif \$head or \$edited then/elif \$head then/' t_pd_edited
+wmutate "identical: a trigger in an example directory marked" 's/\n           or any\(\$l\.coverage\.examples\[\]; \.dir as \$x \| \$d \| under\(\$x\)\)//' t_pd_inex
+wmutate "identical: a variable with a level marked" 's/ and \$t\.levels == \[\] then "variable"/ then "variable"/' t_pd_valid
+wmutate "identical: an argument at any level marked" 's/-\]\*\$"\)\) and \$t\.levels == \["L4"\]\n/-]*\$"))\n/' t_pd_l1
+wmutate "identical: coverage with no head calls read" 's/\n           or \(any\(\$l\.coverage\.examples\[\]; \(\.module_calls \| type\) == "object" and \.module_calls != \{\}\) \| not\)//' t_pd_nocalls
+wmutate "identical: the list not sorted" 's/\| unique \| \.\[:20\]/| .[:20]/' t_pd_sort
+wmutate "identical: the list not capped" 's/\| unique \| \.\[:20\]/| unique/' t_pd_cap
+wmutate "identical: beside unexercised" 's/if \$i != \[\] and \(unex\(\$t; \$et\) \| not\) then \{identical/if \$i != [] then {identical/' t_pd_unex
 wmutate "derive in the shared file returning its input" 's/  return \$o;\n\}/  return \$s;\n}/' t_wr_derived wrapper-derive.pl
 
 echo

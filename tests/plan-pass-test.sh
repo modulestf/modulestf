@@ -1222,6 +1222,377 @@ nocont "$PP" | perl -0pe 's/terraform validate -no-color; then/true; then/' > "$
 check "runner phases: the mutation that passes every validate is caught" \
   "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && [ "$(vphase "$TMP/pp-runner-m.sh" | tail -n 1)" = 'validate: passed' ]; echo $?)"
 
+# The plan diff (plan-pass.md, Plan diff): the merge base example planned against the base and
+# the head module, compared in the pass. Its own upstream: examples/same is unchanged by the
+# change, examples/edited is edited at the head, examples/fresh is new. The stubbed terraform
+# prints the show JSON of the tree it runs in: the base worktree, the mixed tree or the clone.
+pdu="$TMP/pdup"; mkdir -p "$pdu/examples/same" "$pdu/examples/edited" "$TMP/pd" "$TMP/pdbin"
+git -C "$pdu" init -q
+echo 'resource "aws_s3_bucket" "this" {}' > "$pdu/main.tf"
+for e in same edited; do echo 'module "b" { source = "../../" }' > "$pdu/examples/$e/main.tf"; done
+git -C "$pdu" add -A && git -C "$pdu" -c user.name=t -c user.email=t@example.invalid commit -qm base
+PDBASE="$(git -C "$pdu" rev-parse HEAD)"
+printf 'variable "new" {\n  default = null\n}\n' > "$pdu/variables.tf"
+printf 'module "b" {\n  source = "../../"\n}\n' > "$pdu/examples/edited/main.tf"
+mkdir -p "$pdu/examples/fresh"; echo 'module "b" { source = "../../" }' > "$pdu/examples/fresh/main.tf"
+git -C "$pdu" add -A && git -C "$pdu" -c user.name=t -c user.email=t@example.invalid commit -qm head
+cat > "$TMP/pdbin/terraform" <<PDEOF
+#!/bin/sh
+case "\$PWD" in */base/*) w=base ;; */mixed/*) w=mixed ;; *) w=head ;; esac
+echo "\$w \${PWD##*/} \$1" >> "$TMP/pd.log"
+case "\$1" in
+init) printf 'provider "registry.terraform.io/hashicorp/aws" {\n}\n' >> .terraform.lock.hcl ;;
+plan) [ -n "\$AWS_ACCESS_KEY_ID" ] || { echo "Error: no valid credential sources"; exit 1; }
+  for a; do case "\$a" in -out=*) echo saved > "\${a#-out=}" ;; esac; done
+  echo "Plan: 1 to add, 0 to change, 0 to destroy." ;;
+providers) [ -z "\$AWS_ACCESS_KEY_ID" ] || echo "schema with credentials" >> "$TMP/pd.log"
+  cat "$TMP/pd/schema.json" ;;
+show) [ -z "\$AWS_ACCESS_KEY_ID" ] || echo "show with credentials" >> "$TMP/pd.log"
+  if [ -f "$TMP/pd/\$w-\${PWD##*/}.json" ]; then cat "$TMP/pd/\$w-\${PWD##*/}.json"; else cat "$TMP/pd/\$w.json"; fi ;;
+esac
+exit 0
+PDEOF
+cp "$TMP/bin/aws" "$TMP/pdbin/aws"; chmod +x "$TMP/pdbin/terraform"
+pdj() { # after object -> show JSON with one resource of module b and its call
+  jq -n -c --argjson a "$1" '{resource_changes: [{address: "module.b.aws_s3_bucket.this", mode: "managed", type: "aws_s3_bucket",
+    provider_name: "registry.terraform.io/hashicorp/aws", change: {actions: ["create"],
+    after: $a, after_unknown: {arn: true}, after_sensitive: {}}}], output_changes: {},
+    configuration: {root_module: {module_calls: {b: {source: "../../"}}}}}'
+}
+pdset() { # base after, mixed after, head after
+  rm -f "$TMP/pd"/*.json
+  jq -n -c '{provider_schemas: {"registry.terraform.io/hashicorp/aws": {resource_schemas: {aws_s3_bucket: {block: {
+    attributes: {arn: {computed: true}, bucket: {optional: true, computed: true}}}}}}}}' > "$TMP/pd/schema.json"
+  pdj "$1" > "$TMP/pd/base.json"; pdj "$2" > "$TMP/pd/mixed.json"; pdj "$3" > "$TMP/pd/head.json"
+}
+pdrun() { # shell, script, arguments... -> the record; R set
+  R="$(mktemp -d "$TMP/pr-review.XXXXXX")"; git clone -q "$pdu" "$R/clone"; : > "$TMP/pd.log"; echo "$R" > "$TMP/pd-last"
+  PATH="$TMP/pdbin:/usr/bin:/bin" "$1" "$PP" g0 "$R" > /dev/null
+  PATH="$TMP/pdbin:/usr/bin:/bin" "$1" "$2" plan "$R" demo --role-arn "$ROLE" "${@:3}" 2>&1
+}
+blk() { printf '%s\n' "$1" | awk -v e="example: ${2//\\/}" '/^(example: |plan summary)/ { on = ($0 == e) } on && /^plan-diff/'; }
+for sh in bash zsh; do
+  command -v "$sh" > /dev/null 2>&1 || continue
+  pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}'
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir . examples/same examples/edited examples/fresh)"
+  check "$sh: plan diff: an unchanged example equal" "$([ "$(blk "$out" examples\\/same)" = 'plan-diff: equal' ]; echo $?)"
+  check "$sh: plan diff: an edited example compared in the mixed tree" \
+    "$([ "$(blk "$out" examples\\/edited)" = 'plan-diff: equal' ] && grep -qx 'mixed edited show' "$TMP/pd.log" && ! grep -qx 'mixed same show' "$TMP/pd.log"; echo $?)"
+  check "$sh: plan diff: a new example is absent at the base" "$([ "$(blk "$out" examples\\/fresh)" = 'plan-diff: not-run absent-at-base' ]; echo $?)"
+  check "$sh: plan diff: the head module plan's addresses kept for equal" \
+    "$(jq -e '. == {addresses: ["module.b.aws_s3_bucket.this"], module_calls: {b: "../../"}}' "$(cat "$TMP/pd-last")/plan-addresses/plan-diff-1.json" > /dev/null 2>&1; echo $?)"
+  check "$sh: plan diff: every head plans before any plan diff" \
+    "$(awk '/ plan$/ { if ($1 == "head") { if (seen) bad = 1 } else seen = 1 } END { exit bad }' "$TMP/pd.log"; echo $?)"
+  check "$sh: plan diff: the schema is read with no credentials" "$(grep -q 'schema with credentials' "$TMP/pd.log" && echo 1 || echo 0)"
+  check "$sh: plan diff: shows run with no credentials" "$(grep -q 'show with credentials' "$TMP/pd.log" && echo 1 || echo 0)"
+  check "$sh: plan diff: the head's class and summary stay" "$(has "$out" 'plan summary: 3 examples, 3 planned, 0 exceptions, 0 other')"
+  # The frozen caller: the edited head example plans otherwise, the merge base example does not
+  pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"y"}'
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir . examples/same examples/edited)"
+  check "$sh: plan diff: an edited example is read as it was at the merge base" "$([ "$(blk "$out" examples\\/edited)" = 'plan-diff: equal' ]; echo $?)"
+  check "$sh: plan diff: an unchanged example whose plan moved differs, naming the address" \
+    "$([ "$(blk "$out" examples\\/same)" = 'plan-diff: differs module.b.aws_s3_bucket.this' ]; echo $?)"
+  check "$sh: plan diff: no value crosses" "$(lacks "$out" '"y"')"
+  pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}'; jq '.errored = true' "$TMP/pd/base.json" > "$TMP/pd/base-same.json"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir . examples/same)"
+  check "$sh: plan diff: a plan that errored is unknown" "$([ "$(blk "$out" examples\\/same)" = 'plan-diff: unknown' ]; echo $?)"
+  pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}'
+  jq '.resource_changes[0].change.after_unknown = {arn: true, bucket: true}' "$TMP/pd/head.json" > "$TMP/pd/head-same.json"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir . examples/same)"
+  check "$sh: plan diff: a configurable value unknown on one side is unknown" "$([ "$(blk "$out" examples\\/same)" = 'plan-diff: unknown' ]; echo $?)"
+  out="$(pdrun "$sh" "$PP" --diff-dir . examples/same)"
+  check "$sh: plan diff: no merge base is not-run" "$([ "$(blk "$out" examples\\/same)" = 'plan-diff: not-run no-base' ]; echo $?)"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" examples/same)"
+  check "$sh: plan diff: no plan diff directory runs no base plan" "$(lacks "$out" 'plan-diff')"
+  check "$sh: plan diff: and touches no base worktree" "$(grep -q '^base ' "$TMP/pd.log" && echo 1 || echo 0)"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir modules/other examples/same)"
+  check "$sh: plan diff: an example that reaches no plan diff directory gets none" "$(lacks "$out" 'plan-diff')"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir ../x examples/same)"
+  check "$sh: plan diff: a directory outside the pattern loses only its plan diff" \
+    "$([ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$(lacks "$out" 'plan-diff')" = 0 ]; echo $?)"
+  pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}'; rm -f "$TMP/pd/schema.json"
+  out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir . examples/same)"
+  check "$sh: plan diff: no provider schema is unknown" "$([ "$(blk "$out" examples\\/same)" = 'plan-diff: unknown' ]; echo $?)"
+done
+# Mutations of the comparison and the frozen caller, each caught by the laptop pass under bash
+pdmut() { # name, perl substitution, base after, mixed after, head after, example, line it must not print
+  rm -rf "$TMP/ppd"; cp -R "${PP%/*}" "$TMP/ppd"; perl -0pe "$2" "$PP" > "$TMP/ppd/plan-pass.sh"
+  pdset "$3" "$4" "$5"
+  local o; o="$(pdrun bash "$TMP/ppd/plan-pass.sh" --base "$PDBASE" --diff-dir . "examples/$6")"
+  check "plan diff: the mutation $1 is caught" "$( ! cmp -s "$PP" "$TMP/ppd/plan-pass.sh" && [ "$(blk "$o" "examples\\/$6")" != "$7" ]; echo $?)"
+}
+pdmut "that ignores after" 's/\{actions, after, after_unknown/{actions, after_unknown/' '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"z"}' same 'plan-diff: differs module.b.aws_s3_bucket.this'
+pdmut "that reads the head example" 's/example_changed\(\) \{\n  !/example_changed() {\n  false \&\& !/' '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"z"}' edited 'plan-diff: equal'
+pdmut "that ignores errored plans" 's/ or \.errored == true//' '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}' same 'plan-diff: unknown'
+
+# PDIFF_JQ, the plan diff's comparison, taken from the script: one case per branch, each with a
+# mutation that must be caught. An attribute unknown on both sides is equal only when the
+# provider schema marks it computed-only; a configurable one, or a type the schema lacks, is
+# unknown. The recorded case: a root variable that defaults to "b", passed to a child whose own
+# default is "a" and which joins it to an id, planned by Terraform 1.17 at both revisions with
+# the builtin provider: the value changed, both plans show it unknown.
+PDJ="$(sed -n "/^PDIFF_JQ='\$/,/^'\$/p" "$PP" | sed '1d;$d')"
+cat > "$TMP/pdf-base.json" <<'PDF'
+{"resource_changes":[{"address":"module.this.module.sub.terraform_data.a","module_address":"module.this.module.sub","mode":"managed","type":"terraform_data","name":"a","provider_name":"terraform.io/builtin/terraform","change":{"actions":["create"],"before":null,"after":{"input":null,"output":null,"store":null,"triggers_replace":null},"after_unknown":{"id":true},"before_sensitive":false,"after_sensitive":{}}},{"address":"module.this.module.sub.terraform_data.b","module_address":"module.this.module.sub","mode":"managed","type":"terraform_data","name":"b","provider_name":"terraform.io/builtin/terraform","change":{"actions":["create"],"before":null,"after":{"store":null,"triggers_replace":null},"after_unknown":{"id":true,"input":true,"output":true},"before_sensitive":false,"after_sensitive":{}}}],"output_changes":{}}
+PDF
+cat > "$TMP/pdf-head.json" <<'PDF'
+{"resource_changes":[{"address":"module.this.module.sub.terraform_data.a","module_address":"module.this.module.sub","mode":"managed","type":"terraform_data","name":"a","provider_name":"terraform.io/builtin/terraform","change":{"actions":["create"],"before":null,"after":{"input":null,"output":null,"store":null,"triggers_replace":null},"after_unknown":{"id":true},"before_sensitive":false,"after_sensitive":{}}},{"address":"module.this.module.sub.terraform_data.b","module_address":"module.this.module.sub","mode":"managed","type":"terraform_data","name":"b","provider_name":"terraform.io/builtin/terraform","change":{"actions":["create"],"before":null,"after":{"store":null,"triggers_replace":null},"after_unknown":{"id":true,"input":true,"output":true},"before_sensitive":false,"after_sensitive":{}}}],"output_changes":{}}
+PDF
+cat > "$TMP/pdf-schema.json" <<'PDF'
+{"provider_schemas":{"terraform.io/builtin/terraform":{"resource_schemas":{"terraform_data":{"version":0,"block":{"attributes":{"id":{"type":"string","description_kind":"plain","computed":true},"input":{"type":"dynamic","description_kind":"plain","optional":true},"output":{"type":"dynamic","description_kind":"plain","computed":true},"triggers_replace":{"type":"dynamic","description_kind":"plain","optional":true}},"block_types":{"store":{"nesting_mode":"single","block":{"attributes":{"input":{"type":"dynamic","description_kind":"plain","optional":true,"write_only":true},"output":{"type":"dynamic","description_kind":"plain","computed":true},"replace":{"type":"bool","description_kind":"plain","optional":true},"sensitive":{"type":"bool","description_kind":"plain","optional":true},"sensitive_output":{"type":"dynamic","description_kind":"plain","computed":true,"sensitive":true},"version":{"type":"dynamic","description_kind":"plain","optional":true}},"description_kind":"plain"}}},"description_kind":"plain"}}}}}}
+PDF
+pdq() { jq -n -c --slurpfile a "$1" --slurpfile b "$2" --slurpfile s "${3:-$TMP/pdq-schema.json}" "${PDQ:-$PDJ}" 2> /dev/null | jq -r '.result + (.differs | map(" " + .) | join(""))'; }
+# Recorded with Terraform 1.17 and hashicorp/aws 6.74.0, offline: an S3 bucket gains a
+# null-default force_destroy. The bucket, an IAM role, a VPC and a security group with no
+# configured unknown plan the same and are equal; a security group whose vpc_id the
+# configuration sets to the new VPC's id, unknown at both revisions, is unknown.
+PDF="$SRC/tests/plan-diff-fixture"
+check "PDIFF_JQ: recorded aws_s3_bucket, aws_iam_role, aws_vpc and aws_security_group plans are equal" \
+  "$(for f in base head; do jq '.resource_changes |= map(select(.address != "module.this.aws_security_group.this"))' "$PDF/aws-$f.json" > "$TMP/pdf-aws-$f.json"; done
+     [ "$(pdq "$TMP/pdf-aws-base.json" "$TMP/pdf-aws-head.json" "$PDF/aws-schema.json")" = equal ]; echo $?)"
+check "PDIFF_JQ: each recorded aws type alone is equal" \
+  "$(for t in aws_s3_bucket aws_iam_role aws_vpc; do for f in base head; do jq --arg t "$t" '.resource_changes |= map(select(.type == $t))' "$PDF/aws-$f.json" > "$TMP/pdf-t-$f.json"; done
+       [ "$(pdq "$TMP/pdf-t-base.json" "$TMP/pdf-t-head.json" "$PDF/aws-schema.json")" = equal ] || exit 1; done; echo 0)"
+check "PDIFF_JQ: a recorded security group whose configuration sets an unknown vpc_id is unknown" \
+  "$([ "$(pdq "$PDF/aws-base.json" "$PDF/aws-head.json" "$PDF/aws-schema.json")" = unknown ]; echo $?)"
+check "PDIFF_JQ: a recorded dynamic block that joins an id to a changed literal is unknown" \
+  "$([ "$(pdq "$PDF/dynamic-base.json" "$PDF/dynamic-head.json" "$PDF/dynamic-schema.json")" = unknown ]; echo $?)"
+check "PDIFF_JQ: a recorded batch environment whose launch template version, at block depth 2, joins an id to a changed literal is unknown" \
+  "$([ "$(pdq "$PDF/depth2-base.json" "$PDF/depth2-head.json" "$PDF/depth2-schema.json")" = unknown ]; echo $?)"
+# Recorded the same way: an aws_instance ebs_block_device written as a static block and as a
+# dynamic block, the dynamic content setting kms_key_id from an id. A plan's configuration holds
+# the static block alone, so the count of planned instances decides it.
+check "PDIFF_JQ: a recorded block type written as a static and a dynamic block, the dynamic content joining an id to a changed literal, is unknown" \
+  "$([ "$(pdq "$PDF/static-dynamic-mix-base.json" "$PDF/static-dynamic-mix-head.json" "$PDF/static-dynamic-schema.json")" = unknown ]; echo $?)"
+check "PDIFF_JQ: a recorded block type written as a static and a dynamic block, the dynamic content reading another id, is unknown" \
+  "$([ "$(pdq "$PDF/static-dynamic-ref-base.json" "$PDF/static-dynamic-ref-head.json" "$PDF/static-dynamic-schema.json")" = unknown ]; echo $?)"
+check "PDIFF_JQ: the recorded round 1 case with its configuration is unknown" \
+  "$([ "$(pdq "$PDF/data-base.json" "$PDF/data-head.json" "$PDF/data-schema.json")" = unknown ]; echo $?)"
+check "PDIFF_JQ: a value the child joins to an id, unknown at both revisions, is unknown" \
+  "$([ "$(pdq "$TMP/pdf-base.json" "$TMP/pdf-head.json" "$TMP/pdf-schema.json")" = unknown ]; echo $?)"
+jq -n '{provider_schemas: {"registry.terraform.io/hashicorp/aws": {resource_schemas: {aws_x: {block: {
+  attributes: {arn: {computed: true}, name: {optional: true}, tags: {optional: true, computed: true},
+    blob: {optional: true, computed: true}, req: {required: true, computed: true}},
+  block_types: {rule: {nesting_mode: "list", block: {attributes: {id: {computed: true}, v: {optional: true}, w: {optional: true, computed: true}},
+      block_types: {sub: {nesting_mode: "list", block: {attributes: {x: {optional: true, computed: true}},
+        block_types: {deep: {nesting_mode: "list", block: {attributes: {y: {optional: true, computed: true}}}}}}},
+        one: {nesting_mode: "single", block: {attributes: {v: {optional: true}, w: {optional: true, computed: true}}}}}}},
+    st: {nesting_mode: "set", block: {attributes: {v: {optional: true}, w: {optional: true, computed: true}}}},
+    lc: {nesting_mode: "list", block: {attributes: {v: {optional: true}}}},
+    lc2: {nesting_mode: "list", block: {attributes: {w2: {optional: true, computed: true}}}},
+    bymap: {nesting_mode: "map", block: {attributes: {id: {computed: true}, v: {optional: true}, w: {optional: true, computed: true}}}}}}}},
+  data_source_schemas: {aws_x: {block: {attributes: {id: {optional: true, computed: true}}}}}}}}' > "$TMP/pdq-schema.json"
+jq -n -c '{resource_changes: [{address: "aws_x.this[0]", mode: "managed", type: "aws_x", name: "this", provider_name: "registry.terraform.io/hashicorp/aws",
+  change: {actions: ["create"], after: {name: "n", rule: [{v: "a"}]}, after_unknown: {arn: true, rule: [{id: true}]}, after_sensitive: {}, replace_paths: null}}],
+  output_changes: {o: {actions: ["create"], after: "v", after_unknown: false, after_sensitive: false}},
+  configuration: {root_module: {resources: [{address: "aws_x.this", mode: "managed", type: "aws_x", name: "this",
+    expressions: {name: {constant_value: "n"}, rule: [{v: {constant_value: "a"}}]}}]}}}' > "$TMP/pdq-a.json"
+pdcase() { # name, jq update of the head module plan, expected
+  jq -c "$2" "$TMP/pdq-a.json" > "$TMP/pdq-b.json"
+  check "PDIFF_JQ: $1" "$([ "$(pdq "$TMP/pdq-a.json" "$TMP/pdq-b.json")" = "$3" ]; echo $?)"
+}
+pdboth() { # name, jq update of both plans, expected
+  jq -c "$2" "$TMP/pdq-a.json" > "$TMP/pdq-ba.json"; jq -c "$2" "$TMP/pdq-a.json" > "$TMP/pdq-bb.json"
+  check "PDIFF_JQ: $1" "$([ "$(pdq "$TMP/pdq-ba.json" "$TMP/pdq-bb.json")" = "$3" ]; echo $?)"
+}
+pdcase "the same plan is equal, computed-only unknowns included" . equal
+pdcase "actions differ" '.resource_changes[0].change.actions = ["create", "delete"]' 'differs aws_x.this'
+pdcase "after differs" '.resource_changes[0].change.after.name = "m"' 'differs aws_x.this'
+pdcase "after_sensitive differs" '.resource_changes[0].change.after_sensitive = {name: true}' 'differs aws_x.this'
+pdcase "replace_paths differ" '.resource_changes[0].change.replace_paths = [["name"]]' 'differs aws_x.this'
+pdcase "an address only one side plans" '.resource_changes += [.resource_changes[0] | .address = "aws_x.extra"]' 'differs aws_x.extra'
+pdcase "a root output differs" '.output_changes.o.after = "w"' 'differs output.o'
+pdcase "a deferred change is unknown" '.deferred_changes = [{reason: "x"}]' unknown
+pdcase "a marker that is no object is unknown" '.resource_changes[0].change.after_unknown = true' unknown
+pdcase "a plan that errored is unknown" '.errored = true' unknown
+pdboth "a configurable attribute unknown at both is unknown" '.resource_changes[0].change.after_unknown.name = true' unknown
+pdboth "an optional computed attribute no configuration sets, unknown at both, is equal" '.resource_changes[0].change.after_unknown.tags = true' equal
+pdboth "an optional computed attribute the configuration sets, unknown at both, is unknown" \
+  '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].expressions.tags = {references: ["aws_y.z.id"]}' unknown
+pdboth "an optional computed attribute of a resource with no configuration is unknown" '.resource_changes[0].change.after_unknown.tags = true | del(.configuration)' unknown
+pdboth "a nested optional computed attribute its block does not set is equal" '.resource_changes[0].change.after_unknown.rule = [{w: true}]' equal
+pdboth "a nested optional computed attribute its block sets is unknown" \
+  '.resource_changes[0].change.after_unknown.rule = [{w: true}] | .configuration.root_module.resources[0].expressions.rule[0].w = {constant_value: "x"}' unknown
+pdboth "a whole nested block no configuration writes, unknown, is equal" '.resource_changes[0].change.after_unknown.lc = true' equal
+pdboth "a map block keyed like a computed attribute is read by its values" '.resource_changes[0].change.after_unknown.bymap = {id: {v: true}}' unknown
+# The rule reads the configuration of both plans, the base example's at each, and nothing else.
+pdcfg() { # name, jq update of the base plan, of the head plan, expected
+  jq -c "$2" "$TMP/pdq-a.json" > "$TMP/pdq-ba.json"; jq -c "$3" "$TMP/pdq-a.json" > "$TMP/pdq-bb.json"
+  check "PDIFF_JQ: $1" "$([ "$(pdq "$TMP/pdq-ba.json" "$TMP/pdq-bb.json")" = "$4" ]; echo $?)"
+}
+TU='.resource_changes[0].change.after_unknown.tags = true'
+TS='.configuration.root_module.resources[0].expressions.tags = {references: ["aws_y.z.id"]}'
+pdcfg "an attribute the base configuration alone sets is unknown" "$TU | $TS" "$TU" unknown
+pdcfg "an attribute the head configuration alone sets is unknown" "$TU" "$TU | $TS" unknown
+pdboth "an optional computed attribute unknown only inside, unset, is unknown" '.resource_changes[0].change.after_unknown.blob = [{d: true}]' unknown
+pdboth "a nested optional computed attribute of a block no configuration writes is unknown" '.resource_changes[0].change.after_unknown.lc2 = [{w2: true}]' unknown
+pdboth "a whole block of a resource with no configuration is unknown" '.resource_changes[0].change.after_unknown.lc = true | del(.configuration)' unknown
+pdboth "a nested optional computed attribute of a resource with no configuration is unknown" '.resource_changes[0].change.after_unknown.rule = [{w: true}] | del(.configuration)' unknown
+pdboth "a required computed attribute unknown at both is unknown" '.resource_changes[0].change.after_unknown.req = true' unknown
+pdboth "a configuration of another mode at the same address is not the resource" '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].mode = "data"' unknown
+pdboth "a data source read at apply is found by its data address" '.resource_changes[0] |= (.address = "data.aws_x.this" | .mode = "data" | .change.after_unknown = {id: true})
+  | .configuration.root_module.resources[0] |= (.address = "data.aws_x.this" | .mode = "data" | .expressions = {})' equal
+pdboth "a map block is read by the attributes its labels set" '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
+  | .configuration.root_module.resources[0].expressions.bymap = {a: {w: {constant_value: "x"}}}' unknown
+# Nested blocks are read at every depth: what a block inside a block sets is seen.
+pdboth "an optional computed attribute a block inside a block sets, unknown at both, is unknown" '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{x: {references: ["aws_y.z.id"]}}]}]' unknown
+pdboth "an optional computed attribute a block inside a block does not set, unknown at both, is equal" '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{}]}]' equal
+pdboth "a block written at depth 3, wholly unknown, is unknown" '.resource_changes[0].change.after_unknown.rule = [{sub: [{deep: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{deep: [{y: {constant_value: "q"}}]}]}]' unknown
+# A nested block type is read with its configuration only when the configuration writes as many
+# instances as are planned, counted over every instance its configuration describes, and it is no
+# set block written more than once.
+pdboth "a list block written once and planned twice, unknown in an optional computed attribute, is unknown" '.resource_changes[0].change.after_unknown.rule = [{w: true}, {w: true}]' unknown
+pdboth "a block inside a block that one instance writes and the other does not, planned in both, is unknown" '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}, {sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{}]}, {v: {constant_value: "b"}}]' unknown
+pdboth "a block inside a block every instance writes, not setting the unknown, is equal" '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}, {sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{sub: [{}]}, {sub: [{}]}]' equal
+pdboth "a block at depth 3 planned once more than written, the parents written alike, is unknown" '.resource_changes[0].change.after_unknown.rule = [{sub: [{deep: [{y: true}, {y: true}]}]}, {sub: [{deep: [{}]}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{sub: [{deep: [{}]}]}, {sub: [{deep: [{}]}]}]' unknown
+pdboth "a set block written twice, unknown in an optional computed attribute, is unknown" '.resource_changes[0].change.after_unknown.st = [{w: true}, {w: true}]
+  | .configuration.root_module.resources[0].expressions.st = [{v: {constant_value: "a"}}, {v: {constant_value: "b"}}]' unknown
+pdboth "a set block written once, not setting the unknown, is equal" '.resource_changes[0].change.after_unknown.st = [{w: true}]
+  | .configuration.root_module.resources[0].expressions.st = [{v: {constant_value: "a"}}]' equal
+pdboth "a single block the second instance sets the unknown in is unknown" '.resource_changes[0].change.after_unknown.rule = [{one: {w: true}}, {one: {w: true}}]
+  | .configuration.root_module.resources[0].expressions.rule = [{one: {v: {constant_value: "a"}}}, {one: {w: {references: ["aws_y.z.id"]}}}]' unknown
+pdboth "a single block every instance writes, not setting the unknown, is equal" '.resource_changes[0].change.after_unknown.rule = [{one: {w: true}}, {one: {w: true}}]
+  | .configuration.root_module.resources[0].expressions.rule = [{one: {v: {constant_value: "a"}}}, {one: {v: {constant_value: "b"}}}]' equal
+pdboth "an empty block list in the configuration is unknown" '.resource_changes[0].change.after_unknown.rule = [{w: true}]
+  | .configuration.root_module.resources[0].expressions.rule = []' unknown
+pdboth "a map block whose configuration is no object is unknown" '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
+  | .configuration.root_module.resources[0].expressions.bymap = "x"' unknown
+pdboth "a module key holding a bracket is removed whole" '.resource_changes[0].module_address = "module.m[\"x]y\"]" | .resource_changes[0].address = "module.m[\"x]y\"].aws_x.this[0]"
+  | .resource_changes[0].change.after_unknown.tags = true
+  | .configuration.root_module = {module_calls: {m: {module: {resources: .configuration.root_module.resources}}}}' equal
+pdboth "a configurable attribute of a nested block unknown at both is unknown" '.resource_changes[0].change.after_unknown.rule = [{v: true}]' unknown
+pdboth "a whole nested block the configuration writes, unknown, is unknown" '.resource_changes[0].change.after_unknown.rule = true' unknown
+pdboth "an attribute the schema does not name, unknown, is unknown" '.resource_changes[0].change.after_unknown.other = true' unknown
+pdcase "a type the schema lacks is unknown" '.resource_changes[0].type = "aws_y"' unknown
+jq -c '.resource_changes[0].change.after_unknown.name = true' "$TMP/pdq-a.json" > "$TMP/pdq-u.json"
+check "PDIFF_JQ: an unknown on one side only is unknown" "$([ "$(pdq "$TMP/pdq-a.json" "$TMP/pdq-u.json")" = unknown ]; echo $?)"
+: > "$TMP/pdq-none.json"
+check "PDIFF_JQ: no schema is unknown" "$([ "$(pdq "$TMP/pdq-a.json" "$TMP/pdq-a.json" "$TMP/pdq-none.json")" = unknown ]; echo $?)"
+jq -c '.resource_changes += [range(60) as $i | .resource_changes[0] | .address = "aws_x.n\($i)" | .change.after.name = "z"]
+  | .resource_changes += [.resource_changes[0] | .address = "aws_x.bad name"]' "$TMP/pdq-a.json" > "$TMP/pdq-b.json"
+check "PDIFF_JQ: at most 50 names, each in the name charset" \
+  "$(o="$(pdq "$TMP/pdq-a.json" "$TMP/pdq-b.json")"; [ "$(printf '%s\n' "$o" | wc -w | tr -d ' ')" = 51 ] && printf '%s\n' "$o" | grep -q '^differs ' && ! printf '%s\n' "$o" | grep -q 'bad'; echo $?)"
+pdjmut() { # name, perl substitution, case jq update, schema file or "", the result the real comparison gives
+  local m; m="$(printf '%s\n' "$PDJ" | perl -0pe "$2")"
+  jq -c "$3" "$TMP/pdq-a.json" > "$TMP/pdq-ba.json"; jq -c "$3" "$TMP/pdq-a.json" > "$TMP/pdq-b.json"
+  # an unknown case changes both plans, so the mutation, not the one-sided difference, decides it
+  if [ "$5" = unknown ]; then set -- "$1" "$2" "$3" "$4" "$5" "$TMP/pdq-ba.json"; else set -- "$1" "$2" "$3" "$4" "$5" "$TMP/pdq-a.json"; fi
+  check "PDIFF_JQ: the mutation $1 is caught" "$([ "$m" != "$PDJ" ] && [ "$(PDQ="$m" pdq "$6" "$TMP/pdq-b.json" ${4:+"$4"})" != "$5" ]; echo $?)"
+}
+pdjmut "without actions" 's/\{actions, after,/{after,/' '.resource_changes[0].change.actions = ["delete", "create"]' "" 'differs aws_x.this'
+pdjmut "without after_sensitive" 's/, after_sensitive, replace_paths\}/, replace_paths}/' '.resource_changes[0].change.after_sensitive = {name: true}' "" 'differs aws_x.this'
+pdjmut "without replace_paths" 's/, replace_paths\}/}/' '.resource_changes[0].change.replace_paths = [["name"]]' "" 'differs aws_x.this'
+pdjmut "without the outputs" 's/\| "output\.\\\(\.\)"\]/| empty]/' '.output_changes.o.after = "w"' "" 'differs output.o'
+pdjmut "without the deferred check" 's/\n      or \(\(\(\.deferred_changes \/\/ \[\]\) \| length\) > 0\)//' '.deferred_changes = [{reason: "x"}]' "" unknown
+pdjmut "without the marker check" 's/ or \(\.change\.after_sensitive \| marker \| not\)//' '.resource_changes[0].change.after_sensitive = true' "" unknown
+pdjmut "that takes an optional attribute as computed-only" 's/\(\.optional \| not\)/true/' '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].expressions.tags = {references: ["aws_y.z.id"]}' "" unknown
+pdjmut "that ignores what the configuration sets" 's/\(\$ex != null and \(\$set \| not\) and \$v == true\)\)\)/true))/' \
+  '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].expressions.tags = {references: ["aws_y.z.id"]}' "" unknown
+pdjmut "that reads a map block by its keys" 's/\n          elif \$m == "map" then [^\n]*//' '.resource_changes[0].change.after_unknown.bymap = {id: {v: true}}' "" unknown
+pdjmut "that takes an attribute the schema does not name" 's/      else \(\$v \| has_true \| not\) end\)/      else true end)/' '.resource_changes[0].change.after_unknown.other = true' "" unknown
+pdjmut "that takes a nested configurable attribute" 's/elif \(\$v \| type\) == "array" then all\(\$v\[\]; computed_only\(\$nb; \$nex; \$nall\)\)/elif (\$v | type) == "array" then true/' '.resource_changes[0].change.after_unknown.rule = [{v: true}]' "" unknown
+pdjmut "that takes a whole block the configuration writes" 's/elif \$v == true then \$ex != null and \(\$set \| not\)/elif \$v == true then true/' '.resource_changes[0].change.after_unknown.rule = true' "" unknown
+pdcfgmut() { # name, perl substitution, base update, head update: the real comparison says unknown
+  local m; m="$(printf '%s\n' "$PDJ" | perl -0pe "$2")"
+  jq -c "$3" "$TMP/pdq-a.json" > "$TMP/pdq-ba.json"; jq -c "$4" "$TMP/pdq-a.json" > "$TMP/pdq-bb.json"
+  check "PDIFF_JQ: the mutation $1 is caught" "$([ "$m" != "$PDJ" ] && [ "$(PDQ="$m" pdq "$TMP/pdq-ba.json" "$TMP/pdq-bb.json")" != unknown ]; echo $?)"
+}
+pdcfgmut "that reads the head configuration only" 's/any\(cfg_of\(\$A; \$c\), cfg_of\(\$B; \$c\);/any(cfg_of(\$B; \$c);/' "$TU | $TS" "$TU"
+pdcfgmut "that reads the base configuration only" 's/any\(cfg_of\(\$A; \$c\), cfg_of\(\$B; \$c\);/any(cfg_of(\$A; \$c);/' "$TU" "$TU | $TS"
+pdjmut "that takes a whole block with no configuration found" 's/elif \$v == true then \$ex != null and \(\$set \| not\)/elif \$v == true then (\$set | not)/' '.resource_changes[0].change.after_unknown.lc = true | del(.configuration)' "" unknown
+pdjmut "that reads a resource with no configuration as nothing set" 's/if \$ex == null or \(\$set \| not\) then null/if \$ex == null then {} elif (\$set | not) then null/' '.resource_changes[0].change.after_unknown.rule = [{w: true}] | del(.configuration)' "" unknown
+pdjmut "that reads a block no configuration writes as nothing set" 's/if \$ex == null or \(\$set \| not\) then null/if \$ex == null then null elif (\$set | not) then {}/' '.resource_changes[0].change.after_unknown.lc2 = [{w2: true}]' "" unknown
+pdjmut "that takes an unset attribute unknown only inside" 's/ and \$v == true\)\)\)/)))/' '.resource_changes[0].change.after_unknown.blob = [{d: true}]' "" unknown
+pdjmut "that takes a required computed attribute" 's/ and \(\.required \| not\)//' '.resource_changes[0].change.after_unknown.req = true' "" unknown
+pdjmut "that finds a resource of another mode" 's/ and \.mode == \$c\.mode\)/)/' '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].mode = "data"' "" unknown
+pdjmut "that looks a data source up without its data prefix" 's/\(if \$c\.mode == "data" then "data\." else "" end\) \+ //' '.resource_changes[0] |= (.address = "data.aws_x.this" | .mode = "data" | .change.after_unknown = {id: true})
+  | .configuration.root_module.resources[0] |= (.address = "data.aws_x.this" | .mode = "data" | .expressions = {})' "" equal
+pdjmut "that reads a map block by its labels" 's/\(if \$m == "map" then \[\.\[\]\] else \[\.\] end\)/[.]/' '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
+  | .configuration.root_module.resources[0].expressions.bymap = {a: {w: {constant_value: "x"}}}' "" unknown
+pdjmut "that cuts a module key at a bracket" 's/\(\$c\.module_address \/\/ "" \| nokey/(\$c.module_address \/\/ "" | gsub("\\\\[[^\\\\]]*\\\\]"; "")/' '.resource_changes[0].module_address = "module.m[\"x]y\"]" | .resource_changes[0].address = "module.m[\"x]y\"].aws_x.this[0]"
+  | .resource_changes[0].change.after_unknown.tags = true
+  | .configuration.root_module = {module_calls: {m: {module: {resources: .configuration.root_module.resources}}}}' "" equal
+pdjmut "that reads a map block of another shape as one with nothing set" 's/ else \[\] end;/ else [{}] end;/' '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
+  | .configuration.root_module.resources[0].expressions.bymap = "x"' "" unknown
+pdjmut "that reads a block of another shape as one with nothing set" 's/ else \[\] end;/ else [{}] end;/' '.resource_changes[0].change.after_unknown.rule = [{w: true}]
+  | .configuration.root_module.resources[0].expressions.rule = "x"' "" unknown
+pdjmut "that keeps the first instance of a key" 's/\.\[\$e\.key\] = if has\(\$e\.key\) then [^\n]* else \$e\.value end/.[\$e.key] = (.[\$e.key] \/\/ \$e.value)/' '.resource_changes[0].change.after_unknown.rule = [{one: {w: true}}, {one: {w: true}}]
+  | .configuration.root_module.resources[0].expressions.rule = [{one: {v: {constant_value: "a"}}}, {one: {v: {constant_value: "b"}}}]' "" equal
+pdjmut "that joins lists without their instances" 's/ \| if type == "array" then \.\[\] else \. end\] else \$e\.value end/] else \$e.value end/' '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}, {sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{sub: [{}]}, {sub: [{}]}]' "" equal
+pdjmut "without the count" 's/if length != \(\$nall \| length\) or /if /' '.resource_changes[0].change.after_unknown.rule = [{w: true}, {w: true}]' "" unknown
+pdjmut "without the set rule" 's/ or \(\$m == "set" and length > 1\)//' '.resource_changes[0].change.after_unknown.st = [{w: true}, {w: true}]
+  | .configuration.root_module.resources[0].expressions.st = [{v: {constant_value: "a"}}, {v: {constant_value: "b"}}]' "" unknown
+pdjmut "that counts the instances of one parent only" 's/elif \(\$v \| type\) == "array" then all\(\$v\[\]; computed_only\(\$nb; \$nex; \$nall\)\)/elif (\$v | type) == "array" then all(\$v[]; computed_only(\$nb; \$nex; \$v))/' '.resource_changes[0].change.after_unknown.rule = [{sub: [{deep: [{y: true}, {y: true}]}]}, {sub: [{deep: [{}]}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{sub: [{deep: [{}]}]}, {sub: [{deep: [{}]}]}]' "" unknown
+check "PDIFF_JQ: the mutation without the count is caught on the recorded static and dynamic block" \
+  "$(m="$(printf '%s\n' "$PDJ" | perl -0pe 's/if length != \(\$nall \| length\) or /if /')"
+     [ "$m" != "$PDJ" ] && [ "$(PDQ="$m" pdq "$PDF/static-dynamic-mix-base.json" "$PDF/static-dynamic-mix-head.json" "$PDF/static-dynamic-schema.json")" = equal ]; echo $?)"
+pdjmut "that takes a type the schema lacks" 's/\(\$blk == null\) or //' '.resource_changes[0].type = "aws_y" | .resource_changes[0].change.after_unknown = {}' "" unknown
+
+# The runner phases of the plan diff, from a copy without the container check: diff-init adds the
+# base worktree and the mixed tree, diff-plan saves both plans, diff compares them in a phase of
+# its own and prints one line and, for equal, the addresses.
+pdphases() { # script copy, example -> the diff phase's output
+  local R; R="$(mktemp -d "$TMP/pr-review.XXXXXX")"; git clone -q "$pdu" "$R/clone"
+  rp() { PATH="$TMP/pdbin:/usr/bin:/bin" PLAN_PASS_AWS_ACCESS_KEY_ID=ASIAFIXTUREFIXTURE01 PLAN_PASS_AWS_SECRET_ACCESS_KEY=s3cr3t-value-xyz \
+    PLAN_PASS_AWS_SESSION_TOKEN=tok-fixture bash "$1" plan "$R" demo --role-arn "$ROLE" --mode runner "${@:2}" 2>&1; }
+  PATH="$TMP/pdbin:/usr/bin:/bin" bash "$PP" g0 "$R" > /dev/null
+  rp "$1" --phase init "$2" > /dev/null
+  rp "$1" --phase plan --index 1 --base "$PDBASE" "$2" > /dev/null
+  rp "$1" --phase diff-init --index 1 --base "$PDBASE" "$2" > /dev/null
+  rp "$1" --phase diff-plan --index 1 "$2" > /dev/null
+  rp "$1" --phase diff --index 1 "$2"
+}
+pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"y"}'; : > "$TMP/pd.log"
+check "runner phases: plan diff of an edited example equal in the mixed tree, with its addresses and merge base calls" \
+  "$([ "$(pdphases "$TMP/pp-runner.sh" examples/edited)" = "$(printf 'plan-diff: equal\nplan-diff-json: {"addresses":["module.b.aws_s3_bucket.this"],"module_calls":{"b":"../../"}}')" ]; echo $?)"
+check "runner phases: the diff phase reads with no credentials" "$(grep -q 'show with credentials' "$TMP/pd.log" && echo 1 || echo 0)"
+check "runner phases: plan diff of an unchanged example that moved differs" \
+  "$([ "$(pdphases "$TMP/pp-runner.sh" examples/same)" = 'plan-diff: differs module.b.aws_s3_bucket.this' ]; echo $?)"
+check "runner phases: plan diff of a new example is absent at the base" \
+  "$([ "$(pdphases "$TMP/pp-runner.sh" examples/fresh)" = 'plan-diff: not-run absent-at-base' ]; echo $?)"
+# A diff-init that left no decision is no evidence, and a merge base that is not a full SHA is
+# never handed to git once the base worktree exists.
+pdmark() { # script copy, marker to remove -> the diff phase's output
+  local R; R="$(mktemp -d "$TMP/pr-review.XXXXXX")"; git clone -q "$pdu" "$R/clone"
+  rp() { PATH="$TMP/pdbin:/usr/bin:/bin" PLAN_PASS_AWS_ACCESS_KEY_ID=ASIAFIXTUREFIXTURE01 PLAN_PASS_AWS_SECRET_ACCESS_KEY=s3cr3t-value-xyz \
+    PLAN_PASS_AWS_SESSION_TOKEN=tok-fixture bash "$1" plan "$R" demo --role-arn "$ROLE" --mode runner "${@:2}" 2>&1; }
+  PATH="$TMP/pdbin:/usr/bin:/bin" bash "$PP" g0 "$R" > /dev/null
+  rp "$1" --phase init examples/same examples/edited > /dev/null
+  rp "$1" --phase plan --index 1 --base "$PDBASE" examples/same > /dev/null
+  rp "$1" --phase diff-init --index 1 --base "$PDBASE" examples/same > /dev/null
+  rp "$1" --phase diff-init --index 2 --base HEAD examples/edited > /dev/null
+  echo "badsha $([ -f "$R/plan/state/e2-diff.nobase" ] && echo nobase)"
+  rm -f "$R/plan/state/$2"
+  rp "$1" --phase diff-plan --index 1 examples/same > /dev/null
+  rp "$1" --phase diff --index 1 examples/same
+}
+pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"x"}'
+check "runner phases: a merge base that is not a full SHA is no base, and a missing decision is not-run" \
+  "$([ "$(pdmark "$TMP/pp-runner.sh" e1-diff.unchanged)" = "$(printf 'badsha nobase\nplan-diff: not-run head-module-plan')" ]; echo $?)"
+o="$(pdmark "$TMP/pp-runner.sh" none)"
+check "runner phases: with its decision the same example is equal" "$(printf '%s\n' "$o" | grep -qx 'plan-diff: equal'; echo $?)"
+# shown only when the case fails, so a failure under load says what the diff phase printed
+printf '%s\n' "$o" | grep -qx 'plan-diff: equal' || printf 'diff phase printed:\n%s\n' "$o" | sed 's/^/  | /'
+nocont "$PP" | perl -0pe 's/  else echo "plan-diff: not-run head-module-plan"; exit 0; fi/  else hk=\$key hd=\$HROOT\/\$rel_ex; fi/' > "$TMP/pp-runner-m.sh"
+check "runner phases: the mutation that reads a missing decision as unchanged is caught" \
+  "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && ! pdmark "$TMP/pp-runner-m.sh" e1-diff.unchanged | grep -qx 'plan-diff: not-run head-module-plan'; echo $?)"
+nocont "$PP" | perl -0pe 's/  \{ printf .%s\\n. "\$BASESHA" \| grep -Eqx .\[0-9a-f\]\{40\}. && base_ready; \}/  base_ready/' > "$TMP/pp-runner-m.sh"
+check "runner phases: the mutation without the SHA check is caught" \
+  "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && ! pdmark "$TMP/pp-runner-m.sh" none | head -n 1 | grep -qx 'badsha nobase'; echo $?)"
+nocont "$PP" | perl -0pe 's/  pd_show "\$key-base" \|\| \{/  pd_show "\$hk" || {/' > "$TMP/pp-runner-m.sh"
+pdset '{"bucket":"x"}' '{"bucket":"y"}' '{"bucket":"y"}'
+check "runner phases: the mutation that compares the head module plan with itself is caught" \
+  "$( ! cmp -s "$TMP/pp-runner.sh" "$TMP/pp-runner-m.sh" && [ "$(pdphases "$TMP/pp-runner.sh" examples/edited)" = 'plan-diff: differs module.b.aws_s3_bucket.this' ] \
+     && [ "$(pdphases "$TMP/pp-runner-m.sh" examples/edited | head -n 1)" != 'plan-diff: differs module.b.aws_s3_bucket.this' ]; echo $?)"
+
 # Negative self-check of the relaxations: each weakened copy of the script must let its case
 # through, and the real script must refuse it.
 mkdir -p "$TMP/mut"
@@ -1825,6 +2196,89 @@ check "runner mutation denial-not-deferred is caught" "$(denwire "$DW/m2.sh" | g
 perl -ne "print unless /^      grep -E '\^base-denied: '/" "$RP" > "$DW/m3.sh"
 check "runner mutation base-denied-dropped is caught" "$(denwire "$DW/m3.sh" > /dev/null; grep -q '^base-denied: ' "$DW/base.1" && echo 1 || echo 0)"
 
+# The plan diff on the runner's host (plan-pass.md, Plan diff), taken from run-pass.sh with the
+# containers stubbed: which examples get a plan diff (a planned head with its addresses that calls
+# a plan diff directory, never one under its own directory), a plan-diff line a plan container
+# printed dropped, the comparison container's line kept only in its grammar, an equal one's
+# addresses and calls through clean_addresses, the budget, and the line in its own block.
+pdhost() { # script -> the assembled record; the selected examples in pdhost/diffs
+  local d="$SW/pdhost"; rm -rf "$d"; mkdir -p "$d/rec"
+  { cat <<EOF
+set -uo pipefail
+TMPRUN="$d" W="$d" record="$d/rec"; RUN=/run volume=v saved=s runner_image=i pname=p base=0000000000000000000000000000000000000000 budget_min=1
+common=(--label x) planned=0 exc=0
+diffdirs=(. examples/inside/helper)
+EOF
+    cat <<'EOF'
+check_record_size() { :; }
+left() { if [ -e "$W/left0" ]; then echo 0; else echo 100; fi; }
+in_runner() { # output file, docker arguments; the last is the example
+  local outf=$1 ex="${!#}"
+  case "$ex" in
+    */eq) printf 'plan-diff: equal\nplan-diff-json: {"addresses":["module.b.aws_x.y","bad name"],"module_calls":{"b":"../../","r":"git::x"}}\n' >> "$outf" ;;
+    */differs) echo 'plan-diff: differs module.b.aws_x.y' >> "$outf" ;;
+    */grammar) echo 'plan-diff: same as before' >> "$outf" ;;
+    */nojson) echo 'plan-diff: equal' >> "$outf" ;;
+  esac
+}
+EOF
+    sed -n "/^clean_addresses='/,/ else {} end)'\$/p" "$1"
+    echo 'set -- examples/eq examples/differs examples/grammar examples/nojson examples/nocall examples/inside examples/unplanned examples/noaddr; examples=("$@")'
+    sed -n '/^reaches_jq=/,/^# Merge base re-run, only for the code-errors, and the plan diffs/p' "$1" | sed '$d'
+    echo 'echo "diffs ${diffs[*]:-}" > "$W/diffs"'
+    sed -n '/^pdiff_re=/,/^done$/p' "$1"
+    sed -n '/^assemble_record() {/,/^}$/p' "$1"
+    echo 'assemble_record "$@"'; } > "$d/run.sh"
+  local i=0 e
+  for e in eq differs grammar nojson nocall inside unplanned noaddr; do
+    i=$((i + 1)); printf 'example: examples/%s\nplan: planned\n' "$e" > "$d/block.$i"
+    case "$e" in
+      nocall) echo '{"addresses":["aws_x.y"],"module_calls":{}}' > "$d/rec/addresses-$i.json" ;;
+      inside) echo '{"addresses":["aws_x.y"],"module_calls":{"h":"./helper"}}' > "$d/rec/addresses-$i.json" ;;
+      unplanned) printf 'example: examples/%s\nplan: code-error\n' "$e" > "$d/block.$i"; echo '{"addresses":[],"module_calls":{"b":"../../"}}' > "$d/rec/addresses-$i.json" ;;
+      noaddr) ;;
+      *) echo '{"addresses":["module.b.aws_x.y"],"module_calls":{"b":"../../"}}' > "$d/rec/addresses-$i.json" ;;
+    esac
+  done
+  [ -z "${PDHOST_LEFT0:-}" ] || touch "$d/left0"
+  bash "$d/run.sh" 2>&1
+}
+# untrusted() from a script, over a file
+pduntrusted() { # script, file
+  sed -n '/^host_only=/,/^untrusted() /p' "$1" > "$SW/untrusted.sh"
+  printf 'untrusted "%s"\n' "$2" >> "$SW/untrusted.sh"
+  bash "$SW/untrusted.sh"
+}
+o="$(pdhost "$RP")"
+check "plan diff host: a planned head with its addresses that calls a plan diff directory, and no other, gets a plan diff" \
+  "$(grep -qx 'diffs 1 2 3 4' "$SW/pdhost/diffs"; echo $?)"
+check "plan diff host: each line joins its own block, in its grammar or as not-run show" \
+  "$([ "$(printf '%s\n' "$o" | grep -E '^(host example|plan-diff)' | tr '\n' '|')" = 'host example 1: examples/eq|plan-diff: equal|host example 2: examples/differs|plan-diff: differs module.b.aws_x.y|host example 3: examples/grammar|plan-diff: not-run show|host example 4: examples/nojson|plan-diff: not-run show|host example 5: examples/nocall|host example 6: examples/inside|host example 7: examples/unplanned|host example 8: examples/noaddr|' ]; echo $?)"
+check "plan diff host: an equal one's addresses and local calls through clean_addresses" \
+  "$(jq -e '. == {addresses: ["module.b.aws_x.y"], module_calls: {b: "../../"}}' "$SW/pdhost/rec/plan-diff-1.json" > /dev/null 2>&1; echo $?)"
+o="$(PDHOST_LEFT0=1 pdhost "$RP")"
+check "plan diff host: no budget left is not-run budget" "$([ "$(printf '%s\n' "$o" | grep -c '^plan-diff: not-run budget$')" = 4 ]; echo $?)"
+printf 'plan: planned\nplan-diff: equal\nscope: .\n' > "$SW/forged.txt"
+check "plan diff host: a plan-diff line a plan container printed is dropped" \
+  "$(pduntrusted "$RP" "$SW/forged.txt" | grep -q '^plan-diff' && echo 1 || echo 0)"
+pdhmut() { # name, perl substitution, case function over the mutated output in $o
+  perl -0pe "$2" "$RP" > "$SW/pdh-mut.sh"
+  local o; o="$(pdhost "$SW/pdh-mut.sh")"
+  check "plan diff host: the mutation $1 is caught" "$( ! cmp -s "$RP" "$SW/pdh-mut.sh" && "$3" "$o"; echo $?)"
+}
+pdh_sel() { ! grep -qx 'diffs 1 2 3 4' "$SW/pdhost/diffs"; }
+pdh_grammar() { printf '%s\n' "$1" | grep -q 'same as before'; }
+pdh_clean() { ! jq -e '. == {addresses: ["module.b.aws_x.y"], module_calls: {b: "../../"}}' "$SW/pdhost/rec/plan-diff-1.json" > /dev/null 2>&1; }
+pdh_nojson() { [ "$(printf '%s\n' "$1" | grep -c '^plan-diff: equal$')" = 2 ]; }
+pdhmut "that takes an example under its own directory" 's/\n    \| select\(\. != \$d and \(startswith\(\$d \+ "\/"\) \| not\)\)//' pdh_sel
+pdhmut "that takes a head that did not plan" 's/\[ -f "\$record\/addresses-\$n\.json" \] && grep -Eq .\^plan: planned. "\$TMPRUN\/block\.\$n"/[ -f "\$record\/addresses-\$n.json" ]/' pdh_sel
+pdhmut "without the grammar" 's/\[\[ "\$line" =~ \$pdiff_re \]\] \|\| line=.plan-diff: not-run show./:/' pdh_grammar
+pdhmut "without clean_addresses" 's/jq -c "\$clean_addresses". \| \{addresses, module_calls\}. \\/jq -c "." \\/' pdh_clean
+pdhmut "that keeps an equal line with no addresses" 's/else line=.plan-diff: not-run show.; fi/fi/' pdh_nojson
+perl -0pe 's/\|plan-diff: \|/|/' "$RP" > "$SW/pdh-mut.sh"
+check "plan diff host: the mutation that lets a plan container print the line is caught" \
+  "$( ! cmp -s "$RP" "$SW/pdh-mut.sh" && pduntrusted "$SW/pdh-mut.sh" "$SW/forged.txt" | grep -q '^plan-diff'; echo $?)"
+
 # hosted-record.sh: a finished run-pass.sh record reduced to plan-hosted.json, classes and
 # counts only, on fixture record directories.
 HR="${PP%/*}/plan-runner/hosted-record.sh"
@@ -1906,7 +2360,7 @@ for n in 1 2; do
 done
 check "hosted-record: addresses over the argument size limit are read whole" \
   "$([ "$(hr "$big")" = 0 ] && [ "$(jq '.examples[0].addresses | length' "$TMP/hr.json")" = 1000 ]; echo $?)"
-perl -0pe 's/--slurpfile addr <\(jq -s \x27add \/\/ \{\}\x27 "\$addr"\) \\\n  \x27\(\$addr \| if length == 1 then \.\[0\] else error\("not one JSON value"\) end\) as \$addr \| \x27"\$REDUCE"/--argjson addr "\$(jq -s \x27add \/\/ {}\x27 "\$addr")" "\$REDUCE"/' "$HR" > "$TMP/hr-mut2.sh"
+perl -0pe 's/--slurpfile addr <\(jq -s \x27add \/\/ \{\}\x27 "\$addr"\)/--argjson addr "\$(jq -s \x27add \/\/ {}\x27 "\$addr")"/; s/\x27\(\$addr \| if length == 1 then \.\[0\] else error\("not one JSON value"\) end\) as \$addr\n   \| /\x27/' "$HR" > "$TMP/hr-mut2.sh"
 check "mutation hosted-record-argv changes the script" "$(cmp -s "$HR" "$TMP/hr-mut2.sh"; test $? -eq 1; echo $?)"
 check "mutation hosted-record-argv is caught" \
   "$(rm -f "$TMP/hr.json"; bash "$TMP/hr-mut2.sh" --record "$big" --head "$HH" --merge-base "$HM" --out "$TMP/hr.json" 2> /dev/null; [ $? != 0 ]; echo $?)"
@@ -1960,6 +2414,44 @@ d="$TMP/hr-many"; mkdir -p "$d"
   echo 'plan summary: 15000 examples, 0 planned, 0 exceptions, 15000 other'; } > "$d/plan-pass.txt"
 : > "$d/plan-refused-hosts.txt"
 hrefused "an output over the size cap" "$d" "the output is over the size cap"
+
+# The plan diff in the hosted record (plan-pass.md, Plan diff): a line in its grammar becomes the
+# example's plan_diff, with an equal one's addresses; no differing name crosses; a line outside
+# the grammar or two in a block refuse the record. host-pass.sh takes the result and refuses it
+# outside its shape.
+d="$(hrec pd 'host example 1: examples/a' 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.' 'plan-diff: equal' \
+  'host example 2: examples/b' 'plan: planned-no-changes' 'plan-diff: differs module.b.aws_x.y output.secret_name' \
+  'host example 3: examples/c' 'plan: planned-no-changes' 'plan-diff: not-run absent-at-base' \
+  'host example 4: examples/d' 'plan: budget')"
+echo '{"addresses":["module.b.aws_x.y","bad address"],"module_calls":{"b":"../../","reg":"terraform-aws-modules/x/aws"}}' > "$d/plan-diff-1.json"
+echo '{"addresses":["module.b.aws_x.y"]}' > "$d/addresses-1.json"
+check "hosted-record: plan diffs are kept with an equal one's addresses, and no name of a difference" \
+  "$([ "$(hr "$d")" = 0 ] && hq '.examples[0].plan_diff == {result: "equal", reason: null, addresses: ["module.b.aws_x.y"], module_calls: {b: "../../"}}
+     and .examples[1].plan_diff == {result: "differs", reason: null, addresses: [], module_calls: {}}
+     and .examples[2].plan_diff == {result: "not-run", reason: "absent-at-base", addresses: [], module_calls: {}}
+     and (.examples[0] | has("module_calls") | not)
+     and (.examples[3] | has("plan_diff") | not)' | grep -qx 0 && ! grep -q secret_name "$TMP/hr.json"; echo $?)"
+cp "$TMP/hr.json" "$TMP/hp-pd.json"
+check "host-pass: a hosted record with plan diffs is accepted" "$([ "$(hp "$TMP/hp-pd.json")" = ok ] && echo 0 || echo 1)"
+for u in '.examples[1].plan_diff.result = "same"' '.examples[2].plan_diff.reason = "because"' '.examples[1].plan_diff.reason = "show"' \
+  '.examples[1].plan_diff.addresses = ["module.b.aws_x.y"]' '.examples[0].plan_diff.addresses += ["a b"]' '.examples[0].plan_diff.extra = 1' \
+  '.examples[3].plan_diff = {result: "equal", reason: null, addresses: [], module_calls: {}}' '.examples[1].plan_diff.module_calls = {b: "../../"}' \
+  '.examples[0].plan_diff.module_calls = {b: "git::x"}' 'del(.examples[0].plan_diff.module_calls)'; do
+  jq "$u" "$TMP/hp-pd.json" > "$TMP/hp-pd-bad.json"
+  check "host-pass: a plan diff outside its shape is refused ($u)" "$([ "$(hp "$TMP/hp-pd-bad.json")" = "plan record content" ] && echo 0 || echo 1)"
+done
+hrefused "a plan-diff line outside the grammar" "$(hrec pdbad 'host example 1: examples/a' 'plan: planned-no-changes' 'plan-diff: same as before')" "a plan-diff line outside the grammar"
+hrefused "a not-run plan diff with a free reason" "$(hrec pdwhy 'host example 1: examples/a' 'plan: planned-no-changes' 'plan-diff: not-run account 123456789012')" "a plan-diff line outside the grammar"
+hrefused "two plan-diff lines in a block" "$(hrec pdtwo 'host example 1: examples/a' 'plan: planned-no-changes' 'plan-diff: differs' 'plan-diff: equal')" "two plan-diff lines in a block"
+hrefused "an equal plan diff of an example that did not plan" "$(hrec pdnp 'host example 1: examples/a' 'plan: code-error' 'plan-diff: equal')" "a plan diff of an example that did not plan"
+HPD="$(printf '%s\n' "$HPJ" | perl -pe 's/\n?  and \(\.result != "equal" or \(\$head\.class \| IN\("planned", "planned-no-changes"\)\)\);/;/' )"
+check "mutation host-pass-plan-diff-head changes the rule" "$([ "$HPD" != "$HPJ" ]; echo $?)"
+jq '.examples[3].plan_diff = {result: "equal", reason: null, addresses: [], module_calls: {}}' "$TMP/hp-pd.json" > "$TMP/hp-pd-bad.json"
+check "mutation host-pass-plan-diff-head is caught" \
+  "$([ "$(jq -n -r --arg head "$HH" --slurpfile p "$TMP/hp-pd-bad.json" --slurpfile h "$TMP/hp-host.json" --slurpfile f "$TMP/hp-files.json" "$HPD")" = ok ]; echo $?)"
+perl -pe 's/error\("refused: a plan-diff line outside the grammar"\)/{result: "equal", reason: null}/' "$HR" > "$TMP/hr-mut.sh"
+rm -f "$TMP/hr.json"; bash "$TMP/hr-mut.sh" --record "$TMP/hr-pdbad" --head "$HH" --merge-base "$HM" --out "$TMP/hr.json" 2> /dev/null
+check "mutation hosted-record-plan-diff-grammar is caught" "$( ! cmp -s "$HR" "$TMP/hr-mut.sh" && [ -e "$TMP/hr.json" ]; echo $?)"
 
 # host-records.jq's caps on the untrusted block, as github-io.md's Caps states them: the body
 # item 8000 bytes, the title and a thread comment 4000, 16000 in total, in block order.

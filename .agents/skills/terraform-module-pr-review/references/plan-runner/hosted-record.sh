@@ -11,7 +11,9 @@
 # of its plan: line and, for planned, the three Plan: counts, and the class of its base: line,
 # or null when the block has none, and the planned addresses run-pass.sh wrote for the block as
 # addresses-<n>.json: config addresses of resources and data sources and attribute names,
-# each checked against its pattern again. Of the refused hosts it keeps the count. No kept line, no free text and no host name
+# each checked against its pattern again. A block's plan-diff line, in its grammar, becomes the
+# example's plan_diff, with an equal one's addresses from plan-diff-<n>.json; no differing name
+# crosses. Of the refused hosts it keeps the count. No kept line, no free text and no host name
 # enters the output. A class outside the fixed list, a path outside
 # the safe pattern, a duplicate path, a block with no plan: line, or a record that did not end
 # with the runner's summary line is refused: nothing is written, a fixed reason goes to
@@ -45,11 +47,12 @@ for f in plan-pass.txt plan-refused-hosts.txt; do
   [ "$(wc -c < "$record/$f")" -le "$IN_CAP" ] || refuse "$f is over the size cap"
 done
 refused="$(grep -c . "$record/plan-refused-hosts.txt" || true)"
-addr="$(mktemp)"; trap 'rm -f "$addr"' EXIT
-for af in "$record"/addresses-*.json; do
-  an="${af##*/addresses-}"; an="${an%.json}"
+addr="$(mktemp)"; pdaddr="$(mktemp)"; trap 'rm -f "$addr" "$pdaddr"' EXIT
+for af in "$record"/addresses-*.json "$record"/plan-diff-*.json; do
+  an="${af##*/addresses-}"; an="${an##*/plan-diff-}"; an="${an%.json}"
   [[ "$an" =~ ^[1-9][0-9]{0,5}$ ]] && [ -f "$af" ] && [ ! -L "$af" ] && [ "$(wc -c < "$af")" -le 1048576 ] || continue
-  jq -c --arg n "$an" '{($n): .}' "$af" >> "$addr" 2> /dev/null || true
+  case "${af##*/}" in plan-diff-*) to="$pdaddr" ;; *) to="$addr" ;; esac
+  jq -c --arg n "$an" '{($n): .}' "$af" >> "$to" 2> /dev/null || true
 done
 
 # The fixed lists: what plan-pass.sh writes on a plan: line, with a gate hit reduced to its
@@ -72,12 +75,19 @@ def counts:
   capture("^Plan: (?:[0-9]+ to import, )?(?<add>[0-9]{1,9}) to add, (?<change>[0-9]{1,9}) to change, (?<destroy>[0-9]{1,9}) to destroy\\.$")
   | map_values(tonumber);
 def path_ok: test("^examples/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$");
+# A plan-diff line (../plan-pass.md, Plan diff): result and reason only, no name
+def pdiff: if test("^(equal|unknown)$") then {result: ., reason: null}
+  elif test("^differs( [A-Za-z0-9_.-]{1,300}){0,50}$") then {result: "differs", reason: null}
+  elif test("^not-run (no-base|absent-at-base|base-plan|head-module-plan|show|budget)$") then {result: "not-run", reason: .[8:]}
+  else error("refused: a plan-diff line outside the grammar") end;
 def clean: . as $x
   | [($x.addresses? | if type == "array" then .[] else empty end)
      | select(type == "string" and length <= 300
        and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z"))] | unique | .[:1000]
   | . as $s
   | {addresses: $s,
+     module_calls: ($x.module_calls? | if type == "object" then with_entries(select((.key | test("^[A-Za-z0-9_-]{1,64}$"))
+                  and (.value | type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?$")))) else {} end),
      attributes: (($x.attributes? | if type == "object" then . else {} end)
        | with_entries(select(.key as $k | ($s | index($k)) != null)
            | .value |= ([(if type == "array" then .[] else empty end)
@@ -91,10 +101,13 @@ def main:
       if $x | startswith("host example ") then
         ($x | capture("^host example (?<n>[1-9][0-9]*): (?<path>.*)$")
           // error("refused: a malformed host example line")) as $h
-        | .blocks += [{n: ($h.n | tonumber), path: $h.path, plan: null, base: null}]
+        | .blocks += [{n: ($h.n | tonumber), path: $h.path, plan: null, base: null, pdiff: null}]
       elif (.blocks | length) == 0 then .
       elif ($x | startswith("plan: ")) and .blocks[-1].plan == null then .blocks[-1].plan = $x[6:]
       elif ($x | startswith("base: ")) and .blocks[-1].base == null then .blocks[-1].base = $x[6:]
+      elif ($x | startswith("plan-diff: ")) then
+        (if .blocks[-1].pdiff != null then error("refused: two plan-diff lines in a block") else . end)
+        | .blocks[-1].pdiff = $x[11:]
       else . end)
   | .blocks
   | if [.[].n] != [range(1; length + 1)] then error("refused: host example lines out of order") else . end
@@ -103,20 +116,26 @@ def main:
   | map(
       if .plan == null then error("refused: a block with no plan line") else . end
       | (.plan | split(" | ")[0] | head_class) as $c
-      | (if $c == "planned" or $c == "planned-no-changes" then ($addr[.n | tostring] // {}) | clean
+      | (if $c == "planned" or $c == "planned-no-changes" then ($addr[.n | tostring] // {}) | clean | del(.module_calls)
          else {addresses: [], attributes: {}} end) as $ad
       | {path,
          head: {class: $c, plan: (if $c == "planned" then (.plan | split(" | ")[1:] | join(" | ") | counts) // null else null end)},
          base: (if .base == null then null else {class: (.base | base_class), plan: null} end),
-         addresses: $ad.addresses, attributes: $ad.attributes})
+         addresses: $ad.addresses, attributes: $ad.attributes}
+        + (if .pdiff == null then {} else (.pdiff | pdiff) as $d
+           | if $d.result == "equal" and ($c | IN("planned", "planned-no-changes") | not)
+             then error("refused: a plan diff of an example that did not plan") else . end
+           | (if $d.result == "equal" then ($pd[.n | tostring] // {}) | clean else {addresses: [], module_calls: {}} end) as $pc
+           | {plan_diff: ($d + {addresses: $pc.addresses, module_calls: $pc.module_calls})} end))
   | {schema_version: 1, head: $head, merge_base: $mb, refused_hosts: $refused, examples: .};
 try main catch (if type == "string" and startswith("refused: ") then . else "refused: a malformed record" end)
 '
 # The merged addresses can pass one argument's size limit (128 KiB on Linux), so they reach jq on
 # a descriptor, held to exactly one JSON value as --argjson held them.
 result="$(jq -R -s -c --arg head "$head" --arg mb "$mb" --argjson refused "$refused" \
-  --slurpfile addr <(jq -s 'add // {}' "$addr") \
-  '($addr | if length == 1 then .[0] else error("not one JSON value") end) as $addr | '"$REDUCE" \
+  --slurpfile addr <(jq -s 'add // {}' "$addr") --slurpfile pd <(jq -s 'add // {}' "$pdaddr") \
+  '($addr | if length == 1 then .[0] else error("not one JSON value") end) as $addr
+   | ($pd | if length == 1 then .[0] else error("not one JSON value") end) as $pd | '"$REDUCE" \
   "$record/plan-pass.txt")" || refuse "a malformed record"
 case "$result" in
   '"refused: '*) refuse "$(jq -r '.[9:]' <<< "$result")" ;;

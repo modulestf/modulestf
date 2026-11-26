@@ -111,6 +111,8 @@ sub="$1"
 while [ $# -gt 0 ]; do [ "$1" = --out ] && out="$2"; shift; done
 # wrappers: the lines a case names, when it names any.
 if [ "$sub" = wrappers ]; then [ -z "${WRAP_STUB:-}" ] || printf '%s\n' "$WRAP_STUB" > "$out/wrappers.txt"; exit 0; fi
+# diff-dirs: the directories a case names, one per line.
+if [ "$sub" = diff-dirs ]; then [ -z "${DIFF_STUB:-}" ] || printf '%s\n' "$DIFF_STUB"; exit 0; fi
 if [ -f "$out/behaviour.json" ] || [ -n "${EVAL:-}" ]; then
   echo '{"status": "ran", "reason": null, "triggers": [], "claims": [], "capped": 0}' > "$out/run-behaviour.json"
   echo 'behaviour: ran, 0 triggers, 0 over the cap' > "$out/record.txt"
@@ -940,6 +942,30 @@ for rc in 2 1; do
     "$([ "$(jq -r '[.unplanned[].reason] | unique | join(",")' "$RUN/coverage.json")" = "$want" ] && grep -qE "^plan: $want \([0-9]+s\)\$" "$TMP/pl.out"; echo $?)"
   run_rr cleanup "$RUN" > /dev/null
 done
+
+# The plan diff (plan-pass.md, Plan diff): plan passes each directory diff-dirs prints as
+# --diff-dir, drops one outside the pattern and keeps the pass, and ladder hands eval the coverage
+# as --plan-diff. Each is caught when its line is removed from a copy of the script.
+pd_rr() { # review-run.sh copy -> 0 when the plan pass got exactly the two good directories and eval the coverage
+  printf '%s\n' 'plan pass mode: laptop' 'example: examples/one' 'plan: planned-no-changes' 'plan summary: 1 examples, 1 planned, 0 exceptions, 0 other' > "$TMP/plan-rec.txt"
+  DEPTH_STUB=deep prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review
+  local n; n="$(wc -l < "$STUB_LOG")"
+  (cd "$TMP/cwd" && "$SH" "$1" verify "$RUN") > /dev/null 2>&1
+  (cd "$TMP/cwd" && DIFF_STUB="$(printf '.\nmodules/a+b\nmodules/x')" PLAN_STUB_REC="$TMP/plan-rec.txt" "$SH" "$1" plan "$RUN") > /dev/null 2>&1
+  (cd "$TMP/cwd" && "$SH" "$1" ladder "$RUN") > /dev/null 2>&1
+  local l; l="$(tail -n +"$((n + 1))" "$STUB_LOG")"; run_rr cleanup "$RUN" > /dev/null
+  printf '%s\n' "$l" | grep '^plan-pass plan ' | grep -qF -- '--diff-dir . --diff-dir modules/x ' || return 1
+  printf '%s\n' "$l" | grep '^plan-pass plan ' | grep -qF -- 'a+b' && return 1
+  printf '%s\n' "$l" | grep '^behaviour eval ' | grep -qE -- '--plan-diff [^ ]*/coverage\.json( |$)'
+}
+pd_rr "$RR"; check "plan diff: plan passes the directories diff-dirs prints, less one outside the pattern, and eval gets the coverage" $?
+pd_mut() { # name, perl substitution
+  perl -0pe "$2" "$RR" > "$SK/review-run-pd.sh"
+  check "self-check: $1 is caught" "$( ! cmp -s "$RR" "$SK/review-run-pd.sh" && ! pd_rr "$SK/review-run-pd.sh"; echo $?)"
+}
+pd_mut "no --diff-dir" 's/ \$\{pdd\[\@\]\+"\$\{pdd\[\@\]\}"\}//g'
+pd_mut "a directory outside the pattern passed" 's/\[\[ "\$d" =~ \^\(\\\.\|[^\n]*\]\] && pdd\+=/pdd+=/'
+pd_mut "no --plan-diff" 's/\[ ! -f "\$RUN\/coverage\.json" \] \|\| wr\+=\(--plan-diff "\$RUN\/coverage\.json"\)/:/'
 
 # A named profile and no example selected: the plan line names the cause, not the depth.
 DEPTH_STUB=deep prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review

@@ -591,6 +591,11 @@ def base_results: ["reproduces at base", "new under this change",
 def gate: if test("^plan gate G[0-3]( |$)") then .[0:12] else . end;
 def norm: gate | if IN(classes[]) then . else "output unrecognised" end;
 def bnorm: gate | if IN(classes[]) or IN(base_results[]) then . else "not available" end;
+# A plan-diff line (plan-pass.md, Plan diff) as {result, reason}; one outside the grammar is unknown
+def pnorm: if test("^(equal|unknown)$") then {result: ., reason: null}
+  elif test("^differs( [A-Za-z0-9_.-]{1,300}){0,50}$") then {result: "differs", reason: null}
+  elif test("^not-run (no-base|absent-at-base|base-plan|head-module-plan|show|budget)$") then {result: "not-run", reason: .[8:]}
+  else {result: "unknown", reason: null} end;
 '
   if [ -n "$NOPLAN" ]; then
     echo '[]' > "$W/blocks.json"
@@ -603,12 +608,14 @@ def bnorm: gate | if IN(classes[]) or IN(base_results[]) then . else "not availa
       | reduce $l[] as $x ({b: [], n: 0};
           if $runner and ($x | startswith("host example ")) then
             (($x | capture("^host example (?<n>[1-9][0-9]{0,5}): (?<p>.*)$")) // null) as $h
-            | if $h == null then . else .b += [{n: ($h.n | tonumber), dir: $h.p, plan: null, base: null}] end
+            | if $h == null then . else .b += [{n: ($h.n | tonumber), dir: $h.p, plan: null, base: null, pd: null}] end
           elif ($runner | not) and ($x | startswith("example: ")) then
-            .n += 1 | .b += [{n: .n, dir: $x[9:], plan: null, base: null}]
+            .n += 1 | .b += [{n: .n, dir: $x[9:], plan: null, base: null, pd: null}]
           elif (.b | length) == 0 then .
           elif ($x | startswith("plan: ")) and .b[-1].plan == null then .b[-1].plan = ($x[6:] | split(" | ")[0] | norm)
           elif ($x | startswith("base: ")) and .b[-1].base == null then .b[-1].base = ($x[6:] | bnorm)
+          # A second plan-diff line in one block is no evidence
+          elif ($x | startswith("plan-diff: ")) then .b[-1].pd = (if .b[-1].pd == null then $x[11:] | pnorm else {result: "unknown", reason: null} end)
           else . end)
       | .b' "$PLANREC" > "$W/blocks.json" || die "--plan cannot be read"
   else
@@ -620,22 +627,29 @@ def bnorm: gate | if IN(classes[]) or IN(base_results[]) then . else "not availa
          | select(type == "object" and (.path | type == "string"))
          | {n: ($k + 1), dir: .path, plan: (.head.class | if type == "string" then norm else "output unrecognised" end),
             base: (.base.class? // null | if type == "string" then bnorm else null end),
-            addr: {addresses: .addresses, attributes: .attributes}}]
+            addr: {addresses: .addresses, attributes: .attributes},
+            pd: (.plan_diff? // null | if type == "object" then {result: (.result | if type == "string" then . else "unknown" end),
+                   reason: (.reason // null)} else null end),
+            pdaddr: (.plan_diff | if type == "object" then {addresses, module_calls} else null end)}]
       else error("not a plan record") end' "$HOSTED" > "$W/blocks.json" 2> /dev/null || die "--hosted is not a plan record"
   fi
   # The planned addresses of each block, from addresses-<n>.json in --addresses: data only
-  : > "$W/addr.jsonl"
+  # and the head module plan's addresses of each equal plan diff, from plan-diff-<n>.json
+  : > "$W/addr.jsonl"; : > "$W/pdaddr.jsonl"
   if [ -n "$ADDRS" ] && [ -d "$ADDRS" ] && [ ! -L "$ADDRS" ]; then
-    for af in "$ADDRS"/addresses-*.json; do
-      an="${af##*/addresses-}"; an="${an%.json}"
+    # One glob that matches, under zsh too, which stops on a glob that matches nothing
+    for af in "$ADDRS"/*.json; do
+      case "${af##*/}" in addresses-*|plan-diff-*) ;; *) continue ;; esac
+      an="${af##*/addresses-}"; an="${an##*/plan-diff-}"; an="${an%.json}"
       printf '%s\n' "$an" | grep -Eqx '[1-9][0-9]{0,5}' || continue
       [ -f "$af" ] && [ ! -L "$af" ] && [ "$(wc -c < "$af")" -le 1048576 ] || continue
-      jq -c --arg n "$an" '{($n): .}' "$af" >> "$W/addr.jsonl" 2> /dev/null || true
+      case "${af##*/}" in plan-diff-*) to="$W/pdaddr.jsonl" ;; *) to="$W/addr.jsonl" ;; esac
+      jq -c --arg n "$an" '{($n): .}' "$af" >> "$to" 2> /dev/null || true
     done
   fi
   jq -n --slurpfile b "$W/blocks.json" --slurpfile l "$W/list.jsonl" --slurpfile s "$W/selection.json" \
-    --slurpfile a "$W/addr.jsonl" --arg noplan "${NOPLAN:-}" --arg pre "$PREFIX" '
-    ($a | add // {}) as $addr
+    --slurpfile a "$W/addr.jsonl" --slurpfile pa "$W/pdaddr.jsonl" --arg noplan "${NOPLAN:-}" --arg pre "$PREFIX" '
+    ($a | add // {}) as $addr | ($pa | add // {}) as $pdaddr
     | def clean: . as $x
         | [($x.addresses | if type == "array" then .[] else empty end)
            | select(type == "string" and length <= 300
@@ -663,6 +677,16 @@ def bnorm: gate | if IN(classes[]) or IN(base_results[]) then . else "not availa
           else {addresses: [], attributes: {}, module_calls: {}} end)) as $ad
       | {dir: $d, head: $h, base: $bs, addresses: $ad.addresses, attributes: $ad.attributes,
          module_calls: ($ad.module_calls | with_entries(.value |= resolve($d)) | with_entries(select(.value != null))),
+         # The plan diff of a planned example (plan-pass.md, Plan diff): an equal one with no
+         # addresses to read is not-run show.
+         # The module calls are those of the merge base example, resolved as at the head.
+         pd: (if $k == null or $k.pd == null or ($h | planned | not) then null
+              else ($k.pdaddr // $pdaddr[$k.n | tostring] // null) as $pa
+              | if $k.pd.result != "equal" then $k.pd + {addresses: [], module_calls: {}}
+                elif ($pa | type) != "object" or ($pa.addresses | type) != "array" then {result: "not-run", reason: "show", addresses: [], module_calls: {}}
+                else ($pa | clean) as $pc
+                  | $k.pd + {addresses: $pc.addresses,
+                      module_calls: ($pc.module_calls | with_entries(.value |= resolve($d)) | with_entries(select(.value != null)))} end end),
          covered: (($h | planned) or ($h == "code-error"
            and ($bs | IN("reproduces at base", "new under this change", "new under this change (absent at base)")))),
          why: (if $noplan != "" then "no AWS profile named" elif $h == "not run" then "not reached by the plan pass"
@@ -673,6 +697,7 @@ def bnorm: gate | if IN(classes[]) or IN(base_results[]) then . else "not availa
     | {schema_version: 1, selection: $s[0], inert: $s[0].inert,
        class: (if $none then "none" elif $c == ($e | length) then "complete" elif $c == 0 then "none" else "partial" end),
        examples: [$e[] | {dir, head, base, addresses, attributes, module_calls}],
+       plan_diff: [$e[] | select(.pd != null) | {dir} + .pd],
        unplanned: (if $none then [{dir: ($pre + "examples"), reason: "no example directory"}]
                    else [$e[] | select(.covered | not) | {dir, reason: .why}] end)}
   ' > "$OUT.tmp" && mv -- "$OUT.tmp" "$OUT" || die "cannot write $OUT"

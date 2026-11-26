@@ -4,7 +4,7 @@
 #
 # Usage:
 #   run-pass.sh --clone DIR --record DIR (--profile NAME --role-arn ARN | --credentials-env-file FILE)
-#               [--base SHA] [--budget-minutes N] [--tmp DIR] [--build] <example-dir>...
+#               [--base SHA] [--diff-dir DIR]... [--budget-minutes N] [--tmp DIR] [--build] <example-dir>...
 #
 # --tmp names an existing directory, such as the pull request skill's run directory, to hold
 # this script's private temporary directory, and with it the credentials file for the plan
@@ -44,6 +44,14 @@
 # the host. A session that cannot be issued gives the container no credentials, and the plan
 # pass ends at credentials there: there is no fallback to the profile's own. The container
 # reads the file into the plan pass's environment, and plan-pass.sh reads them there.
+#
+# --diff-dir names a directory, repository-relative, that a change the host can clear by a plan
+# diff sits in (../plan-pass.md, Plan diff). With --base, each example whose head planned and
+# that is such a directory or calls one through a local module source gets its merge base
+# example planned against the base module and against the head module, in two more containers
+# behind the init and plan proxies, and compared in a container with no network and no
+# credentials. Its block gets one plan-diff line, and an equal one the head module plan's
+# addresses as plan-diff-<n>.json.
 # --credentials-env-file is for the smoke test: a fixed file of made-up session credentials.
 set -euo pipefail
 
@@ -53,7 +61,7 @@ pass="$(cd "$here/.." && pwd)/plan-pass.sh"
 tag="$("$here/image-tag.sh")"
 runner_image="plan-runner:$tag"
 proxy_image="plan-egress-proxy:$tag"
-clone="" record="" profile="" role_arn="" cred_file="" base="" build=0 budget_min=120 tmp_parent=""
+clone="" record="" profile="" role_arn="" cred_file="" base="" build=0 budget_min=120 tmp_parent="" diffdirs=()
 
 die() { echo "run-pass: $*" >&2; exit 2; }
 while [ $# -gt 0 ]; do
@@ -64,6 +72,7 @@ while [ $# -gt 0 ]; do
     --role-arn) role_arn="${2:-}"; shift 2 ;;
     --credentials-env-file) cred_file="${2:-}"; shift 2 ;;
     --base) base="${2:-}"; shift 2 ;;
+    --diff-dir) diffdirs+=("${2:-}"); shift 2 ;;
     --budget-minutes) budget_min="${2:-}"; shift 2 ;;
     --tmp) tmp_parent="${2:-}"; shift 2 ;;
     --build) build=1; shift ;;
@@ -85,6 +94,12 @@ done
 pname="${profile:-smoke}"
 [[ "$pname" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]] || die "invalid profile name"
 [ -z "$base" ] || [[ "$base" =~ ^[0-9a-f]{40}$ ]] || die "--base must be a full commit SHA"
+# A plan diff directory outside the pattern loses only its own plan diff
+kept=()
+for d in ${diffdirs[@]+"${diffdirs[@]}"}; do
+  [[ "$d" =~ ^(\.|[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*)$ ]] && kept+=("$d")
+done
+diffdirs=(${kept[@]+"${kept[@]}"})
 [[ "$budget_min" =~ ^[1-9][0-9]{0,3}$ ]] || die "--budget-minutes must be a whole number of minutes, 1 to 9999"
 budget=$((budget_min * 60))
 if [ -n "$tmp_parent" ]; then
@@ -370,9 +385,14 @@ plan_container() { # output file, phase, index, example, budget left: the work v
   # lambda module's packaging does, so the clone (and the base worktree) are private
   # writable copies on tmpfs, seeded from the volume at start and gone with the container.
   local base_tmpfs=() seed_base=: lines
-  if [ "$2" = base-plan ]; then
+  if [ "$2" = base-plan ] || [ "$2" = diff-plan ]; then
     base_tmpfs=(--tmpfs "$RUN/base:rw,size=1g,mode=1777")
     seed_base="{ [ ! -d '$SEED/base' ] || cp -dR '$SEED/base/.' '$RUN/base/'; }"
+  fi
+  # The plan diff's head tree with the merge base example (../plan-pass.md, Plan diff)
+  if [ "$2" = diff-plan ]; then
+    base_tmpfs+=(--tmpfs "$RUN/mixed:rw,size=1g,mode=1777")
+    seed_base="$seed_base && { [ ! -d '$SEED/mixed' ] || cp -dR '$SEED/mixed/.' '$RUN/mixed/'; }"
   fi
   issue_session
   rm -f "$TMPRUN/stalled"
@@ -401,7 +421,7 @@ plan_container() { # output file, phase, index, example, budget left: the work v
 # base-denied line comes only from a merge base re-run's own container, and the refused-host
 # class with its refused, validate and base-refused lines only from this script (skip-coverage.md,
 # Design skips).
-host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example |not reached:|base-denied: |refused: |base-refused: |validate: |(plan|base): environment \(refused-host\))'
+host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example |not reached:|plan-diff: |base-denied: |refused: |base-refused: |validate: |(plan|base): environment \(refused-host\))'
 # The one credentials line a container may write, from plan-pass.sh's fixed list: the first
 # such line is kept, any other credentials line is dropped
 cred_re='^credentials: (session: not issued|write probe: write allowed|(identity check|write probe): (timed out|expired token|invalid token|access denied|throttled|network|other answer))$'
@@ -488,12 +508,33 @@ for ex in "$@"; do
   rm -f "$TMPRUN/addresses.$n"
 done
 
-# Merge base re-run, only for the code-errors: the base worktree and its init behind the init
-# proxy with no credentials, then its plan behind the plan proxy. One proxy runs at a time,
-# since both answer to the same name on the internal network.
-if [ "${#deferred[@]}" -gt 0 ]; then
+# The plan diff (../plan-pass.md, Plan diff): each example whose head planned, with the
+# addresses this script accepted, that calls a plan diff directory through a local module source
+# of its root module, resolved against the example directory, outside the example's own directory.
+# shellcheck disable=SC2016 # a jq program
+reaches_jq='def resolve($d): ($d + "/" + .) | split("/")
+    | reduce .[] as $p ([]; if . == null then null elif $p == "" or $p == "." then .
+        elif $p == ".." then (if length == 0 then null else .[:-1] end) else . + [$p] end)
+    | if . == null then null elif length == 0 then "." else join("/") end;
+  any((.module_calls // {}) | to_entries[] | .value | strings | resolve($d)
+    | select(. != $d and (startswith($d + "/") | not)); IN($dd[]))'
+diffs=()
+if [ -n "$base" ] && [ "${#diffdirs[@]}" -gt 0 ]; then
+  dd="$(printf '%s\n' "${diffdirs[@]}" | jq -R . | jq -s -c .)"
+  n=0
+  for ex in "$@"; do
+    n=$((n + 1))
+    [ -f "$record/addresses-$n.json" ] && grep -Eq '^plan: planned' "$TMPRUN/block.$n" || continue
+    jq -e --arg d "$ex" --argjson dd "$dd" "$reaches_jq" "$record/addresses-$n.json" > /dev/null 2>&1 && diffs+=("$n")
+  done
+fi
+
+# Merge base re-run, only for the code-errors, and the plan diffs: the base worktree and its init
+# behind the init proxy with no credentials, then its plan behind the plan proxy. One proxy runs
+# at a time, since both answer to the same name on the internal network.
+if [ "${#deferred[@]}" -gt 0 ] || [ "${#diffs[@]}" -gt 0 ]; then
   start_proxy "$proxy_init" init.conf
-  for n in "${deferred[@]}"; do
+  for n in ${deferred[@]+"${deferred[@]}"}; do
     rem=$(left)
     [ "$rem" -gt 0 ] || break # base-plan then records the budget
     ex="${examples[n - 1]}"
@@ -502,9 +543,18 @@ if [ "${#deferred[@]}" -gt 0 ]; then
       "exec bash /opt/plan-pass/plan-pass.sh plan '$RUN' '$pname' --mode runner --budget '$rem' --phase base-init --index '$n' \"\$@\"" \
       plan-pass --base "$base" "$ex"
   done
+  for n in ${diffs[@]+"${diffs[@]}"}; do
+    rem=$(left)
+    [ "$rem" -gt 0 ] || break
+    ex="${examples[n - 1]}"
+    in_runner "$record/plan-pass-init.txt" --network "$net_int" "${common[@]}" "${proxy_env[@]}" \
+      -v "$volume":/work --entrypoint /bin/bash "$runner_image" -c \
+      "exec bash /opt/plan-pass/plan-pass.sh plan '$RUN' '$pname' --mode runner --budget '$rem' --phase diff-init --index '$n' \"\$@\"" \
+      plan-pass --base "$base" "$ex"
+  done
   save_proxy_log "$proxy_init" proxy-init.log
   start_proxy "$proxy_plan" plan.conf
-  for n in "${deferred[@]}"; do
+  for n in ${deferred[@]+"${deferred[@]}"}; do
     rem=$(left)
     if [ "$rem" -le 0 ]; then echo 'base: budget' > "$TMPRUN/base.$n"; continue; fi
     ex="${examples[n - 1]}"
@@ -520,8 +570,38 @@ if [ "${#deferred[@]}" -gt 0 ]; then
     fi
     [ -s "$TMPRUN/base.$n" ] || echo 'base: not available' > "$TMPRUN/base.$n"
   done
+  for n in ${diffs[@]+"${diffs[@]}"}; do
+    rem=$(left)
+    [ "$rem" -gt 0 ] || break
+    : > "$TMPRUN/example.out"
+    plan_container "$TMPRUN/example.out" diff-plan "$n" "${examples[n - 1]}" "$rem"
+  done
   save_proxy_log "$proxy_plan" proxy-plan.log
 fi
+# The comparison of each plan diff, read outside the containers that ran the head's code, as
+# the show phase is. Only a plan-diff line in its grammar reaches the record, and only an equal
+# one's addresses and local module calls, reduced by clean_addresses; anything else is not-run show.
+pdiff_re='^plan-diff: (equal|unknown|differs( [A-Za-z0-9_.-]+){0,50}|not-run (no-base|absent-at-base|base-plan|head-module-plan|show|budget))$'
+for n in ${diffs[@]+"${diffs[@]}"}; do
+  rem=$(left)
+  if [ "$rem" -le 0 ]; then echo 'plan-diff: not-run budget' > "$TMPRUN/pdiff.$n"; continue; fi
+  : > "$TMPRUN/diff.out"
+  in_runner "$TMPRUN/diff.out" --network none "${common[@]}" \
+    -v "$volume":/work:ro -v "$saved":"$RUN/plan/saved":ro \
+    --tmpfs "$RUN/plan/out:rw,size=256m,mode=1777" --tmpfs "$RUN/plan/tmp:rw,size=64m,mode=1777" \
+    --tmpfs "$RUN/plan/home:rw,size=64m,mode=1777" --entrypoint /bin/bash "$runner_image" -c \
+    "exec bash /opt/plan-pass/plan-pass.sh plan '$RUN' '$pname' --mode runner --budget '$rem' --phase diff --index '$n' \"\$@\"" \
+    plan-pass "${examples[n - 1]}"
+  line="$(grep -E -m 1 '^plan-diff: ' "$TMPRUN/diff.out" || true)"
+  [[ "$line" =~ $pdiff_re ]] || line='plan-diff: not-run show'
+  if [ "$line" = 'plan-diff: equal' ]; then
+    sed -n 's/^plan-diff-json: //p' "$TMPRUN/diff.out" | head -n 1 | jq -c "$clean_addresses"' | {addresses, module_calls}' \
+      > "$TMPRUN/pdaddr.$n" 2> /dev/null || true
+    if [ -s "$TMPRUN/pdaddr.$n" ]; then mv "$TMPRUN/pdaddr.$n" "$record/plan-diff-$n.json"; else line='plan-diff: not-run show'; fi
+    rm -f "$TMPRUN/pdaddr.$n"
+  fi
+  printf '%s\n' "$line" > "$TMPRUN/pdiff.$n"
+done
 rm -f "$TMPRUN/pass.env" # no plan container runs after this
 
 # The record: each block headed by the host with its own index, so a forged block cannot claim
@@ -531,6 +611,7 @@ for ex in "$@"; do
   n=$((n + 1))
   check_record_size "$TMPRUN/block.$n"
   check_record_size "$TMPRUN/base.$n"
+  check_record_size "$TMPRUN/pdiff.$n"
 done
 assemble_record() {
 printf 'plan pass mode: runner\nplan pass budget: %s minutes\n' "$budget_min"
@@ -548,6 +629,7 @@ for ex in "$@"; do
   else
     sed 's/^base: deferred$/base: not available/' "$TMPRUN/block.$n"
   fi
+  [ ! -f "$TMPRUN/pdiff.$n" ] || cat "$TMPRUN/pdiff.$n"
 done
 echo "plan summary: $# examples, $planned planned, $exc exceptions, $(($# - planned - exc)) other"
 }

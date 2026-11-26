@@ -2399,8 +2399,9 @@ mutate "the skip SHAs accepted alone" 's/and \(\[has\("covered_skips", "skip_bas
 mutate "covered names not allowlisted" 's/dir: \(\$c\.dir \| nm\(allowed\)\)/dir: (\$c.dir | nm(true))/' t_cov_names
 mutate "the witness lines left out of section 5" 's/if \$cov != \[\] then covered_lines\("unplanned-covered"; \$cov; \$run\) else/if false then [] else/' t_cov_std
 mutate "the COMPACT sentence dropped" 's/\+ \(if \$cov != \[\] then " " \+ covered_sentence\("compact-covered"; \$run; \$cov\)/+ (if false then " " + covered_sentence("compact-covered"; \$run; \$cov)/' t_cov_gold
-mutate "What to do with no item rendered" 's/ or \(\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.nonhcl_cap\) and \$items == \[\]\)//' t_cov_rule8_std
-mutate "What to do with no item rendered beside undemonstrated coverage" 's/\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/\$cov != [] and \$items == []/' t_ux
+mutate "What to do with no item rendered" 's/ or \(\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.identical > 0 or \$l\.nonhcl_cap\) and \$items == \[\]\)//' t_cov_rule8_std
+mutate "What to do with no item rendered beside undemonstrated coverage" 's/\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.identical > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/(\$cov != [] or \$l.identical > 0 or \$l.nonhcl_cap) and \$items == []/' t_ux
+mutate "What to do with no item rendered beside identical plans" 's/ or \$l\.identical > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/ or \$l.nonhcl_cap) and \$items == []/' t_id
 mutate "the rule 7 rationale for covered skips alone dropped" 's/elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.covered > 0 then tx\("rationale-7-covered"\)\n//' t_cov_rule8_std
 mutate "the base not checked" 's/ and \$cv\.skip_base_sha == \$in\.host\.merge_base//' t_cov_base
 mutate "a plan pass that did not run accepted" 's/and \$run\.plan_ran and \(\$cv\.inert/and (\$cv.inert/' t_cov_noplan
@@ -2944,7 +2945,7 @@ mutate "an unread floor accepted" 's/\$e != \[\] and all\(\$e\[\]; \.read\)/\$e 
 mutate "floors of another head accepted" 's/\$fl\.head_sha == \$h\.head_sha\n       and/true and/' t_fl_head
 mutate "another category cleared" 's/\n             and \(\(\(\.also_categories \/\/ \[\]\) - \["provider-version-floor-change"\]\) == \[\]\)//' t_fl_also
 mutate "Check A not run ignored" 's/check_a_ran\(\$findings; \$run\) and \$fl != null/\$fl != null/' t_fl_cnr
-mutate "judged triggers counted as gaps" 's/select\(\(ci_gated or floor_ok or demo_ok\) \| not\)\), \.claims/select((ci_gated or demo_ok) | not)), .claims/' t_fl_read
+mutate "judged triggers counted as gaps" 's/select\(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\), \.claims/select((ci_gated or demo_ok or same_ok) | not)), .claims/' t_fl_read
 
 # --- Undemonstrated features (verdict.md, Undemonstrated features): a trigger behaviour-pass.sh
 # marked unexercised is undemonstrated coverage, as a covered skip is: approve with nits at best,
@@ -3016,15 +3017,76 @@ mutate "the merged categories not read" 's/\[\.category, \(\.also_categories \/\
 mutate "a triage run accepted" 's/\(\(\$run\.triage \| not\) and \$run\.plan_ran/(\$run.plan_ran/' t_ux_triage
 mutate "a compat finding at LOW ignored" 's/\(\.rule_id \| startswith\("compat\."\)\) and \(\.file \| file_dir\)/(.rule_id | startswith("compat.")) and .severity != "LOW" and (.file | file_dir)/' t_ux_compat_low
 mutate "only a compat finding at the same file read" 's/and \(\.file \| file_dir\) == \(\$t\.file \| file_dir\)/and .file == \$t.file/' t_ux_compat_low
-mutate "cleared triggers counted as gaps" 's/select\(\(ci_gated or floor_ok or demo_ok\) \| not\)\), \.claims/select((ci_gated or floor_ok) | not)), .claims/' t_ux
-mutate "cleared triggers listed as not verified" 's/select\(\.state == "unverifiable" and \(\(ci_gated or floor_ok or demo_ok\) \| not\)\)/select(.state == "unverifiable" and ((ci_gated or floor_ok) | not))/' t_ux
+mutate "cleared triggers counted as gaps" 's/select\(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\), \.claims/select((ci_gated or floor_ok or same_ok) | not)), .claims/' t_ux
+mutate "cleared triggers listed as not verified" 's/select\(\.state == "unverifiable" and \(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\)/select(.state == "unverifiable" and ((ci_gated or floor_ok or same_ok) | not))/' t_ux
 mutate "rule 7 not reached by undemonstrated coverage" 's/ or \.undemonstrated > 0 or / or /' t_ux
 mutate "the count line dropped" 's/    \+ \(\[\$b\.triggers\[\] \| select\(demo_ok\)\][^\n]*\n//' t_ux
 mutate "the information section dropped" 's/     \+ section\("Changes no example creates"[^\n]*\n//' t_ux
 mutate "the rule 7 rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.undemonstrated > 0 then tx\("rationale-7-undemonstrated"\)//' t_ux
-mutate "sweep evidence beside the mark accepted" 's/\n              and \(has\("complete"\) or has\("outstanding"\) or has\("evidence_digest"\) \| not\)\)\)\)/)))/' t_ux_grammar
+mutate "sweep evidence beside the mark accepted" 's/\n              and \(has\("complete"\) or has\("outstanding"\) or has\("evidence_digest"\) \| not\)\)\)\n/))\n/' t_ux_grammar
 t_ux_state() { render "$NONE" "" "" "$(RUX r5 '.behaviour.triggers[0].state = "covered"')"; [ "$ST" != 0 ]; }
 mutate "the mark on a trigger that passed accepted" 's/\(\.unexercised == true and \.state == "unverifiable"\n/(.unexercised == true\n/' t_ux_state
+
+# --- Identical plans (verdict.md, Identical plans): a trigger behaviour-pass.sh marked identical
+# reads as an undemonstrated one does, under the same conditions: approve with nits at best,
+# listed with its examples as information. Anything else keeps it an unknown.
+IT='{id: "T-001", file: "variables.tf", line: 40, category: "unclassified-change", state: "unverifiable", identical: ["examples/complete", "examples/minimal"]}'
+RID() { runf "id-$1" '.plan_ran = true | .behaviour.triggers = ['"$IT"', ('"$IT"' | .id = "T-002" | .file = "main.tf" | .line = 9 | .category = "dynamic-block-change" | .identical = ["examples/complete"])] | '"${2:-.}"; }
+IDL='Added inputs the existing examples plan the same as before, on their default only: 2.'
+IDRAT='No finding is open, and an added input planned the same as before in the existing examples, which shows only its default. With such a change, approve with nits is the best verdict (ladder rule 7).'
+cat > "$TMP/want-id.txt" <<'WANT'
+### Changes the examples plan the same
+
+- Same plan: `variables.tf:40` (unclassified-change): `examples/complete`, `examples/minimal`, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown.
+- Same plan: `main.tf:9` (dynamic-block-change): `examples/complete`, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown.
+WANT
+idsec() { awk '/^### Changes the examples plan the same$/ { on = 1 } on && /^### / && !/plan the same/ { exit } on' "$O/comment.md" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'; }
+t_id() {
+  render "$NONE" "" "" "$(RID f)"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && [ "$(tier)" = STANDARD ] \
+    && grep -qxF "$IDL" "$O/comment.md" && grep -qxF "$IDRAT" "$O/comment.md" && idsec | cmp -s - "$TMP/want-id.txt" \
+    && ! grep -qF '### Checks that could not run' "$O/comment.md" && ! grep -qxF '### What to do' "$O/comment.md" \
+    && [ "$(accept "$O/result.json")" = "findings accepted: full" ]
+}
+t_id; check "identical: identical triggers alone are approve with nits, STANDARD, listed with their examples byte for byte, accepted by host-pass.sh" $?
+t_id_keep() { # run update [findings] -> rule 4, the trigger in section 5, nothing cleared
+  render "${2:-$NONE}" "" "" "$(RID "k$oc" "$1")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qE '^- Behaviour change at `variables\.tf:40` \([a-z-]+\): not verified\.$' "$O/comment.md" \
+    && ! grep -qF 'Same plan:' "$O/comment.md"
+}
+IDNRAT="$(jq -nr -L "$REF" 'include "render-comment"; texts["rationale-7-identical-nonhcl"]')"
+t_id_nonhcl() {
+  render "$NONE" "" "$NHC" "$(RID nh '.behaviour.triggers += [{id: "T-003", file: "package.py", line: 3, category: "non-hcl-dependency", state: "unverifiable"}]')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qxF "$IDNRAT" "$O/comment.md" && ! grep -qxF "$IDRAT" "$O/comment.md" && grep -qxF "$IDL" "$O/comment.md"
+}
+t_id_nonhcl; check "identical: beside a change outside Terraform the rationale gives both reasons" $?
+t_id_mark() { t_id_keep '.behaviour.triggers |= map(del(.identical))'; }
+t_id_mark; check "identical: a trigger not marked identical stays an unknown" $?
+t_id_partial() { t_id_keep '.coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/x", reason: "plan gate G1"}]}'; }
+t_id_partial; check "identical: an example not planned leaves the triggers unknowns" $?
+t_id_noplan() { t_id_keep '.plan_ran = false'; }
+t_id_noplan; check "identical: no plan pass leaves the triggers unknowns" $?
+t_id_cat() { t_id_keep '.behaviour.triggers |= map(.category = "default-change")'; }
+t_id_cat; check "identical: a category off the list stays an unknown" $?
+t_id_compat() { t_id_keep . "$(f compat.default-changed LOW main.tf 3 "The change alters a default." "needs decision: (a) keep (b) revert." | list idc)"; }
+t_id_compat; check "identical: a compat finding in the directory keeps the triggers unknowns" $?
+t_id_low() { render "$UXL" "" "" "$(RID l)"; [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && idsec | cmp -s - "$TMP/want-id.txt"; }
+t_id_low; check "identical: a LOW finding elsewhere is an ordinary LOW beside them" $?
+refused "an identical trigger that is not unverifiable" "$NONE" "" "" "$(RID r1 '.behaviour.triggers[0].state = "covered"')"
+refused "an identical mark that is no list" "$NONE" "" "" "$(RID r2 '.behaviour.triggers[0].identical = true')"
+refused "an identical mark beside unexercised" "$NONE" "" "" "$(RID r3 '.behaviour.triggers[0].unexercised = true')"
+refused "an identical example outside the path grammar" "$NONE" "" "" "$(RID r4 '.behaviour.triggers[0].identical = ["../x"]')"
+t_id_state() { render "$NONE" "" "" "$(RID r5 '.behaviour.triggers[0].state = "covered"')"; [ "$ST" != 0 ]; }
+t_id_beside() { render "$NONE" "" "" "$(RID r6 '.behaviour.triggers[0].unexercised = true')"; [ "$ST" != 0 ]; }
+mutate "an unmarked identical trigger cleared" 's/and \(\.identical \| type == "array"\)/and true/' t_id_mark
+mutate "any category read as identical" 's/and \(\[\.category, \(\.also_categories \/\/ \[\]\)\[\]\] - same_categories == \[\]\)/and true/' t_id_cat
+mutate "identical triggers counted as gaps" 's/select\(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\), \.claims/select((ci_gated or floor_ok or demo_ok) | not)), .claims/' t_id
+mutate "rule 7 not reached by identical plans" 's/ or \.identical > 0 or / or /' t_id
+mutate "the identical section dropped" 's/     \+ section\("Changes the examples plan the same"/     + [] + section("dropped"/' t_id
+mutate "the identical and outside-Terraform rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.identical > 0 and \$in\.nonhcl_cap then tx\("rationale-7-identical-nonhcl"\)//' t_id_nonhcl
+mutate "the identical rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.identical > 0 then tx\("rationale-7-identical"\)//' t_id
+mutate "an identical mark on a trigger that passed accepted" 's/and \. == unique\) and \.state == "unverifiable"/and . == unique)/' t_id_state
+mutate "an identical mark beside unexercised accepted" 's/ or has\("evidence_digest"\) or has\("unexercised"\) \| not\)/ or has("evidence_digest") | not)/' t_id_beside
 
 # --- Recorded exceptions join the covered skips (verdict.md, Covered safety-gate skips): a
 # runner-mode run whose every unplanned example is a recorded exception witnessed by a planned
@@ -3394,6 +3456,16 @@ t_own_covered; check "earlier review: LOW findings beside a covered skip over a 
 t_own_undemo() { render "$NONE" "$HOWN" "" "$(RUX own "$EOKX")"
   [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md"; }
 t_own_undemo; check "earlier review: an undemonstrated trigger over a cleared block proposes COMMENT and says the block stands" $?
+EPARTX='.earlier = {review_id: 41, commit_id: "'"$BASE"'", record: "ok", items: ['"$(eitem F-001 partly)"']}'
+t_own_identical_stands() { render "$NONE" "$HOWN" "" "$(RID ownst "$EPARTX")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md" \
+    && grep -qxF '| F-001 `structure.wrong-file` | HIGH | `main.tf:3` | partly resolved |' "$O/comment.md" && grep -qF 'Same plan:' "$O/comment.md"; }
+t_own_identical_stands; check "earlier review: identical triggers beside a standing block propose COMMENT and say the block stands" $?
+t_own_identical() { render "$NONE" "$HOWN" "" "$(RID own "$EOKX")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md"; }
+t_own_identical; check "earlier review: identical triggers over a cleared block propose COMMENT and say the block stands" $?
+mutate "APPROVE over a block with identical triggers" 's/\(\(\$l \| \.findings = \[\] \| ladder\)\.rule == 8\)/true/' t_own_identical
+mutate "the stands line dropped beside identical triggers" 's/\[tx\("earlier-stands"\)\]/[]/' t_own_identical_stands
 mutate "APPROVE over a block with a jobless Checks signal" 's/\(\(\$l \| \.findings = \[\] \| ladder\)\.rule == 8\)/true/' t_own_jobless
 mutate "APPROVE over a block with a covered skip" 's/\(\(\$l \| \.findings = \[\] \| ladder\)\.rule == 8\)/true/' t_own_covered
 mutate "APPROVE over a block with an undemonstrated trigger" 's/\(\(\$l \| \.findings = \[\] \| ladder\)\.rule == 8\)/true/' t_own_undemo
@@ -3428,6 +3500,10 @@ t_own_broken() { render "$NONE" "$HOWN" "" "$(erun ebroken broken '[]')"
   grep -qxF "This account requested changes on \`${BASE:0:7}\`, and that review cannot be checked against this head: it replaced an earlier block of this account that could not be checked, whose requests were never judged." "$O/comment.md"; }
 t_own_broken; check "earlier review: a broken chain keeps the block, approve proposes COMMENT and says why" $?
 mutate "a broken chain refused as a record state" 's/, "empty", "broken"\]/, "empty"]/' t_own_broken
+t_own_broken_identical() { render "$NONE" "$HOWN" "" "$(RID ownbr '.earlier = {review_id: 41, commit_id: "'"$BASE"'", record: "broken", items: []}')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md" && grep -qF 'Same plan:' "$O/comment.md"; }
+t_own_broken_identical; check "earlier review: identical triggers beside a broken chain propose COMMENT and say the block stands" $?
+mutate "the stands line dropped beside a broken chain and identical triggers" 's/\[tx\("earlier-stands"\)\]/[]/' t_own_broken_identical
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

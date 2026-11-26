@@ -672,6 +672,16 @@ def part($base): type == "object" and keys == ["class", "plan"]
        and keys == ["add", "change", "destroy"] and all(.[]; nat))));
 def addrs: type == "array" and length <= 1000 and all(.[]; type == "string" and length <= 300
   and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z"));
+# The plan diff of an example, when present (plan-pass.md, Plan diff): a result, a reason only
+# for not-run, and addresses only for equal, of an example whose head planned.
+def pdiff($head): type == "object" and keys == ["addresses", "module_calls", "reason", "result"]
+  and (if .result == "not-run" then .reason | IN("no-base", "absent-at-base", "base-plan", "head-module-plan", "show", "budget")
+       else (.result | IN("equal", "differs", "unknown")) and .reason == null end)
+  and (.addresses | addrs) and (.result == "equal" or .addresses == [])
+  and (.module_calls | type == "object" and length <= 1000 and all(keys[]; test("^[A-Za-z0-9_-]{1,64}\\z"))
+       and all(.[]; type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?\\z")))
+  and (.result == "equal" or .module_calls == {})
+  and (.result != "equal" or ($head.class | IN("planned", "planned-no-changes")));
 "examples/" as $ex
 | if ($p | length) != 1 or ($p[0] | type) != "object" then "plan record content"
   elif $h[0].prefix != "" then "plan record prefix"
@@ -679,7 +689,8 @@ def addrs: type == "array" and length <= 1000 and all(.[]; type == "string" and 
   elif $h[0].merge_base == null or $p[0].merge_base != $h[0].merge_base then "plan record merge base"
   elif ($p[0] | (keys != ["examples", "head", "merge_base", "refused_hosts", "schema_version"])
         or .schema_version != 1 or (.refused_hosts | nat | not) or (.examples | type != "array")
-        or (.examples | all(.[]; type == "object" and keys == ["addresses", "attributes", "base", "head", "path"]
+        or (.examples | all(.[]; type == "object" and (keys - ["plan_diff"]) == ["addresses", "attributes", "base", "head", "path"]
+              and ((has("plan_diff") | not) or (.head as $hd | .plan_diff | pdiff($hd)))
               and (.path | type == "string" and startswith($ex)
                    and (.[($ex | length):] | test("^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}\\z")))
               and (.head | part(false)) and (.base == null or (.base | part(true)))
