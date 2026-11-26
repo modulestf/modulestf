@@ -919,10 +919,10 @@ t_tm_big() { tamper '. + {pad: ("x" * 17000000)}' . change-not-allowed; }
 t_tm_big; check "a report over the 16 MiB cap: change-not-allowed" $?
 # The design skip: a bad entry before the real one must not hide a read attribute (the pairs
 # were once listed by a jq whose error left an empty list, and the attribute then looked unread).
-t_tm_refs() { # a block whose attributes is a string, first: the whole report is refused
+t_tm_refs() { # a file entry, first, whose block has attributes as a string: the whole report is refused
   reset_knobs; fresh; ed main.tf 's/subnets         = var\.subnets/subnets         = var.subnet_ids/'
   local keep="$EX" kp="$PATH"; EX="$EXV"; COVJQ="$VCOV"; PATH="$TMP/bin-tamper:$PATH"
-  export STUB_JQ='.files |= map(.blocks = [{address: "aws_x.y", kind: "resource", status: "edited", structural: false, attributes: "x"}] + .blocks)' STUB_VJQ=.
+  export STUB_JQ='.files = [{path: "zz.tf", status: "modified", parsed: true, outside: false, blocks: [{address: "aws_x.y", kind: "resource", status: "edited", structural: false, attributes: "x"}]}] + .files' STUB_VJQ=.
   run_case; local s=$?; unset STUB_JQ STUB_VJQ; EX="$keep"; PATH="$kp"
   [ "$s" = 0 ] && [ "$(why examples/v1)" = change-not-allowed ]
 }
@@ -935,6 +935,25 @@ t_tm_read() { # a read state outside read, unread and unknown
   [ "$s" = 0 ] && [ "$(why examples/v1)" = change-not-allowed ]
 }
 t_tm_read; check "design skip: a read state outside the enum: the report is refused, change-not-allowed" $?
+t_tm_dupfile() { # a second entry for main.tf with a structural block, after the real one
+  tamper '.files += [(.files[] | select(.path == "main.tf") | .blocks |= map(.structural = true))]' . change-not-allowed; }
+t_tm_dupfile; check "a report that lists a file twice: change-not-allowed" $?
+t_tm_dupdir() { # a forged complete entry for examples/h8 (a directory the engine could not read whole), first
+  h_reset; HEX=examples/h8; HLINES="${HDEF//$HOSTS/sso.eu-west-1.amazonaws.com:443}"
+  local kp="$PATH"; PATH="$TMP/bin-tamper:$PATH"
+  export STUB_JQ='(.data_sources | map(select(.dir == "examples/h1")) | .[0]) as $g | .data_sources = [$g + {dir: "examples/h8"}] + .data_sources' STUB_VJQ=.
+  h_why denial-unproven; local s=$?; unset STUB_JQ STUB_VJQ; PATH="$kp"; return $s
+}
+t_tm_dupdir; check "refused-host: a report that lists a directory twice: denial-unproven" $?
+t_relfiles() { # a relative --files reaches the engine, which runs from another directory
+  fresh; reset_knobs; plain_change; commit; filesjson; records; coverage
+  rm -f "$TMP/base-gates.txt"
+  "$SH" "$SC" gates "$RUN" --tree "$RUN/base" --base "$BASE" --coverage "$TMP/coverage.json" --out "$TMP/base-gates.txt" || return 1
+  (cd "$TMP" && "$SH" "$SC" check "$RUN" --files files.json --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
+    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" --changed-files "$(jq length "$TMP/files.json")" > "$TMP/out.json") || return 1
+  all_why covered
+}
+t_relfiles; check "a relative --files is read by the engine: covered" $?
 # The deadline variable is a whole number of seconds, 1 or more: anything else is refused up front.
 t_timeout_var() {
   local v s=0
@@ -1074,6 +1093,9 @@ mutate "the engine deadline replaced by an hour" 's/facts_run "\$FACTS_TIMEOUT" 
 mutate "the engine output cap raised" 's/FACTS_CAP=16777216/FACTS_CAP=99999999/' t_tm_big
 mutate "the read state not limited to its enum" 's/\n        and \(\.read == "read" or \.read == "unread" or \.read == "unknown"\)//' t_tm_read
 mutate "the report shape and the pairs' status not checked" 's/  && jq -e -s "\$CHANGES_SHAPE_JQ" [^\n]*\n//; s/(> "\$W\/refs\.tmp") \\\n  && LC_ALL=C sort -u "\$W\/refs\.tmp" > "\$W\/refs\.new"; then/$1 || :; LC_ALL=C sort -u "\$W\/refs.tmp" > "\$W\/refs.new"; then/' t_tm_refs
+mutate "a file listed twice allowed" 's/\(\.files \| type == "array" and \(map\(\.path\) \| unique \| length\) == length and /(.files | type == "array" and /' t_tm_dupfile
+mutate "a data source directory listed twice allowed" 's/\(\.data_sources \| type == "array" and \(map\(\.dir\) \| unique \| length\) == length and /(.data_sources | type == "array" and /' t_tm_dupdir
+mutate "a relative --files passed to the engine as given" 's/\ncase "\$FILES" in [^\n]*\n/\n/' t_relfiles
 mutate "the deadline variable not checked" 's/\ncase "\$FACTS_TIMEOUT" in [^\n]*\n/\n/' t_timeout_var
 mutate "the base denied set not compared" 's/ or \$x\.blk\.base_denied != \$x\.blk\.denied//' t_v_baseother
 

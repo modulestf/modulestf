@@ -77,6 +77,8 @@ W="$(mktemp -d "${TMPDIR:-/tmp}/pr-review.XXXXXX")" || die "no temporary directo
 trap 'rm -rf -- "$W"' EXIT
 trap 'rm -rf -- "$W"; exit 130' INT TERM
 
+# The engine runs from the temporary directory, so a relative --files is made absolute first
+case "$FILES" in ''|/*) ;; *) FILES="$PWD/$FILES" ;; esac
 regular --coverage "$COV"
 # The unplanned example directories, once each, in order: data only
 jq -r 'if type == "object" and (.unplanned | type == "array") then
@@ -153,7 +155,7 @@ HEADOK=false
 # report read once under its limits. The engine runs only when that report lists the feature
 # cmd:changes and changes report version 1, under a deadline of SKIP_COVERAGE_FACTS_TIMEOUT
 # seconds and an output cap, and its whole report must have the shape below before any of it
-# is read. It rebuilds the base from --files and reads both sides with the HCL parser. A
+# is read: one document, every file path and data source directory once. It rebuilds the base from --files and reads both sides with the HCL parser. A
 # missing, old, failing, late, oversized or malformed engine leaves the report null: no .tf file
 # is then allowed and no directory declares a data source type.
 FACTS_TIMEOUT=${SKIP_COVERAGE_FACTS_TIMEOUT:-120}
@@ -161,7 +163,7 @@ case "$FACTS_TIMEOUT" in ''|*[!0-9]*|0*) die "SKIP_COVERAGE_FACTS_TIMEOUT must b
 FACTS_CAP=16777216
 # shellcheck disable=SC2016 # a jq program
 CHANGES_SHAPE_JQ='length == 1 and (.[0] | type == "object" and .schema_version == 1
-  and (.files | type == "array" and all(.[]; type == "object" and (.path | type == "string") and (.status | type == "string")
+  and (.files | type == "array" and (map(.path) | unique | length) == length and all(.[]; type == "object" and (.path | type == "string") and (.status | type == "string")
     and (.parsed | type == "boolean") and (.outside | type == "boolean")
     and (.blocks | type == "array" and all(.[]; type == "object" and (.address | type == "string" and test("^[!-~]{1,300}\\z"))
       and (.kind | type == "string") and (.status | type == "string") and (.structural | type == "boolean")
@@ -169,7 +171,7 @@ CHANGES_SHAPE_JQ='length == 1 and (.[0] | type == "object" and .schema_version =
         and (.name | type == "string" and test("^[A-Za-z0-9_-]{1,255}\\z"))
         and (.read == "read" or .read == "unread" or .read == "unknown")
         and (.plain | type == "object" and (.head | type == "boolean") and (.base | type == "boolean"))))))))
-  and (.data_sources | type == "array" and all(.[]; type == "object" and (.dir | type == "string") and (.complete | type == "boolean")
+  and (.data_sources | type == "array" and (map(.dir) | unique | length) == length and all(.[]; type == "object" and (.dir | type == "string") and (.complete | type == "boolean")
     and (.types | type == "array" and all(.[]; type == "string")))))'
 facts_resolve "$RUN" "$CLONE"
 FACTS=$FACTS_BIN
