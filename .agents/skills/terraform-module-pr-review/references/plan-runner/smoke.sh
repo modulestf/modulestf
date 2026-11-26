@@ -315,10 +315,11 @@ check "image tag: an invalid PLAN_RUNNER_TAG is refused" test "$(PLAN_RUNNER_TAG
 leftover() { # ids...: prints each of those runs' containers, networks and volumes still present
   local id n
   for id in "$@"; do
-    for n in "plan-runner-$id" "plan-proxy-$id" "plan-proxy-init-$id" "plan-proxy-plan-$id" "plan-export-$id"; do
+    for n in "plan-runner-$id" "plan-proxy-$id" "plan-proxy-init-$id" "plan-proxy-plan-$id" "plan-export-$id" \
+      $(for k in 2 3 4 5 6 7 8; do echo "plan-runner-$id-$k" "plan-proxy-plan-$id-$k"; done); do
       docker container inspect "$n" > /dev/null 2>&1 && echo "container $n"
     done
-    for n in "plan-int-$id" "plan-ext-$id"; do
+    for n in "plan-int-$id" "plan-ext-$id" $(for k in 2 3 4 5 6 7 8; do echo "plan-int-$id-$k"; done); do
       docker network inspect "$n" > /dev/null 2>&1 && echo "network $n"
     done
     docker volume inspect "plan-work-$id" > /dev/null 2>&1 && echo "volume plan-work-$id"
