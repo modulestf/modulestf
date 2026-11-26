@@ -1,3 +1,12 @@
+## [0.16.14](https://github.com/modulestf/modulestf/compare/v0.16.13...v0.16.14) (2026-11-26)
+
+
+### Bug Fixes
+
+* Print a pseudo-version of mtf-facts, guard skill scripts against CDPATH, run verify-pass-test live in CI ([#266](https://github.com/modulestf/modulestf/issues/266)) ([fbc833b](https://github.com/modulestf/modulestf/commit/fbc833bcaf6e109b6402183184a245a676c08d26))
+
+
+
 ## [0.16.13](https://github.com/modulestf/modulestf/compare/v0.16.12...v0.16.13) (2026-11-26)
 
 
