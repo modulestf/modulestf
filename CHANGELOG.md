@@ -1,3 +1,12 @@
+## [0.16.5](https://github.com/modulestf/modulestf/compare/v0.16.4...v0.16.5) (2026-11-26)
+
+
+### Bug Fixes
+
+* **reviewer:** Calibrate a flattened single block and a submodule floor raised with the root ([#248](https://github.com/modulestf/modulestf/issues/248)) ([be78d69](https://github.com/modulestf/modulestf/commit/be78d69eba0c6c74e069aa3eae83a32692248045))
+
+
+
 ## [0.16.4](https://github.com/modulestf/modulestf/compare/v0.16.3...v0.16.4) (2026-11-26)
 
 
