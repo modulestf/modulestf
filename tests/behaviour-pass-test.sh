@@ -77,6 +77,8 @@ behaviour)
   while [ \$# -gt 0 ]; do [ "\$1" = --diff ] && cp "\$2" "$TMP/diff-seen.json"; shift; done
   [ -f "$TMP/behaviour.sleep" ] && sleep 5
   [ -f "$TMP/behaviour.rc" ] && exit "\$(cat "$TMP/behaviour.rc")"; cat "$TMP/behaviour.out" ;;
+version)
+  [ -f "$TMP/features" ] || exit 2; cat "$TMP/features" ;;
 claims-eval)
   while [ \$# -gt 0 ]; do [ "\$1" = --ladder ] && cp "\$2" "$TMP/ladder-seen.json"; shift; done
   [ -f "$TMP/eval.sleep" ] && sleep 5
@@ -91,7 +93,10 @@ FACTS="$TMP/bin/mtf-facts"
 c=0
 setup() {
   c=$((c + 1)); O="$TMP/out-$c"; mkdir -p "$O"
-  rm -f "$TMP/behaviour.rc" "$TMP/eval.rc" "$TMP/behaviour.sleep" "$TMP/eval.sleep" "$TMP/facts.log" "$TMP/ladder-seen.json" "$TMP/diff-seen.json"
+  rm -f "$TMP/behaviour.rc" "$TMP/eval.rc" "$TMP/behaviour.sleep" "$TMP/eval.sleep" "$TMP/facts.log" "$TMP/ladder-seen.json" "$TMP/diff-seen.json" "$TMP/features"
+  # FEATS: the feature names the stub's version --json lists; with none set it exits 2, as a binary
+  # older than the command does.
+  [ -z "${FEATS-}" ] || jq -n --arg f "$FEATS" '{schema_version: 1, version: "v0.0.0", features: ($f | split(" "))}' > "$TMP/features"
   cp "$TMP/behaviour-556.json" "$TMP/behaviour.out"; cp "$TMP/eval-556.json" "$TMP/eval.out"
 }
 classify() { bash "$BP" classify --facts "${F:-$FACTS}" --dir "$MOD" --diff "${DIFF:-$TMP/files.json}" ${PFX:+--prefix "$PFX"} ${SCHEMA:+--schema "$SCHEMA"} --out "$O" > "$O/classify.txt" 2>&1; }
@@ -1315,6 +1320,128 @@ wmutate "identical: the list not sorted" 's/\| unique \| \.\[:20\]/| .[:20]/' t_
 wmutate "identical: the list not capped" 's/\| unique \| \.\[:20\]/| unique/' t_pd_cap
 wmutate "identical: beside unexercised" 's/if \$i != \[\] and \(unex\(\$t; \$et\) \| not\) then \{identical/if \$i != [] then {identical/' t_pd_unex
 wmutate "derive in the shared file returning its input" 's/  return \$o;\n\}/  return \$s;\n}/' t_wr_derived wrapper-derive.pl
+
+# --- The split cap (behaviour.off-ladder-cap): with the feature, at most 40 triggers that may need
+# evidence and 40 that no ladder level can verify; without it, at most 40 in all.
+OFFC="provider-version-floor-change"
+capcase() { # evidence count, off-ladder count [, jq update of each off-ladder trigger]; classify and eval; sets O
+  setup
+  jq -n --argjson e "$1" --argjson o "$2" '
+    def tid: "T-\("00\(. + 1)" | .[-3:])";
+    [range($e) | {file: "e\(.).tf", category: "literal-argument-change", levels: ["L4"]}]
+    + [range($o) | {file: "o\(.).tf", category: "provider-version-floor-change", levels: ["compat"]}]
+    | to_entries | map(.value + {id: (.key | tid), line: 1, change_kind: "modified"}) as $t
+    | {schema_version: 1, inert: false, capped: 0, triggers: $t,
+       entries: [$t[] | {path: .file, change_kind: "modified", inert: false, trigger_ids: [.id]}]}' > "$TMP/cap-b.json"
+  jq ".triggers |= map(if .category == \"$OFFC\" then ${3:-.} else . end)" "$TMP/cap-b.json" > "$TMP/behaviour.out"
+  [ -z "${RAWVER-}" ] || printf '%s\n' "$RAWVER" > "$TMP/features"
+  jq '[.entries[] | {filename: .path, status: "modified"}]' "$TMP/behaviour.out" > "$TMP/files-cap.json"
+  jq '{schema_version: 1, capped: 0, triggers: [.triggers[] | {id, state: "unverifiable"}], claims: [], discarded_claims: []}' "$TMP/behaviour.out" > "$TMP/eval.out"
+  DIFF="$TMP/files-cap.json" classify; evalp
+}
+SPLIT="behaviour.off-ladder-cap"
+t_cap80() { FEATS="$SPLIT" capcase 40 40; [ "$(head -n 1 "$O/classify.txt")" = "behaviour: ran, 80 triggers, 0 over the cap" ] && [ "$(q '.status == "ran" and (.triggers | length) == 80')" = 0 ]; }
+t_cap80; check "split cap: 40 triggers that need evidence and 40 version floors classify and evaluate" $?
+t_cap41e() { FEATS="$SPLIT" capcase 41 10; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
+t_cap41e; check "split cap: 41 triggers that need evidence are refused" $?
+t_cap41o() { FEATS="$SPLIT" capcase 10 41; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
+t_cap41o; check "split cap: 41 version floors are refused" $?
+for u in '.also_categories = ["literal-argument-change"]' '.follows = []' '.levels = ["compat", "L4"]' '.levels = []' '.category = "moved-or-renamed-address"'; do
+  FEATS="$SPLIT" capcase 40 1 "$u"; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"
+  check "split cap: a floor with $u counts toward the evidence cap" $?
+done
+t_cap_moved() { FEATS="$SPLIT" capcase 40 40 'if .id == "T-080" then .category = "moved-or-renamed-address" | .levels = [] else . end'; grep -qF 'behaviour: ran, 80 triggers' "$O/classify.txt"; }
+t_cap_moved; check "split cap: a moved address that selects no level is off-ladder" $?
+t_cap_nofeat() { capcase 40 1; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
+t_cap_nofeat; check "split cap: a binary without the feature keeps the cap of 40" $?
+FEATS="behaviour.declarations" capcase 40 1; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; check "split cap: features without off-ladder-cap keep the cap of 40" $?
+grep -qxF 'version --json' "$TMP/facts.log"; check "split cap: classify reads the features with version --json" $?
+t_cap_raw() { RAWVER="$1" capcase 40 1; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
+t_cap_raw 'not json'; check "split cap: version --json that is not JSON keeps the cap of 40" $?
+t_cap_raw '{"features": "behaviour.off-ladder-cap"}'; check "split cap: features that are not a list keep the cap of 40" $?
+t_cap_f() { FEATS="$SPLIT" capcase 40 1 '.follows = []'; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
+t_cap_a() { FEATS="$SPLIT" capcase 40 1 '.also_categories = ["literal-argument-change"]'; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
+t_cap_l() { FEATS="$SPLIT" capcase 40 1 '.levels = ["compat", "L4"]'; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
+wmutate "split cap: a follower read as off-ladder" 's/ and \(has\("follows"\) \| not\)\n/\n/' t_cap_f
+wmutate "split cap: a merged floor read as off-ladder" 's/def off_ladder: \(has\("also_categories"\) \| not\) and /def off_ladder: /' t_cap_a
+wmutate "split cap: a floor at any level read as off-ladder" 's/\.levels == \["compat"\]\)/true)/' t_cap_l
+wmutate "split cap: the evidence cap dropped" 's/ and length - \$off <= 40//' t_cap41e
+wmutate "split cap: the off-ladder cap dropped" 's/\$off <= 40 and //' t_cap41o
+wmutate "split cap: the feature ignored" 's/ && split=true/ \&\& split=false/' t_cap80
+wmutate "split cap: the split taken without the feature" 's/split=false decl=false/split=true decl=false/' t_cap_nofeat
+
+# --- Variable facts from the report (behaviour.declarations and behaviour.schema-required): no
+# tokenizer and no schema walk. The recorded classifier output gains the facts a binary with both
+# features reports for these files: each variable trigger and referenced input its declaration, each
+# resource trigger with an attribute its schema_required. On it the run object, the record and
+# nullvars.json are byte for byte those of the tokenizer path.
+DECL="behaviour.declarations behaviour.schema-required"
+ENR='def d($n): {new_idle: {added: true, default: "null", nullable: "unset"}, new_on: {added: true, default: "literal", nullable: "unset"},
+    old_existing: {added: false, default: "null", nullable: "unset"}, kms: {added: false, default: "null", nullable: "false"},
+    create: {added: false, default: "literal", nullable: "unset"}}[$n];
+  .triggers |= map(.referenced_inputs |= map(if d(.name) then .declaration = d(.name) else . end)
+    | if (.address | test("^var\\.")) and d(.address | ltrimstr("var.")) then .declaration = d(.address | ltrimstr("var.")) else . end
+    | if (.address | test("^aws_")) and (.attribute | type == "string")
+      then .schema_required = (if .attribute | IN("idle_timeout", "dynamic.default_action", "port") then "not_required" else "unknown" end) else . end)'
+# unexd [behaviour jq update after ENR]: unex with both features and the enriched output.
+unexd() { FEATS="$DECL" unex . "$ENR | ${1:-.}"; }
+t_decl_same() {
+  unex; cp "$O/run-behaviour.json" "$TMP/decl-old-run.json"; cp "$O/record.txt" "$TMP/decl-old-record.txt"; cp "$O/nullvars.json" "$TMP/decl-old-nv.json"
+  unexd && cmp -s "$O/run-behaviour.json" "$TMP/decl-old-run.json" && cmp -s "$O/record.txt" "$TMP/decl-old-record.txt" \
+    && cmp -s "$O/nullvars.json" "$TMP/decl-old-nv.json" && [ "$(marked)" = '["T-008","T-014"]' ]
+}
+t_decl_same; check "declarations: the run object, the record and nullvars.json equal the tokenizer path's" $?
+t_decl_path() { # the report path ran: the required list holds the trigger paths not reported not_required
+  unexd && [ "$(cat "$O/required.json")" = "$(jq -c '[.[] | select(. != "aws_lb_listener.idle_timeout" and . != "aws_lb_listener.default_action" and . != "aws_lb_listener.port")]' <<< '["aws_db_instance.engine","aws_db_instance.kms_key_id","aws_db_instance.provider","aws_db_instance.storage_encrypted","aws_db_instance.timeouts","aws_lb_listener.alpn_policy","aws_lb_listener.force_destroy","aws_lb_listener.ssl_policy"]')" ]
+}
+t_decl_path; check "declarations: the required list is the trigger paths not reported not_required" $?
+wmutate "declarations: a path of any block on the required list" 's/ and \(\.\[-2\] \| test\("\^\[a-z\]\[a-z0-9\]\*_\[a-z0-9_\]\+\$"\)\)\)/)/' t_decl_path
+# The tokenizer is not run: a variables file it refuses (a comment in the block) still gives the entry.
+t_decl_notok() {
+  local keep="$UMOD"; UMOD="$TMP/unex-decl-head"; rm -rf "$UMOD"; cp -R "$keep" "$UMOD"
+  perl -0pi -e 's/  type    = number\n  default = null/  type    = number # seconds\n  default = null/' "$UMOD/variables.tf"
+  unex; local old; old="$(marked)"; unexd; UMOD="$keep"
+  [ "$old" = '[]' ] && [ "$(marked)" = '["T-008","T-014"]' ]
+}
+t_decl_notok; check "declarations: the report decides, a block the tokenizer refuses is still read" $?
+t_decl_follow() { unexd '.triggers |= map(if .id == "T-017" then .follows = ["T-008", "T-014"] else . end)' && [ "$(marked)" = '["T-008","T-014","T-017"]' ]; }
+t_decl_follow; check "declarations: the variable's own trigger is marked when every trigger it follows is" $?
+declno() { # jq update after ENR -> neither T-008 nor T-014 nor T-017 is marked
+  unexd "$1 | .triggers |= map(if .id == \"T-017\" then .follows = [\"T-008\", \"T-014\"] else . end)" && [ "$(marked)" = '[]' ]
+}
+vt='.triggers |= map(if .id == "T-017" then'
+declno "$vt del(.declaration) else . end)"; check "declarations: a variable with no declaration is not null" $?
+declno "$vt .declaration.default = \"literal\" else . end)"; check "declarations: a literal default is not null" $?
+declno "$vt .declaration.default = \"other\" else . end)"; check "declarations: another default expression is not null" $?
+declno "$vt .declaration.default = null else . end)"; check "declarations: a JSON null default field is not the null default" $?
+declno "$vt .declaration.nullable = \"true\" else . end)"; check "declarations: a nullable argument, even true, is not marked" $?
+declno "$vt .declaration.added = false else . end)"; check "declarations: a variable the base has is not marked" $?
+declno "$vt .declaration = \"null\" else . end)"; check "declarations: a declaration that is not an object is not marked" $?
+t_decl_extra() { unexd "$vt .declaration.sensitive = false else . end)" && [ "$(marked)" = '["T-008","T-014"]' ]; }
+t_decl_extra; check "declarations: an additive field in the declaration is ignored" $?
+t_decl_req() { unexd '.triggers |= map(if .id == "T-008" then .schema_required = "required" else . end)' && [ "$(marked)" = '["T-014"]' ]; }
+t_decl_req; check "declarations: a required attribute is not marked" $?
+t_decl_unk() { unexd '.triggers |= map(if .id == "T-014" then .schema_required = "unknown" else . end)' && [ "$(marked)" = '["T-008"]' ]; }
+t_decl_unk; check "declarations: schema_required unknown requires it" $?
+t_decl_abs() { unexd '.triggers |= map(if .id == "T-008" then del(.schema_required) else . end)' && [ "$(marked)" = '["T-014"]' ]; }
+t_decl_abs; check "declarations: no schema_required requires it" $?
+t_decl_nos() { SCHEMA= FEATS="$DECL" unex . "$ENR" && [ "$(marked)" = '[]' ] && [ ! -e "$O/required.json" ]; }
+t_decl_nos; check "declarations: with no schema nothing is marked" $?
+t_decl_one() { FEATS="behaviour.declarations" unex . "$ENR" && [ "$(marked)" = '["T-008","T-014"]' ] && [ "$(cat "$O/required.json")" = '[]' ]; }
+t_decl_one; check "declarations: declarations alone keep the tokenizer and the schema walk" $?
+t_decl_dirs() { # a variable of a submodule keys its own directory
+  unexd '.triggers |= map(if .id == "T-017" then .file = "modules/a/variables.tf" else . end)' && [ "$(cat "$O/nullvars.json")" = '[{"dir":"modules/a","name":"new_idle"}]' ] && [ "$(marked)" = '[]' ]
+}
+t_decl_dirs; check "declarations: a submodule's null variable keys its directory, so the root's arguments stay unmarked" $?
+t_decl_lit() { declno "$vt .declaration.default = \"literal\" else . end)"; }
+t_decl_nul() { declno "$vt .declaration.nullable = \"true\" else . end)"; }
+t_decl_add() { declno "$vt .declaration.added = false else . end)"; }
+wmutate "declarations: the default not checked" 's/ and \.default == "null" and \.nullable == "unset"\)/ and .nullable == "unset")/' t_decl_lit
+wmutate "declarations: nullable not checked" 's/ and \.default == "null" and \.nullable == "unset"\)/ and .default == "null")/' t_decl_nul
+wmutate "declarations: added not checked" 's/\.declaration \| type == "object" and \.added == true and /.declaration | type == "object" and /' t_decl_add
+wmutate "declarations: unknown read as not required" 's/ and \.schema_required != "not_required"\)/ and .schema_required == "required")/' t_decl_unk
+wmutate "declarations: the report path not taken" 's/if \[ "\$decl" = true \]; then decl_vars; else null_vars; fi/null_vars/' t_decl_notok
+wmutate "declarations: one feature enough" 's/ && grep -qxF behaviour\.schema-required <<< "\$feats" && decl=true/ \&\& decl=true/' t_decl_one
 
 echo
 if [ "$fails" -eq 0 ]; then echo "behaviour pass: all checks hold"; else echo "behaviour pass: $fails failed"; exit 1; fi
