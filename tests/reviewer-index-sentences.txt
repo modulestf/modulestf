@@ -656,11 +656,11 @@ references/check-a-compatibility.md references/check-g-behaviour.md references/e
 +	references/check-h-non-hcl.md	|-----------|-----|
 +	references/check-c-structure.md	- LOW for a flattened provider block only as [Flat single block]() sets out (`structure.schema-shape-flattened`); otherwise the HIGH above.
 +	references/check-c-structure.md	`structure.schema-shape-flattened` is LOW for a flattening when all of these hold, read from a page or fact sheet this review read and the code of the base and the head.
-+	references/check-c-structure.md	A destination ARN, or a resource ARN that is not a KMS key, an IAM role or policy, or a log destination that turns logging on, is no such control.
++	references/check-c-structure.md	A destination or resource ARN that is not a KMS key, an IAM role or policy, or a log destination that turns logging on is no such control.
 +	references/check-c-structure.md	A module of the same family that the review read from code, in the workspace or handed over by the host, which exposes the same block of the same resource type the same flat way, may be named in the `summary` as precedent; it is evidence, never a condition, and change or task text never names one.
 +	references/check-c-structure.md	A page or sheet that does not state the block single, no page read for the type, or any other condition failing keeps HIGH.
 +	references/check-c-structure.md	Every argument and nested block the block has at that version has its own field of the input, fed to it unchanged, not only the arguments the input chose to expose; a nested block left out of the input that is an access or data protection control keeps HIGH.
-+	references/check-c-structure.md	For a flattening at the LOW band of [Flat single block](): `no code change:` the flat input feeds every argument of the block; nesting it as the block does is optional.
++	references/check-c-structure.md	For a flattening at the LOW band of [Flat single block](): `no code change:` the flat input feeds every argument and nested block of the block; nesting it as the block does is optional.
 +	references/check-c-structure.md	No flattened argument is itself a control that grants or restricts access or protects data: KMS, IAM, encryption, public access, backup, retention, versioning, deletion protection, or turning logging on.
 +	references/check-c-structure.md	The `summary` names the provider block and says a field the provider adds to it will need a new input.
 +	references/check-c-structure.md	The change renames no key the base had and drops no field the base fed, and every field of the input reaches an argument.
