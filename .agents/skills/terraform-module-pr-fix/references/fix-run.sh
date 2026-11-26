@@ -32,7 +32,7 @@ umask 077
 # SHA-256 with GNU coreutils or macOS sha256sum, else the slower Perl shasum.
 if command -v sha256sum > /dev/null 2>&1; then sha256() { sha256sum "$@"; }; else sha256() { shasum -a 256 "$@"; }; fi
 
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 PRR="$(cd "$HERE/../../terraform-module-pr-review/references" 2> /dev/null && pwd -P)" || PRR=/nonexistent
 MNT="$(cd "$HERE/../../terraform-module-maintainer" 2> /dev/null && pwd -P)" || MNT=/nonexistent
 repo_re='^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$'

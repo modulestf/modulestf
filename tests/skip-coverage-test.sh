@@ -23,11 +23,32 @@ check() { # name, command status (0 = holds)
 # engine): an mtf-facts on PATH whose version --json lists cmd:changes. Without one the suite is
 # skipped, and with MTF_FACTS_REQUIRED=1 the skip fails. The parsing cases the Perl readers had
 # are the facts engine's own fixtures now (testdata/changes in the facts repository).
+# MTF_FACTS_BIN, when it names an executable file, is put first on PATH through a link of its own
+# directory, so a binary installed elsewhere is the one the script and the suite use.
+if [ -n "${MTF_FACTS_BIN:-}" ] && [ -x "$MTF_FACTS_BIN" ]; then
+  mkdir "$TMP/facts-bin" && ln -s "$MTF_FACTS_BIN" "$TMP/facts-bin/mtf-facts" && PATH="$TMP/facts-bin:$PATH"
+fi
 MF="$(cd / && command -v mtf-facts)"
 if [ -z "$MF" ] || ! "$MF" version --json 2> /dev/null | jq -e '(.features | index("cmd:changes")) != null' > /dev/null 2>&1; then
   if [ "${MTF_FACTS_REQUIRED:-}" = 1 ]; then echo "FAIL no mtf-facts with the changes command on PATH, and MTF_FACTS_REQUIRED=1"; exit 1; fi
   echo "skip skip coverage: no mtf-facts with the changes command on PATH (MTF_FACTS_REQUIRED=1 makes this fail)"; exit 0
 fi
+
+# The gate above run with no mtf-facts on PATH: it fails under MTF_FACTS_REQUIRED=1 and skips
+# without it. A copy whose required check never fires is caught.
+mkdir "$TMP/nobin"
+for _t in mktemp rm dirname; do ln -s "$(command -v "$_t")" "$TMP/nobin/$_t"; done # all the gate needs before it runs
+gate_holds() { # script: 0 when it fails with the variable set and skips with it unset
+  local out s
+  out="$(PATH="$TMP/nobin" MTF_FACTS_REQUIRED=1 MTF_FACTS_BIN= "$BASH" "$1" 2>&1)"; s=$?
+  [ "$s" = 1 ] && [[ "$out" == FAIL* ]] || return 1
+  out="$(PATH="$TMP/nobin" MTF_FACTS_REQUIRED= MTF_FACTS_BIN= "$BASH" "$1" 2>&1)"; s=$?
+  [ "$s" = 0 ] && [[ "$out" == skip* ]]
+}
+check "no mtf-facts: the suite fails under MTF_FACTS_REQUIRED=1 and skips without it" "$(gate_holds "$0"; echo $?)"
+sed 's/MTF_FACTS_REQUIRED:-}" = 1 \]/MTF_FACTS_REQUIRED:-}" = 9 ]/' "$0" > "$TMP/gate-mut.sh"
+check "the mutation that never fails a missing binary under MTF_FACTS_REQUIRED=1 is caught" \
+  "$( ! cmp -s "$0" "$TMP/gate-mut.sh" && ! gate_holds "$TMP/gate-mut.sh"; echo $?)"
 
 # --- The synthetic module: a root module, one submodule, a wrapper, six examples that plan and
 # three that a G3 hit (a data source outside the gate list) keeps from planning.

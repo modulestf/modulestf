@@ -19,7 +19,7 @@
 set -u
 export LC_ALL=C
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 RULES="$HERE/rule-facts.md"
 CAP=1048576
 

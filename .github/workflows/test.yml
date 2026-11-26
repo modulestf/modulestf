@@ -45,7 +45,7 @@ jobs:
       # The suites that run the real mtf-facts get the pinned release, its hash checked;
       # a wrong hash fails the job. No other suite sees it.
       - name: Install the pinned mtf-facts
-        if: matrix.suite == 'skills-test.sh' || matrix.suite == 'review-run-test.sh'
+        if: matrix.suite == 'skills-test.sh' || matrix.suite == 'review-run-test.sh' || matrix.suite == 'verify-pass-test.sh' || matrix.suite == 'skip-coverage-test.sh'
         run: |
           mkdir -p "$RUNNER_TEMP/mtf-facts"
           bash .agents/skills/terraform-module-pr-review/references/mtf-facts-install.sh "$RUNNER_TEMP/mtf-facts"

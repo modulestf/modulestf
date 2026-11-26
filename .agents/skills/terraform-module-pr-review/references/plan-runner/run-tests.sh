@@ -14,7 +14,7 @@
 # and tests.txt, whose one line is the result: passed <n>, failed <n> or error <class>.
 set -euo pipefail
 
-here="$(cd "$(dirname "$0")" && pwd)"
+here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 tag="$("$here/image-tag.sh")"
 runner_image="plan-runner:$tag"
 proxy_image="plan-egress-proxy:$tag"

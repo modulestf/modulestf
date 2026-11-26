@@ -533,7 +533,7 @@ exc_or_gate() { # all hits as one argument: a gate hit wins; exceptions alone ar
     *) CLASS='exception: needs a Docker daemon' ;;
   esac
 }
-PHERE="$(cd "$(dirname "$0")" && pwd -P)"
+PHERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 # Runner mode: the eight named providers, plus the profile's lines (plan-pass.md, Runner providers)
 RPROV='hashicorp/(aws|random|time|tls|cloudinit|null|local|external)'
 # The file is mounted beside this script in the runner, and read from the profile in a checkout
@@ -576,7 +576,7 @@ fi
 PROFILE=${3:-}
 shift 3 2>/dev/null || { echo "plan pass not run: arguments missing"; exit 0; }
 BASESHA=; GMODE=laptop; PHASE=; INDEX=; BUDGET=; ROLE_ARN=; DIFFDIRS=
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 while :; do
   case "${1:-}" in
     --base) BASESHA=${2:-}; shift 2 2>/dev/null || shift ;;

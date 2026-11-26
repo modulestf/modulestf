@@ -38,7 +38,7 @@ RUN="$(cd "$RUN" && pwd -P)"
 ROOT="${RUN%/*}"
 case "$RUN" in "$ROOT"/pr-review.??????) ;; *) die "not a run directory: $RUN" ;; esac
 shift 2
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 SELF="$HERE/${0##*/}"
 TPL="$HERE/ladder-templates"
 

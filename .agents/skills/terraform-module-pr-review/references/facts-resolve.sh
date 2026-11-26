@@ -9,7 +9,9 @@
 #       output cap. Sets:
 #         FACTS_BIN       the binary, or empty when there is none
 #         FACTS_STATE     absent, ok, old (no version report), timeout or refused
-#         FACTS_VERSION   vX.Y.Z when known, else empty
+#         FACTS_VERSION   the version as the binary reports it (vX.Y.Z, a pseudo-version of a
+#                         build from a commit, or "(devel)") when it is plain text, else empty.
+#                         Only printed: the feature list, never the version, says what it can do.
 #         FACTS_FEATURES  the report's feature names, one per line, only when FACTS_STATE is ok
 #         FACTS_REPORT    the report as it came, only when FACTS_STATE is ok
 #   facts_has <feature>    exit 0 when the version report lists the feature
@@ -57,7 +59,7 @@ facts_resolve() {
   [ -n "$_fr_bin" ] && [ -f "$_fr_bin" ] && [ -x "$_fr_bin" ] || return 0
   for _fr_d in "$@"; do
     [ -n "$_fr_d" ] || continue
-    _fr_d="$(cd "$_fr_d" 2> /dev/null && pwd -P)" || continue
+    _fr_d="$(CDPATH= cd -- "$_fr_d" 2> /dev/null && pwd -P)" || continue
     case "$_fr_bin/" in "$_fr_d"/*) return 0 ;; esac
   done
   FACTS_BIN=$_fr_bin
@@ -70,7 +72,7 @@ facts_resolve() {
         # shellcheck disable=SC2034 # read by the scripts that source this file
         FACTS_STATE=ok FACTS_REPORT=$_fr_out
         FACTS_FEATURES="$(printf '%s\n' "$_fr_out" | jq -r '.features[]')"
-        FACTS_VERSION="$(printf '%s\n' "$_fr_out" | jq -r '.version | select(test("^v[0-9]+[.][0-9]+[.][0-9]+$"))')"
+        FACTS_VERSION="$(printf '%s\n' "$_fr_out" | jq -r '.version | select(test("^[A-Za-z0-9(][A-Za-z0-9.+_()-]{0,127}$"))')"
       else
         FACTS_STATE=refused
       fi ;;
@@ -79,8 +81,13 @@ facts_resolve() {
     *)
       # No version report: a release before it. Its plain version line names the release.
       FACTS_STATE=old
+      # Taken only when the output is exactly one line.
       _fr_out="$(cd / && facts_run 10 4096 "$FACTS_BIN" version)" &&
-        printf '%s\n' "$_fr_out" | grep -Eqx 'v[0-9]+[.][0-9]+[.][0-9]+' && FACTS_VERSION=$_fr_out ;;
+        case "$_fr_out" in
+          *"
+"*) ;;
+          *) printf '%s\n' "$_fr_out" | grep -Eqx '[A-Za-z0-9(][A-Za-z0-9.+_()-]{0,127}' && FACTS_VERSION=$_fr_out ;;
+        esac ;;
   esac
   return 0
 }

@@ -12,7 +12,7 @@
 # standard error, for the operator, never for a record: there is no fallback to the
 # profile's own credentials.
 set -euo pipefail
-here="$(cd "$(dirname "$0")" && pwd -P)"
+here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 profile=${1:-} arn=${2:-} name=${3:-}
 stop() { echo "plan-session: $1" >&2; exit 1; }
 [[ "$profile" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]] || stop "bad input: profile name"

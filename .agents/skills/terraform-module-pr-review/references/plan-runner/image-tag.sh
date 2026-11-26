@@ -4,7 +4,7 @@
 # from. Two checkouts with the same runner files share a tag; any change to those files
 # gives a new one, so runs of different revisions on one Docker daemon never share an image.
 set -euo pipefail
-here="$(cd "$(dirname "$0")" && pwd)"
+here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 if [ -n "${PLAN_RUNNER_TAG:-}" ]; then
   tag="$PLAN_RUNNER_TAG"
 else

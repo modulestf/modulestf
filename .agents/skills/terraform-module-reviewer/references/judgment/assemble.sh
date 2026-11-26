@@ -14,7 +14,7 @@
 set -euo pipefail
 export LC_ALL=C
 
-J="$(cd "$(dirname "$0")" && pwd)"
+J="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 R="$(dirname "$J")"   # references/
 S="$(dirname "$R")"   # the skill root
 

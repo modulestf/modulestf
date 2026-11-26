@@ -181,6 +181,38 @@ for sh in bash zsh; do
   frstub '[ "$2" = --json ] && exit 2; echo v0.8.0' "$TMP/fr/bin"
   check "$sh: resolver: a release before the version report names its version and the one it needs" \
     "$([ "$(frline)" = "old|mtf-facts: v0.8.0, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path" ]; echo $?)"
+  # A build from a commit reports a pseudo-version or "(devel)": the line prints it as reported, and
+  # the features, never the version, decide what it can do.
+  PSEUDO=v0.19.1-0.20261126120000-abcdef123456
+  frstub "echo '{\"schema_version\":1,\"version\":\"$PSEUDO\",\"features\":[\"flag:affected:module-root\",\"flag:profile-check:profile-dir\"]}'" "$TMP/fr/bin"
+  check "$sh: resolver: a pseudo-version with every feature prints as reported" "$([ "$(frline)" = "ok|mtf-facts: $PSEUDO" ]; echo $?)"
+  frstub 'echo "{\"schema_version\":1,\"version\":\"(devel)\",\"features\":[\"flag:profile-check:profile-dir\"]}"' "$TMP/fr/bin"
+  check "$sh: resolver: a (devel) build is judged by its features, not assumed new" \
+    "$([ "$(frline)" = "ok|mtf-facts: (devel), missing flag:affected:module-root (v0.12.0 or later reports it); the steps that need it use their older path" ]; echo $?)"
+  frstub "[ \"\$2\" = --json ] && exit 2; echo $PSEUDO" "$TMP/fr/bin"
+  check "$sh: resolver: a pseudo-version before the version report prints as reported" \
+    "$([ "$(frline)" = "old|mtf-facts: $PSEUDO, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path" ]; echo $?)"
+  frstub 'echo "{\"schema_version\":1,\"version\":\"v0.13.0; rm -rf x\",\"features\":[]}"' "$TMP/fr/bin"
+  check "$sh: resolver: a version that is not plain text is not printed" \
+    "$(case "$(frline)" in "ok|mtf-facts: version unknown, missing "*) echo 0 ;; *) echo 1 ;; esac)"
+  # A release before the version report whose plain version prints several lines gives no version,
+  # even when one of the lines looks like one.
+  frstub '[ "$2" = --json ] && exit 2; printf "%s\n" "version info" unknown "built from source"' "$TMP/fr/bin"
+  check "$sh: resolver: a plain version of several lines is not a version" \
+    "$([ "$(frline)" = "old|mtf-facts: version unknown, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path" ]; echo $?)"
+  frstub '[ "$2" = --json ] && exit 2; printf "%s\n" v0.8.0 "built from source"' "$TMP/fr/bin"
+  check "$sh: resolver: a plain version of two lines, one of them a version, is not a version" \
+    "$([ "$(frline)" = "old|mtf-facts: version unknown, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path" ]; echo $?)"
+  perl -0pe 's/          \*"\n"\*\) ;;\n//' "$FR" > "$TMP/fr-ml.sh"
+  check "$sh: resolver: the mutation that takes a several-line plain version is caught" \
+    "$( ! cmp -s "$FR" "$TMP/fr-ml.sh" && [ "$(PATH="$TMP/fr/bin:/usr/bin:/bin" "$sh" -c '. "$1"; facts_resolve; echo "$FACTS_VERSION"' sh "$FR")" = "" ] \
+      && [ "$(PATH="$TMP/fr/bin:/usr/bin:/bin" "$sh" -c '. "$1"; facts_resolve; echo "$FACTS_VERSION"' sh "$TMP/fr-ml.sh")" != "" ]; echo $?)"
+  # The mutation that reads only vX.Y.Z as a version is caught by the pseudo-version case.
+  perl -0pe 's/\^\[A-Za-z0-9\(\]\[A-Za-z0-9\.\+_\(\)-\]\{0,127\}\$/^v[0-9]+[.][0-9]+[.][0-9]+\$/' "$FR" > "$TMP/fr-ver.sh"
+  frstub "echo '{\"schema_version\":1,\"version\":\"$PSEUDO\",\"features\":[]}'" "$TMP/fr/bin"
+  check "$sh: resolver: the mutation that reads only vX.Y.Z as a version is caught" \
+    "$( ! cmp -s "$FR" "$TMP/fr-ver.sh" && [ "$(PATH="$TMP/fr/bin:/usr/bin:/bin" "$sh" -c '. "$1"; facts_resolve; echo "$FACTS_VERSION"' sh "$FR")" = "$PSEUDO" ] \
+      && [ "$(PATH="$TMP/fr/bin:/usr/bin:/bin" "$sh" -c '. "$1"; facts_resolve; echo "$FACTS_VERSION"' sh "$TMP/fr-ver.sh")" != "$PSEUDO" ]; echo $?)"
   frstub 'echo "{\"schema_version\":2,\"version\":\"v9.0.0\",\"features\":[]}"' "$TMP/fr/bin"
   check "$sh: resolver: a report of another schema is refused, not read as old" "$(case "$(frline)" in "refused|mtf-facts: version unknown, its version report was refused;"*) echo 0 ;; *) echo 1 ;; esac)"
   frstub 'head -c 70000 /dev/zero | tr "\0" x' "$TMP/fr/bin"

@@ -16,7 +16,7 @@ set -f
 
 OUT="${1:?facts output directory}"
 WORK="${2:?work directory}"
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 FACTS_JQ="$HERE/schema-facts.jq"
 HANDOFF_JQ="$HERE/schema-handoff.jq"
 HANDOFF="${3:-}"
