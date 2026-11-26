@@ -51,10 +51,22 @@ echo '{}' > "$RUN/affected-empty.json"
 
 cat > "$TMP/bin/mtf-facts" <<'EOF'
 #!/bin/bash
+# `version` answers as facts-resolve.sh reads it (STUB_VERSION: ok, old for a release with no
+# version report, junk); any other command is recorded and prints the fixture.
+if [ "${1-}" = version ]; then
+  case "${STUB_VERSION:-ok}" in
+    ok) if [ "${2-}" = --json ]; then echo '{"schema_version":1,"version":"v0.13.0","features":["cmd:depth"]}'; else echo v0.13.0; fi ;;
+    old) [ "${2-}" = --json ] && { echo 'unknown flag: --json' >&2; exit 2; }; echo v0.8.0 ;;
+    *) echo nope ;;
+  esac
+  exit 0
+fi
 printf '%s\n' "$@" > "$STUB_ARGS"
 prev=""; for a in "$@"; do [ "$prev" != --files ] || cp "$a" "$STUB_FILES"; prev="$a"; done
 case "${STUB_MODE:-ok}" in fail) exit 1 ;; slow) sleep 5 ;; junk) echo nope; exit 0 ;; esac
+echo "stub noise on standard error" >&2
 cat "$STUB_OUT"
+[ "${STUB_MODE:-ok}" != pad ] || head -c 1200000 /dev/zero | tr '\0' ' '
 EOF
 chmod +x "$TMP/bin/mtf-facts"
 export STUB_ARGS="$TMP/args.txt" STUB_FILES="$TMP/stub-files.json"
@@ -191,6 +203,18 @@ mkdir -p "$C/.bin"; cp "$TMP/bin/mtf-facts" "$C/.bin/mtf-facts"; PATH="$TMP/lbin
 mkdir -p "$TMP/cwd/rel"; cp "$TMP/bin/mtf-facts" "$TMP/cwd/rel/"
 PATH="rel:$PATH0" compute; check "tool on a relative PATH entry: never run, deep" "$(unavailable && [ ! -e "$STUB_ARGS" ]; echo $?)"
 rm -rf "$C/.bin"
+# facts-resolve.sh decides which binary runs: a release with no version report still serves depth,
+# a refused report does not, and a binary under the run directory or the base tree is never run.
+t_vold() { STUB_VERSION=old compute; [ "$ST" = 0 ] && [ "$(dj .depth)" = light ] && [ -e "$STUB_ARGS" ]; }
+t_vold; check "resolver: a binary with no version report still runs for depth" $?
+t_vjunk() { STUB_VERSION=junk compute; unavailable && [ ! -e "$STUB_ARGS" ]; }
+t_vjunk; check "resolver: a binary whose version report is refused is never run for depth, deep" $?
+t_inrun() { mkdir -p "$RUN/.bin"; cp "$TMP/bin/mtf-facts" "$RUN/.bin/mtf-facts"; PATH="$RUN/.bin:$PATH0" compute; rm -rf "$RUN/.bin"; unavailable && [ ! -e "$STUB_ARGS" ]; }
+t_inrun; check "resolver: a binary under the run directory is never run, deep" $?
+t_inbase() { mkdir -p "$RUN/base/.bin"; cp "$TMP/bin/mtf-facts" "$RUN/base/.bin/mtf-facts"; PATH="$RUN/base/.bin:$PATH0" compute; rm -rf "$RUN/base/.bin"; unavailable && [ ! -e "$STUB_ARGS" ]; }
+t_inbase; check "resolver: a binary under the base tree is never run, deep" $?
+t_cap() { STUB_MODE=pad compute; unavailable; }
+t_cap; check "output cap: a depth report past 1 MiB is refused, deep" $?
 
 # --- schema_version: mtf-facts writes it next to format from the release that adds it. A report
 # with it equal to 1 is taken and depth.json is written without it, in the shape the bound
@@ -286,7 +310,7 @@ t_tokens; check "tokens: depth.md lists the tokens of render-comment.jq, in orde
 
 # --- Negative self-check: each mutation of a temp copy must make its named case fail.
 mutate() { # name, perl substitution, case function
-  local d="$TMP/mut-$oc"; oc=$((oc + 1)); mkdir -p "$d"; cp "$REF/depth.sh" "$REF/render-comment.jq" "$d/"
+  local d="$TMP/mut-$oc"; oc=$((oc + 1)); mkdir -p "$d"; cp "$REF/depth.sh" "$REF/render-comment.jq" "$REF/facts-resolve.sh" "$d/"
   perl -0pi -e "$2" "$d/depth.sh" "$d/render-comment.jq"
   if cmp -s "$d/depth.sh" "$REF/depth.sh" && cmp -s "$d/render-comment.jq" "$REF/render-comment.jq"; then
     check "self-check: $1 (the mutation changed nothing)" 1; return
@@ -304,7 +328,13 @@ mutate "escalate keeps examples out of scope" 's/\| \.examples_out_of_scope = \[
 mutate "the owner raise ignored" 's/\[ -n "\$owner" \] && raise=/[ -n "" ] \&\& raise=/' t_owner
 mutate "a failed tool kept its result" "s/\\[ \"\\\$st\" = ok \\] \\|\\| raise='\\[\"deep-classifier-unavailable\"\\]'//" t_missing
 mutate "the fixed scope table not checked" 's/and \(\.depth as \$d \| \.checks_out_of_scope - depth_scope\[\$d\] == \[\]\)//' t_refused
-mutate "a tool under the clone run" 's/for d in "\$@"; do case "\$f\/" in "\$d"\/\*\) return 0 ;; esac; done//' t_inclone
+mutate "a binary under the clone, base tree or run directory resolved (no refused directories)" 's/facts_resolve "\$C" "\$B" "\$R"/facts_resolve/' t_inclone
+mutate "a binary under the run directory resolved (no run directory refused)" 's/facts_resolve "\$C" "\$B" "\$R"/facts_resolve "\$C" "\$B"/' t_inrun
+mutate "a copy without the resolver, the first mtf-facts on PATH taken as it is" 's/facts_resolve "\$C" "\$B" "\$R"/FACTS_BIN="\$(command -v mtf-facts)" FACTS_STATE=ok/' t_inclone
+mutate "a refused version report run anyway" 's/case "\$FACTS_STATE" in ok \| old\) facts="\$FACTS_BIN" ;; \*\) facts="" ;; esac/facts="\$FACTS_BIN"/' t_vjunk
+mutate "an old binary with no version report refused" 's/ok \| old\) facts=/ok) facts=/' t_vold
+mutate "the output cap dropped" 's/facts_run "\$deadline" "\$CAP"/facts_run "\$deadline" 999999999/' t_cap
+mutate "standard error of the report kept in its output" 's/FACTS_RUN_NOERR=1 //' t_bind
 mutate "a missing classifier not raised" 's/\|\| raise="\$\(jq -c .\. \+ \["deep-classifier-unavailable"\]. <<< "\$raise"\)"\n//' t_noclass
 mutate "an empty affected output accepted" 's/ and \. != \{\}//' t_affempty
 mutate "a failed git diff hashed" 's/> "\$f" 2> \/dev\/null && h=/> "\$f" 2> \/dev\/null; h=/' t_brokendiff

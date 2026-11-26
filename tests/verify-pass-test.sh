@@ -86,8 +86,10 @@ esac
 EOF
 chmod +x "$TMP/facts/mtf-facts"
 REAL='["brokenbase","bump","bumpmajor","codeok","env","initfail","net","net2","newfail","regress"]'
+AFFC="$TMP/pr-review.*/affected-cache"
+fresh() { rm -rf $AFFC; } # the stub changed: no report of an earlier call stands
 facts() { # jq program over the real example names -> facts.out; mode
-  jq -n --argjson r "$REAL" "$1" > "$TMP/facts.out"; printf '%s' "${2:-}" > "$TMP/facts.mode"
+  fresh; jq -n --argjson r "$REAL" "$1" > "$TMP/facts.out"; printf '%s' "${2:-}" > "$TMP/facts.mode"
 }
 
 # The upstream repository: a base commit and a head commit.
@@ -420,7 +422,7 @@ $BASE" --out "$R3/x.json")"
   # the one the scan gives. A report that does not fit falls back to the scan.
   feat() { jq -n --argjson f "$1" '{schema_version:1, name:"mtf-facts", version:"v0.13.0", reports:{affected:1}, features:$f}' > "$TMP/facts.version"; }
   feat '["cmd:affected","flag:affected:module-root"]'
-  rootrep() { jq -n "$1" > "$TMP/facts.out"; : > "$TMP/facts.mode"; }
+  rootrep() { fresh; jq -n "$1" > "$TMP/facts.out"; : > "$TMP/facts.mode"; }
   rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf","examples/touched/main.tf"],
     examples:[{dir:"examples/touched", reason:"touched"}, {dir:"modules/a/examples/own", reason:"touched"}, {dir:"examples/calls", reason:"caller"}]}'
   : > "$TMP/facts.log"
@@ -435,7 +437,7 @@ $BASE" --out "$R3/x.json")"
   for bad in '.module_root = "modules/b"' '.examples += [{dir:"examples/a b", reason:"all"}]' '.examples |= map(select(.dir != "modules/a/examples/own"))' \
       '.examples += [{dir:"modules/a/examples/nope", reason:"all"}]' '.examples[0].unresolved = true' \
       '.examples += [{dir:"examples/calls", reason:"caller"}]' '.examples += [{dir:"modules/a/examples/own", reason:"all"}]'; do
-    jq "$bad" "$TMP/facts.out" > "$TMP/facts.bad" && cp "$TMP/facts.out" "$TMP/facts.good" && cp "$TMP/facts.bad" "$TMP/facts.out"
+    fresh; jq "$bad" "$TMP/facts.out" > "$TMP/facts.bad" && cp "$TMP/facts.out" "$TMP/facts.good" && cp "$TMP/facts.bad" "$TMP/facts.out"
     check "$sh: a module root report that does not fit ($bad) is invalid, the scan selects" \
       "$(q <(sel9 modules/a "$TMP/facts") '.selection.tool == "invalid" and [.dirs[] | "\(.affected) \(.dir)"] == ["all modules/a/examples/own", "touched examples/touched", "caller examples/calls"]')"
     cp "$TMP/facts.good" "$TMP/facts.out"
@@ -487,10 +489,88 @@ $BASE" --out "$R3/x.json")"
   check "$sh: a relative --files reaches the module root run as an absolute copy" \
     "$([ "$(cat "$TMP/facts.log")" = "affected $C9 --module-root modules/a --diff $R9/verify-select/affected-files.json --json" ] && cmp -s "$TMP/files9.json" "$TMP/facts-diff.json" && [ "$(q "$TMP/selrel.json" '.selection.tool == "mtf-facts"')" = 0 ]; echo $?)"
   perl -0pe 's/(--module-root "\$\{PREFIX%\/\}" \\\n\s+--diff )"\$W\/affected-files\.json"/$1"\$FILES"/' "$VP" > "$TMP/vp-rel.sh"
-  : > "$TMP/facts.log"
+  : > "$TMP/facts.log"; fresh
   (cd "$TMP" && PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/vp-rel.sh" select "$R9" --files files9.json --prefix modules/a > /dev/null 2>&1)
   check "$sh: the mutation that passes --files as given to the module root run is caught" \
     "$( ! cmp -s "$VP" "$TMP/vp-rel.sh" && grep -q -- '--diff files9.json ' "$TMP/facts.log"; echo $?)"
+  # One `affected` report per module root and review: select, coverage and every later command
+  # read the report the first one wrote into the run directory. The key is a hash of the inputs;
+  # a file with another key, or one that is no report, is not used and the run is made again.
+  rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf"],
+    examples:[{dir:"modules/a/examples/own", reason:"caller"}]}'
+  selx() { # script, module root prefix (and files list): one select; the selection tool on standard output
+    PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$1" select "$R9" --files "${3:-$TMP/files9.json}" --prefix "$2" 2> /dev/null | jq -r '.selection.tool'
+  }
+  nrun() { grep -c '^affected ' "$TMP/facts.log"; }
+  cachef() { printf '%s\n' "$R9"/affected-cache/*.json; }
+  # t_once: four selects and a coverage run of one review, then a second module root twice.
+  t_once() { # script
+    fresh; : > "$TMP/facts.log"
+    selx "$1" modules/a > /dev/null; selx "$1" modules/a > /dev/null
+    PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$1" coverage "$R9" --files "$TMP/files9.json" --out "$TMP/cov-once.json" --prefix modules/a --no-plan > /dev/null 2>&1
+    selx "$1" modules/a > /dev/null
+    [ "$(nrun)" = 1 ] || return 1
+    selx "$1" modules/b > /dev/null; selx "$1" modules/b > /dev/null
+    [ "$(nrun)" = 2 ] && [ "$(selx "$1" modules/a)" = mtf-facts ]
+  }
+  check "$sh: a traced review starts one affected process per module root" "$(t_once "$VP"; echo $?)"
+  # The same with no feature of the module root: the plain run is shared too.
+  feat '["cmd:affected"]'; fresh; : > "$TMP/facts.log"
+  jq -n '{schema_version:1, inert:false, fallback:null, changed:["main.tf"], examples:[{dir:"examples/own", reason:"touched"}]}' > "$TMP/facts.out"
+  selx "$VP" modules/a > /dev/null; selx "$VP" modules/a > /dev/null
+  check "$sh: the plain run of a binary with no module root feature is made once" "$([ "$(nrun)" = 1 ]; echo $?)"
+  feat '["cmd:affected","flag:affected:module-root"]'
+  rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf"],
+    examples:[{dir:"modules/a/examples/own", reason:"caller"}]}'
+  # A cache file that holds another key than its name is not used.
+  t_key() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    f="$(cachef)"; [ -f "$f" ] || return 1
+    jq -c '.key = "0000" | .report.module_root = "modules/zzz"' "$f" > "$f.x" && mv "$f.x" "$f"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ] && jq -e --arg k "$(basename "$f" .json)" '.key == $k' "$f" > /dev/null
+  }
+  check "$sh: a cache file whose key does not match is recomputed and written again" "$(t_key "$VP"; echo $?)"
+  # A file that is no JSON, and one with no report, are recomputed too.
+  t_corrupt() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    f="$(cachef)"; [ -f "$f" ] || return 1
+    printf 'not json {' > "$f"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ] || return 1
+    jq -c '.report = null' "$f" > "$f.x" && mv "$f.x" "$f"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 3 ]
+  }
+  check "$sh: a corrupt cache file is recomputed" "$(t_corrupt "$VP"; echo $?)"
+  # A cache directory that is a link is never read.
+  t_link() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    mv "$R9/affected-cache" "$R9/affected-real"; ln -s "$R9/affected-real" "$R9/affected-cache"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ]; rc=$?
+    rm -rf "$R9/affected-cache" "$R9/affected-real"; return $rc
+  }
+  check "$sh: a cache directory that is a link is not used" "$(t_link "$VP"; echo $?)"
+  # Another input gives another key: a changed files list, a binary with another version report.
+  t_inputs() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    jq '. + [{filename:"modules/a/extra.tf", status:"added", additions:1, deletions:0}]' "$TMP/files9.json" > "$TMP/files9b.json"
+    selx "$1" modules/a "$TMP/files9b.json" > /dev/null; [ "$(nrun)" = 2 ] || return 1
+    jq -n '{schema_version:1, name:"mtf-facts", version:"v0.14.0", reports:{affected:1}, features:["cmd:affected","flag:affected:module-root"]}' > "$TMP/facts.version"
+    selx "$1" modules/a > /dev/null; rc=$?; feat '["cmd:affected","flag:affected:module-root"]'
+    [ "$(nrun)" = 3 ] && [ "$rc" = 0 ]
+  }
+  check "$sh: a changed files list or version report gives another key, the run is made again" "$(t_inputs "$VP"; echo $?)"
+  mutcache() { # name, perl substitution, case function
+    perl -0pe "$2" "$VP" > "$TMP/vp-cache.sh"
+    if cmp -s "$VP" "$TMP/vp-cache.sh"; then check "$sh: $1 (the mutation changed nothing)" 1; return; fi
+    check "$sh: the mutation $1 is caught" "$( ! "$3" "$TMP/vp-cache.sh" > /dev/null 2>&1; echo $?)"
+  }
+  mutcache "that never reads the cache" 's/  if \[ -n "\$ar_key" \] && affected_cached "\$ar_key"; then return 0; fi\n//' t_once
+  mutcache "that never stores the report" 's/  \[ -z "\$ar_key" \] \|\| affected_store "\$ar_key"\n//' t_once
+  mutcache "that does not compare the key" 's/ and \.key == \$k//' t_key
+  mutcache "that takes a file with no report" 's/ and \(\.report \| type == "object"\)//' t_corrupt
+  mutcache "that follows a linked cache directory" 's/\[ -d "\$RUN\/affected-cache" \] && \[ ! -L "\$RUN\/affected-cache" \] && //' t_link
+  mutcache "with the files list out of the key" 's/"\$\{ak_files%% \*\}" //' t_inputs
+  mutcache "with the binary version out of the key" 's/ "\$FACTS_BIN" "\$FACTS_VERSION" "\$\{ak_rep%% \*\}"//' t_inputs
+  fresh; : > "$TMP/facts.log"
   # Started by a bare relative name, the script still finds facts-resolve.sh beside it.
   cp "$VP" "$TMP/vp-bare.sh"
   sed 's|^HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"$|HERE="${0%/*}"|' "$VP" > "$TMP/vp-bare-mut.sh"

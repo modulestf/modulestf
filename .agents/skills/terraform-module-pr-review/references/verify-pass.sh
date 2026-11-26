@@ -472,6 +472,38 @@ def root_ok: type == "string" and test("^examples/[A-Za-z0-9._-]+$") and (test("
   and ([.examples[].dir] | length == (unique | length))
   and all($real[]; . as $d | any($in.examples[]; .dir == $d))
 '
+# One `affected` report per review. select, check, run and coverage each select the examples in
+# a process of their own, so the report is kept in $RUN/affected-cache, named by a SHA-256 over
+# everything the run reads: the kind of run, the clone and module root, the files list, the clone's
+# head, the binary's path and its version report. The file holds the key it was made for and the
+# report; a file that is a link, is not JSON, or holds another key is not used, and the run is made
+# again. The base commit is no input of `affected`, so it is not part of the key.
+affected_key() { # kind (root or plain); the key on standard output, nothing when an input is unreadable
+  ak_head="$(git -C "$DIR" rev-parse HEAD 2> /dev/null)" && sha_ok "$ak_head" || return 1
+  ak_files="$(shasum -a 256 < "$FILES")" || return 1
+  ak_rep="$(printf '%s' "$FACTS_REPORT" | shasum -a 256)" || return 1
+  printf '%s\0' "$1" "$CROOT" "$PREFIX" "${ak_files%% *}" "$ak_head" "$FACTS_BIN" "$FACTS_VERSION" "${ak_rep%% *}" \
+    | shasum -a 256 | { read -r ak_sum _; printf '%s' "$ak_sum"; }
+}
+affected_cached() { # key: the cached report into $W/affected.json
+  ac_f="$RUN/affected-cache/$1.json"
+  [ -d "$RUN/affected-cache" ] && [ ! -L "$RUN/affected-cache" ] && [ -f "$ac_f" ] && [ ! -L "$ac_f" ] || return 1
+  jq -e --arg k "$1" 'type == "object" and .key == $k and (.report | type == "object")' "$ac_f" > /dev/null 2>&1 || return 1
+  jq -c .report "$ac_f" > "$W/affected.json" 2> /dev/null
+}
+affected_store() { # key: the report in $W/affected.json, kept for the next run of this review
+  [ ! -L "$RUN/affected-cache" ] && { [ -d "$RUN/affected-cache" ] || mkdir -m 700 "$RUN/affected-cache" 2> /dev/null; } || return 0
+  jq -c --arg k "$1" '{key: $k, report: .}' "$W/affected.json" > "$RUN/affected-cache/$1.tmp" 2> /dev/null \
+    && mv -- "$RUN/affected-cache/$1.tmp" "$RUN/affected-cache/$1.json" || rm -f -- "$RUN/affected-cache/$1.tmp"
+}
+affected_run() { # kind, then the command; leaves a JSON report in $W/affected.json or fails
+  ar_kind=$1; shift
+  ar_key="$(affected_key "$ar_kind")" || ar_key=''
+  if [ -n "$ar_key" ] && affected_cached "$ar_key"; then return 0; fi
+  CAP_QUIET_ERR=1 run_capped 70 "$W/affected.json" / "$@" && jq -e . "$W/affected.json" > /dev/null 2>&1 || return 1
+  [ -z "$ar_key" ] || affected_store "$ar_key"
+  return 0
+}
 select_examples() {
   perl -e "$ALL_PL" "$CROOT" "$PREFIX" > "$W/all.tsv" || die "an example directory name outside [A-Za-z0-9._-]"
   TAB="$(printf '\t')"
@@ -487,8 +519,8 @@ select_examples() {
       mroot=true
       # The engine runs from /, so the files list goes in as an absolute path.
       cp -- "$FILES" "$W/affected-files.json"
-      if CAP_QUIET_ERR=1 run_capped 70 "$W/affected.json" / "$FACTS_BIN" affected "$CROOT" --module-root "${PREFIX%/}" \
-          --diff "$W/affected-files.json" --json && jq -e . "$W/affected.json" > /dev/null 2>&1; then
+      if affected_run root "$FACTS_BIN" affected "$CROOT" --module-root "${PREFIX%/}" \
+          --diff "$W/affected-files.json" --json; then
         tool=invalid
         jq -e --slurpfile all "$W/all.json" --arg pre "$PREFIX" '. as $in | $all[0] as $all | '"$AFFECTED_ROOT_JQ" \
           "$W/affected.json" > /dev/null 2>&1 && tool=mtf-facts
@@ -501,8 +533,7 @@ select_examples() {
       else
         cp -- "$FILES" "$W/affected-files.json"
       fi
-      if CAP_QUIET_ERR=1 run_capped 70 "$W/affected.json" / "$FACTS_BIN" affected "$MROOT" --diff "$W/affected-files.json" --json \
-        && jq -e . "$W/affected.json" > /dev/null 2>&1; then
+      if affected_run plain "$FACTS_BIN" affected "$MROOT" --diff "$W/affected-files.json" --json; then
         tool=invalid
         jq -e --slurpfile all "$W/all.json" --arg pre "$PREFIX" '. as $in | $all[0] as $all | '"$AFFECTED_JQ" \
           "$W/affected.json" > /dev/null 2>&1 && tool=mtf-facts
