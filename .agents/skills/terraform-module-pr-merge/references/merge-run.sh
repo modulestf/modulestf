@@ -17,7 +17,7 @@ set -uo pipefail
 set -f
 umask 077
 
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 PRR="$(cd "$HERE/../../terraform-module-pr-review/references" 2> /dev/null && pwd -P)" || PRR=/nonexistent
 repo_re='^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$'
 sha_re='^[0-9a-f]{40}$'

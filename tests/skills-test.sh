@@ -1083,6 +1083,11 @@ judgment_check() { # skill directory: one line per problem: invariant, detail
   fi
   bash "$d/$JUD/assemble.sh" > "$TMP/jud-b" 2> /dev/null
   cmp -s "$TMP/jud-a" "$TMP/jud-b" || printf 'deterministic\ttwo runs of assemble.sh differ\n'
+  # Started by a relative path with CDPATH naming a directory that holds a same-named
+  # subdirectory, it still reads its own directory (bash would cd into the decoy).
+  rm -rf "$TMP/jud-decoy"; mkdir -p "$TMP/jud-decoy/judgment"
+  (cd "$d/references" && CDPATH="$TMP/jud-decoy" bash judgment/assemble.sh > "$TMP/jud-c" 2> /dev/null)
+  cmp -s "$TMP/jud-a" "$TMP/jud-c" || printf 'cdpath\tassemble.sh run with CDPATH set gives other bytes\n'
   cmp -s "$TMP/jud-a" "$d/$JUD/prefix.md" ||
     printf 'regenerated\tprefix.md is not what assemble.sh gives; run bash assemble.sh > prefix.md in %s\n' "$JUD"
   size="$(wc -c < "$d/$JUD/prefix.md" | tr -d ' ')"
@@ -1112,6 +1117,7 @@ a line the assembly drops reworded in its source~assembles~sed 's/^8[.] If `mtf-
 a section the assembly drops renamed in its source~assembles~sed 's/^## Plan evidence$/## Plan records/' references/check-d-examples.md > s && cat s > references/check-d-examples.md && rm s
 an assembler that writes into the skill~sources~sed 's/^export LC_ALL=C$/&; : > "$(dirname "$0")\/stray"/' references/judgment/assemble.sh > s && cat s > references/judgment/assemble.sh && rm s
 an assembler whose output varies~deterministic~echo 'echo "$RANDOM$RANDOM"' >> references/judgment/assemble.sh
+an assembler that lets CDPATH redirect its directory lookup~cdpath~sed 's/^J="$(CDPATH= cd -- "$(dirname -- "$0")" \&\& pwd)"$/J="$(cd "$(dirname "$0")" \&\& pwd)"/' references/judgment/assemble.sh > s && cat s > references/judgment/assemble.sh && rm s
 EOF
 if ! grep -qxF "judgment prefix" "$TMP/failed"; then
   echo "ok   judgment prefix ($(wc -c < "$RSK/$JUD/prefix.md" | tr -d ' ') bytes; $nmut mutations caught)"

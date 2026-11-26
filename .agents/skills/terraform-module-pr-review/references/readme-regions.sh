@@ -32,7 +32,7 @@ seg='[A-Za-z0-9_][A-Za-z0-9._-]{0,63}'
 [ ! -e "$out/regions.txt" ] && [ ! -e "$out/rr" ] || die "--out already holds the README evidence"
 jq -e 'type == "array" and all(.[]; type == "object" and (.filename | type == "string"))' "$diff" > /dev/null 2>&1 ||
   die "--diff is not a GitHub files list"
-PASS="$(cd "$(dirname "$0")/../../terraform-module-maintainer/references" 2> /dev/null && pwd -P)/terraform-docs-pass.sh"
+PASS="$(CDPATH= cd -- "$(dirname -- "$0")/../../terraform-module-maintainer/references" 2> /dev/null && pwd -P)/terraform-docs-pass.sh"
 [ -f "$PASS" ] || die "the maintainer's terraform-docs-pass.sh is missing"
 pa=(); [ -z "$profile" ] || pa=(--profile "$profile")
 

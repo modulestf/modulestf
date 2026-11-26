@@ -147,7 +147,7 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
-SELF_DIR=$(cd -P -- "$(dirname -- "$0")" && pwd -P) || exit 2
+SELF_DIR=$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd -P) || exit 2
 [ -n "$PROFILE" ] || PROFILE=$SELF_DIR/../profiles/terraform-aws-modules/PROFILE.md
 
 # Step 0: constants from the profile's "Documentation regeneration in an untrusted
@@ -197,7 +197,7 @@ WS=$(cd -P -- "$WORKSPACE" 2>/dev/null && pwd -P) || { echo "workspace unreadabl
 real_of() { # real path of an existing file or directory
   if [ -d "$1" ]; then (cd -P -- "$1" && pwd -P); else
     local dir
-    dir=$(cd -P -- "$(dirname -- "$1")" && pwd -P) && echo "$dir/${1##*/}"
+    dir=$(CDPATH= cd -P -- "$(dirname -- "$1")" && pwd -P) && echo "$dir/${1##*/}"
   fi
 }
 refused() {

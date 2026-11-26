@@ -123,7 +123,7 @@
 set -uo pipefail
 set -f
 
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 CAP=1048576
 CAP_SMALL=65536
 sha_re='^[0-9a-f]{40}$'

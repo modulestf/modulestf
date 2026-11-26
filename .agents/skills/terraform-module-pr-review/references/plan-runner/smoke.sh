@@ -23,7 +23,7 @@
 # - no container, network or volume of these runs is left behind.
 set -uo pipefail
 
-here="$(cd "$(dirname "$0")" && pwd)"
+here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 rec="$(mktemp -d "${TMPDIR:-/tmp}/plan-runner-smoke.XXXXXX")"
 creds="$rec/fake-credentials.env"
 printf '%s\n' AWS_ACCESS_KEY_ID=smoke-test-not-a-key AWS_SECRET_ACCESS_KEY=smoke-test-not-a-secret \

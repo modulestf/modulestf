@@ -11,7 +11,7 @@
 # only.
 set -euo pipefail
 
-here="$(cd "$(dirname "$0")" && pwd)"
+here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # The image tag: PLAN_RUNNER_TAG, or one derived from the files the images are built from
 tag="$("$here/image-tag.sh")"
 runner_image="plan-runner:$tag"

@@ -70,7 +70,7 @@
 # --credentials-env-file is for the smoke test: a fixed file of made-up session credentials.
 set -euo pipefail
 
-here="$(cd "$(dirname "$0")" && pwd)"
+here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 pass="$(cd "$here/.." && pwd)/plan-pass.sh"
 # The image tag: PLAN_RUNNER_TAG, or one derived from the files the images are built from
 tag="$("$here/image-tag.sh")"

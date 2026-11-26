@@ -252,7 +252,7 @@ cmd_check() {
 
 # --- run: the host records of one pull request, Steps 2 to 5, 7.5 and the Step 8 prefix.
 
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 MAX_FILES=3000
 MAX_THREAD_PAGES=50
 FETCH_REQUESTS=10

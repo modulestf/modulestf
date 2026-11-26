@@ -205,7 +205,7 @@ null_vars() {
   while IFS=$'\t' read -r name file line; do
     local f="$dir/$file" real
     [ -f "$f" ] && [ ! -L "$f" ] && [ "$(wc -c < "$f")" -le "$CAP" ] || continue
-    real="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")" || continue
+    real="$(CDPATH= cd -- "$(dirname -- "$f")" && pwd -P)/$(basename "$f")" || continue
     case "$real" in "$root"/*) ;; *) continue ;; esac
     perl -e '
       my ($name, $at, $max) = (shift, shift, shift); my @l = <STDIN>; my $i = $at - 1;
