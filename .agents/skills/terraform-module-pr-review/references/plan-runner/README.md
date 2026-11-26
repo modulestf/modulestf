@@ -121,6 +121,8 @@ a third proxy configuration that passes the Python package index alone
   container can fill it; the run removes it when it ends, and Cleanup by its exact name.
 - **A SIGKILL of `run-pass.sh` skips its cleanup.** Its containers, networks and volumes
   stay; the pull request skill's Cleanup removes them by the exact names in `run-id.txt`.
+  It does not yet know the `-<slot>` names of the further plan slots, so after a SIGKILL
+  those stay until removed by their exact names.
   A leftover plan container holds no credential in its configuration; it names only the
   mounted file.
   Its private temporary directory, mode 0700, which holds that credentials file, stays too,
@@ -234,6 +236,19 @@ the skill's plan pass whenever a container runtime is available.
   example's record lines. A `code-error`, or an access denial with a `denied:` line, with
   `--base` given ends in `base: deferred`. The
   phase stops at a credentials failure, as the plan pass does, and at the budget.
+- **Parallel plans:** up to `--jobs <n>` plan containers run side by side, 1 to 8, or
+  `PLAN_JOBS`, 3 when neither is set. Each slot has its own runner container, internal
+  network and plan proxy, named with the run's id and `-<slot>` from slot 2 on, and each new
+  network gets the network check behind its own proxy before its first plan container
+  (`network-check-plan-<slot>.txt`). So a plan container reaches only its own proxy, and the
+  refused-host watcher of each container reads only that container's refusals. Sessions are
+  issued one at a time, each just before its container starts, into the slot's own file.
+  Each example's block is written under its own index, and the record is assembled in
+  example order, so `plan-pass.txt` is the one a run of one slot writes, whatever order the
+  plans end in. No example starts after one that ended at credentials, and a block of an
+  example that ran beside it is dropped, as a run of one slot would never have started it.
+  Each container takes 4 GiB of memory at most, so three slots need up to 12 GiB. The init,
+  show, validate, merge base and plan diff phases run one container at a time.
 - **Show phase:** every plan is saved with `-out` into a second volume, the saved plans'
   volume, made writable for the containers' user by a capability-free root container that
   only changes its mode. After the plan phase, one more container per example whose plan
@@ -265,7 +280,8 @@ the skill's plan pass whenever a container runtime is available.
   re-run: 120 minutes, or `--budget-minutes <n>`. It is recorded in `plan-pass.txt` as
   `plan pass budget: <n> minutes`. There is no cap on the number of examples. Each container
   gets what is left of the budget as the plan pass's `--budget`, and an example the budget
-  does not reach is `plan: budget`. Each command keeps its own timeout.
+  does not reach is `plan: budget`, read as each example starts, so a plan already running
+  beside it keeps its own result. Each command keeps its own timeout.
 - **Credentials:** `run-pass.sh` owns them. `--profile` needs `--role-arn`, the review role
   the user named; without it the script stops before anything runs, so the plan pass does
   not run. Before each plan container it calls [plan-session.sh](../plan-session.sh) on the
@@ -315,7 +331,8 @@ The record directory must not exist yet, and receives regular files only:
 - `plan-pass-init.txt`: the G0 count, one `init:` line per example, and one per merge base
   re-run;
 - `proxy-init.log`, `proxy-plan.log` and `plan-refused-hosts.txt`, as for `run-plan.sh`;
-- `network-check-init.txt` and `network-check-plan.txt`: the network check's lines behind
+- `network-check-init.txt`, `network-check-plan.txt` and one `network-check-plan-<slot>.txt`
+  per further plan slot: the network check's lines behind
   each proxy, `closed <check>` and `ok <check>` for a pass, anything else for a fault, and the
   `end network check` line. They name the host's gateway, `docker0` and IPv6 addresses, so
   they stay in the record on the runner: `hosted-record.sh` never reads them, and nothing

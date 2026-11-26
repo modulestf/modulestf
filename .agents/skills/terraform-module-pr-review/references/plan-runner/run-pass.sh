@@ -4,7 +4,7 @@
 #
 # Usage:
 #   run-pass.sh --clone DIR --record DIR (--profile NAME --role-arn ARN | --credentials-env-file FILE)
-#               [--base SHA] [--diff-dir DIR]... [--budget-minutes N] [--tmp DIR] [--build] <example-dir>...
+#               [--base SHA] [--diff-dir DIR]... [--budget-minutes N] [--jobs N] [--tmp DIR] [--build] <example-dir>...
 #
 # --tmp names an existing directory, such as the pull request skill's run directory, to hold
 # this script's private temporary directory, and with it the credentials file for the plan
@@ -14,6 +14,13 @@
 # The runner has no cap on the number of examples. Its bound is a wall-clock budget for the
 # whole pass, 120 minutes unless --budget-minutes says otherwise, recorded in plan-pass.txt.
 # Every container gets what is left of it, and each command keeps its own timeout.
+#
+# --jobs N, 1 to 8, or PLAN_JOBS, default 3: the head's plan containers that run side by side.
+# Each slot has its own internal network and its own plan proxy, so a plan container reaches
+# only its own proxy and the refused-host watcher of each container reads only its own
+# refusals. Each example's block is written under its own index and the record is assembled
+# in example order, so the record is the one a run with --jobs 1 writes, whatever order the
+# plans end in. The init, show and merge base phases run one container at a time, in slot 1.
 #
 # --clone is a git checkout of the head, as the pull request skill's Workspace makes it, with
 # its origin remote, so the plan pass can fetch --base for a re-run. The record directory must
@@ -62,6 +69,7 @@ tag="$("$here/image-tag.sh")"
 runner_image="plan-runner:$tag"
 proxy_image="plan-egress-proxy:$tag"
 clone="" record="" profile="" role_arn="" cred_file="" base="" build=0 budget_min=120 tmp_parent="" diffdirs=()
+jobs="${PLAN_JOBS:-3}"
 
 die() { echo "run-pass: $*" >&2; exit 2; }
 while [ $# -gt 0 ]; do
@@ -74,6 +82,7 @@ while [ $# -gt 0 ]; do
     --base) base="${2:-}"; shift 2 ;;
     --diff-dir) diffdirs+=("${2:-}"); shift 2 ;;
     --budget-minutes) budget_min="${2:-}"; shift 2 ;;
+    --jobs) jobs="${2:-}"; shift 2 ;;
     --tmp) tmp_parent="${2:-}"; shift 2 ;;
     --build) build=1; shift ;;
     --) shift; break ;;
@@ -102,6 +111,9 @@ done
 diffdirs=(${kept[@]+"${kept[@]}"})
 [[ "$budget_min" =~ ^[1-9][0-9]{0,3}$ ]] || die "--budget-minutes must be a whole number of minutes, 1 to 9999"
 budget=$((budget_min * 60))
+[[ "$jobs" =~ ^[1-8]$ ]] || die "--jobs must be a whole number, 1 to 8"
+slots=$jobs # no more slots than examples
+[ "$slots" -le "$#" ] || slots=$#
 if [ -n "$tmp_parent" ]; then
   [ -d "$tmp_parent" ] && [ ! -L "$tmp_parent" ] || die "--tmp must name an existing directory"
   tmp_parent="$(cd "$tmp_parent" && pwd -P)"
@@ -129,8 +141,16 @@ sfx="$(printf '%s' "$id" | tail -c 6)"
 RUN="/work/pr-review.$sfx" # the plan pass's run directory, inside the work volume
 net_int="plan-int-$id" net_ext="plan-ext-$id" volume="plan-work-$id" saved="plan-saved-$id"
 runner="plan-runner-$id" proxy_init="plan-proxy-init-$id" proxy_plan="plan-proxy-plan-$id"
-# Every name carries this run's id, and cleanup removes exactly these names, never by prefix
+# Every name carries this run's id, and cleanup removes exactly these names, never by prefix.
+# Slot k of the plan phase, from 2 on, adds -k to the runner, the internal network and the
+# plan proxy.
 echo "$id" > "$record/run-id.txt"
+slot_names=()
+for ((k = 2; k <= slots; k++)); do slot_names+=("$k"); done
+use_slot() { # slot: this subshell's container, network, plan proxy, credentials file and stall flag
+  [ "$1" -eq 1 ] && return 0
+  runner="$runner-$1" net_int="$net_int-$1" proxy_plan="$proxy_plan-$1" pass_env="$TMPRUN/pass.env.$1" stalled="$TMPRUN/stalled.$1"
+}
 
 save_proxy_log() { # container, record file; a proxy may run twice, so the log is appended
   local have=0
@@ -139,10 +159,26 @@ save_proxy_log() { # container, record file; a proxy may run twice, so the log i
   docker logs "$1" 2>&1 | head -c $((max_bytes - have)) >> "$record/$2" || true
   docker rm -f "$1" > /dev/null 2>&1 || true
 }
+# A plan job's process tree, read before the kill, so a process its end leaves behind, a docker
+# client or a watcher, goes with it.
+kill_tree() { # pid
+  local all
+  all="$(ps -A -o pid= -o ppid= | awk -v r="$1" '{ ch[$2] = ch[$2] " " $1 }
+    END { q[1] = r; h = 1; t = 1; while (h <= t) { p = q[h++]; printf "%s ", p; m = split(ch[p], c, " "); for (i = 1; i <= m; i++) q[++t] = c[i] } }')" || all="$1"
+  # shellcheck disable=SC2086 # a list of pids
+  kill $all 2> /dev/null || true
+}
+job_pid=() job_ex=() job_poll=1
+stop_jobs() {
+  local p
+  for p in ${job_pid[@]+"${job_pid[@]}"}; do [ -z "$p" ] || kill_tree "$p"; done
+}
 cleanup() {
   [ -z "${wpid:-}" ] || kill "$wpid" 2> /dev/null || true
+  stop_jobs
   docker rm -f "$runner" > /dev/null 2>&1 || true
-  for p in "$proxy_init:proxy-init.log" "$proxy_plan:proxy-plan.log"; do
+  for k in ${slot_names[@]+"${slot_names[@]}"}; do docker rm -f "$runner-$k" > /dev/null 2>&1 || true; done
+  for p in "$proxy_init:proxy-init.log" "$proxy_plan:proxy-plan.log" ${slot_names[@]+$(printf "$proxy_plan-%s:proxy-plan.log " "${slot_names[@]}")}; do
     if docker container inspect "${p%%:*}" > /dev/null 2>&1; then
       # Refused evidence must not stop teardown or retain the session file. Normal
       # log collection still refuses the run; cleanup isolates that exit and continues.
@@ -151,6 +187,7 @@ cleanup() {
     fi
   done
   docker volume rm "$volume" "$saved" > /dev/null 2>&1 || true
+  for k in ${slot_names[@]+"${slot_names[@]}"}; do docker network rm "$net_int-$k" > /dev/null 2>&1 || true; done
   docker network rm "$net_int" "$net_ext" > /dev/null 2>&1 || true
   case "$TMPRUN" in
     "$tmp_parent"/plan-runner.??????) rm -rf -- "$TMPRUN" ;;
@@ -162,14 +199,14 @@ trap 'exit 130' INT TERM
 
 # Credentials, for the plan containers only, renamed so that only the plan pass reads them.
 # values collects every credential value and the role's ARN and account id, for the leak scan.
-values="$TMPRUN/values"
+values="$TMPRUN/values" pass_env="$TMPRUN/pass.env" stalled="$TMPRUN/stalled" runner_log="$record/runner.log"
 printf '%s\n' "$role_arn" "$(printf '%s\n' "$role_arn" | sed -nE 's/^arn:[^:]*:iam::([0-9]{12}):.*/\1/p')" > "$values"
 write_pass_env() { # AWS_* lines on stdin -> pass.env with PLAN_PASS_ names, values kept
-  grep -E '^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)=' | sed 's/^/PLAN_PASS_/' > "$TMPRUN/pass.env" || true
+  grep -E '^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)=' | sed 's/^/PLAN_PASS_/' > "$pass_env" || true
   # 0644, not 0600: the container runs as uid 10001, not the file's owner, and on a native
   # Linux daemon it could not read a 0600 file. The 0700 directory keeps other host users out.
-  chmod 0644 "$TMPRUN/pass.env"
-  sed -nE 's/^PLAN_PASS_AWS_[A-Z_]+=//p' "$TMPRUN/pass.env" >> "$values"
+  chmod 0644 "$pass_env"
+  sed -nE 's/^PLAN_PASS_AWS_[A-Z_]+=//p' "$pass_env" >> "$values"
 }
 # One session per plan container, issued just before it starts. A session that cannot be
 # issued leaves pass.env empty: the container's plan pass ends at credentials.
@@ -190,6 +227,7 @@ if [ -n "$cred_file" ]; then
   grep -Eq '^AWS_SESSION_TOKEN=.+' "$cred_file" ||
     die "the credentials carry no session token, so they are long-lived keys; use a role or SSO profile"
   write_pass_env < "$cred_file"
+  for k in ${slot_names[@]+"${slot_names[@]}"}; do cp -p "$pass_env" "$TMPRUN/pass.env.$k"; done
 fi
 # Run in the plan container: exports the three names from the mounted file and no other
 # line. Each line splits at its first '=', so a value keeps every '=' it has, a trailing
@@ -200,6 +238,7 @@ docker volume create "$volume" > /dev/null
 docker volume create "$saved" > /dev/null
 docker network create --internal --ipv6=false "$net_int" > /dev/null
 docker network create --ipv6=false "$net_ext" > /dev/null
+for k in ${slot_names[@]+"${slot_names[@]}"}; do docker network create --internal --ipv6=false "$net_int-$k" > /dev/null; done
 
 hardening=(--read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512)
 proxy_env=(-e HTTPS_PROXY=http://proxy:8888 -e HTTP_PROXY=http://proxy:8888
@@ -210,7 +249,7 @@ common=("${hardening[@]}" --user 10001:10001 --memory 4g --tmpfs "/tmp:rw,size=6
 providers="$(cd "$here/../../.." && pwd)/terraform-module-maintainer/profiles/terraform-aws-modules/plan-providers.txt"
 [ ! -f "$providers" ] || common+=(-v "$providers":/opt/plan-pass/plan-providers.txt:ro)
 
-start_proxy() { # name, config
+start_proxy() { # name, config; on this slot's internal network
   docker run -d --name "$1" --network "$net_ext" "${hardening[@]}" \
     --tmpfs /tmp:rw,size=16m "$proxy_image" "/etc/tinyproxy/$2" > /dev/null
   docker network connect --alias proxy "$net_int" "$1"
@@ -230,18 +269,20 @@ bounded_append() { # stdout stream -> remaining destination allowance
 capture_runner() { # stdout destination, then docker arguments; stderr appended afterwards
   local outf="$1" err_pid command_status=0; shift
   check_record_size "$outf"
-  check_record_size "$record/runner.log"
+  check_record_size "$runner_log"
   # Serialize the two streams: setup writes both to runner.log. The FIFO keeps stderr
-  # bounded while Docker runs, and waiting closes it before another container starts.
-  rm -f "$TMPRUN/runner-stderr.pipe" "$TMPRUN/runner-stderr.txt"
-  mkfifo "$TMPRUN/runner-stderr.pipe"
-  head -c "$max_bytes" < "$TMPRUN/runner-stderr.pipe" > "$TMPRUN/runner-stderr.txt" &
+  # bounded while Docker runs, and waiting closes it before another container starts. A plan
+  # job's runner_log is its own, appended to runner.log in example order.
+  local pipe="$TMPRUN/$runner.stderr.pipe" errf="$TMPRUN/$runner.stderr.txt"
+  rm -f "$pipe" "$errf"
+  mkfifo "$pipe"
+  head -c "$max_bytes" < "$pipe" > "$errf" &
   err_pid=$!
-  docker run "$@" 2> "$TMPRUN/runner-stderr.pipe" |
+  docker run "$@" 2> "$pipe" |
     bounded_append "$outf" || command_status=$?
   wait "$err_pid" || true
-  bounded_append "$record/runner.log" < "$TMPRUN/runner-stderr.txt" || true
-  rm -f "$TMPRUN/runner-stderr.pipe" "$TMPRUN/runner-stderr.txt"
+  bounded_append "$runner_log" < "$errf" || true
+  rm -f "$pipe" "$errf"
   return "$command_status"
 }
 in_runner() { # stdout file, then docker run arguments
@@ -258,27 +299,31 @@ in_runner() { # stdout file, then docker run arguments
 # plan container, and is passed the host addresses it cannot know: the internal network's
 # gateway, the docker0 address, and the host's IPv6 addresses. Its lines, which name those
 # addresses, stay in network-check-<phase>.txt in the record and are never reduced or uploaded.
-[ "$(docker network inspect -f '{{.EnableIPv6}}' "$net_int" "$net_ext" | tr '\n' ' ')" = "false false " ] ||
+[ "$(docker network inspect -f '{{.EnableIPv6}}' "$net_int" "$net_ext" ${slot_names[@]+$(printf "$net_int-%s " "${slot_names[@]}")} | tr '\n' ' ')" = "$(printf 'false %.0s' "$net_int" "$net_ext" ${slot_names[@]+"${slot_names[@]}"})" ] ||
   die "refusing to plan: IPv6 is on for a run network"
 v4_re='^[0-9]{1,3}([.][0-9]{1,3}){3}$'
-gw="$(docker network inspect -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' "$net_int")"
-[[ "$gw" =~ $v4_re ]] || die "refusing to plan: the internal network has no IPv4 gateway address"
-probe_args=(--gateway "$gw")
-d0="$(docker network inspect -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' bridge 2> /dev/null || true)"
-[[ ! "$d0" =~ $v4_re ]] || probe_args+=(--host "$d0")
-if command -v ip > /dev/null 2>&1; then
-  br="br-$(docker network inspect -f '{{.Id}}' "$net_int" | cut -c1-12)"
-  # Global addresses on any interface, and the internal bridge's link-local one, which is on
-  # the container's own link. More than 16, or one in another form, stops the run: none is
-  # dropped unprobed.
-  v6="$({ ip -6 -o addr show scope global 2> /dev/null | awk '{ split($4, a, "/"); print a[1] }'
-    ip -6 -o addr show dev "$br" scope link 2> /dev/null | awk '{ split($4, a, "/"); print a[1] "%eth0" }'; } || true)"
-  [ "$(printf '%s\n' "$v6" | grep -c .)" -le 16 ] || die "refusing to plan: more than 16 host IPv6 addresses to probe"
-  for a in $v6; do
-    [[ "$a" =~ ^[0-9a-f:]+(%eth0)?$ ]] || die "refusing to plan: a host IPv6 address the probe cannot take"
-    probe_args+=(--host "$a")
-  done
-fi
+set_probe_args() { # the host addresses of this slot's internal network -> probe_args
+  local gw d0 br v6 a
+  gw="$(docker network inspect -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' "$net_int")"
+  [[ "$gw" =~ $v4_re ]] || die "refusing to plan: the internal network has no IPv4 gateway address"
+  probe_args=(--gateway "$gw")
+  d0="$(docker network inspect -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' bridge 2> /dev/null || true)"
+  [[ ! "$d0" =~ $v4_re ]] || probe_args+=(--host "$d0")
+  if command -v ip > /dev/null 2>&1; then
+    br="br-$(docker network inspect -f '{{.Id}}' "$net_int" | cut -c1-12)"
+    # Global addresses on any interface, and the internal bridge's link-local one, which is on
+    # the container's own link. More than 16, or one in another form, stops the run: none is
+    # dropped unprobed.
+    v6="$({ ip -6 -o addr show scope global 2> /dev/null | awk '{ split($4, a, "/"); print a[1] }'
+      ip -6 -o addr show dev "$br" scope link 2> /dev/null | awk '{ split($4, a, "/"); print a[1] "%eth0" }'; } || true)"
+    [ "$(printf '%s\n' "$v6" | grep -c .)" -le 16 ] || die "refusing to plan: more than 16 host IPv6 addresses to probe"
+    for a in $v6; do
+      [[ "$a" =~ ^[0-9a-f:]+(%eth0)?$ ]] || die "refusing to plan: a host IPv6 address the probe cannot take"
+      probe_args+=(--host "$a")
+    done
+  fi
+}
+set_probe_args
 network_check() { # phase, then egress-probe.sh check arguments beyond the host addresses
   local f="$record/network-check-$1.txt"; shift
   docker rm -f "$runner" > /dev/null 2>&1 || true
@@ -348,13 +393,13 @@ design_refusals() { # proxy log lines before the container
 validate_example() { # index, example
   local rem v; rem=$(left)
   [ "$rem" -gt 0 ] || { echo 'validate: not run'; return 0; }
-  : > "$TMPRUN/validate.out"
-  in_runner "$TMPRUN/validate.out" --network none "${common[@]}" -v "$volume":/work:ro \
+  : > "$TMPRUN/validate.out.$1"
+  in_runner "$TMPRUN/validate.out.$1" --network none "${common[@]}" -v "$volume":/work:ro \
     --tmpfs "$RUN/plan/out:rw,size=256m,mode=1777" --tmpfs "$RUN/plan/tmp:rw,size=64m,mode=1777" \
     --tmpfs "$RUN/plan/home:rw,size=64m,mode=1777" --entrypoint /bin/bash "$runner_image" -c \
     "exec bash /opt/plan-pass/plan-pass.sh plan '$RUN' '$pname' --mode runner --budget '$rem' --phase validate --index '$1' \"\$@\"" \
     plan-pass "$2"
-  v="$(grep -E '^validate: ' "$TMPRUN/validate.out")" || v=
+  v="$(grep -E '^validate: ' "$TMPRUN/validate.out.$1")" || v=
   case "$v" in 'validate: passed'|'validate: failed') printf '%s\n' "$v" ;; *) echo 'validate: not run' ;; esac
 }
 # A plan whose provider keeps retrying a host the plan proxy refuses would wait for the plan's
@@ -395,11 +440,11 @@ plan_container() { # output file, phase, index, example, budget left: the work v
     seed_base="$seed_base && { [ ! -d '$SEED/mixed' ] || cp -dR '$SEED/mixed/.' '$RUN/mixed/'; }"
   fi
   issue_session
-  rm -f "$TMPRUN/stalled"
+  rm -f "$stalled"
   plan_since=
   # No watcher when the log cannot be read: a baseline of 0 would count earlier refusals
   if lines="$(docker logs "$proxy_plan" 2>&1 | wc -l | tr -d ' ')" && [[ "$lines" =~ ^[0-9]+$ ]]; then
-    stall_watch "$lines" "$TMPRUN/stalled" &
+    stall_watch "$lines" "$stalled" &
     wpid=$!
     plan_since=$lines
   fi
@@ -407,7 +452,7 @@ plan_container() { # output file, phase, index, example, budget left: the work v
     -v "$volume":/work:ro -v "$volume":/seed:ro \
     --tmpfs "$RUN/clone:rw,size=1g,mode=1777" ${base_tmpfs[@]+"${base_tmpfs[@]}"} -v "$saved":"$RUN/plan/saved" \
     --tmpfs "$RUN/plan/out:rw,size=256m,mode=1777" --tmpfs "$RUN/plan/tmp:rw,size=256m,mode=1777" \
-    --tmpfs "$RUN/plan/home:rw,size=64m,mode=1777" -v "$TMPRUN/pass.env":/opt/plan-pass/creds.env:ro \
+    --tmpfs "$RUN/plan/home:rw,size=64m,mode=1777" -v "$pass_env":/opt/plan-pass/creds.env:ro \
     --entrypoint /bin/bash "$runner_image" -c \
     "$load_creds && cp -dR '$SEED/clone/.' '$RUN/clone/' && $seed_base && exec bash /opt/plan-pass/plan-pass.sh plan '$RUN' '$pname' --mode runner --budget '$5' --phase '$2' --index '$3' \"\$@\"" \
     plan-pass ${base_args[@]+"${base_args[@]}"} "$4"
@@ -427,25 +472,28 @@ host_only='^(plan summary:|plan pass mode:|plan pass budget:|host example |not r
 cred_re='^credentials: (session: not issued|write probe: write allowed|(identity check|write probe): (timed out|expired token|invalid token|access denied|throttled|network|other answer))$'
 untrusted() { grep -Ev "$host_only" "$1" | awk -v re="$cred_re" '!/^credentials: / || ($0 ~ re && !c++)' || true; }
 
-# Plan phase: one container per example. Each block is kept apart until the end, because a
-# deferred merge base re-run fills in its base line later.
+# Plan phase: one container per example, up to $slots side by side. Each block is kept apart
+# until the end, because a deferred merge base re-run fills in its base line later. Slot 1 is
+# the run's own network and plan proxy; every further slot gets its own, checked as slot 1's
+# is before its first plan container.
 start_proxy "$proxy_plan" plan.conf
 network_check plan --allowed sts.us-east-1.amazonaws.com --refused registry.terraform.io
-n=0 planned=0 exc=0 deferred=() examples=("$@")
-for ex in "$@"; do
-  n=$((n + 1)); blk="$TMPRUN/block.$n"
-  rem=$(left)
-  if [ "$rem" -le 0 ]; then
-    printf 'example: %s\nplan: budget\n' "$ex" > "$blk"; continue
-  fi
-  : > "$TMPRUN/example.out"
-  plan_container "$TMPRUN/example.out" plan "$n" "$ex" "$rem"
-  untrusted "$TMPRUN/example.out" > "$blk"
+for k in ${slot_names[@]+"${slot_names[@]}"}; do
+  (use_slot "$k"; start_proxy "$proxy_plan" plan.conf; set_probe_args
+    network_check "plan-$k" --allowed sts.us-east-1.amazonaws.com --refused registry.terraform.io) || exit 2
+done
+# One example in one slot, in a subshell that took the slot's names: its plan container, then
+# its block, written whole under its own index.
+plan_example() { # index, example, budget left
+  local n=$1 ex=$2 blk="$TMPRUN/block.$1.part" hosts vline
+  : > "$TMPRUN/example.out.$n"
+  plan_container "$TMPRUN/example.out.$n" plan "$n" "$ex" "$3"
+  untrusted "$TMPRUN/example.out.$n" > "$blk"
   # Ended by stall_watch: the plan did not finish, whatever the container printed. When every
   # refusal was of a host refused by design, environment (refused-host) with those hosts, the
   # head's validate and a merge base re-run (skip-coverage.md, Design skips); otherwise
   # environment (network).
-  if [ -s "$TMPRUN/stalled" ]; then
+  if [ -s "$stalled" ]; then
     hosts="$(design_refusals "$plan_since")"
     if [ -n "$hosts" ]; then
       vline="$(validate_example "$n" "$ex")"
@@ -455,6 +503,50 @@ for ex in "$@"; do
       printf 'example: %s\nplan: environment (network)\n' "$ex" > "$blk"
     fi
   fi
+  mv "$blk" "$TMPRUN/block.$n"
+}
+# Each example in turn into the first free slot, until the list ends, or an example ends at
+# credentials: then no example starts after it. The budget is read once per example as it
+# starts; an example it does not reach is plan: budget. Each session is issued here, one at a
+# time, just before its container starts.
+plan_jobs() {
+  local next=1 k busy rem stop=0
+  while :; do
+    busy=0
+    for ((k = 1; k <= slots; k++)); do
+      [ -n "${job_pid[k]:-}" ] || continue
+      if kill -0 "${job_pid[k]}" 2> /dev/null; then busy=$((busy + 1)); continue; fi
+      wait "${job_pid[k]}" 2> /dev/null || true
+      ! grep -q '^plan: plan pass ended: credentials' "$TMPRUN/block.${job_ex[k]}" 2> /dev/null || stop=1
+      job_pid[k]=
+    done
+    k=1
+    while [ "$k" -le "$slots" ] && [ "$next" -le "${#examples[@]}" ] && [ "$stop" -eq 0 ]; do
+      if [ -n "${job_pid[k]:-}" ]; then k=$((k + 1)); continue; fi
+      rem=$(left)
+      if [ "$rem" -le 0 ]; then
+        printf 'example: %s\nplan: budget\n' "${examples[next - 1]}" > "$TMPRUN/block.$next"; next=$((next + 1)); continue
+      fi
+      (use_slot "$k"; issue_session)
+      (use_slot "$k"; issue_session() { :; }; runner_log="$TMPRUN/runner-log.$next"
+        plan_example "$next" "${examples[next - 1]}" "$rem") &
+      job_pid[k]=$! job_ex[k]=$next
+      busy=$((busy + 1)) next=$((next + 1)) k=$((k + 1))
+    done
+    if [ "$busy" -eq 0 ] && { [ "$next" -gt "${#examples[@]}" ] || [ "$stop" -eq 1 ]; }; then break; fi
+    sleep "$job_poll"
+  done
+}
+n=0 planned=0 exc=0 deferred=() examples=("$@") cut=0
+plan_jobs
+# In example order: the counts, the merge base re-runs, each job's stderr into runner.log, and
+# no block after the first example that ended at credentials, as a run of one slot stops there.
+for ex in "$@"; do
+  n=$((n + 1)); blk="$TMPRUN/block.$n"
+  if [ "$cut" -eq 1 ]; then rm -f "$blk"; continue; fi
+  # A job that ended with no block failed where a run of one slot would have stopped
+  [ -f "$blk" ] || die "the plan of example $n ended with no record block"
+  [ ! -f "$TMPRUN/runner-log.$n" ] || bounded_append "$record/runner.log" < "$TMPRUN/runner-log.$n"
   line="$(grep -m 1 '^plan: ' "$blk" || true)"
   case "$line" in
     'plan: planned'*) planned=$((planned + 1)) ;; # planned and planned-no-changes
@@ -462,10 +554,11 @@ for ex in "$@"; do
     # a code-error, an access denial on data source reads alone, and hosts refused by design
     # (skip-coverage.md, Design skips)
     'plan: code-error'*|'plan: environment (access-denied)'*|'plan: environment (refused-host)'*) [ -z "$base" ] || ! grep -qx 'base: deferred' "$blk" || deferred+=("$n") ;;
-    'plan: plan pass ended: credentials'*) break ;;
+    'plan: plan pass ended: credentials'*) cut=1 ;;
   esac
 done
 save_proxy_log "$proxy_plan" proxy-plan.log
+for k in ${slot_names[@]+"${slot_names[@]}"}; do save_proxy_log "$proxy_plan-$k" proxy-plan.log; done
 
 # The saved plan of each example that planned, read outside the container that ran the head's
 # code: no network, no credentials, both volumes read-only. Only an addresses-json line the
@@ -563,7 +656,7 @@ if [ "${#deferred[@]}" -gt 0 ] || [ "${#diffs[@]}" -gt 0 ]; then
     { grep -E '^base: ' "$TMPRUN/example.out" | grep -Ev '^base: environment \(refused-host\)' | head -n 1
       grep -E '^base-denied: ' "$TMPRUN/example.out" | head -n 1
       untrusted "$TMPRUN/example.out" | grep '^credentials: ' | head -n 1; } > "$TMPRUN/base.$n" || true
-    if [ -s "$TMPRUN/stalled" ]; then
+    if [ -s "$stalled" ]; then
       hosts="$(design_refusals "$plan_since")"
       if [ -n "$hosts" ]; then printf 'base: environment (refused-host)\nbase-refused: %s\n' "$hosts" > "$TMPRUN/base.$n"
       else echo 'base: environment (network)' > "$TMPRUN/base.$n"; fi
@@ -602,7 +695,7 @@ for n in ${diffs[@]+"${diffs[@]}"}; do
   fi
   printf '%s\n' "$line" > "$TMPRUN/pdiff.$n"
 done
-rm -f "$TMPRUN/pass.env" # no plan container runs after this
+rm -f "$TMPRUN"/pass.env* # no plan container runs after this
 
 # The record: each block headed by the host with its own index, so a forged block cannot claim
 # another example, and a deferred base line replaced by its re-run's result.

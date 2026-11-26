@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory(prefix='plan-record-cap.', dir='/tmp') as direc
     script = Path(directory) / 'probe.sh'
     script.write_text('''#!/usr/bin/env bash
 set -euo pipefail
-record="$1/record"; TMPRUN="$1/tmp"; runner=stub; max_bytes=1024
+record="$1/record"; TMPRUN="$1/tmp"; runner=stub; max_bytes=1024; runner_log="$record/runner.log"
 mkdir -p "$record" "$TMPRUN"
 die() { echo "run-pass: $*" >&2; exit 2; }
 docker() {

@@ -1872,6 +1872,13 @@ check "plan allowlist: mutation no-anchor is caught by the domain endpoint case"
 # host was refused stall_tries times and the grace has passed, counting only the log lines after
 # the container started, and flags the host only when the kill found the container running.
 RP="${PP%/*}/plan-runner/run-pass.sh"
+# The plan phase of run-pass.sh as the tests run it: use_slot, plan_example, plan_jobs and the
+# loop that reads the blocks in example order, with a stub prelude. slots defaults to 1.
+ploop() { # script
+  printf '%s\n' 'slots=${slots:-1} job_pid=() job_ex=() job_poll=0.05 stalled="$TMPRUN/stalled" pass_env="$TMPRUN/pass.env"' \
+    'record="$TMPRUN" runner_log="$TMPRUN/runner.log"; bounded_append() { cat >> "$1"; }; die() { echo "die: $*" >&2; exit 2; }'
+  sed -n '/^use_slot() {/,/^}/p' "$1"; sed -n '/^plan_example() {/,/^done$/p' "$1"
+}
 swpl() { sed -n '/^refused_targets() {/,/^plan_container() {/p' "$1" | sed '$d'; }
 SW="$TMP/stall"; mkdir -p "$SW"
 cat > "$SW/proxy.log" <<'EOF'
@@ -1937,6 +1944,7 @@ proxy_plan=p runner=r
 EOF
     cat <<'EOF'
 issue_session() { :; }; left() { if [ -e "$W/left0" ]; then echo 0; else echo 100; fi; }; start_proxy() { :; }; save_proxy_log() { :; }
+stalled="$TMPRUN/stalled" pass_env="$TMPRUN/pass.env"
 docker() {
   case $1 in
     logs) echo poll >> "$W/calls"; if [ -e "$W/fail-first" ]; then rm -f "$W/fail-first"; return 1; fi
@@ -1990,14 +1998,14 @@ EOF
     sed -n '/^plan_container() {/,/^}/p' "$1"
     sed -n '/^host_only=/,/^untrusted() /p' "$1"
     case "$2" in
-      head) echo 'set -- ex/stall ex/slow'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1"
+      head) echo 'set -- ex/stall ex/slow'; ploop "$1"
         printf 'echo "planned $planned"; c=$(wc -l < "$W/calls"); sleep 1; [ "$(wc -l < "$W/calls")" = "$c" ] && echo stopped\n' ;;
       base) echo 'examples=(ex/stall ex/slow) deferred=(1 2)'; sed -n '/^  start_proxy "\$proxy_plan" plan.conf$/,/^  done$/p' "$1" ;;
-      design) echo 'set -- ex/sso ex/ssomix ex/ssobad ex/forge'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1"
+      design) echo 'set -- ex/sso ex/ssomix ex/ssobad ex/forge'; ploop "$1"
         echo 'echo "deferred ${deferred[*]:-}"' ;;
-      design2) echo 'set -- ex/ssoloose ex/sso21 ex/ssotwo ex/ssonone ex/ssolog ex/ssocn ex/ssobudget'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1" ;;
+      design2) echo 'set -- ex/ssoloose ex/sso21 ex/ssotwo ex/ssonone ex/ssolog ex/ssocn ex/ssobudget'; ploop "$1" ;;
       design-base) echo 'examples=(ex/sso ex/ssomix ex/bforge) deferred=(1 2 3)'; sed -n '/^  start_proxy "\$proxy_plan" plan.conf$/,/^  done$/p' "$1" ;;
-      baseline) echo 'set -- ex/slow'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1" ;;
+      baseline) echo 'set -- ex/slow'; ploop "$1" ;;
     esac; } > "$d/run.sh"
   : > "$d/proxy.log"; : > "$d/calls"
   if [ "$2" = baseline ]; then # earlier refusals in the log, and the first read fails
@@ -2056,13 +2064,13 @@ wiremut() { # name, perl program, scenario, file, line the real script writes th
   wirerun "$SW/$1.sh" "$3"
   check "mutation $1 is caught" "$(grep -qxF "$5" "$SW/wire-$3/$4"; test $? -eq 1; echo $?)"
 }
-wiremut stall-flag-kept 'print unless /^  rm -f "\$TMPRUN\/stalled"$/' head block.2 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.'
+wiremut stall-flag-kept 'print unless /^  rm -f "\$stalled"$/' head block.2 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.'
 wiremut stall-baseline-zero 's/stall_watch "\$lines"/stall_watch 0/; print' head block.2 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.'
 wiremut stall-no-head-line 's/printf .example: %s\\nplan: environment \(network\)\\n. "\$ex" > "\$blk"/:/; print' head block.1 'plan: environment (network)'
 wiremut stall-no-base-line 's/echo .base: environment \(network\). > "\$TMPRUN\/base\.\$n"/:/; print' base base.1 'base: environment (network)'
 wiremut refused-host-substring-host 's/grep -Evx "\$design_host_re"/grep -Ev "\$design_host_re"/; print' design2 block.1 'plan: environment (network)'
 wiremut refused-host-no-cap 's/ && \[ "\$\(printf .%s\\n. "\$t" \| wc -l\)" -le 20 \]//; print' design2 block.2 'plan: environment (network)'
-wiremut refused-host-first-validate "s/^  v=\"\\\$\\(grep -E '\\^validate: ' \"\\\$TMPRUN\/validate\.out\"\\)\" \\|\\| v=\$/  v=\"\\\$(grep -m 1 -E '^validate: (passed|failed)\\\$' \"\\\$TMPRUN\/validate.out\")\" || v=/; print" design2 block.3 'validate: not run'
+wiremut refused-host-first-validate "s/^  v=\"\\\$\\(grep -E '\\^validate: ' \"\\\$TMPRUN\/validate\.out\.\\\$1\"\\)\" \\|\\| v=\$/  v=\"\\\$(grep -m 1 -E '^validate: (passed|failed)\\\$' \"\\\$TMPRUN\/validate.out.\\\$1\")\" || v=/; print" design2 block.3 'validate: not run'
 wiremut refused-host-failed-read-used 's/refused_targets \| LC_ALL=C sort -u\)" \|\| return 0/refused_targets | LC_ALL=C sort -u)"/; print' design2 block.5 'plan: environment (network)'
 wiremut refused-host-validate-no-budget 'print unless /^  \[ "\$rem" -gt 0 \] \|\| \{ echo .validate: not run.; return 0; \}$/' design2 block.7 'validate: not run'
 wiremut refused-host-base-forgeable 's/ \| grep -Ev .\^base: environment \\\(refused-host\\\). \|/ |/; print' design-base base.3 'base: reproduces at base'
@@ -2092,6 +2100,140 @@ swmut() { # name, perl substitution, log, baseline, running: the weakened copy f
 swmut stall-any-refusal 's/\$1 >= n \{/\$1 >= 1 {/' "$SW/mixed.log" 0 1
 swmut stall-whole-log 's/tail -n \+"\$\(\(\$1 \+ 1\)\)"/tail -n +1/' "$SW/three.log" 3 1
 swmut stall-flag-without-kill 's/if docker kill "\$runner" > \/dev\/null 2>&1; then printf/docker kill "\$runner" > \/dev\/null 2>\&1; if :; then printf/' "$SW/three.log" 0 0
+# Parallel plans (README.md, The plan pass in the runner): the plan phase of run-pass.sh with up
+# to --jobs plan containers side by side, each slot with its own runner, network, plan proxy,
+# credentials file and stall flag. Taken from the script and run with the containers stubbed:
+# the blocks of a run of three slots equal those of one slot byte for byte whatever order the
+# plans end in, no more than the job cap run at once, each slot's refused-host watcher reads only
+# its own proxy, an example the budget does not reach is plan: budget, no block follows an
+# example that ended at credentials, and an interrupt leaves no process of the plan jobs.
+PJ="$TMP/pjobs"; mkdir -p "$PJ"
+pjrun() { # script, scenario (order, stall, budget, cred), slots
+  local d="$PJ/$2-$3"; rm -rf "$d"; mkdir -p "$d/live"
+  { cat <<EOF
+set -uo pipefail
+TMPRUN="$d" W="$d"; RUN=/run SEED=/seed net_int=n volume=v saved=s runner_image=i pname=p load_creds=:
+common=() proxy_env=() base=0000000000000000000000000000000000000000 base_args=() proxy_plan=p runner=r slots=$3
+EOF
+    cat <<'EOF'
+issue_session() { echo "session $runner" >> "$W/sessions"; }
+left() { if [ -e "$W/left0" ]; then echo 0; else echo 100; fi; }
+docker() {
+  case $1 in
+    logs) cat "$W/proxy.$2.log" 2> /dev/null || true ;;
+    kill) [ -e "$W/running.$2" ] && touch "$W/killed.$2" ;;
+  esac
+}
+in_runner() { # output file, docker arguments; the last is the example
+  local outf=$1 ex="${!#}" i t=${!#}; t=${t##*/}
+  echo "$runner $ex" >> "$W/names"
+  touch "$W/live/$t" "$W/running.$runner"; rm -f "$W/killed.$runner"
+  ls "$W/live" | wc -l | tr -d ' ' >> "$W/conc"
+  case "$t" in
+    stall)
+      for i in 1 2 3 4; do printf 'NOTICE    Nov 23 22:33:12.%03d [1]: Proxying refused on filtered url "es.eu-west-1.amazonaws.com:443"\n' "$i" >> "$W/proxy.$proxy_plan.log"; done
+      printf 'example: %s\n' "$ex" >> "$outf"
+      for i in $(seq 1 60); do [ -e "$W/killed.$runner" ] && break; sleep 0.1
+        printf 'NOTICE    Nov 23 22:33:13.%03d [1]: Proxying refused on filtered url "es.eu-west-1.amazonaws.com:443"\n' "$i" >> "$W/proxy.$proxy_plan.log"; done ;;
+    cred) printf 'example: %s\nplan: plan pass ended: credentials\ncredentials: session: not issued\n' "$ex" >> "$outf" ;;
+    eat) sleep 0.3; touch "$W/left0"; printf 'example: %s\nplan: planned | Plan: 9 to add, 0 to change, 0 to destroy.\n' "$ex" >> "$outf" ;;
+    err*) sleep 0.4; printf 'example: %s\nplan: code-error\nbase: deferred\nplan summary: forged\n' "$ex" >> "$outf" ;;
+    *) sleep "$(awk -v t="${t#a}" 'BEGIN { print t / 10 }')"; printf 'example: %s\nplan: planned | Plan: %s to add, 0 to change, 0 to destroy.\n' "$ex" "${t#a}" >> "$outf" ;;
+  esac
+  rm -f "$W/live/$t" "$W/running.$runner"
+}
+EOF
+    swpl "$1"; echo 'stall_grace=1 stall_poll=0.2 stall_tries=3'
+    sed -n '/^plan_container() {/,/^}/p' "$1"
+    sed -n '/^host_only=/,/^untrusted() /p' "$1"
+    case "$2" in
+      order) echo 'set -- ex/a9 ex/a1 ex/err1 ex/a6 ex/a2 ex/err2 ex/a4' ;;
+      stall) echo 'set -- ex/stall ex/a25 ex/a1' ;;
+      budget) echo 'set -- ex/eat ex/a8 ex/a9 ex/a1 ex/a2 ex/a3' ;;
+      cred) echo 'set -- ex/a1 ex/cred ex/a5 ex/a6 ex/a7' ;;
+    esac
+    ploop "$1"
+    # shellcheck disable=SC2016
+    echo 'echo "planned $planned exc $exc deferred ${deferred[*]:-}"; for i in $(seq 1 $#); do echo "== $i"; cat "$TMPRUN/block.$i" 2> /dev/null || echo none; done'
+  } > "$d/run.sh"
+  : > "$d/conc"; : > "$d/names"
+  local t0=$SECONDS
+  bash "$d/run.sh" > "$d/out" 2> "$d/err"
+  echo $((SECONDS - t0)) > "$d/secs"
+}
+pjout() { cat "$PJ/$1/out"; }
+pjrun "$RP" order 1; pjrun "$RP" order 3
+check "parallel plans: three slots give the blocks, counts and deferred list of one slot byte for byte" \
+  "$([ -s "$PJ/order-1/out" ] && [ "$(pjout order-3)" = "$(pjout order-1)" ] && echo 0 || echo 1)"
+check "parallel plans: a slow first example keeps its place, though the next ones end before it" \
+  "$(sed -n '2,4p' "$PJ/order-3/out" | tr '\n' ' ' | grep -qx '== 1 example: ex/a9 plan: planned | Plan: 9 to add, 0 to change, 0 to destroy. ' && echo 0 || echo 1)"
+check "parallel plans: no more plan containers run at once than the job cap, and the cap is used" \
+  "$([ "$(sort -n "$PJ/order-3/conc" | tail -n 1)" = 3 ] && [ "$(sort -n "$PJ/order-1/conc" | tail -n 1)" = 1 ] && echo 0 || echo 1)"
+check "parallel plans: three slots end sooner than one" "$([ "$(cat "$PJ/order-3/secs")" -lt "$(cat "$PJ/order-1/secs")" ] && echo 0 || echo 1)"
+check "parallel plans: containers that run at once have their own names" \
+  "$([ "$(cut -d' ' -f1 "$PJ/order-3/names" | sort -u | tr '\n' ' ')" = 'r r-2 r-3 ' ] && echo 0 || echo 1)"
+check "parallel plans: each container's session is issued for its own slot" \
+  "$([ "$(sort -u "$PJ/order-3/sessions" | tr '\n' ' ')" = 'session r session r-2 session r-3 ' ] && echo 0 || echo 1)"
+pjrun "$RP" stall 1; pjrun "$RP" stall 3
+check "parallel plans: a stalled example beside running ones is environment (network), the others keep their results" \
+  "$([ "$(pjout stall-3)" = "$(pjout stall-1)" ] && grep -qx 'plan: environment (network)' "$PJ/stall-3/block.1" \
+     && grep -qx 'plan: planned | Plan: 25 to add, 0 to change, 0 to destroy.' "$PJ/stall-3/block.2" && echo 0 || echo 1)"
+pjrun "$RP" budget 3
+check "parallel plans: the budget spent mid-run leaves the running plans their results and starts no further one" \
+  "$(grep -qx 'planned 3 exc 0 deferred ' "$PJ/budget-3/out" && [ "$(grep -c '^plan: budget$' "$PJ/budget-3/out")" = 3 ] \
+     && grep -qx 'plan: planned | Plan: 8 to add, 0 to change, 0 to destroy.' "$PJ/budget-3/block.2" && grep -qx 'plan: budget' "$PJ/budget-3/block.6" && echo 0 || echo 1)"
+pjrun "$RP" cred 1; pjrun "$RP" cred 3
+check "parallel plans: no block follows an example that ended at credentials, as with one slot" \
+  "$([ "$(pjout cred-3)" = "$(pjout cred-1)" ] && [ ! -e "$PJ/cred-3/block.3" ] && grep -qx 'r-3 ex/a5' "$PJ/cred-3/names" && echo 0 || echo 1)"
+# An interrupt: TERM to the script while three plans run. The EXIT trap's cleanup ends each
+# plan job's process tree and removes each slot's container by name.
+pjint() { # script -> 0 when nothing is left
+  local d="$PJ/int"; rm -rf "$d"; mkdir -p "$d/plan-runner.abcdef"
+  { echo 'set -euo pipefail'
+    echo "tmp_parent='$d' TMPRUN='$d/plan-runner.abcdef' W='$d'"
+    cat <<'EOF'
+runner=r proxy_init=pi proxy_plan=p volume=v saved=s net_int=n net_ext=e slots=3 slot_names=(2 3) RUN=/run SEED=/seed
+volume=v runner_image=i pname=p load_creds=: common=() proxy_env=() base= base_args=()
+check_record_size() { :; }; issue_session() { :; }; left() { echo 100; }
+docker() { echo "docker $*" >> "$W/calls"; case $1 in logs) echo 0 ;; container) return 1 ;; esac; return 0; }
+in_runner() { sleep 30 & echo $! >> "$W/pids"; echo "$BASHPID" >> "$W/pids"; wait; }
+EOF
+    sed -n '/^save_proxy_log() {/,/^trap .exit 130. INT TERM$/p' "$1"
+    swpl "$1"; sed -n '/^plan_container() {/,/^}/p' "$1"; sed -n '/^host_only=/,/^untrusted() /p' "$1"
+    echo 'set -- ex/a ex/b ex/c ex/d'; ploop "$1"; } > "$d/run.sh"
+  bash "$d/run.sh" > /dev/null 2>&1 & local p=$!
+  for _ in $(seq 1 50); do [ -f "$d/pids" ] && [ "$(wc -l < "$d/pids")" -ge 6 ] && break; sleep 0.1; done
+  kill -TERM "$p"; wait "$p" 2> /dev/null; sleep 0.5
+  local left=0 q
+  for q in $(cat "$d/pids" 2> /dev/null); do kill -0 "$q" 2> /dev/null && { left=1; kill "$q" 2> /dev/null; }; done
+  [ "$(wc -l < "$d/pids")" -ge 6 ] && [ "$left" = 0 ] && grep -qx 'docker rm -f r-2' "$d/calls" && grep -qx 'docker rm -f r-3' "$d/calls" \
+    && grep -qx 'docker network rm n-3' "$d/calls" && echo 0 || echo 1
+}
+check "parallel plans: an interrupt leaves no plan job process and removes each slot's container and network" "$(pjint "$RP")"
+# The negative self-check: a weakened copy of each rule is caught.
+pjmut() { # name, perl program, scenario, slots, check (a shell test on $PJ/<scenario>-<slots>)
+  perl -0pe "$2" "$RP" > "$PJ/$1.sh"
+  check "mutation $1 changes the script" "$(cmp -s "$RP" "$PJ/$1.sh"; test $? -eq 1; echo $?)"
+  pjrun "$PJ/$1.sh" "$3" "$4"
+  check "mutation $1 is caught" "$(D="$PJ/$3-$4"; eval "$5" && echo 1 || echo 0)"
+}
+pjmut parallel-shared-output 's/"\$TMPRUN\/example\.out\.\$n"/"\$TMPRUN\/example.out"/g' order 3 '[ "$(cat "$D/out")" = "$(pjout order-1)" ]'
+pjmut parallel-no-cap 's/while \[ "\$k" -le "\$slots" \] && /while /' order 3 '[ "$(sort -n "$D/conc" | tail -n 1)" -le 3 ]'
+pjmut parallel-shared-runner 's/  runner="\$runner-\$1" /  /' order 3 '[ "$(cut -d" " -f1 "$D/names" | sort -u | wc -l | tr -d " ")" = 3 ]'
+pjmut parallel-shared-stall-flag 's/ stalled="\$TMPRUN\/stalled\.\$1"//' stall 3 '[ "$(cat "$D/out")" = "$(pjout stall-1)" ]'
+pjmut parallel-shared-proxy 's/ proxy_plan="\$proxy_plan-\$1"//' stall 3 '[ "$(cat "$D/out")" = "$(pjout stall-1)" ]'
+pjmut parallel-no-budget 's/      if \[ "\$rem" -le 0 \]; then\n.*?continue\n      fi\n//s' budget 3 'grep -qx "plan: budget" "$D/block.6"'
+pjmut parallel-no-cred-cut 's/  if \[ "\$cut" -eq 1 \]; then rm -f "\$blk"; continue; fi\n//' cred 3 '[ "$(cat "$D/out")" = "$(pjout cred-1)" ]'
+pjmut parallel-in-finish-order 's/  mv "\$blk" "\$TMPRUN\/block\.\$n"/  c=1; while [ -e "\$TMPRUN\/block.\$c" ]; do c=\$((c + 1)); done; mv "\$blk" "\$TMPRUN\/block.\$c"/' order 3 '[ "$(cat "$D/out")" = "$(pjout order-1)" ]'
+perl -ne 'print unless /^  stop_jobs$/' "$RP" > "$PJ/parallel-orphan.sh"
+check "mutation parallel-orphan changes the script" "$(cmp -s "$RP" "$PJ/parallel-orphan.sh"; test $? -eq 1; echo $?)"
+check "mutation parallel-orphan is caught" "$([ "$(pjint "$PJ/parallel-orphan.sh")" = 1 ] && echo 0 || echo 1)"
+perl -pe 's/^  kill \$all 2> \/dev\/null \|\| true$/  kill "\$1" 2> \/dev\/null || true/' "$RP" > "$PJ/parallel-root-only.sh"
+check "mutation parallel-root-only changes the script" "$(cmp -s "$RP" "$PJ/parallel-root-only.sh"; test $? -eq 1; echo $?)"
+check "mutation parallel-root-only is caught" "$([ "$(pjint "$PJ/parallel-root-only.sh")" = 1 ] && echo 0 || echo 1)"
+# The job cap's argument: 1 to 8, PLAN_JOBS or --jobs, default 3.
+check "parallel plans: the job cap is 1 to 8, from PLAN_JOBS or --jobs, 3 by default" \
+  "$(grep -qx 'jobs="${PLAN_JOBS:-3}"' "$RP" && grep -qF '[[ "$jobs" =~ ^[1-8]$ ]] || die "--jobs must be a whole number, 1 to 8"' "$RP" && echo 0 || echo 1)"
 # The evaluator itself: a deny wins over an allow of the same action
 check "session policy: the evaluator lets a deny win" \
   "$([ "$(jq -r --arg a s3:GetObject --arg r x "$EVAL" <<< '{"Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":"*"},{"Effect":"Deny","Action":["s3:Get*"],"Resource":"*"}]}')" = deny ] && echo 0 || echo 1)"
@@ -2210,6 +2352,7 @@ denwire() { # script -> the head block, the deferred list, the base file
   { echo 'set -uo pipefail'; echo "TMPRUN='$DW' base=0000000000000000000000000000000000000000 RUN=/run"
     cat <<'EOF'
 left() { echo 100; }; start_proxy() { :; }; save_proxy_log() { :; }; network_check() { :; }
+stalled="$TMPRUN/stalled"
 plan_container() { # output file, phase, index, example
   if [ "$2" = base-plan ]; then printf 'base: environment (access-denied)
 base-denied: data.aws_ssm_parameter.p
@@ -2223,7 +2366,7 @@ base: deferred
 }
 EOF
     sed -n '/^host_only=/,/^untrusted() /p' "$1"
-    echo 'set -- ex/a'; sed -n '/^n=0 planned=0 exc=0 deferred=() examples=("\$@")$/,/^done$/p' "$1"
+    echo 'set -- ex/a'; ploop "$1"
     echo 'echo "deferred ${deferred[*]}"'
     echo 'n=1; ex=ex/a; rem=100'
     sed -n '/plan_container "\$TMPRUN\/example.out" base-plan/,/\[ -s "\$TMPRUN\/base\.\$n" \]/p' "$1"; } > "$DW/run.sh"
