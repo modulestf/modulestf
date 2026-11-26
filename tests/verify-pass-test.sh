@@ -185,6 +185,16 @@ for sh in bash zsh; do
   check "$sh: resolver: a binary inside a refused directory is never run" "$([ "$(frline "$TMP/fr/refused")" = "absent|mtf-facts: not installed" ]; echo $?)"
   check "$sh: resolver: facts_has matches a whole feature name only" \
     "$(PATH="$TMP/fr/bin:/usr/bin:/bin" "$sh" -c '. "$1"; FACTS_FEATURES="flag:affected:module-root"; facts_has flag:affected:module-root && ! facts_has flag:affected && ! facts_has module-root' sh "$FR"; echo $?)"
+  # An empty name or one with a line break matches nothing, and neither does a name over 128 bytes.
+  FHT='. "$1"; L=$(printf "%0129d" 0); NL="
+"
+    FACTS_FEATURES=""; ! facts_has "" && FACTS_FEATURES="flag:a${NL}flag:b" && ! facts_has "flag:a${NL}flag:b" \
+      && facts_has flag:a && facts_has flag:b && FACTS_FEATURES=$L && ! facts_has "$L"'
+  check "$sh: resolver: facts_has refuses an empty name, a name with a line break and one over 128 bytes" \
+    "$("$sh" -c "$FHT" sh "$FR"; echo $?)"
+  perl -0pe 's/  case "\$1" in .*?\n  \[ "\$\{#1\}" -le 128 \] \|\| return 1\n//s' "$FR" > "$TMP/fr-has.sh"
+  check "$sh: resolver: the mutation without the facts_has name check is caught" \
+    "$( ! cmp -s "$FR" "$TMP/fr-has.sh" && ! "$sh" -c "$FHT" sh "$TMP/fr-has.sh" 2> /dev/null; echo $?)"
   # The negative self-check: a copy that reads any exit of version --json as old, and one with
   # no output cap.
   perl -0pe 's/    125\) FACTS_STATE=refused ;;\n//' "$FR" > "$TMP/fr-cap.sh"
@@ -410,14 +420,15 @@ $BASE" --out "$R3/x.json")"
   : > "$TMP/facts.log"
   check "$sh: with affected --module-root, the selection is the scan's order, own examples first" \
     "$(q <(sel9 modules/a "$TMP/facts") '.selection == {tool:"mtf-facts", fallback:null, inert:false} and [.dirs[] | "\(.affected) \(.dir)"] == ["touched modules/a/examples/own", "touched examples/touched", "caller examples/calls"]')"
-  check "$sh: affected --module-root runs once, on the repository root with the whole files list" \
-    "$([ "$(cat "$TMP/facts.log")" = "affected $C9 --module-root modules/a --diff $TMP/files9.json --json" ]; echo $?)"
+  check "$sh: affected --module-root runs once, on the repository root with the whole files list as an absolute copy" \
+    "$([ "$(cat "$TMP/facts.log")" = "affected $C9 --module-root modules/a --diff $R9/verify-select/affected-files.json --json" ] && cmp -s "$TMP/files9.json" "$TMP/facts-diff.json"; echo $?)"
   rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf"],
     examples:[{dir:"modules/a/examples/own", reason:"caller"}, {dir:"examples/zz", reason:"all", unresolved:true}, {dir:"examples/touched", reason:"all"}, {dir:"examples/calls", reason:"caller"}]}'
   check "$sh: a root example that calls the module root is a caller, one the tool could not resolve comes last with reason all" \
     "$(q <(sel9 modules/a "$TMP/facts") '[.dirs[] | "\(.affected) \(.dir)"] == ["caller modules/a/examples/own", "caller examples/calls", "caller examples/touched"]')"
   for bad in '.module_root = "modules/b"' '.examples += [{dir:"examples/a b", reason:"all"}]' '.examples |= map(select(.dir != "modules/a/examples/own"))' \
-      '.examples += [{dir:"modules/a/examples/nope", reason:"all"}]' '.examples[0].unresolved = true'; do
+      '.examples += [{dir:"modules/a/examples/nope", reason:"all"}]' '.examples[0].unresolved = true' \
+      '.examples += [{dir:"examples/calls", reason:"caller"}]' '.examples += [{dir:"modules/a/examples/own", reason:"all"}]'; do
     jq "$bad" "$TMP/facts.out" > "$TMP/facts.bad" && cp "$TMP/facts.out" "$TMP/facts.good" && cp "$TMP/facts.bad" "$TMP/facts.out"
     check "$sh: a module root report that does not fit ($bad) is invalid, the scan selects" \
       "$(q <(sel9 modules/a "$TMP/facts") '.selection.tool == "invalid" and [.dirs[] | "\(.affected) \(.dir)"] == ["all modules/a/examples/own", "touched examples/touched", "caller examples/calls"]')"
@@ -438,6 +449,50 @@ $BASE" --out "$R3/x.json")"
   PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/vp-gate.sh" select "$R9" --files "$TMP/files9.json" --prefix modules/a > /dev/null 2>&1
   check "$sh: the mutation without the feature check is caught" \
     "$( ! cmp -s "$VP" "$TMP/vp-gate.sh" && grep -q -- '--module-root' "$TMP/facts.log"; echo $?)"
+  # mutsel: 0 when the script's select output is JSON that does not satisfy the jq test.
+  mutsel() { # script, files, prefix, jq test
+    PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$1" select "$R9" --files "$2" --prefix "$3" > "$TMP/mut.json" 2>&1
+    jq -e . "$TMP/mut.json" > /dev/null 2>&1 && ! jq -e "$4" "$TMP/mut.json" > /dev/null 2>&1
+  }
+  feat '["cmd:affected","flag:affected:module-root"]'
+  # A directory listed twice in a module root report makes it invalid; the scan selects.
+  rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf"],
+    examples:[{dir:"modules/a/examples/own", reason:"caller"}, {dir:"examples/calls", reason:"caller"}, {dir:"examples/calls", reason:"caller"}]}'
+  DUPOK='.selection.tool == "invalid"'
+  check "$sh: a module root report that lists a directory twice is invalid" \
+    "$(q <(sel9 modules/a "$TMP/facts") "$DUPOK")"
+  perl -0pe 's/(AFFECTED_ROOT_JQ=.*?)\n  and \(\[\.examples\[\]\.dir\] \| length == \(unique \| length\)\)/$1/s' "$VP" > "$TMP/vp-dup.sh"
+  check "$sh: the mutation without the no-duplicate check of the module root report is caught" \
+    "$( ! cmp -s "$VP" "$TMP/vp-dup.sh" && mutsel "$TMP/vp-dup.sh" "$TMP/files9.json" modules/a "$DUPOK"; echo $?)"
+  # Under a fallback every root example stays reason all; only a report with none says caller.
+  rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:"dynamic-source", changed:["modules/a/main.tf"],
+    examples:[{dir:"modules/a/examples/own", reason:"all"}, {dir:"examples/calls", reason:"all"}, {dir:"examples/touched", reason:"all"}]}'
+  FBOK='.selection.fallback == "dynamic-source" and [.dirs[] | "\(.affected) \(.dir)"] == ["all modules/a/examples/own", "all examples/calls", "all examples/touched"]'
+  check "$sh: under a fallback the root examples keep reason all, none is a caller" \
+    "$(q <(sel9 modules/a "$TMP/facts") "$FBOK")"
+  perl -0pe 's/\\\(\$cl\)/caller/' "$VP" > "$TMP/vp-fb.sh"
+  check "$sh: the mutation that labels every root example a caller under a fallback is caught" \
+    "$( ! cmp -s "$VP" "$TMP/vp-fb.sh" && mutsel "$TMP/vp-fb.sh" "$TMP/files9.json" modules/a "$FBOK"; echo $?)"
+  # A relative --files reaches an engine that runs from /: it gets an absolute copy.
+  rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf"],
+    examples:[{dir:"modules/a/examples/own", reason:"caller"}]}'
+  : > "$TMP/facts.log"; rm -f "$TMP/facts-diff.json"
+  (cd "$TMP" && PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$VP" select "$R9" --files files9.json --prefix modules/a > "$TMP/selrel.json" 2>&1)
+  check "$sh: a relative --files reaches the module root run as an absolute copy" \
+    "$([ "$(cat "$TMP/facts.log")" = "affected $C9 --module-root modules/a --diff $R9/verify-select/affected-files.json --json" ] && cmp -s "$TMP/files9.json" "$TMP/facts-diff.json" && [ "$(q "$TMP/selrel.json" '.selection.tool == "mtf-facts"')" = 0 ]; echo $?)"
+  perl -0pe 's/(--module-root "\$\{PREFIX%\/\}" \\\n\s+--diff )"\$W\/affected-files\.json"/$1"\$FILES"/' "$VP" > "$TMP/vp-rel.sh"
+  : > "$TMP/facts.log"
+  (cd "$TMP" && PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/vp-rel.sh" select "$R9" --files files9.json --prefix modules/a > /dev/null 2>&1)
+  check "$sh: the mutation that passes --files as given to the module root run is caught" \
+    "$( ! cmp -s "$VP" "$TMP/vp-rel.sh" && grep -q -- '--diff files9.json ' "$TMP/facts.log"; echo $?)"
+  # Started by a bare relative name, the script still finds facts-resolve.sh beside it.
+  cp "$VP" "$TMP/vp-bare.sh"
+  sed 's|^HERE="$(cd "$(dirname "$0")" && pwd -P)"$|HERE="${0%/*}"|' "$VP" > "$TMP/vp-bare-mut.sh"
+  bare() { (cd "$TMP" && PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$1" select "$R9" --files files9.json --prefix modules/a 2> /dev/null | jq -e '.selection.tool == "mtf-facts"' > /dev/null 2>&1); }
+  check "$sh: started by a bare relative name the script reads facts-resolve.sh from its own directory" "$(bare vp-bare.sh; echo $?)"
+  check "$sh: the mutation that reads the resolver through the script name is caught" \
+    "$( ! cmp -s "$VP" "$TMP/vp-bare-mut.sh" && ! bare vp-bare-mut.sh; echo $?)"
+  rm -f "$TMP/facts.version"; : > "$TMP/facts.log"
   # Live, with MTF_FACTS_BIN naming an mtf-facts that has the feature: the module root path and
   # the scan, the same binary with its version report hidden, give the same selection.
   if [ -n "${MTF_FACTS_BIN:-}" ] && [ -x "$MTF_FACTS_BIN" ] && "$MTF_FACTS_BIN" version --json 2> /dev/null | jq -e '.features | index("flag:affected:module-root")' > /dev/null; then
