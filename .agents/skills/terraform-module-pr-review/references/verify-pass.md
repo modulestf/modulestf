@@ -84,6 +84,7 @@ Every terraform command runs through the script's `tf` function, which leaves no
 
 - Removed from the environment: every AWS credential variable, `GH_TOKEN`, `GITHUB_TOKEN` and their enterprise forms, every `TF_TOKEN_*` variable, `SSH_AUTH_SOCK`, `SSH_ASKPASS`, `GIT_ASKPASS`, `GIT_SSH` and `GIT_SSH_COMMAND`, `TF_CLI_ARGS`, `TF_CLI_ARGS_init`, `TF_CLI_ARGS_validate`, `TF_DATA_DIR` and `TF_WORKSPACE`.
 - `HOME` is an empty directory of the script's own, so no `~/.terraformrc`, `~/.terraform.d`, `~/.netrc`, `~/.gitconfig` or `~/.aws` is read. `NETRC`, `TF_CLI_CONFIG_FILE`, `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` are `/dev/null`.
+- `TMPDIR` is a short directory of the run, `/tmp/vp.XXXXXX`, made private and removed by its exact path when the script ends or is interrupted. Terraform starts each provider on a unix socket at `$TMPDIR/plugin<digits>`, and a socket path has at most 103 bytes on macOS and 107 on Linux, so a long caller `TMPDIR` would fail every provider schema load. When the directory cannot be made, the script stops with an error before any terraform command.
 - Git, which `init` runs to fetch a module, reads no system or global configuration (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`), runs no hook (`core.hooksPath=/dev/null`), has no credential helper (`credential.helper` empty) and never prompts.
 - Instance metadata is off, input is off, and no checkpoint call is made.
 
