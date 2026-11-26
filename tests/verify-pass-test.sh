@@ -36,6 +36,9 @@ echo "\${TMPDIR:-}" >> "$TMP/tmpdir.log"
 case "\$1" in
 version) echo '{"terraform_version":"1.9.8","platform":"darwin_arm64"}' ;;
 init)
+  # as terraform does: the data directory, and a lock file in the working directory
+  mkdir -p "\${TF_DATA_DIR:-.terraform}/modules"
+  [ -e .terraform.lock.hcl ] || echo '# generated' > .terraform.lock.hcl
   if [ -f init.slow ]; then
     (sleep 3; : > "$TMP/survivor") &
     sleep 30
@@ -100,6 +103,7 @@ commit() { git -C "$up" add -A && git -C "$up" -c user.name=t -c user.email=t@ex
 mk() { mkdir -p "$(dirname "$up/$1")" && printf '%s\n' "$2" > "$up/$1"; }
 mk main.tf 'resource "aws_s3_bucket" "this" {}'
 for d in regress brokenbase bump bumpmajor; do mk "examples/$d/main.tf" 'module "b" { source = "../../" }'; done
+mk examples/regress/.terraform.lock.hcl '# committed'
 : > "$up/examples/brokenbase/validate.fail"
 mk examples/bump/versions.tf 'terraform {
   required_version = ">= 1.5.7"
@@ -288,6 +292,24 @@ for sh in bash zsh; do
     "$([ ! -s "$TMP/leak.log" ]; echo $?)"
   check "$sh: the merge base worktree is the pass's own" "$([ -d "$R/verify-base" ] && [ ! -e "$R/base" ]; echo $?)"
   check "$sh: the work directory is removed" "$([ ! -e "$R/verify" ]; echo $?)"
+  clean_trees() { # run directory: no untracked or ignored file and no .terraform in the clone or the merge base worktree
+    for t in "$1/clone" "$1/verify-base"; do
+      [ -z "$(git -C "$t" status --porcelain --untracked-files=all --ignored)" ] || return 1
+      [ -z "$(find "$t" -name .terraform -not -path '*/.git/*')" ] || return 1
+    done
+  }
+  check "$sh: the clone and the merge base worktree have no untracked file and no .terraform" "$(clean_trees "$R"; echo $?)"
+  check "$sh: a committed lock file is kept at the head and the base" \
+    "$([ "$(cat "$R/clone/examples/regress/.terraform.lock.hcl")" = '# committed' ] && [ "$(cat "$R/verify-base/examples/regress/.terraform.lock.hcl")" = '# committed' ]; echo $?)"
+  # The negative self-check: a copy with no data directory, and one that removes a tracked lock file.
+  perl -pe 's/ TF_DATA_DIR="\$TFD"//' "$VP" > "$TMP/vp-dd.sh"
+  perl -0pe 's/\(cd "\$1\/\$3" && git[^\n]*\n\s*\|\| rm/rm/' "$VP" > "$TMP/vp-lock.sh"
+  for m in dd lock; do
+    Rm="$(newrun)"
+    EXPECT_CACHE="$Rm/plugin-cache" PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/vp-$m.sh" run "$Rm" --files "$TMP/files.json" --base "$BASE" --out "$Rm/v.json" --dir examples/regress > /dev/null 2>&1
+    check "$sh: the mutation vp-$m is caught" \
+      "$( ! cmp -s "$VP" "$TMP/vp-$m.sh" && [ "$(q "$Rm/v.json" "$(d regress '.base.validate == 0')")" = 0 ] && ! clean_trees "$Rm"; echo $?)"
+  done
 
   # A host's results: accepted as produced, rejected on any change of binding or shape.
   chk() { run check "$R" --files "$TMP/files.json" --base "$BASE" --head "${2:-$HEAD}" --results "$1"; }

@@ -840,8 +840,10 @@ TFENV+=(-u AWS_PROFILE -u AWS_DEFAULT_PROFILE -u AWS_ACCESS_KEY_ID
   TF_IN_AUTOMATION=1 TF_INPUT=0 CHECKPOINT_DISABLE=1 GIT_TERMINAL_PROMPT=0
   GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=2
   GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
-  GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1=
-  terraform)
+  GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1=)
+# Each terraform run gets its data directory under the work area, never .terraform in the
+# clone, which the later mtf-facts reads of the clone would take in.
+TFD="$W/data/version"
 T0=$SECONDS
 left() { echo $((BUDGET - (SECONDS - T0))); }
 LIMBUDGET=0
@@ -850,7 +852,7 @@ tf() { # seconds, directory, arguments: one terraform command into $W/out.txt, u
   bl=$(left); LIMBUDGET=0
   if [ "$bl" -lt "$tl" ]; then tl=$bl; LIMBUDGET=1; fi
   [ "$tl" -ge 1 ] || tl=1 # alarm 0 would mean no limit at all
-  run_capped "$tl" "$W/out.txt" "$td" "${TFENV[@]}" "$@"
+  run_capped "$tl" "$W/out.txt" "$td" "${TFENV[@]}" TF_DATA_DIR="$TFD" terraform "$@"
 }
 side() { # init validate record line: one JSON object
   jq -cn --argjson init "${1:-null}" --argjson validate "${2:-null}" --arg record "$3" --arg line "$4" \
@@ -871,7 +873,14 @@ classify() { # output file, tree root: sets CLASS and LINE
 limited() { # a command the budget, its time limit or the output cap stopped: the record
   if [ "$LIMBUDGET" = 1 ] || [ "$(left)" -le 0 ]; then echo not-run-budget; else echo not-run-limit; fi
 }
-verify() { # tree root, module root, example directory: sets SIDEJ to one side object
+TFN=0
+verify() { # tree root, module root, example directory: sets SIDEJ, then drops an untracked lock file
+  TFN=$((TFN + 1)); TFD="$W/data/$TFN"
+  verify_side "$@"
+  (cd "$1/$3" && git -c core.fsmonitor=false ls-files --error-unmatch .terraform.lock.hcl > /dev/null 2>&1) \
+    || rm -f -- "$1/$3/.terraform.lock.hcl"
+}
+verify_side() { # tree root, module root, example directory: sets SIDEJ to one side object
   INIT=; VALID=; LINE=
   if [ "$(left)" -le 0 ]; then SIDEJ="$(side "" "" not-run-budget "")"; return; fi
   tf 180 "$1/$3" init -backend=false -input=false -no-color
