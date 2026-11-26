@@ -2015,7 +2015,19 @@ w_none() { rm -rf "$WC"; mkdir -p "$WC/run" "$WC/out"; echo '{}' > "$WC/run-file
 w_other() { rm -rf "$WC"; wc_run "$WF" "$(wi not-resolved partly)" > /dev/null
   jq '.earlier.review_id = 40' "$WC/run-file.json" > "$WC/r.tmp" && mv "$WC/r.tmp" "$WC/run-file.json" && rm -f "$WC/out/carried.json"
   ( export RUN="$WC/run" PREFIX= HERE="$SK"; bash -c "$(ER_SRC "$ERS"); write_carried '$WC/out' '$WC/run-file.json'" ) > /dev/null 2>&1
-  [ "$(jq -c . "$WC/out/carried.json" 2> /dev/null)" = '[]' ]; }
+  [ "$(jq -c . "$WC/out/carried.json" 2> /dev/null)" = '{"broken_chain":"mismatch"}' ]; }
+# An ok record with a run file whose earlier is missing or not ok: the marker, never [].
+w_mismatch() { local x; for x in 'del(.earlier)' '.earlier.record = "unreadable"'; do
+    rm -rf "$WC"; wc_run "$WF" "$(wi not-resolved partly)" > /dev/null
+    jq "$x" "$WC/run-file.json" > "$WC/r.tmp" && mv "$WC/r.tmp" "$WC/run-file.json" && rm -f "$WC/out/carried.json"
+    ( export RUN="$WC/run" PREFIX= HERE="$SK"; bash -c "$(ER_SRC "$ERS"); write_carried '$WC/out' '$WC/run-file.json'" ) > /dev/null 2>&1
+    [ "$(jq -c . "$WC/out/carried.json" 2> /dev/null)" = '{"broken_chain":"mismatch"}' ] || return 1; done; }
+# An ok record whose run file earlier holds fewer items than its blocking findings, or none: the marker.
+w_items() { local x; for x in '.earlier.items |= .[:1]' '.earlier.items = []'; do
+    rm -rf "$WC"; wc_run "$WF" "$(wi not-resolved partly)" > /dev/null
+    jq "$x" "$WC/run-file.json" > "$WC/r.tmp" && mv "$WC/r.tmp" "$WC/run-file.json" && rm -f "$WC/out/carried.json"
+    ( export RUN="$WC/run" PREFIX= HERE="$SK"; bash -c "$(ER_SRC "$ERS"); write_carried '$WC/out' '$WC/run-file.json'" ) > /dev/null 2>&1
+    [ "$(jq -c . "$WC/out/carried.json" 2> /dev/null)" = '{"broken_chain":"mismatch"}' ] || return 1; done; }
 # The chain: we block with A (review 41); at the next head A is judged not resolved and a fresh
 # block with D alone replaces ours (review 42); at the head after, D is fixed. The record of 42 must
 # still hold A, so A is judged again and APPROVE cannot follow while A is open.
@@ -2081,7 +2093,7 @@ cb_nocarried() { chain_broken nocarried; }
 cb_user() { chain_broken user; }
 cb_all() { cb_missing && cb_edited && cb_plan && cb_nocarried && cb_user; }
 for c in cb_missing cb_edited cb_plan cb_nocarried cb_user w_broken w_empty r_carriedtwo r_broken r_brokenbad c_carriedlow c_carriedtwo c_broken \
-    chain w_open w_judged w_resolved w_none w_other r_carried r_carriedlow r_carriedmissing r_carriedlink r_carriedsha r_carriedbad r_carrieddup r_carriedbig \
+    chain w_open w_judged w_resolved w_none w_other w_mismatch w_items r_carried r_carriedlow r_carriedmissing r_carriedlink r_carriedsha r_carriedbad r_carrieddup r_carriedbig \
     r_space e_lnblob e_replaced e_space c_nocarried c_carriedbad c_carriedlink; do
   "$c"; check "post record: case $c" $?
 done
@@ -2100,6 +2112,10 @@ erm() { # name, perl -0 expression on a copy of review-run.sh, case function tha
   check "self-check: post record mutation $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
 erm missing-default 's/rid d m pl c rec=missing/rid d m pl c rec=ok/' r_missing
+erm carried-mismatch-empty 's/(\$x\.review_id != \$e\.review_id\n        or \(\$x\.items \| map\(\.id\) \| sort\) != \(\$e\.findings \| map\(\.id\) \| sort\) then )\{broken_chain: "mismatch"\}/$1\[\]/' w_other
+erm carried-mismatch-empty-run 's/(\$x\.review_id != \$e\.review_id\n        or \(\$x\.items \| map\(\.id\) \| sort\) != \(\$e\.findings \| map\(\.id\) \| sort\) then )\{broken_chain: "mismatch"\}/$1\[\]/' w_mismatch
+erm carried-items-unchecked 's/\n        or \(\$x\.items \| map\(\.id\) \| sort\) != \(\$e\.findings \| map\(\.id\) \| sort\)//' w_items
+erm broken-marker-empty 's/then \{broken_chain: \$e\.record\}/then []/' cb_all
 # A symbolic link has mode 777 on Linux, so the permission test refuses it too: these drop both.
 erm no-link-checks 's/\[ -f "\$m" \] && \[ ! -L "\$m" \] && \[ -f "\$pl" \] && \[ ! -L "\$pl" \] && /[ -f "\$m" ] \&\& [ -f "\$pl" ] \&\& /; s/\[ -O "\$p" \] && \[ ! -L "\$p" \]/[ -O "\$p" ]/; s/\[ -z "\$\(find "\$p" -prune [^\n]*\|\| return 1/true/;' r_metalink
 erm no-link-checks-plan 's/\[ -f "\$m" \] && \[ ! -L "\$m" \] && \[ -f "\$pl" \] && \[ ! -L "\$pl" \] && /[ -f "\$m" ] \&\& [ -f "\$pl" ] \&\& /; s/\[ -O "\$p" \] && \[ ! -L "\$p" \]/[ -O "\$p" ]/; s/\[ -z "\$\(find "\$p" -prune [^\n]*\|\| return 1/true/;' r_planlink
@@ -2157,12 +2173,12 @@ erm carry-resolved-too 's/select\(\.judgment != "resolved"\)/select(true)/' w_re
 erm carry-no-origin 's/\{id: \(if \$id \| test\("@"\) then \$id else "\\\(\$id\)@\\\(\$e\.review_id\)" end\)/{id: \$id/' w_open
 erm carry-origin-rewritten 's/\{id: \(if \$id \| test\("@"\) then \$id else /{id: (if false then \$id else /' w_open
 erm carry-module-paths 's/file: \(\.file \| repo_path\)/file: .file/' w_open
-erm carry-other-review 's/ or \$x\.review_id != \$e\.review_id then \[\]/ then []/' w_other
+erm carry-other-review 's/ or \$x\.review_id != \$e\.review_id\n/\n/' w_other
 erm carried-low 's/ and \(\.severity \| IN\("CRITICAL", "HIGH", "MEDIUM"\)\)\)\)\n/))\n/' r_carriedlow
 erm record-carried-low 's/ and \(\.severity \| IN\("CRITICAL", "HIGH", "MEDIUM"\)\)\)\)\n/))\n/' c_carriedlow
 erm carried-two-docs 's/jq -e -s "\$EARLIER_JQ"\x27 length == 1 and \(\.\[0\] \| carried_ok\)\x27 "\$c"/jq -e "\$EARLIER_JQ"\x27 carried_ok\x27 "\$c"/' r_carriedtwo
 erm record-carried-two-docs 's/jq -e -s "\$EARLIER_JQ"\x27 length == 1 and \(\.\[0\] \| carried_ok\)\x27 "\$k"/jq -e "\$EARLIER_JQ"\x27 carried_ok\x27 "\$k"/' c_carriedtwo
-erm no-broken-marker 's/\n      elif \$e\.record != "ok" then \{broken_chain: \$e\.record\}//' cb_all
+erm no-broken-marker 's/\n      elif \$e\.record != "ok" then \{broken_chain: \$e\.record\}//' w_broken
 erm broken-marker-read-as-ok 's/\n        elif jq -e \x27type == "object"\x27 "\$c" > \/dev\/null 2>&1; then rec=broken//' r_broken
 erm broken-reason-open 's/\(\.broken_chain \| IN\(chain_reasons\[\]\)\)/(.broken_chain | type == "string")/' r_brokenbad
 erm empty-breaks-chain 's/if \$e == null or \$e\.record == "empty" then \[\]/if \$e == null then []/' w_empty
