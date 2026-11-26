@@ -111,7 +111,13 @@ def behaviour_categories: ["wrapper-change", "default-change", "count-for_each-c
 def valid_behaviour:
   type == "object" and keys == ["capped", "claims", "reason", "status", "triggers"]
   and (.capped | nat)
-  and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object"
+  # The classifier's caps: at most 40 triggers that may need evidence and, apart from them, 40 that no
+  # ladder level can verify. behaviour-pass.sh checks the split by levels and follows; this object has
+  # neither, so a version floor or moved address not merged with another category is read as off-ladder.
+  and (.triggers | type == "array" and length <= 80
+        and ([.[] | select(type == "object" and (((.category | IN("provider-version-floor-change", "moved-or-renamed-address"))
+               and (has("also_categories") | not)) | not))] | length) <= 40
+        and all(.[]; type == "object"
         and (keys - ["also_categories", "complete", "evidence_digest", "identical", "outstanding", "unexercised"]) == ["category", "file", "id", "line", "state"]
         and (.id | type == "string" and test("^T-[0-9]{3}$"))
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0))
