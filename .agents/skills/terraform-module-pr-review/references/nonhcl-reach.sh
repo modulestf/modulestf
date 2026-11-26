@@ -257,17 +257,20 @@ gate_at() { # rev, file, var name
 # The test evidence of one changed file (verdict.md, Changes outside Terraform): its tested-by line
 # holds when the file is a .py file at the repository root with a plain module name, a regular file at
 # the head with no other root entry named <module> or <module>.<suffix> that Python could import first
-# (any suffix but .tf, .json, .md, .txt, .yaml, .yml, .tftpl, .hcl and .sh); the change adds or renames
-# no path at the repository root but the file, and edits nothing under .github/ or the tests dir, no
-# Python test or packaging config at any path, and no .toml, .ini, .cfg or .pth file at the repository
-# root or in a parent of the tests dir, where pytest and Python read them; the workflow is a regular file, the same blob at both revisions, naming pytest and the tests dir; the
-# tests dir is the same tree at both revisions, holds no entry that shadows the module, and a regular
+# (any suffix but .tf, .json, .md, .txt, .yaml, .yml, .tftpl, .hcl and .sh); every top-level entry of
+# the head's tree is one the merge base's tree has, since python -m pytest puts the repository root
+# first on sys.path and a new top-level package, plugin or cache would load before anything else; no
+# __pycache__, *.dist-info or *.egg-info entry at the repository root or in a parent of the tests dir
+# at the head; the change edits nothing under .github/ or the tests dir, no Python test or packaging
+# config at any path, and no .toml, .ini, .cfg or .pth file at the repository root or in a parent of
+# the tests dir, where pytest and Python read them; the workflow is a regular file, the same blob at
+# both revisions, naming pytest and the tests dir; the tests dir is the same tree at both revisions, holds no entry that shadows the module, and a regular
 # .py file directly in it imports the module at column 0; and the head's check runs whose name starts
 # with the prefix are at least one, each name's latest run completed, success, from github-actions,
 # for the head. Status 1 otherwise.
 cfgre='(^|/)(tox\.ini|\.?pytest\.(ini|toml)|setup\.cfg|setup\.py|pyproject\.toml|conftest\.py|sitecustomize\.py|usercustomize\.py|Pipfile|Pipfile\.lock|requirements[^/]*\.txt)$'
 tested_at() { # repository path of the file, tests dir, workflow, prefix
-  local f="$1" td="$2" wf="$3" px="$4" mod ents mode type path t hit="" own="" added
+  local f="$1" td="$2" wf="$3" px="$4" mod ents bents mode type path t hit="" own="" dirs pd
   case "$f" in *.py) ;; *) return 1 ;; esac
   mod="${f%.py}"
   [[ "$mod" =~ ^[A-Za-z_][A-Za-z0-9_]{0,63}$ ]] || return 1
@@ -280,8 +283,15 @@ tested_at() { # repository path of the file, tests dir, workflow, prefix
     esac
   done <<< "$ents"
   [ -n "$own" ] || return 1
-  added="$(jq -r '.[] | select(.status != "modified" and .status != "removed") | .filename, (.previous_filename // empty)' "$files" 2> /dev/null)" || return 1
-  ! awk -v f="$f" '$0 != "" && index($0, "/") == 0 && $0 != f { x = 1 } END { exit !x }' <<< "$added" || return 1
+  bents="$(entries "$base" .)" || return 1
+  ! awk 'NR == FNR { b[$3] = 1; next } $3 != "" && !($3 in b) { x = 1 } END { exit !x }' \
+    <(printf '%s\n' "$bents") <(printf '%s\n' "$ents") || return 1
+  dirs="." pd="$td"
+  while [[ "$pd" == */* ]]; do pd="${pd%/*}"; dirs="$dirs"$'\n'"$pd"; done
+  while IFS= read -r pd; do
+    t="$(entries "$head" "$pd")" || return 1
+    ! awk '$3 == "__pycache__" || $3 ~ /\.(dist|egg)-info$/ { x = 1 } END { exit !x }' <<< "$t" || return 1
+  done <<< "$dirs"
   ! grep -Eq '^\.github/' <<< "$changed" || return 1
   ! grep -Eq "$cfgre" <<< "$changed" || return 1
   ! awk -v td="$td" '{ n = split($0, a, "/"); if (a[n] !~ /\.(toml|ini|cfg|pth)$/) next

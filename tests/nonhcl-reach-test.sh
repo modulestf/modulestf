@@ -364,8 +364,8 @@ t_ttests() { FILES="$TMP/ftests.json" untested ttests tsetup "" success; }
 t_ttests; check "a change that lists a file of the tests dir: not tested" $?
 t_ttree() { untested ttree tsetup t_new success; }
 t_ttree; check "a tests dir that differs between the merge base and the head, even unlisted: not tested" $?
-jq -n '[{filename: "package.py", status: "modified"}, {filename: "sub/pyproject.toml", status: "added"}]' > "$TMP/fcfg.json"
-t_cfg() { mkdir -p sub; printf '[tool.pytest]\n' > sub/pyproject.toml; }
+jq -n '[{filename: "package.py", status: "modified"}, {filename: "examples/pyproject.toml", status: "added"}]' > "$TMP/fcfg.json"
+t_cfg() { printf '[tool.pytest]\n' > examples/pyproject.toml; }
 t_tcfg() { FILES="$TMP/fcfg.json" untested tcfg tsetup t_cfg success; }
 t_tcfg; check "a change that edits a Python test or packaging config at any path: not tested" $?
 noimport() { tsetup; perl -pi -e 's/^from package import BuildPlanManager$/from packaging import x/' tests/test_zip.py; }
@@ -406,36 +406,56 @@ t_tparentext() {
   RF="$TMP/tnest.txt" run --checks "$TMP/checks.json"; [ "$ST" = 0 ] && [ "$(tested)" = true ]
 }
 t_tparentext; check "a change of a .cfg file in a parent of the tests dir: not tested; none: tested" $?
-pkgdir() { mkdir -p package && printf '\n' > package/__init__.py; }
-t_tshadowdir() { untested tshadowdir tsetup pkgdir success; }
-t_tshadowdir; check "a package directory named like the module at the root, even unlisted: not tested" $?
-pkgso() { printf 'elf\n' > package.cpython-312-x86_64-linux-gnu.so; }
-t_tshadowso() { untested tshadowso tsetup pkgso success; }
-t_tshadowso; check "an extension module named like the module at the root, even unlisted: not tested" $?
-pkgpyc() { printf 'pyc\n' > package.pyc; git add -f package.pyc; } # forced past any global ignore
-t_tshadowpyc() { untested tshadowpyc tsetup pkgpyc success; }
+# The shadowing entries sit at the merge base too, so the new-entry rule does not hide them.
+pkgdir() { tsetup; mkdir -p package && printf '\n' > package/__init__.py; }
+t_tshadowdir() { untested tshadowdir pkgdir "" success; }
+t_tshadowdir; check "a package directory named like the module at the root: not tested" $?
+pkgso() { tsetup; printf 'elf\n' > package.cpython-312-x86_64-linux-gnu.so; }
+t_tshadowso() { untested tshadowso pkgso "" success; }
+t_tshadowso; check "an extension module named like the module at the root: not tested" $?
+pkgpyc() { tsetup; printf 'pyc\n' > package.pyc; git add -f package.pyc; } # forced past any global ignore
+t_tshadowpyc() { untested tshadowpyc pkgpyc "" success; }
 t_tshadowpyc; check "a bytecode file named like the module at the root: not tested" $?
-pkgmd() { printf 'notes\n' > package.md; }
-t_tsiblingok() { tcase tsiblingok tsetup pkgmd success; }
+pkgmd() { tsetup; printf 'notes\n' > package.md; }
+t_tsiblingok() { tcase tsiblingok pkgmd "" success; }
 t_tsiblingok; check "a root file named like the module with a suffix Python does not import still tests the file" $?
-pylink() { printf 'y\n' > real.py; rm package.py; ln -s real.py package.py; }
-t_tpylink() { untested tpylink tsetup pylink success; }
+realpy() { tsetup; printf 'y\n' > real.py; }
+pylink() { rm package.py; ln -s real.py package.py; }
+t_tpylink() { untested tpylink realpy pylink success; }
 t_tpylink; check "a changed file that is a link at the head: not tested" $?
-t_taddroot() {
-  jq -n '[{filename: "package.py", status: "modified"}, {filename: "notes.txt", status: "added"}]' > "$TMP/fadd.json"
-  FILES="$TMP/fadd.json" untested taddroot tsetup "" success
+# A new top-level entry of the head's tree, listed or not: python -m pytest puts the root first on
+# sys.path, so a new package (a fake pytest), a plugin's metadata or a bytecode cache loads first.
+fakepytest() { mkdir -p pytest && printf '\n' > pytest/__init__.py && printf 'raise SystemExit(0)\n' > pytest/__main__.py; }
+t_tfakepytest() { untested tfakepytest tsetup fakepytest success; }
+t_tfakepytest; check "a new top-level pytest package, unlisted: not tested" $?
+newfile() { printf 'x\n' > notes.txt; }
+t_tnewroot() { untested tnewroot tsetup newfile success; }
+t_tnewroot; check "a new top-level file: not tested" $?
+plugin() { mkdir -p evil.dist-info evilplug && printf 'Name: evil\n' > evil.dist-info/METADATA \
+  && printf '[pytest11]\nevil = evilplug\n' > evil.dist-info/entry_points.txt && printf '\n' > evilplug/__init__.py; }
+t_tplugin() { untested tplugin tsetup plugin success; }
+t_tplugin; check "a new top-level plugin package with its dist-info: not tested" $?
+newcache() { mkdir -p __pycache__ && printf 'pyc\n' > __pycache__/package.cpython-312.pyc && git add -f __pycache__; }
+t_tnewcache() { untested tnewcache tsetup newcache success; }
+t_tnewcache; check "a new top-level __pycache__: not tested" $?
+belowfile() { printf 'x\n' > examples/new.txt; }
+t_taddbelow() { tcase taddbelow tsetup belowfile success; }
+t_taddbelow; check "a file added inside an existing top-level directory still tests the file" $?
+# Import metadata and caches the merge base already holds, at the root or in a parent of the tests
+# dir: refused at the head whatever the change.
+basecache() { tsetup; mkdir -p __pycache__ && printf 'pyc\n' > __pycache__/package.cpython-312.pyc && git add -f __pycache__; }
+t_tbasecache() { untested tbasecache basecache "" success; }
+t_tbasecache; check "a __pycache__ at the repository root, already at the merge base: not tested" $?
+baseegg() { tsetup; mkdir -p x.egg-info && printf 'Name: x\n' > x.egg-info/PKG-INFO; }
+t_tbaseegg() { untested tbaseegg baseegg "" success; }
+t_tbaseegg; check "an .egg-info at the repository root, already at the merge base: not tested" $?
+nestdist() { mkdir -p a/evil.dist-info && printf '[pytest11]\nevil = evilplug\n' > a/evil.dist-info/entry_points.txt; }
+t_tnestdist() {
+  repo tnestdist nested nestdist; checks success
+  printf '%s\n' "${TLINE/ tests / a/tests }" > "$TMP/tnest.txt"
+  RF="$TMP/tnest.txt" run --checks "$TMP/checks.json"; [ "$ST" = 0 ] && [ "$(tested)" = false ]
 }
-t_taddroot; check "a change that adds a path at the repository root: not tested" $?
-t_trenroot() {
-  jq -n '[{filename: "package.py", status: "modified"}, {filename: "docs/new.txt", previous_filename: "old.txt", status: "renamed"}]' > "$TMP/fren.json"
-  FILES="$TMP/fren.json" untested trenroot tsetup "" success
-}
-t_trenroot; check "a change that renames a path away from the repository root: not tested" $?
-t_taddbelow() {
-  jq -n '[{filename: "package.py", status: "modified"}, {filename: "docs/new.txt", status: "added"}]' > "$TMP/fbelow.json"
-  FILES="$TMP/fbelow.json" tcase taddbelow tsetup "" success
-}
-t_taddbelow; check "a path added below the repository root still tests the file" $?
+t_tnestdist; check "a .dist-info in a parent of the tests dir: not tested" $?
 t_tsubdir() {
   repo tsubdir tsetup; checks success
   printf 'tested-by example/terraform-aws-lambda sub/package.py tests .github/workflows/test.yml checks Test with Python\n' > "$TMP/tsub.txt"
@@ -538,7 +558,12 @@ mutate "a root entry named like the module taken" 's/sh\) ;; \*\) return 1 ;; es
 mutate "a root package directory taken" 's/      "\$mod"\) return 1 ;;\n//' t_tshadowdir
 mutate "a root bytecode file taken" 's/tf \| json \| md \| txt/pyc | tf | json | md | txt/' t_tshadowpyc
 mutate "a linked changed file taken" 's/"\$mod\.py"\) \[ "\$mode" = 100644 \] && \[ "\$type" = blob \] \|\| return 1; own=1 ;;/"\$mod.py") own=1 ;;/' t_tpylink
-mutate "a path added at the repository root taken" 's/  ! awk -v f="\$f" .*?<<< "\$added" \|\| return 1\n//' t_taddroot
-mutate "the old name of a renamed path not read" 's/"removed"\) \| \.filename, \(\.previous_filename \/\/ empty\)/"removed") | .filename/' t_trenroot
+mutate "a new top-level entry taken" 's/  ! awk .NR == FNR \{ b\[\$3\] = 1; next \} \$3 != "" && !\(\$3 in b\) \{ x = 1 \} END \{ exit !x \}. \\\n.*?\|\| return 1\n//s' t_tfakepytest
+mutate "a new top-level file taken" 's/  ! awk .NR == FNR \{ b\[\$3\] = 1; next \} \$3 != "" && !\(\$3 in b\) \{ x = 1 \} END \{ exit !x \}. \\\n.*?\|\| return 1\n//s' t_tnewroot
+mutate "a new top-level plugin taken" 's/  ! awk .NR == FNR \{ b\[\$3\] = 1; next \} \$3 != "" && !\(\$3 in b\) \{ x = 1 \} END \{ exit !x \}. \\\n.*?\|\| return 1\n//s; s/\\\.\(dist\|egg\)-info\$/\\.egg-info\$/' t_tplugin
+mutate "a new top-level __pycache__ taken" 's/  ! awk .NR == FNR \{ b\[\$3\] = 1; next \} \$3 != "" && !\(\$3 in b\) \{ x = 1 \} END \{ exit !x \}. \\\n.*?\|\| return 1\n//s; s/\$3 == "__pycache__" \|\| //' t_tnewcache
+mutate "a __pycache__ at the merge base taken" 's/\$3 == "__pycache__" \|\| //' t_tbasecache
+mutate "an .egg-info taken" 's/\\\.\(dist\|egg\)-info\$/\\.dist-info\$/' t_tbaseegg
+mutate "a .dist-info in a parent of the tests dir taken" 's/while \[\[ "\$pd" == \*\/\* \]\]; do pd="\$\{pd%\/\*\}"; dirs="\$dirs"\$.\\n."\$pd"; done/:/' t_tnestdist
 echo
 if [ "$fails" -eq 0 ]; then echo "nonhcl reach: all checks hold"; else echo "nonhcl reach: $fails failed"; exit 1; fi
