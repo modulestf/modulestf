@@ -1607,6 +1607,20 @@ refused "a behaviour trigger state outside the five" "$G" "" "" "$(brun bs "[$(b
 refused "a behaviour category outside the list" "$G" "" "" "$(brun bc "[$(bt T-001 cosmetic verified)]" '[]')"
 refused "a claim state inert" "$G" "" "" "$(brun bk '[]' '[{claim_id: "C-1", state: "inert"}]')"
 refused "41 behaviour triggers" "$G" "" "" "$(brun b41 "[$(for i in $(seq 1 41); do bt "$(printf 'T-%03d' "$i")" wrapper-change verified; done | paste -sd, -)]" '[]')"
+# The split cap: 40 triggers that may need evidence and 40 version floors or moved addresses beside them.
+bts() { # count, category, first index -> that many triggers, comma separated
+  for i in $(seq "$3" $(($3 + $1 - 1))); do bt "$(printf 'T-%03d' "$i")" "$2" verified; done | paste -sd, -
+}
+t_b80() { render "$G" "" "" "$(brun b80 "[$(bts 40 wrapper-change 1), $(bts 30 provider-version-floor-change 41), $(bts 10 moved-or-renamed-address 71)]" '[]')"; [ "$ST" = 0 ]; }
+t_b80; check "behaviour: 40 triggers that need evidence beside 40 version floors and moved addresses render" $?
+refused "81 behaviour triggers" "$G" "" "" "$(brun b81 "[$(bts 40 wrapper-change 1), $(bts 41 provider-version-floor-change 41)]" '[]')"
+refused "41 behaviour triggers that need evidence beside version floors" "$G" "" "" "$(brun b41f "[$(bts 41 wrapper-change 1), $(bts 10 provider-version-floor-change 42)]" '[]')"
+t_b41m() { render "$G" "" "" "$(brun b41m "[$(bts 40 wrapper-change 1), $(bt T-041 provider-version-floor-change verified | jq -c '.also_categories = ["literal-argument-change"]')]" '[]')"; [ "$ST" = 2 ] && empty_out; }
+t_b41m; check "refused: a merged version floor counts toward the evidence cap" $?
+t_b41f() { render "$G" "" "" "$(brun b41f2 "[$(bts 41 wrapper-change 1), $(bts 10 provider-version-floor-change 42)]" '[]')"; [ "$ST" = 2 ]; }
+mutate "the old total cap of 40 kept" 's/length <= 80\n/length <= 40\n/' t_b80
+mutate "the evidence cap dropped" 's/\n        and \(\[\.\[\] \| select\(type == "object" and \(\(\(\.category \| IN\("provider-version-floor-change", "moved-or-renamed-address"\)\)\n               and \(has\("also_categories"\) \| not\)\) \| not\)\)\] \| length\) <= 40//' t_b41f
+mutate "a merged version floor read as off-ladder" 's/\n               and \(has\("also_categories"\) \| not\)\) \| not/) | not/' t_b41m
 refused "a ran behaviour with a reason" "$G" "" "" "$(runf br '.behaviour = {status: "ran", reason: "mtf-facts failed", triggers: [], claims: [], capped: 0}')"
 refused "a not-run behaviour with triggers" "$G" "" "" "$(runf bt '.behaviour = {status: "not-run", reason: "mtf-facts failed", triggers: [{id: "T-001", file: "main.tf", line: 2, category: "wrapper-change", state: "unverifiable"}], claims: [], capped: 0}')"
 refused "a not-run reason outside the list" "$G" "" "" "$(runf bx '.behaviour = {status: "not-run", reason: "tired", triggers: [], claims: [], capped: 0}')"

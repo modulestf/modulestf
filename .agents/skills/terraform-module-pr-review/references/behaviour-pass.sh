@@ -69,10 +69,22 @@ def cats: ["wrapper-change", "default-change", "count-for_each-conditional-chang
   "unclassified-change", "non-hcl-dependency"];
 def preds: ["expression-output-unknown", "expression-output-length-known", "expression-output-equals-for-inputs",
   "plan-attribute-unknown", "plan-attribute-unchanged-vs-prior", "plan-action", "input-filtered"];
-def valid_behaviour:
+# A trigger no ladder level can verify, as mtf-facts counts it apart with behaviour.off-ladder-cap: a
+# version floor that selects compat alone or a moved address that selects none, neither merged with
+# another category nor following another trigger. Any other shape counts toward the evidence cap.
+def off_ladder: (has("also_categories") | not) and (has("follows") | not)
+  and ((.category == "provider-version-floor-change" and .levels == ["compat"])
+       or (.category == "moved-or-renamed-address" and .levels == []));
+# $split: the binary lists behaviour.off-ladder-cap, so at most 40 triggers that may need evidence and
+# 40 off-ladder ones; otherwise at most 40 in all, the cap of a binary without it.
+def valid_behaviour($split):
   (.capped // 0) as $cap
   | type == "object" and .schema_version == 1 and (.inert | type == "boolean") and (.capped | nat)
-  and (.triggers | type == "array" and length <= 40 and all(.[]; type == "object" and (.id | tid)
+  and (.triggers | type == "array"
+        and (if $split then ([.[] | select(type == "object" and off_ladder)] | length) as $off
+               | $off <= 40 and length - $off <= 40
+             else length <= 40 end)
+        and all(.[]; type == "object" and (.id | tid)
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0)) and (.category | IN(cats[]))
         # Contract 2: the categories of the triggers merged into this one, each a category once.
         and ((has("also_categories") | not) or (.also_categories | type == "array" and length > 0
@@ -165,7 +177,8 @@ run_facts() {
   elif [ "$(wc -c < "$f")" -gt "$CAP" ]; then echo big; elif [ "$rc" != 0 ]; then echo fail; else echo ok; fi
 }
 
-# null_vars: <out>/nullvars.json, {dir, name} of each variable the change adds whose head block, read
+# null_vars, for a binary without behaviour.declarations and behaviour.schema-required (decl_vars
+# reads those facts from the report instead): <out>/nullvars.json, {dir, name} of each variable the change adds whose head block, read
 # from the clone as text at the classifier's line and never run, a small tokenizer accepts: each
 # line has its quoted strings removed first (escape-aware; a string holding `${` or `%{`, or one
 # left open, refuses), then refuses on `${`, `%{`, `<<`, `#`, `//`, `/*` or `*/`; depth is counted
@@ -227,6 +240,35 @@ null_vars() {
   fi
 }
 
+# features: the feature names mtf-facts version --json lists, one per line, under the same deadline and
+# output cap; nothing when it fails, as from a binary older than the command, which then keeps the
+# paths of a binary without features.
+features() {
+  [ "$(run_facts "$out/version.raw" version --json)" = ok ] &&
+    jq -r 'if (.features | type) == "array" then .features[] | strings else empty end' "$out/version.raw" 2> /dev/null
+  rm -f -- "$out/version.raw"
+}
+
+# decl_vars: nullvars.json and required.json in the shapes null_vars writes, from the facts the binary
+# reports with behaviour.declarations and behaviour.schema-required. A variable trigger the change adds
+# is a null variable only when its declaration says added, a null default and no nullable argument,
+# each field read on its own; no declaration is no entry. With a schema, each resource or data source
+# trigger whose schema_required is not exactly not_required puts its own path on the required list, so
+# unknown and an absent field require it, and a trigger can never miss its own path there.
+decl_vars() {
+  jq -c '[.triggers[] | select(.change_kind == "added" and (.address | type == "string" and test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$"))
+      and (.line | type == "number") and (.file | test("^[A-Za-z0-9_./-]+\\.tf$")) and (.file | split("/") | all(. != ".."))
+      and (.declaration | type == "object" and .added == true and .default == "null" and .nullable == "unset"))
+    | {dir: (.file | if test("/") then sub("/[^/]*$"; "") else "." end), name: (.address | ltrimstr("var."))}]' \
+    "$out/behaviour.json" > "$out/nullvars.json" 2> /dev/null || printf '[]\n' > "$out/nullvars.json"
+  if [ -n "$schema" ]; then
+    jq -c '[.triggers[] | select((.address | type == "string") and (.attribute | type == "string") and .schema_required != "not_required")
+        | (.address | gsub("\\[[^\\]]*\\]"; "") | split(".")) as $s | select($s | length >= 2 and (.[-2] | test("^[a-z][a-z0-9]*_[a-z0-9_]+$")))
+        | $s[-2] + "." + ((.attribute | split(".")) - ["dynamic"] | join("."))] | unique' \
+      "$out/behaviour.json" > "$out/required.json" 2> /dev/null || printf '["*"]\n' > "$out/required.json"
+  fi
+}
+
 classify() {
   abs "$dir" --dir; [ -d "$dir" ] || die "--dir is not a directory"
   [ ! -e "$out/behaviour.json" ] && [ ! -e "$out/status" ] || die "--out already holds a classification"
@@ -252,14 +294,18 @@ classify() {
   if [ ! -f "$facts" ] || [ ! -x "$facts" ]; then
     echo "mtf-facts not installed" > "$out/status"
   else
+    local feats split=false decl=false
+    feats="$(features)"
+    grep -qxF behaviour.off-ladder-cap <<< "$feats" && split=true
+    grep -qxF behaviour.declarations <<< "$feats" && grep -qxF behaviour.schema-required <<< "$feats" && decl=true
     case "$(run_facts "$out/behaviour.raw" behaviour "$dir" "$@" --json)" in
       big) echo "output refused" > "$out/status" ;;
       late) echo "mtf-facts timed out" > "$out/status" ;;
       fail) echo "mtf-facts failed" > "$out/status" ;;
-      ok) if jq -e --slurpfile d "$cover" "$JQ_DEFS"' valid_behaviour
+      ok) if jq -e --slurpfile d "$cover" --argjson split "$split" "$JQ_DEFS"' valid_behaviour($split)
              and ($d == [] or covers($d[0]))' "$out/behaviour.raw" > /dev/null 2>&1; then
             mv -- "$out/behaviour.raw" "$out/behaviour.json"
-            null_vars
+            if [ "$decl" = true ]; then decl_vars; else null_vars; fi
           else echo "output refused" > "$out/status"; fi ;;
     esac
     rm -f -- "$out/behaviour.raw"
