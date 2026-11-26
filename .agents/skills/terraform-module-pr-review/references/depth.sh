@@ -21,13 +21,13 @@
 # `git merge-base --all`, a tree is not at its commit, or the binding differs. Exit 2 is a usage
 # error or a refused input, and nothing is written. Paths are data: they reach git and mtf-facts as
 # single arguments and jq as files, never as shell words. Runs the same under bash and zsh.
-# Each mtf-facts run has a deadline of DEPTH_TIMEOUT seconds, 120 unless set.
+# Each mtf-facts run has a deadline of DEPTH_TIMEOUT seconds, 120 unless set, and a 1 MiB output cap.
 set -uo pipefail
 set -f
 export LC_ALL=C
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_DIFF_OPTS GIT_EXTERNAL_DIFF GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
 
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 CAP=1048576
 FILES_CAP=8388608 # the host records' cap on files.json (host-pass.sh CAP_RECORDS)
 sha_re='^[0-9a-f]{40}$'
@@ -64,18 +64,12 @@ diff_hash() { # clone, merge base, head
     rm -f -- "$f"; return 1
   fi
 }
-# The first mtf-facts on PATH from an absolute entry, every link resolved; empty when there is
-# none or it lies under one of the directories given.
-find_facts() {
-  local f d
-  f="$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r d; do
-         case "$d" in (/?*) [ -f "$d/mtf-facts" ] && [ -x "$d/mtf-facts" ] && { printf '%s\n' "$d/mtf-facts"; break; } ;; esac
-       done)"
-  [ -n "$f" ] || return 0
-  f="$(perl -MCwd=abs_path -e 'print abs_path(shift) // ""' "$f")"
-  for d in "$@"; do case "$f/" in "$d"/*) return 0 ;; esac; done
-  printf '%s' "$f"
-}
+# mtf-facts comes from facts-resolve.sh, the one resolver of the review scripts: from /, canonical,
+# outside the clone, the base tree and the run directory, with its version report read under a
+# limit. A binary with no version report (an older release) still runs; one whose report timed out
+# or was refused does not.
+# shellcheck source=facts-resolve.sh
+. "$HERE/facts-resolve.sh" || { echo "depth.sh: facts-resolve.sh cannot be read" >&2; exit 2; }
 
 compute() {
   local clone="" btree="" base="" files="" classify="" affected="" out="" owner=""
@@ -110,16 +104,17 @@ compute() {
   local facts st=fail
   W="$(mktemp -d "${TMPDIR:-/tmp}/depth.XXXXXX")" || die "no temporary directory"
   trap 'rm -rf -- "$W"' EXIT
-  facts="$(find_facts "$C" "$B" "$R")"
+  facts_resolve "$C" "$B" "$R"
+  case "$FACTS_STATE" in ok | old) facts="$FACTS_BIN" ;; *) facts="" ;; esac
   # Names and line counts, the fields mtf-facts depth reads; a list that does not trim is no list.
   jq '[.[] | {filename, status, previous_filename, additions, deletions}]' "$files" > "$W/files.json" 2> /dev/null || facts=""
   set -- depth --head "$C" --base "$B" --files "$W/files.json"
   [ -n "$classify" ] && regular "$classify" && set -- "$@" --classify "$classify"
   [ -n "$affected" ] && regular "$affected" && set -- "$@" --affected "$affected"
   if [ -n "$facts" ]; then
-    { (cd "$W" && exec perl -e 'alarm shift; exec @ARGV or exit 127' "$deadline" "$facts" "$@") 2> /dev/null
-      echo "$?" > "$W/rc"; } | head -c $((CAP + 1)) > "$W/facts.json"
-    [ "$(cat "$W/rc")" = 0 ] && [ "$(wc -c < "$W/facts.json")" -le "$CAP" ] \
+    # facts_run merges standard error into the output unless told to drop it.
+    (cd "$W" && FACTS_RUN_NOERR=1 facts_run "$deadline" "$CAP" "$facts" "$@") > "$W/facts.json" 2> /dev/null
+    [ $? = 0 ] \
       && RJ -e --slurp 'include "render-comment"; length == 1 and (.[0] | valid_depth_shape(false))' \
            "$W/facts.json" > /dev/null 2>&1 && st=ok
   fi

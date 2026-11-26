@@ -15,9 +15,9 @@
 #   facts_has <feature>    exit 0 when the version report lists the feature
 #   facts_line             one line for the run's summary and the reviewer's task
 #   facts_run <seconds> <bytes> <command>...
-#       Runs a command in its own process group with standard error on standard output, under
-#       a time limit and an output cap. Exit 124 past the limit, 125 past the cap, both after
-#       the group is killed; else the command's own status.
+#       Runs a command in its own process group with standard error on standard output (dropped
+#       when FACTS_RUN_NOERR is set), under a time limit and an output cap. Exit 124 past the
+#       limit, 125 past the cap, both after the group is killed; else the command's own status.
 
 # The features the scripts read, each with the first release that reports it. A step whose
 # feature is missing takes its older path, so a binary without one still gives a review.
@@ -31,7 +31,8 @@ pipe(my $r, my $w) or exit 126;
 my $pid = fork; exit 126 unless defined $pid;
 if (!$pid) {
   close $r; setpgrp(0, 0);
-  open(STDOUT, ">&", $w); open(STDERR, ">&", $w); open(STDIN, "<", "/dev/null");
+  open(STDOUT, ">&", $w); open(STDIN, "<", "/dev/null");
+  if ($ENV{FACTS_RUN_NOERR}) { open(STDERR, ">", "/dev/null") } else { open(STDERR, ">&", $w) }
   exec @ARGV; exit 127;
 }
 close $w;

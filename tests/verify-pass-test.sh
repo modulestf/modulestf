@@ -86,8 +86,10 @@ esac
 EOF
 chmod +x "$TMP/facts/mtf-facts"
 REAL='["brokenbase","bump","bumpmajor","codeok","env","initfail","net","net2","newfail","regress"]'
+AFFC="$TMP/pr-review.*/affected-cache"
+fresh() { rm -rf $AFFC; } # the stub changed: no report of an earlier call stands
 facts() { # jq program over the real example names -> facts.out; mode
-  jq -n --argjson r "$REAL" "$1" > "$TMP/facts.out"; printf '%s' "${2:-}" > "$TMP/facts.mode"
+  fresh; jq -n --argjson r "$REAL" "$1" > "$TMP/facts.out"; printf '%s' "${2:-}" > "$TMP/facts.mode"
 }
 
 # The upstream repository: a base commit and a head commit.
@@ -420,7 +422,7 @@ $BASE" --out "$R3/x.json")"
   # the one the scan gives. A report that does not fit falls back to the scan.
   feat() { jq -n --argjson f "$1" '{schema_version:1, name:"mtf-facts", version:"v0.13.0", reports:{affected:1}, features:$f}' > "$TMP/facts.version"; }
   feat '["cmd:affected","flag:affected:module-root"]'
-  rootrep() { jq -n "$1" > "$TMP/facts.out"; : > "$TMP/facts.mode"; }
+  rootrep() { fresh; jq -n "$1" > "$TMP/facts.out"; : > "$TMP/facts.mode"; }
   rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf","examples/touched/main.tf"],
     examples:[{dir:"examples/touched", reason:"touched"}, {dir:"modules/a/examples/own", reason:"touched"}, {dir:"examples/calls", reason:"caller"}]}'
   : > "$TMP/facts.log"
@@ -435,7 +437,7 @@ $BASE" --out "$R3/x.json")"
   for bad in '.module_root = "modules/b"' '.examples += [{dir:"examples/a b", reason:"all"}]' '.examples |= map(select(.dir != "modules/a/examples/own"))' \
       '.examples += [{dir:"modules/a/examples/nope", reason:"all"}]' '.examples[0].unresolved = true' \
       '.examples += [{dir:"examples/calls", reason:"caller"}]' '.examples += [{dir:"modules/a/examples/own", reason:"all"}]'; do
-    jq "$bad" "$TMP/facts.out" > "$TMP/facts.bad" && cp "$TMP/facts.out" "$TMP/facts.good" && cp "$TMP/facts.bad" "$TMP/facts.out"
+    fresh; jq "$bad" "$TMP/facts.out" > "$TMP/facts.bad" && cp "$TMP/facts.out" "$TMP/facts.good" && cp "$TMP/facts.bad" "$TMP/facts.out"
     check "$sh: a module root report that does not fit ($bad) is invalid, the scan selects" \
       "$(q <(sel9 modules/a "$TMP/facts") '.selection.tool == "invalid" and [.dirs[] | "\(.affected) \(.dir)"] == ["all modules/a/examples/own", "touched examples/touched", "caller examples/calls"]')"
     cp "$TMP/facts.good" "$TMP/facts.out"
@@ -487,10 +489,202 @@ $BASE" --out "$R3/x.json")"
   check "$sh: a relative --files reaches the module root run as an absolute copy" \
     "$([ "$(cat "$TMP/facts.log")" = "affected $C9 --module-root modules/a --diff $R9/verify-select/affected-files.json --json" ] && cmp -s "$TMP/files9.json" "$TMP/facts-diff.json" && [ "$(q "$TMP/selrel.json" '.selection.tool == "mtf-facts"')" = 0 ]; echo $?)"
   perl -0pe 's/(--module-root "\$\{PREFIX%\/\}" \\\n\s+--diff )"\$W\/affected-files\.json"/$1"\$FILES"/' "$VP" > "$TMP/vp-rel.sh"
-  : > "$TMP/facts.log"
+  : > "$TMP/facts.log"; fresh
   (cd "$TMP" && PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/vp-rel.sh" select "$R9" --files files9.json --prefix modules/a > /dev/null 2>&1)
   check "$sh: the mutation that passes --files as given to the module root run is caught" \
     "$( ! cmp -s "$VP" "$TMP/vp-rel.sh" && grep -q -- '--diff files9.json ' "$TMP/facts.log"; echo $?)"
+  # One `affected` report per module root for the commands that select before any provider code
+  # runs: select writes and reads it in the run directory, run reads it once and removes it, check
+  # and coverage never read it. The key is a hash of the inputs; a file with another key, one that
+  # is no report, one over the cap, a link, one open to others or one holding two documents is not
+  # used, and the run is made again.
+  rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf"],
+    examples:[{dir:"modules/a/examples/own", reason:"caller"}]}'
+  selx() { # script, module root prefix (and files list): one select; the selection tool on standard output
+    PATH="${FACTSDIR:-$TMP/facts}:$TMP/bin:/usr/bin:/bin" "$sh" "$1" select "${RX:-$R9}" --files "${3:-$TMP/files9.json}" --prefix "$2" 2> /dev/null | jq -r '.selection.tool'
+  }
+  nrun() { grep -c '^affected ' "$TMP/facts.log"; }
+  cachef() { printf '%s\n' "${RX:-$R9}"/affected-cache/*.json; }
+  covx() { # script: one coverage run of modules/a; the cov file on standard output
+    PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$1" coverage "$R9" --files "$TMP/files9.json" --out "$TMP/cov-x.json" --prefix modules/a --no-plan > /dev/null 2>&1
+    cat "$TMP/cov-x.json" 2> /dev/null; rm -f "$TMP/cov-x.json"
+  }
+  # t_once: three selects, then a coverage run, which makes its own, then a second module root twice.
+  t_once() { # script
+    fresh; : > "$TMP/facts.log"
+    selx "$1" modules/a > /dev/null; selx "$1" modules/a > /dev/null; selx "$1" modules/a > /dev/null
+    [ "$(nrun)" = 1 ] || return 1
+    covx "$1" > /dev/null; [ "$(nrun)" = 2 ] || return 1
+    selx "$1" modules/b > /dev/null; selx "$1" modules/b > /dev/null
+    [ "$(nrun)" = 3 ] && [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 3 ]
+  }
+  check "$sh: a traced review starts one affected process per module root for select, and coverage makes its own" "$(t_once "$VP"; echo $?)"
+  # The same with no feature of the module root: the plain run is shared too.
+  feat '["cmd:affected"]'; fresh; : > "$TMP/facts.log"
+  jq -n '{schema_version:1, inert:false, fallback:null, changed:["main.tf"], examples:[{dir:"examples/own", reason:"touched"}]}' > "$TMP/facts.out"
+  selx "$VP" modules/a > /dev/null; selx "$VP" modules/a > /dev/null
+  check "$sh: the plain run of a binary with no module root feature is made once" "$([ "$(nrun)" = 1 ]; echo $?)"
+  feat '["cmd:affected","flag:affected:module-root"]'
+  rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf"],
+    examples:[{dir:"modules/a/examples/own", reason:"caller"}]}'
+  # Providers of the head run between select and coverage: a report forged in the cache after the
+  # select reaches select (before any provider) but neither coverage nor check.
+  t_forged() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    f="$(cachef)"; [ -f "$f" ] || return 1
+    jq -c '.report.inert = true | .report.examples = []' "$f" > "$f.x" && mv "$f.x" "$f"; chmod 600 "$f"
+    [ "$(covx "$1" | jq -r '.inert // false')" = false ] && [ "$(nrun)" = 2 ]
+  }
+  check "$sh: coverage does not read a report forged in the cache, it makes its own" "$(t_forged "$VP"; echo $?)"
+  # run reads the report for its selection and removes the directory before any provider runs.
+  t_rundel() { # script
+    fresh; Rr="$(newrun)"; mkdir -m 700 "$Rr/affected-cache"; : > "$Rr/affected-cache/x.json"
+    PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$1" run "$Rr" --files "$TMP/files.json" --base "$BASE" --dir examples/codeok --out "$Rr/o.json" > /dev/null 2>&1
+    [ -f "$Rr/o.json" ] && [ ! -e "$Rr/affected-cache" ]
+  }
+  check "$sh: run removes the cache directory once it has selected" "$(t_rundel "$VP"; echo $?)"
+  # A cache file that holds another key than its name is not used.
+  t_key() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    f="$(cachef)"; [ -f "$f" ] || return 1
+    jq -c '.key = "0000" | .report.module_root = "modules/zzz"' "$f" > "$f.x" && mv "$f.x" "$f"; chmod 600 "$f"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ] && jq -e --arg k "$(basename "$f" .json)" '.key == $k' "$f" > /dev/null
+  }
+  check "$sh: a cache file whose key does not match is recomputed and written again" "$(t_key "$VP"; echo $?)"
+  # A file that is no JSON, one with no report, one holding two documents and one over the cap are
+  # recomputed too, and the file is written again with one document.
+  t_corrupt() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    f="$(cachef)"; [ -f "$f" ] || return 1; cp "$f" "$TMP/cache.good"
+    printf 'not json {' > "$f"; chmod 600 "$f"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ] || return 1
+    jq -c '.report = null' "$f" > "$f.x" && mv "$f.x" "$f"; chmod 600 "$f"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 3 ]
+  }
+  check "$sh: a corrupt cache file is recomputed" "$(t_corrupt "$VP"; echo $?)"
+  t_two() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    f="$(cachef)"; [ -f "$f" ] || return 1
+    { cat "$f"; jq -c '.report.module_root = "modules/zzz"' "$f"; } > "$f.x" && mv "$f.x" "$f"; chmod 600 "$f"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ] && [ "$(jq -s length "$f")" = 1 ]
+  }
+  check "$sh: a cache file with two documents is recomputed and written again with one" "$(t_two "$VP"; echo $?)"
+  t_big() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    f="$(cachef)"; [ -f "$f" ] || return 1
+    head -c 1100000 /dev/zero | tr '\0' ' ' >> "$f"; chmod 600 "$f"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ] && [ "$(wc -c < "$f")" -lt 1048576 ]
+  }
+  check "$sh: a cache file over 1 MiB is recomputed" "$(t_big "$VP"; echo $?)"
+  # A cache directory or file open to group or others is not used; a link is not used either.
+  t_mode() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    f="$(cachef)"; [ -f "$f" ] || return 1
+    chmod 666 "$f"; [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ] || return 1
+    chmod 666 "$f"; selx "$1" modules/a > /dev/null; [ "$(nrun)" = 3 ]
+  }
+  check "$sh: a cache file writable by others is not used" "$(t_mode "$VP"; echo $?)"
+  t_dirmode() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    chmod 777 "${RX:-$R9}/affected-cache"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ] && [ "$(perl -e "printf q(%o), (stat shift)[2] & 07777" "${RX:-$R9}/affected-cache")" = 700 ]
+  }
+  check "$sh: a cache directory writable by others is not used and is replaced by a private one" "$(t_dirmode "$VP"; echo $?)"
+  t_link() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    mv "$R9/affected-cache" "$R9/affected-real"; ln -s "$R9/affected-real" "$R9/affected-cache"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ]; rc=$?
+    rm -rf "$R9/affected-cache" "$R9/affected-real"; return $rc
+  }
+  check "$sh: a cache directory that is a link is not used" "$(t_link "$VP"; echo $?)"
+  t_flink() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    f="$(cachef)"; [ -f "$f" ] || return 1
+    mv "$f" "$TMP/cache.real"; chmod 600 "$TMP/cache.real"; ln -s "$TMP/cache.real" "$f"
+    [ "$(selx "$1" modules/a)" = mtf-facts ] && [ "$(nrun)" = 2 ]
+  }
+  check "$sh: a cache file that is a link is not used" "$(t_flink "$VP"; echo $?)"
+  # The report is written through a fresh temporary file, never a fixed name a planted link could use.
+  t_tmplink() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    f="$(cachef)"; [ -f "$f" ] || return 1
+    rm -f "$f"; echo victim > "$TMP/victim"; ln -s "$TMP/victim" "${f%.json}.tmp"
+    selx "$1" modules/a > /dev/null
+    [ "$(cat "$TMP/victim")" = victim ] && [ -f "$f" ]
+  }
+  check "$sh: a link planted at the old temporary name is not written through" "$(t_tmplink "$VP"; echo $?)"
+  # Another input gives another key: the files list, the head, the clone, the module root, the
+  # version report, the binary's path, the binary's content.
+  t_files() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    jq '. + [{filename:"modules/a/extra.tf", status:"added", additions:1, deletions:0}]' "$TMP/files9.json" > "$TMP/files9b.json"
+    selx "$1" modules/a "$TMP/files9b.json" > /dev/null; [ "$(nrun)" = 2 ]
+  }
+  check "$sh: a changed files list gives another key, the run is made again" "$(t_files "$VP"; echo $?)"
+  t_report() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    feat '["cmd:affected","flag:affected:module-root","cmd:other"]'
+    selx "$1" modules/a > /dev/null; rc=$?; feat '["cmd:affected","flag:affected:module-root"]'
+    [ "$(nrun)" = 2 ] && [ "$rc" = 0 ]
+  }
+  check "$sh: a changed version report gives another key, the run is made again" "$(t_report "$VP"; echo $?)"
+  t_path() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    mkdir -p "$TMP/facts2"; cp "$TMP/facts/mtf-facts" "$TMP/facts2/mtf-facts"
+    FACTSDIR="$TMP/facts2" selx "$1" modules/a > /dev/null; [ "$(nrun)" = 2 ]
+  }
+  check "$sh: the same binary at another path gives another key" "$(t_path "$VP"; echo $?)"
+  t_binsha() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    cp "$TMP/facts/mtf-facts" "$TMP/mtf-facts.bak"; printf '# changed\n' >> "$TMP/facts/mtf-facts"
+    selx "$1" modules/a > /dev/null; rc=$?; cp "$TMP/mtf-facts.bak" "$TMP/facts/mtf-facts"; chmod +x "$TMP/facts/mtf-facts"
+    [ "$(nrun)" = 2 ] && [ "$rc" = 0 ]
+  }
+  check "$sh: a binary with other content at the same path gives another key" "$(t_binsha "$VP"; echo $?)"
+  t_prefix() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null; selx "$1" modules/b > /dev/null; [ "$(nrun)" = 2 ]
+  }
+  check "$sh: another module root gives another key" "$(t_prefix "$VP"; echo $?)"
+  t_head() { # script
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    git -C "$C9" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m next
+    selx "$1" modules/a > /dev/null; [ "$(nrun)" = 2 ]
+  }
+  check "$sh: a new head commit gives another key" "$(t_head "$VP"; echo $?)"
+  t_clone() { # script: the same files in a second run directory at the same head; the cache copied there
+    fresh; : > "$TMP/facts.log"; selx "$1" modules/a > /dev/null
+    R9b="$(mktemp -d "$TMP/pr-review.XXXXXX")"; cp -R "$R9/." "$R9b/"
+    RX="$R9b" selx "$1" modules/a > /dev/null; rc=$?; rm -rf "$R9b"
+    [ "$(nrun)" = 2 ] && [ "$rc" = 0 ]
+  }
+  check "$sh: the same inputs under another clone path give another key" "$(t_clone "$VP"; echo $?)"
+  mutcache() { # name, perl substitution, case function
+    perl -0pe "$2" "$VP" > "$TMP/vp-cache.sh"
+    if cmp -s "$VP" "$TMP/vp-cache.sh"; then check "$sh: $1 (the mutation changed nothing)" 1; return; fi
+    check "$sh: the mutation $1 is caught" "$( ! "$3" "$TMP/vp-cache.sh" > /dev/null 2>&1; echo $?)"
+  }
+  mutcache "that never reads the cache" 's/  if \[ -n "\$ar_key" \] && affected_cached "\$ar_key"; then return 0; fi\n//' t_once
+  mutcache "that never stores the report" 's/ && \[ "\$CMD" = select \] && affected_store "\$ar_key"/ \&\& false/' t_once
+  mutcache "that lets coverage and check read the cache" 's/case "\$CMD" in select \| run\) AFFCACHE=1 ;; esac/AFFCACHE=1/' t_forged
+  mutcache "that keeps the cache after run selected" 's/\nrm -rf -- "\$RUN\/affected-cache"\n/\n/' t_rundel
+  mutcache "that does not compare the key" 's/ and \.key == \$k//' t_key
+  mutcache "that takes a file with no report" 's/ and \(\.report \| type == "object"\)//' t_corrupt
+  mutcache "that takes a file of two documents" 's/length == 1 and \(\.\[0\] \| type == "object"/true and (.[0] | type == "object"/' t_two
+  mutcache "with no size cap" 's/  \[ "\$\(wc -c < "\$ac_f"\)" -le 1048576 \] \|\| return 1\n//' t_big
+  mutcache "that takes a file open to others" 's/  owned_private "\$ac_f" \|\| return 1\n//' t_mode
+  mutcache "that takes a directory open to others" 's/  owned_private "\$ac_d" \|\| return 1\n//' t_dirmode
+  mutcache "that writes into a directory open to others" 's/ \|\| \{ \[ -e "\$as_d" \] && ! \{ \[ -d "\$as_d" \] && owned_private "\$as_d"; \}; \}//' t_dirmode
+  mutcache "that follows a linked cache directory" 's/\[ -d "\$ac_d" \] && \[ ! -L "\$ac_d" \] && //' t_link
+  mutcache "that follows a linked cache file" 's/ && \[ ! -L "\$ac_f" \]//' t_flink
+  mutcache "that writes through a fixed temporary name" 's/as_t="\$\(mktemp "\$as_d\/\.tmp\.XXXXXX" 2> \/dev\/null\)" \|\| return 0/as_t="\$as_d\/\$1.tmp"/' t_tmplink
+  mutcache "with the files list out of the key" 's/"\$\{ak_files%% \*\}" //' t_files
+  mutcache "with the version report out of the key" 's/ "\$\{ak_rep%% \*\}" \\\n/ \\\n/' t_report
+  mutcache "with the binary path out of the key" 's/ "\$FACTS_BIN" "\$\{ak_bin%% \*\}"/ "\${ak_bin%% *}"/' t_path
+  mutcache "with the binary content out of the key" 's/ "\$\{ak_bin%% \*\}"//' t_binsha
+  mutcache "with the module root out of the key" 's/"\$CROOT" "\$PREFIX" /"\$CROOT" /' t_prefix
+  mutcache "with the head out of the key" 's/"\$\{ak_files%% \*\}" "\$ak_head" /"\${ak_files%% *}" /' t_head
+  mutcache "with the clone path out of the key" 's/printf .%s\\0. "\$CROOT" /printf "%s\\0" /' t_clone
+  fresh; : > "$TMP/facts.log"
   # Started by a bare relative name, the script still finds facts-resolve.sh beside it.
   cp "$VP" "$TMP/vp-bare.sh"
   sed 's|^HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"$|HERE="${0%/*}"|' "$VP" > "$TMP/vp-bare-mut.sh"
