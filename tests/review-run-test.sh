@@ -202,6 +202,9 @@ case "$1" in
       limits: {tf_files: (if $d == "light" then 0 else 1 end), changed_lines: 3, changed_blocks: 0, selected_examples: 1},
       schema_providers: [], schema_types: [], schema_locks: []}' ;;
   affected) m=""; for a in "$@"; do [ "$p" != --module-root ] || m="$a"; p="$a"; done
+    # AFFECTED_MR=refuse: the engine refuses a module root prefix; =other: its report names another one.
+    [ -z "$m" ] || [ "${AFFECTED_MR-}" != refuse ] || { echo 'mtf-facts: module root refused' >&2; exit 2; }
+    [ -z "$m" ] || [ "${AFFECTED_MR-}" != other ] || m=elsewhere
     jq -nc --arg m "$m" '{schema_version: 1, inert: false, fallback: null, changed: [], examples: []} + (if $m == "" then {} else {module_root: $m} end)' ;;
   # With PROFILE_STUB set: a snapshot copy and a valid, relaxing profile-check.
   profile-snapshot) [ -n "${PROFILE_STUB-}" ] || exit 1
@@ -1281,6 +1284,25 @@ check "prepare: a binary with no version report runs affected on the module root
 check "prepare: a binary with no version report names its version and the release it needs" \
   "$(grep -qx 'mtf-facts: v0.8.0, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path' "$TMP/mr.out" && [ ! -e "$RUN/state/facts-version.json" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null 2>&1
+# A binary with the feature whose module root run is refused or does not validate: the older path,
+# a module root run and a second run on the clone root for the depth, and the depth gets its report.
+for mrmode in refuse other; do
+  export AFFECTED_MR=$mrmode
+  mrprep "$RR" "$TMP/fv.json"
+  unset AFFECTED_MR
+  check "prepare: a module root run that is $mrmode falls back to the module root run and a clone root run for the depth" \
+    "$(grep -q -- '--module-root' "$TMP/mr.log" && grep -q "^affected $RUN/clone/modules/a --diff " "$TMP/mr.log" &&
+       grep -q "^affected $RUN/clone --diff " "$TMP/mr.log" && [ "$(q "$RUN/affected.json" 'has("module_root") | not')" = 0 ] &&
+       grep -q "^depth .* --affected $RUN/state/affected-depth.json" "$TMP/mr.log"; echo $?)"
+  run_rr cleanup "$RUN" > /dev/null 2>&1
+done
+# The negative self-check: a copy that keeps the module root path after a refusal.
+sed 's/rm -f "\$RUN\/affected.json"; mraff=false/rm -f "$RUN\/affected.json"/' "$RR" > "$SK/review-run-nofall.sh"
+export AFFECTED_MR=refuse; mrprep "$SK/review-run-nofall.sh" "$TMP/fv.json"; unset AFFECTED_MR
+check "self-check: the mutant that keeps the module root path gives the depth no affected report" \
+  "$( ! cmp -s "$RR" "$SK/review-run-nofall.sh" && ! grep -q "^depth .* --affected " "$TMP/mr.log"; echo $?)"
+[ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null 2>&1
+rm -f "$SK/review-run-nofall.sh"
 # The negative self-check: a copy that runs the module root report with no feature check.
 sed 's/\[ -z "\$prefix" \] || ! facts_has flag:affected:module-root || mraff=true/[ -z "$prefix" ] || mraff=true/' "$RR" > "$SK/review-run-nogate.sh"
 mrprep "$SK/review-run-nogate.sh" ""
