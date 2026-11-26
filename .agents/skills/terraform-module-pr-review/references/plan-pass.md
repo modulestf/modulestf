@@ -237,6 +237,30 @@ In runner mode the addresses come from a saved plan the head's code wrote in its
 
 The saved plan files are removed with the plan directory when the pass ends. A head plan's output is head-influenced as the [Evidence contract](#evidence-contract) says, and a saved plan the head's code rewrote in runner mode reads back as whatever it wrote: addresses are evidence the head could shape, never ground truth, and they only add or remove coverage evidence.
 
+## Plan cache
+
+A review run again at the same head, as after a reviewer's question or a change to the review skills, plans the same examples again with the same inputs. In laptop mode the pass keeps the result of each head plan across runs, so the second run reads it instead of planning. `pe_plan`, `pc_hit`, `pc_put` and `PC_KEY_PL` in the script are this.
+
+**Where.** `PLAN_CACHE` names the directory; unset, it is `$XDG_CACHE_HOME/modulestf/plan-cache`, or `~/.cache/modulestf/plan-cache`, and with neither variable, or `PLAN_CACHE` set to the empty string, there is no cache. The directory is used only when its path is absolute and is its own physical path, with no symbolic link in any component, no `.` or `..` and no trailing slash, and it is owned by the user and writable by neither group nor others, read as a positive answer of `find`; it is made `0700` when it does not exist. The same holds when `terraform version -json` gives no version and platform in their pattern. Otherwise the pass prints `plan pass: plan cache not used` on standard error and plans as without a cache. Runner mode, the runner phases and the merge base and plan diff plans never use it.
+
+**What an entry holds.** Only what already leaves the pass: the class, the kept line after its scan ([Evidence contract](#evidence-contract)) and, for `planned` and `planned-no-changes`, the addresses file `pe_show` wrote. No plan output, no saved plan and no value from the account is stored. Only `planned`, `planned-no-changes` and `code-error` are stored; an environment class, `needs input`, `output unrecognised`, a gate, the budget and a credentials end are not, since they can change from one run to the next. A `planned` result whose show printed nothing is not stored. An entry is written to a temporary directory and renamed into place whole, only when no other run stored it meanwhile, its files `0600`.
+
+**The key.** A SHA-256 over every input that can change the plan, computed after the gates and `init`, so a gate hit is never skipped:
+
+- the mode, the profile and the review role, the credentials the plan reads with;
+- the head commit and the example directory;
+- the Terraform version and platform;
+- the bytes of `plan-pass.sh`, which holds the plan command, its fixed environment and region, and of `plan-session.sh` and `plan-session-policy.json`, which make the session;
+- the example's `.terraform.lock.hcl` after `init`, the provider versions and hashes;
+- every file and link under the example directory and each local module directory it reaches, the clone scope, names sorted, `.git` and `.terraform` directories and other lock files left out;
+- the registry modules `init` resolved, by source and version, and every file under the modules directory `init` filled, less its `modules.json`, which holds local paths.
+
+The plan takes no variables but those files hold: no `-var`, no `-var-file`, and G0 refuses every variables file Terraform reads on its own, so the files are the variables.
+
+**A hit.** The entry is under the key, is a directory and not a link, owned by the user and writable by neither group nor others; its `key`, `class` and `kept` files, and the addresses file, are regular files with the same owner and modes, each within its cap (65, 32 and 4096 bytes, 4 MiB); the `key` file holds the key; `kept` is one line; the class is one of the three; a `planned` entry's addresses file is one JSON object with the run's `head_sha` and `example`, and a `code-error` entry has none; and the `key` file is less than a day old, since the account a plan reads can change. An entry that fails any check is a miss and is removed when the user owns it. On a hit the pass sets the class and the kept line, writes the addresses file byte for byte, prints `plan pass: plan cache hit <example>` on standard error and asks for no session: the record and the addresses files are those of a cold run. A `code-error` hit still re-runs the merge base. An example that reaches a [plan diff](#plan-diff) directory plans, since the plan diff reads the plan itself, so a plan diff never comes from the cache.
+
+**Bounds.** At most 256 entries, the least recently used removed first; a hit marks its entry used. A temporary directory left by a run killed part-way is removed after an hour. The directory can be deleted at any time. A cache that cannot be written changes nothing but the time. A hit skips the identity check and the write probe as it skips the plan: no credentials are issued and nothing of the head's runs with them.
+
 ## Classes
 
 One fixed extraction, per line, decides each command's class:
