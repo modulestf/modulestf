@@ -1,3 +1,12 @@
+## [0.16.13](https://github.com/modulestf/modulestf/compare/v0.16.12...v0.16.13) (2026-11-26)
+
+
+### Performance Improvements
+
+* **pr-review:** Resolve mtf-facts in depth.sh through the shared resolver and run affected once per review ([#267](https://github.com/modulestf/modulestf/issues/267)) ([0c30a88](https://github.com/modulestf/modulestf/commit/0c30a880337442e8fb1689456a88032bb9247c63))
+
+
+
 ## [0.16.12](https://github.com/modulestf/modulestf/compare/v0.16.11...v0.16.12) (2026-11-26)
 
 
