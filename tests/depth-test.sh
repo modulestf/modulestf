@@ -192,6 +192,25 @@ mkdir -p "$TMP/cwd/rel"; cp "$TMP/bin/mtf-facts" "$TMP/cwd/rel/"
 PATH="rel:$PATH0" compute; check "tool on a relative PATH entry: never run, deep" "$(unavailable && [ ! -e "$STUB_ARGS" ]; echo $?)"
 rm -rf "$C/.bin"
 
+# --- schema_version: mtf-facts writes it next to format from the release that adds it. A report
+# with it equal to 1 is taken and depth.json is written without it, in the shape the bound
+# check holds; a report without it is taken too (every case above); any other value is refused.
+jq '.schema_version = 1' "$LIGHT" > "$TMP/sv1.json"
+t_sv1() { STUB_OUT="$TMP/sv1.json" compute; [ "$ST" = 0 ] && [ "$(dj .depth)" = light ] && [ "$(dj 'has("schema_version")')" = false ] && verify "$OUT" && [ "$ST" = 0 ]; }
+t_sv1; check "schema_version: a report with schema_version 1 is taken, depth.json has none and verifies" $?
+t_sv0() { compute; [ "$ST" = 0 ] && [ "$(dj .depth)" = light ] && [ "$(dj 'has("schema_version")')" = false ]; }
+t_sv0; check "schema_version: a report without it is kept as written" $?
+jq '.schema_version = 2' "$LIGHT" > "$TMP/sv2.json"
+t_sv2() { STUB_OUT="$TMP/sv2.json" compute; unavailable; }
+t_sv2; check "schema_version: a report with schema_version 2 is refused, deep" $?
+jq '.schema_version = "1"' "$LIGHT" > "$TMP/svs.json"
+STUB_OUT="$TMP/svs.json" compute; check "schema_version: a report with schema_version \"1\" is refused, deep" "$(unavailable; echo $?)"
+t_svfb() { PATH="$PATH0" compute; unavailable && [ "$(dj 'has("schema_version")')" = false ]; }
+t_svfb; check "schema_version: the fallback object has none" $?
+jq '.schema_version = 1' "$L1" > "$RUN/v-sv1.json"
+t_vsv1() { verify "$RUN/v-sv1.json"; [ "$ST" = 2 ]; }
+t_vsv1; check "verify: a bound depth.json with schema_version is refused" $?
+
 # --- Classifier and affected outputs the host checks itself.
 t_noclass() {
   oc=$((oc + 1)); OUT="$RUN/depth-$oc.json"
@@ -289,6 +308,10 @@ mutate "a tool under the clone run" 's/for d in "\$@"; do case "\$f\/" in "\$d"\
 mutate "a missing classifier not raised" 's/\|\| raise="\$\(jq -c .\. \+ \["deep-classifier-unavailable"\]. <<< "\$raise"\)"\n//' t_noclass
 mutate "an empty affected output accepted" 's/ and \. != \{\}//' t_affempty
 mutate "a failed git diff hashed" 's/> "\$f" 2> \/dev\/null && h=/> "\$f" 2> \/dev\/null; h=/' t_brokendiff
+mutate "a schema_version in the report refused" 's/if \$bound then keys else keys - \["schema_version"\] end/keys/' t_sv1
+mutate "any schema_version in the report accepted" 's/\n  and \(\$bound or \(has\("schema_version"\) \| not\) or \.schema_version == 1\)//' t_sv2
+mutate "schema_version kept in the written depth.json" 's/del\(\.schema_version\) \| //' t_sv1
+mutate "a schema_version accepted in a bound depth.json" 's/\$bound or \(has\("schema_version"\)/(has("schema_version")/; s/if \$bound then keys else keys - \["schema_version"\] end/keys - ["schema_version"]/' t_vsv1
 mutate "a token dropped from the list" 's/"deep-policy", //' t_tokens
 mutate "the 1 MiB refusal of the files list restored" 's/regular "\$files" "\$FILES_CAP"/regular "\$files"/' t_large
 mutate "the whole files list, patches included, handed to mtf-facts" 's/--files "\$W\/files\.json"/--files "\$files"/' t_large

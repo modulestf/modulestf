@@ -137,7 +137,7 @@ compute() {
       schema_providers: [], schema_types: [], schema_locks: []}' > "$W/facts.json"
   RJ --argjson r "$raise" --arg h "$head" --arg b "$base" --arg m "$mb" --arg d "$hash" '
     include "render-comment";
-    (if $r == [] then . else depth_raise($r) end) + {binding: {head_sha: $h, base_sha: $b, merge_base: $m, diff_sha256: $d}}
+    del(.schema_version) | (if $r == [] then . else depth_raise($r) end) + {binding: {head_sha: $h, base_sha: $b, merge_base: $m, diff_sha256: $d}}
     | if valid_depth then . else error("not a depth object") end' "$W/facts.json" > "$out.tmp" 2> /dev/null \
     && mv -- "$out.tmp" "$out" || { rm -f -- "$out.tmp"; die "the depth object cannot be written"; }
   jq -r '"depth: \(.depth) (\(.reasons | join(", ")))"' "$out"

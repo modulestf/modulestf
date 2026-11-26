@@ -2513,6 +2513,17 @@ t_profile_compact; check "profile: COMPACT carries the profile line as an eviden
 
 # Refused: exit 2 and nothing written.
 refused "depth: an unknown key" "$NONE" "" "" "$(rund dr-key light '.extra = 1')"
+# mtf-facts writes schema_version next to format from the release that adds it; depth.sh drops it,
+# so the bound object of the run file never holds it, while the raw report check takes it at 1.
+t_dsv() { render "$NONE" "" "" "$(rund dr-sv light '.schema_version = 1')"; [ "$ST" = 2 ] && empty_out; }
+t_dsv; check "refused: depth: a bound depth object with schema_version" $?
+t_draw() { # the raw report check: no binding, schema_version 1 or none taken, any other value refused
+  local o; o="$(dep light 'del(.binding)')"
+  raw() { jq -n -L "$REF" --argjson o "$o" "include \"render-comment\"; \$o | $1 | valid_depth_shape(false)"; }
+  [ "$(raw .)" = true ] && [ "$(raw '.schema_version = 1')" = true ] && [ "$(raw '.schema_version = 2')" = false ] &&
+    [ "$(raw '.schema_version = "1"')" = false ] && [ "$(raw '.schema_version = null')" = false ]
+}
+t_draw; check "depth: the raw report takes schema_version 1 or none, and refuses any other" $?
 refused "depth: an unknown depth" "$NONE" "" "" "$(rund dr-val light '.depth = "shallow"')"
 refused "depth: an unknown reason token" "$NONE" "" "" "$(rund dr-tok light '.reasons = ["light-everything"]')"
 refused "depth: a reason of another depth" "$NONE" "" "" "$(rund dr-mix light '.reasons = ["focused-within-limits"]')"
@@ -2622,6 +2633,7 @@ mutate "out-of-scope examples still counted" 's/\(\$in \| \.run \|= scoped_run\)
 mutate "the depth binding not checked" 's/\|\| die "the run file.s depth is not bound to this head and host\.json.s merge base"/|| true/' t_dhead
 mutate "the depth binding check passes a null merge base" 's/\$h\.merge_base != null and //; s/ and \.binding\.merge_base == \$h\.merge_base//' t_dnomb
 t_dfocused_a() { render "$NONE" "" "" "$(rund dr-a2 focused '.checks_out_of_scope = ["A"]')"; [ "$ST" = 2 ] && empty_out; }
+mutate "a schema_version accepted in the bound depth object" 's/\$bound or \(has\("schema_version"\)/(has("schema_version")/; s/if \$bound then keys else keys - \["schema_version"\] end/keys - ["schema_version"]/' t_dsv
 mutate "the scope table not checked" 's/and \(\.depth as \$d \| \.checks_out_of_scope - depth_scope\[\$d\] == \[\]\)//' t_dfocused_a
 mutate "all out-of-scope items listed" 's/\$i\[:20\]/\$i/' t_d20
 mutate "the depth section dropped" 's/\+ section\("Review depth"; depth_lines\(\$in\.run\); "\\n\\n"\)//' t_dlight

@@ -1,3 +1,12 @@
+## [0.13.2](https://github.com/modulestf/modulestf/compare/v0.13.1...v0.13.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Accept a schema version in the depth report ([#230](https://github.com/modulestf/modulestf/issues/230)) ([e684143](https://github.com/modulestf/modulestf/commit/e684143ea5ba441538c0fde1d9b39048ab8267c5))
+
+
+
 ## [0.13.1](https://github.com/modulestf/modulestf/compare/v0.13.0...v0.13.1) (2026-11-26)
 
 

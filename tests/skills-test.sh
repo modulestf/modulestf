@@ -958,8 +958,19 @@ for id in $( { gate_ids; down_ids; never_ids; } | sort -u); do
 done
 [ -z "$(comm -12 <(down_ids) <(never_ids))" ] || fail "profile gates" "$PF" "a rule both downgrades and never does"
 MF="${MTF_FACTS:-$(cd / && command -v mtf-facts)}"
-# An mtf-facts without the subcommand prints its root help, so the probe reads the usage line.
-if [ -n "$MF" ] && "$MF" profile-check --help 2>&1 | grep -qF 'mtf-facts profile-check --profile-dir'; then
+mf_features() { # binary: the feature names its version --json lists, one per line; nothing when that fails
+  "$1" version --json 2> /dev/null | jq -r 'if (.features | type) == "array" then .features[] | strings else empty end' 2> /dev/null
+}
+MF_FEATS="$([ -z "$MF" ] || mf_features "$MF")"
+has_profile_check() { # binary, its features: read from version --json; a binary without that is probed
+  # by its help, where one without the subcommand prints its root help, so the probe reads the usage line.
+  if [ -n "$2" ]; then
+    for f in cmd:profile-check flag:profile-check:gates flag:profile-check:downgrade-ids; do grep -qxF "$f" <<< "$2" || return 1; done
+  else
+    "$1" profile-check --help 2>&1 | grep -qF 'mtf-facts profile-check --profile-dir'
+  fi
+}
+if [ -n "$MF" ] && has_profile_check "$MF" "$MF_FEATS"; then
   for d in "$PDIR"/*/; do
     "$MF" profile-check --profile-dir "${d%/}" > "$TMP/pc.out" 2>&1 ||
       fail "profile gates" "${d%/}" "mtf-facts profile-check refuses it: $(head -n 3 "$TMP/pc.out" | tr '\n' ' ')"
@@ -983,6 +994,78 @@ else
   echo "note profile gates: no mtf-facts with profile-check, parity with it not checked"
 fi
 grep -qxF "profile gates" "$TMP/failed" || echo "ok   profile gates ($ngate checked)"
+
+# The engine's rules: when the mtf-facts found has the feature flag:rules:json in its version
+# --json, every tool and candidate row of rule-facts.md equals its rule in `mtf-facts rules
+# --json`, and that list holds no other rule: engine against tier, class, scope, cross_area
+# (yes or no against a boolean) and area_kinds (the comma list split and sorted). A binary
+# without the feature is not compared. A negative self-check runs the comparison through a stub.
+rf_engine_rows() { # rule-facts.md: per tool or candidate row, tab-separated: id, engine, class, scope, cross_area, area_kinds
+  rf_cells "$1" | LC_ALL=C awk -F'\t' -v OFS='\t' '$3 == "tool" || $3 == "candidate" {
+    n = split($7, a, /, */); for (i = 2; i <= n; i++) for (j = i; j > 1 && a[j - 1] > a[j]; j--) { t = a[j]; a[j] = a[j - 1]; a[j - 1] = t }
+    k = a[1]; for (i = 2; i <= n; i++) k = k "," a[i]
+    print $1, $3, $4, $5, $6, k }' | LC_ALL=C sort
+}
+rules_parity() { # binary, rule-facts.md: one line per row that differs, < from the table and > from the binary
+  { diff <(rf_engine_rows "$2") <("$1" rules --json 2> /dev/null | jq -r '.rules[] | [.id, .tier, .class, .scope,
+      (if .cross_area == true then "yes" elif .cross_area == false then "no" else "bad" end), (.area_kinds | sort | join(","))] | @tsv' 2> /dev/null |
+    LC_ALL=C sort) || :; } | grep '^[<>]'
+}
+nrules=0
+if [ -n "$MF" ] && grep -qxF flag:rules:json <<< "$MF_FEATS"; then
+  rules_parity "$MF" "$RF" > "$TMP/rules.diff" &&
+    fail "engine rules" "$RF" "differs from mtf-facts rules --json: $(head -n 6 "$TMP/rules.diff" | tr '\n\t' '  ')"
+  nrules=$(rf_engine_rows "$RF" | wc -l | tr -d ' ')
+else
+  echo "note engine rules: no mtf-facts with rules --json, parity with it not checked"
+fi
+# Self-check: a stub answers version --json with $STUB_FEATS and rules --json with $STUB_RULES.
+cat > "$TMP/stub-mf" <<'STUB'
+#!/bin/bash
+case "$1 $2" in
+  "version --json") [ -n "$STUB_FEATS" ] || exit 2; jq -n --arg f "$STUB_FEATS" '{schema_version: 1, features: ($f | split(" "))}' ;;
+  "rules --json") cat "$STUB_RULES" ;;
+  "profile-check --help") echo "Usage: mtf-facts [command]" ;;
+  *) exit 2 ;;
+esac
+STUB
+chmod +x "$TMP/stub-mf"
+rf_engine_rows "$RF" | jq -Rn '{schema_version: 1, rules: [inputs | split("\t") | {id: .[0], tier: .[1], class: .[2], scope: .[3],
+  cross_area: (.[4] == "yes"), area_kinds: (.[5] | split(",") | reverse), needs_base: true}]}' > "$TMP/rules-good.json"
+stub_parity() { # jq update of the good list -> exit 0 when the comparison reports a difference
+  jq "$1" "$TMP/rules-good.json" > "$TMP/rules-stub.json"
+  STUB_RULES="$TMP/rules-stub.json" rules_parity "$TMP/stub-mf" "$RF" > /dev/null
+}
+F_ALL="cmd:rules flag:rules:json cmd:profile-check flag:profile-check:gates flag:profile-check:downgrade-ids"
+[ "$(STUB_FEATS="$F_ALL" mf_features "$TMP/stub-mf" | grep -cxF flag:rules:json)" = 1 ] ||
+  fail "engine rules" "$TMP/stub-mf" "self-check: the feature flag:rules:json is not read from version --json"
+[ -z "$(STUB_FEATS="" mf_features "$TMP/stub-mf")" ] ||
+  fail "engine rules" "$TMP/stub-mf" "self-check: a failing version --json still lists features"
+has_profile_check "$TMP/stub-mf" "$(tr ' ' '\n' <<< "$F_ALL")" ||
+  fail "engine rules" "$TMP/stub-mf" "self-check: profile-check not found in the features"
+! has_profile_check "$TMP/stub-mf" "$(printf 'cmd:rules\nflag:rules:json')" ||
+  fail "engine rules" "$TMP/stub-mf" "self-check: features without profile-check still report it"
+! has_profile_check "$TMP/stub-mf" "" ||
+  fail "engine rules" "$TMP/stub-mf" "self-check: the help probe of an old binary without profile-check reports it"
+{ [ "$(jq '.rules | length' "$TMP/rules-good.json")" -ge 10 ] && ! stub_parity .; } ||
+  fail "engine rules" "$TMP/stub-mf" "self-check: a list equal to the table, area_kinds in another order, is reported"
+nrmut=0
+while IFS='~' read -r name upd; do
+  nrmut=$((nrmut + 1))
+  stub_parity "$upd" || fail "engine rules" "$TMP/stub-mf" "self-check: $name is not reported"
+done <<'MUT'
+a rule's tier changed~.rules[0].tier |= (if . == "tool" then "candidate" else "tool" end)
+a rule dropped~del(.rules[1])
+a rule the table does not have~.rules += [.rules[0] | .id = "structure.no-such-rule"]
+a rule's class changed~.rules[2].class |= (if . == "path" then "config-semantic" else "path" end)
+a rule's scope changed~.rules[0].scope |= (if . == "any-file-in-area" then "touched-block" else "any-file-in-area" end)
+cross_area flipped~.rules[0].cross_area |= not
+cross_area as a string~.rules[0].cross_area |= (if . then "yes" else "no" end)
+an area kind added~.rules[0].area_kinds |= (. + ["example", "root", "submodule"] | unique)
+an area kind dropped~.rules[0].area_kinds |= .[1:]
+no output~empty
+MUT
+grep -qxF "engine rules" "$TMP/failed" || echo "ok   engine rules ($nrules rows compared; $nrmut mutations caught)"
 
 # The judgment prefix: references/judgment/assemble.sh runs, gives the same bytes twice,
 # those bytes are the committed prefix.md, prefix.md is 90 KB (92160 bytes) or less, and
