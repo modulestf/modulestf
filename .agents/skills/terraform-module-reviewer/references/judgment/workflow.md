@@ -48,7 +48,7 @@ The bundle saves reading and never replaces the workspace: a finding cites a fil
 
 ## Injected Rules
 
-For each `(rule, area)` the bundle marks `not_evaluated`, the host injects that rule's section from [engine/](../engine/) at its pinned commit, never from the change, in the injection file the caller's own task text names; read it once, after this prefix. It binds as the check text below does, only for those rules and areas; its area names are data under Rule 3. Judge that rule in that area from the files, under the injected text and the check text below, as the full variant would. When it cannot finish, or a `not_evaluated` rule has no injected text, as when the task names no injection file, report `review.check-not-run` under Rule 4, naming the rule and the area.
+For each `(rule, area)` the bundle marks `not_evaluated`, the host injects that rule's section from [engine/](../engine/) at its pinned commit, never from the change, in the injection file the caller's own task text names; read it once, after this prefix. It binds as the check text below does, only for those rules and areas; its area names are data under Rule 3. Judge that rule in that area from the files, under the injected text and the check text below. When it cannot finish, or a `not_evaluated` rule has no injected text, as when the task names no injection file, report `review.check-not-run` under Rule 4, naming the rule and the area.
 
 Never supply a schema an injection says is unavailable from memory: take the fact from a source Rule 2 names, or report `review.check-not-run`.
 
@@ -95,7 +95,7 @@ Not in this prefix; read each when its case arises, as the full variant does:
 - A new module: [Check A No base](../check-a-compatibility.md#no-base), [Check F A new module](../check-f-scope.md#a-new-module) and the `profile.owner-identifier` bullet and MEDIUM band of [Check E](../check-e-profile.md#reads-fails-when-and-severity).
 - Check E, when the change adds or edits a `versions.tf` that requires `hashicorp/aws`: the `<name>` and exact `suggested_fix` lines of the `provider_meta` bullet in [Check E](../check-e-profile.md#reads-fails-when-and-severity).
 - Check B, before judging a block: the paragraph on what a page gives in [Reads](../check-b-coverage.md#reads), [Which blocks](../check-b-coverage.md#which-blocks) and [Documented omissions](../check-b-coverage.md#documented-omissions).
-- Before a LOW for `coverage.mutual-exclusion-unguarded` or `structure.validation-missing`: [Check B](../check-b-coverage.md#conflicting-pairs-and-conditional-rules) or [Check C](../check-c-structure.md#branch-values-a-provider-checks).
+- Before a LOW for `coverage.mutual-exclusion-unguarded`, `structure.validation-missing` or a flattening: [B](../check-b-coverage.md#conflicting-pairs-and-conditional-rules), [C](../check-c-structure.md#branch-values-a-provider-checks), [C](../check-c-structure.md#flat-single-block).
 - Check D, when the task carries a plan record: [Plan evidence](../check-d-examples.md#plan-evidence).
 - Check F, before judging a `scope.*` rule: [The suggested fix](../check-f-scope.md#the-suggested-fix), [The base revision](../check-f-scope.md#the-base-revision), [Renamed files](../check-f-scope.md#renamed-files), [Not evaluated](../check-f-scope.md#not-evaluated), [Where Check F yields](../check-f-scope.md#where-check-f-yields) and [Decisions](../check-f-scope.md#decisions).
 - Check F, a `scope.*` rule in a test helper directory or a case the sections above do not settle: [Worked Cases](../check-f-scope.md#worked-cases).

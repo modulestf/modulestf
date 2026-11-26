@@ -63,7 +63,7 @@ Three rows change `scope` after the facts engine review found them:
 - `coverage.attribute-not-output`: HIGH for an output wrong in a supported mode, MEDIUM for a computed attribute with no output.
 - `structure.input-ignored-in-branch`: CRITICAL, HIGH, MEDIUM and LOW, all four named in its Check C bullets.
 - `structure.docs-contradict-code`: HIGH, MEDIUM and LOW, by what a caller who follows the text gets, all three named in its Check C bullet.
-- `structure.schema-shape-flattened`: HIGH for a flattened or re-nested shape, and for a declared field that reaches no argument while the provider has a control the caller would set through it; HIGH also for a base key the head renames or a base field it stops feeding; LOW for a key the change adds under a name unlike the provider's, every field of which reaches its argument, and for a field the change adds with no argument and no such control.
+- `structure.schema-shape-flattened`: HIGH for a flattened or re-nested shape, and for a declared field that reaches no argument while the provider has a control the caller would set through it; HIGH also for a base key the head renames or a base field it stops feeding; LOW for a key the change adds under a name unlike the provider's, every field of which reaches its argument, and for a field the change adds with no argument and no such control; LOW also for a flattened block the page states single whose every argument has a field fed unchanged, renaming and dropping nothing and flattening no access or data protection control.
 - `structure.sibling-block-asymmetry`: HIGH and LOW, by the effect of the missing field, whether a description documents it or a sibling sets it.
 - `structure.passthrough-default-drift`: HIGH, MEDIUM and LOW; its CRITICAL case is reported as `structure.insecure-default`, so CRITICAL is not in its set.
 - `structure.passthrough-field-drift`: HIGH and MEDIUM.
@@ -78,7 +78,7 @@ Three rows change `scope` after the facts engine review found them:
 - `structure.validation-missing`: MEDIUM, and LOW for a branch value an argument checked at plan also takes, read from a page; a commented-out block stays MEDIUM.
 - `examples.custom-input-required`: HIGH, and LOW for an example the change adds that replaces none the base had.
 - `profile.region-not-allowed`: HIGH, and LOW for a literal under `examples/` outside a `*.tftest.hcl` file, in an example no such file sources.
-- `compat.provider-floor-raised`: LOW, also for a pinned registry module whose provider floor is above its caller's within the same provider major version and was read in the review, which raises the floor callers resolve. That case takes this name and no new one; an unread floor is `review.check-not-run` and a higher major is `compat.version-constraint-raised`.
+- `compat.provider-floor-raised`: LOW, also for a pinned registry module whose provider floor is above its caller's within the same provider major version and was read in the review, which raises the floor callers resolve. That case takes this name and no new one; an unread floor is `review.check-not-run` and a higher major is `compat.version-constraint-raised`. A submodule raised in line with the root keeps its LOW; only its fix changes.
 - `review.quoted-claim-unverifiable`: `none`. An unconfirmed claim "produces no finding" and is only counted in the summary line, so the registry name never carries a severity.
 
 ## Open values
