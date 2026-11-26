@@ -1,3 +1,12 @@
+## [0.16.9](https://github.com/modulestf/modulestf/compare/v0.16.8...v0.16.9) (2026-11-26)
+
+
+### Performance Improvements
+
+* **pr-review:** Keep laptop-mode head plan results in a plan cache across runs ([#250](https://github.com/modulestf/modulestf/issues/250)) ([1697389](https://github.com/modulestf/modulestf/commit/16973895f2ac619b56dda756f4e4afef275598b7))
+
+
+
 ## [0.16.8](https://github.com/modulestf/modulestf/compare/v0.16.7...v0.16.8) (2026-11-26)
 
 
