@@ -195,6 +195,18 @@ for sh in bash zsh; do
   frstub 'echo "{\"schema_version\":1,\"version\":\"v0.13.0; rm -rf x\",\"features\":[]}"' "$TMP/fr/bin"
   check "$sh: resolver: a version that is not plain text is not printed" \
     "$(case "$(frline)" in "ok|mtf-facts: version unknown, missing "*) echo 0 ;; *) echo 1 ;; esac)"
+  # A release before the version report whose plain version prints several lines gives no version,
+  # even when one of the lines looks like one.
+  frstub '[ "$2" = --json ] && exit 2; printf "%s\n" "version info" unknown "built from source"' "$TMP/fr/bin"
+  check "$sh: resolver: a plain version of several lines is not a version" \
+    "$([ "$(frline)" = "old|mtf-facts: version unknown, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path" ]; echo $?)"
+  frstub '[ "$2" = --json ] && exit 2; printf "%s\n" v0.8.0 "built from source"' "$TMP/fr/bin"
+  check "$sh: resolver: a plain version of two lines, one of them a version, is not a version" \
+    "$([ "$(frline)" = "old|mtf-facts: version unknown, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path" ]; echo $?)"
+  perl -0pe 's/          \*"\n"\*\) ;;\n//' "$FR" > "$TMP/fr-ml.sh"
+  check "$sh: resolver: the mutation that takes a several-line plain version is caught" \
+    "$( ! cmp -s "$FR" "$TMP/fr-ml.sh" && [ "$(PATH="$TMP/fr/bin:/usr/bin:/bin" "$sh" -c '. "$1"; facts_resolve; echo "$FACTS_VERSION"' sh "$FR")" = "" ] \
+      && [ "$(PATH="$TMP/fr/bin:/usr/bin:/bin" "$sh" -c '. "$1"; facts_resolve; echo "$FACTS_VERSION"' sh "$TMP/fr-ml.sh")" != "" ]; echo $?)"
   # The mutation that reads only vX.Y.Z as a version is caught by the pseudo-version case.
   perl -0pe 's/\^\[A-Za-z0-9\(\]\[A-Za-z0-9\.\+_\(\)-\]\{0,127\}\$/^v[0-9]+[.][0-9]+[.][0-9]+\$/' "$FR" > "$TMP/fr-ver.sh"
   frstub "echo '{\"schema_version\":1,\"version\":\"$PSEUDO\",\"features\":[]}'" "$TMP/fr/bin"
