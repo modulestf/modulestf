@@ -1,3 +1,12 @@
+## [0.16.12](https://github.com/modulestf/modulestf/compare/v0.16.11...v0.16.12) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Propose COMMENT, not REQUEST_CHANGES, when a merge conflict is the only blocker ([#265](https://github.com/modulestf/modulestf/issues/265)) ([ebc107a](https://github.com/modulestf/modulestf/commit/ebc107ad7749b627176cc80dbef8117449d29640))
+
+
+
 ## [0.16.11](https://github.com/modulestf/modulestf/compare/v0.16.10...v0.16.11) (2026-11-26)
 
 
