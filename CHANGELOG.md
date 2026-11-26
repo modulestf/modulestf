@@ -1,3 +1,12 @@
+## [0.16.10](https://github.com/modulestf/modulestf/compare/v0.16.9...v0.16.10) (2026-11-26)
+
+
+### Performance Improvements
+
+* **pr-review:** Plan the runner's examples side by side, three at a time by default ([#249](https://github.com/modulestf/modulestf/issues/249)) ([a4b7be2](https://github.com/modulestf/modulestf/commit/a4b7be2c84a3649fb1227657740d962ffe6f7eb6))
+
+
+
 ## [0.16.9](https://github.com/modulestf/modulestf/compare/v0.16.8...v0.16.9) (2026-11-26)
 
 
