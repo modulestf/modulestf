@@ -527,6 +527,8 @@ The rationale of section 3 takes one row per ladder rule. Rule 4 takes the row o
 | `unplanned-covered-refused` | - Not planned: {dir} (the plan proxy refused a host its data sources read, by design, `environment ({reason})`, at head {head} and at base {base}). |
 | `nonhcl-unreached-one` | - By the module profile, 1 example above runs no changed file outside Terraform, so it leaves nothing unknown. |
 | `nonhcl-unreached-many` | - By the module profile, {count} examples above run no changed file outside Terraform, so they leave nothing unknown. |
+| `nonhcl-tested-one` | - The repository's own tests import every changed file outside Terraform and passed at the head, so 1 example above, not planned for a runner or design reason, leaves nothing unknown. |
+| `nonhcl-tested-many` | - The repository's own tests import every changed file outside Terraform and passed at the head, so {count} examples above, not planned for a runner or design reason, leave nothing unknown. |
 | `behaviour-not-run` | - Behaviour check: {reason}, so no change was classified or verified. |
 | `behaviour-trigger` | - Behaviour change at {location} ({category}): not verified. |
 | `behaviour-trigger-groups` | - {count} behaviour changes not verified: {categories}. |

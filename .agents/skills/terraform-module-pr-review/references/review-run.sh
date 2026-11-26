@@ -1489,15 +1489,22 @@ earlier_of() {
 # The evidence of a change outside Terraform (verdict.md, Changes outside Terraform): nonhcl-reach.sh
 # on the clone's objects at the head and the merge base, with the reach file of the run's shipped
 # module profile from this skill checkout, never from the workspace; a custom profile has none.
-# Prints nothing and fails when there is no merge base or the script refuses.
+# The head's check runs, read here, are the test evidence of its tested-by lines; a failed read
+# passes none, so no file is tested. Prints nothing and fails when there is no merge base or the
+# script refuses.
 nonhcl_of() {
-  local pid reach=()
+  local pid reach=() cks=()
   [ -n "$MB" ] || return 1
   pid="$(jq -r '.label | if startswith("shipped:") then .[8:] else "" end' "$RUN/state/profile.json" 2> /dev/null)"
   [ -z "$pid" ] || [ -z "$MAINT" ] || reach=(--reach "$MAINT/profiles/$pid/nonhcl-reach.txt")
+  if gh api --paginate "repos/$(arg repo)/commits/$HEAD_SHA/check-runs?per_page=100" \
+       --jq '.check_runs[] | {id, name, app_slug: .app.slug, status, conclusion, head_sha}' 2> /dev/null \
+       | jq -s . > "$RUN/nonhcl-checks.json" 2> /dev/null; then
+    cks=(--checks "$RUN/nonhcl-checks.json")
+  fi
   bash "$HERE/nonhcl-reach.sh" --git "$RUN/clone" --head "$HEAD_SHA" --base "$MB" --repo "$(arg repo)" \
     --behaviour "$RUN/behaviour/behaviour.json" --files "$RUN/host/files.json" --prefix "$PREFIX" \
-    ${reach[@]+"${reach[@]}"} 2> /dev/null
+    ${reach[@]+"${reach[@]}"} ${cks[@]+"${cks[@]}"} 2> /dev/null
 }
 
 build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout

@@ -6,22 +6,26 @@
 #
 #   nonhcl-reach.sh --git <clone> --head <sha> --base <merge base sha> --repo <owner/name>
 #     --behaviour <behaviour.json> --files <files.json> [--prefix <module root prefix>]
-#     [--reach <profile nonhcl-reach.txt>]
+#     [--reach <profile nonhcl-reach.txt>] [--checks <check runs.json>]
 #
-# Prints {head_sha, base_sha, files: [{file, unreached}]} and exits 0, or prints nothing and exits 1
+# Prints {head_sha, base_sha, files: [{file, unreached, tested}]} and exits 0, or prints nothing and exits 1
 # on any input it cannot read whole: a malformed reach file among them. File names are
-# module-root-relative as the triggers are; example directories repository-relative.
+# module-root-relative as the triggers are; example directories repository-relative. tested is true
+# when a tested-by line of the reach file holds for the file: the repository's own tests import it
+# and their check runs passed at the head (verdict.md, Changes outside Terraform). The check runs
+# file is the head's check runs as the host read them, [{id, name, app_slug, status, conclusion,
+# head_sha}]; with none, no file is tested.
 set -uo pipefail
 set -f
 export LC_ALL=C
 
 die() { exit 1; }
-git_dir="" head="" base="" repo="" beh="" files="" prefix="" reach=""
+git_dir="" head="" base="" repo="" beh="" files="" prefix="" reach="" checks=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --git) git_dir="${2-}" ;; --head) head="${2-}" ;; --base) base="${2-}" ;; --repo) repo="${2-}" ;;
     --behaviour) beh="${2-}" ;; --files) files="${2-}" ;; --prefix) prefix="${2-}" ;;
-    --reach) reach="${2-}" ;;
+    --reach) reach="${2-}" ;; --checks) checks="${2-}" ;;
     *) die ;;
   esac
   shift 2 || die
@@ -58,14 +62,25 @@ wide=$'\xef\xbb\xbf|\xc2\xa0|\xe2\x80[\x80-\x8b]|\xe2\x80\xaf|\xe2\x81\x9f|\xe3\
 
 
 # The module profile's reach file (profile-format.md, Reach of changes outside Terraform): lines
-# "not-run <owner/name> <file> <example directory> root-calls <argument>=<literal> gated-by var.<name>".
-# A line outside the grammar, or a file and directory named twice, refuses the whole file.
-maps=""
+# "not-run <owner/name> <file> <example directory> root-calls <argument>=<literal> gated-by var.<name>"
+# and "tested-by <owner/name> <file> <tests dir> <workflow> checks <check run name prefix>". A line
+# outside the grammar, a file and directory named twice, or a file with two tested-by lines, refuses
+# the whole file.
+maps="" tests=""
 if [ -n "$reach" ] && [ -e "$reach" ]; then
   [ -f "$reach" ] && [ ! -L "$reach" ] && [ "$(wc -c < "$reach" | tr -d ' ')" -le 65536 ] || die
   seen=""
   while IFS= read -r l || [ -n "$l" ]; do
     case "$l" in '' | '#'*) continue ;; esac
+    if [[ "$l" == tested-by\ * ]]; then
+      read -r k r f td wf ck px <<< "$l"
+      [[ "$r" =~ $repo_re ]] && plain "$f" && plain "$td" && plain "$wf" && [ "${ck-}" = checks ] &&
+        [ "${#px}" -le 64 ] && [[ "${px-}" =~ ^[A-Za-z0-9._()-]+(\ [A-Za-z0-9._()-]+)*$ ]] || die
+      case "$seen" in *"|tested $r $f|"*) die ;; esac
+      seen="$seen|tested $r $f|"
+      [ "$r" != "$repo" ] || tests="$tests$f"$'\t'"$td"$'\t'"$wf"$'\t'"$px"$'\n'
+      continue
+    fi
     read -r k r f d gk ga bk bv x <<< "$l"
     [ "$k" = not-run ] && [ -z "${x-}" ] && [[ "$r" =~ $repo_re ]] && plain "$f" && plain "$d" &&
       [ "$gk" = root-calls ] && [[ "${ga-}" =~ ^[a-z_][a-z0-9_]{0,63}=(false|true|null|[0-9]{1,9})$ ]] &&
@@ -239,6 +254,49 @@ gate_at() { # rev, file, var name
   printf '%s' "$list" | sort
 }
 
+# The test evidence of one changed file (verdict.md, Changes outside Terraform): its tested-by line
+# holds when the file is a .py file at the repository root with a plain module name; the change edits
+# nothing under .github/ or the tests dir and no Python test or packaging config at any path; the
+# workflow is a regular file, the same blob at both revisions, naming pytest and the tests dir; the
+# tests dir is the same tree at both revisions, holds no entry that shadows the module, and a regular
+# .py file directly in it imports the module at column 0; and the head's check runs whose name starts
+# with the prefix are at least one, each name's latest run completed, success, from github-actions,
+# for the head. Status 1 otherwise.
+cfgre='(^|/)(tox\.ini|pytest\.ini|setup\.cfg|setup\.py|pyproject\.toml|conftest\.py|Pipfile|Pipfile\.lock|requirements[^/]*\.txt)$'
+tested_at() { # repository path of the file, tests dir, workflow, prefix
+  local f="$1" td="$2" wf="$3" px="$4" mod ents mode type path t hit=""
+  case "$f" in *.py) ;; *) return 1 ;; esac
+  mod="${f%.py}"
+  [[ "$mod" =~ ^[A-Za-z_][A-Za-z0-9_]{0,63}$ ]] || return 1
+  ! grep -Eq '^\.github/' <<< "$changed" || return 1
+  ! grep -Eq "$cfgre" <<< "$changed" || return 1
+  ! awk -v d="$td/" 'index($0, d) == 1 { t = 1 } END { exit !t }' <<< "$changed" || return 1
+  [ "$(g ls-tree "$head" -- "$wf" 2> /dev/null | cut -d' ' -f1-2)" = "100644 blob" ] || return 1
+  [ "$(g rev-parse "$head:$wf" 2> /dev/null)" = "$(g rev-parse "$base:$wf" 2> /dev/null)" ] || return 1
+  t="$(g cat-file blob "$head:$wf" 2> /dev/null)" || return 1
+  grep -Fq pytest <<< "$t" && grep -Fq -- "$td" <<< "$t" || return 1
+  [ "$(g cat-file -t "$head:$td" 2> /dev/null)" = tree ] || return 1
+  [ "$(g rev-parse "$head:$td" 2> /dev/null)" = "$(g rev-parse "$base:$td" 2> /dev/null)" ] || return 1
+  ents="$(entries "$head" "$td")" || return 1
+  while read -r mode type path; do
+    [ -n "$path" ] || continue
+    [ "$path" != "$mod.py" ] && [ "$path" != "$mod" ] || return 1
+    case "$path" in *.py) ;; *) continue ;; esac
+    [ "$mode" = 100644 ] && [ "$type" = blob ] || continue
+    [ "$(g cat-file -s "$head:$td/$path" 2> /dev/null)" -le 1048576 ] 2> /dev/null || continue
+    t="$(g cat-file blob "$head:$td/$path" 2> /dev/null)" || continue
+    ! grep -Eq "^(from $mod import |import $mod([ ,]|\$))" <<< "$t" || hit=1
+  done <<< "$ents"
+  [ -n "$hit" ] || return 1
+  [ -f "$checks" ] && [ ! -L "$checks" ] && [ "$(wc -c < "$checks" | tr -d ' ')" -le 4194304 ] || return 1
+  jq -e --arg p "$px" --arg h "$head" 'type == "array"
+    and ([.[] | select(type == "object" and (.name | type == "string") and (.name | startswith($p)))] as $m
+      | ($m | length) > 0
+      and all($m[]; (.id | type == "number") and .head_sha == $h)
+      and all($m | group_by(.name)[] | max_by(.id); .status == "completed" and .conclusion == "success"
+            and .app_slug == "github-actions"))' "$checks" > /dev/null 2>&1
+}
+
 # A change that edits a .tf file of the module root changes what the gate means: nothing is cleared.
 rootre="^${prefix:+$prefix/}[^/]+\.(tf|tf\.json|tofu|tofu\.json)$"
 root_changed=false
@@ -263,6 +321,11 @@ while IFS= read -r f; do
     [ "$hg" = "$bg" ] || continue
     un="$(jq -c --arg d "$md" '. + [$d] | unique' <<< "$un")"
   done <<< "$maps"
-  out="$(jq -c --arg f "$f" --argjson u "$un" '. + [{file: $f, unreached: $u}]' <<< "$out")" || die
+  te=false
+  while IFS=$'\t' read -r tf ttd twf tpx; do
+    [ "$tf" = "$r" ] || continue
+    ! tested_at "$r" "$ttd" "$twf" "$tpx" || te=true
+  done <<< "$tests"
+  out="$(jq -c --arg f "$f" --argjson u "$un" --argjson t "$te" '. + [{file: $f, unreached: $u, tested: $t}]' <<< "$out")" || die
 done <<< "$trig"
 jq -c -n --arg h "$head" --arg b "$base" --argjson f "$out" '{head_sha: $h, base_sha: $b, files: $f}'

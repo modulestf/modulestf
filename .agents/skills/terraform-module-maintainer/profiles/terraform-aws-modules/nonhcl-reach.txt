@@ -1,8 +1,13 @@
 # Example directories that run no changed file outside Terraform (profile-format.md, Reach of
 # changes outside Terraform), both paths repository-relative:
 # not-run <owner/name> <file> <example directory> root-calls <arg>=<literal> gated-by var.<name>
+# tested-by <owner/name> <file> <tests dir> <workflow> checks <check run name prefix>
 # The review takes a line only while both guards hold at the head and the merge base: every module
 # call of the example has the module root as its source and sets the argument to the literal, and
 # every block of the module root that names the file has a count or for_each reading the variable.
 # An example that also calls another module, such as container-image or code-signing, never passes.
 not-run terraform-aws-modules/terraform-aws-lambda package.py examples/triggers root-calls create_package=false gated-by var.create_package
+# The repository's own tests import package.py, and the jobs named "Test with Python <version>" of
+# the workflow run them. With no workflow, test or Python config change and those check runs green
+# at the head, an example not planned for a Docker daemon or a denied read leaves nothing unknown.
+tested-by terraform-aws-modules/terraform-aws-lambda package.py tests .github/workflows/test.yml checks Test with Python

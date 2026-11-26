@@ -299,6 +299,103 @@ t_partial; check "a partial clone is refused" $?
 t_badsha() { repo badsha; OUT="$(bash "$NR" --git "$R" --head HEAD --base "$B" --repo a/b --behaviour "$TMP/beh.json" --files "$TMP/files.json")"; [ $? = 1 ] && [ -z "$OUT" ]; }
 t_badsha; check "a head that is not a SHA is refused" $?
 
+# --- Test evidence: a tested-by line, the repository's own tests and their check runs at the head.
+TLINE='tested-by example/terraform-aws-lambda package.py tests .github/workflows/test.yml checks Test with Python'
+tsetup() {
+  mkdir -p tests .github/workflows
+  printf 'import os\n\nfrom package import BuildPlanManager\n\n\ndef test_x():\n    assert os\n' > tests/test_zip.py
+  printf 'def test_y():\n    assert True\n' > tests/test_other.py
+  printf 'jobs:\n  tests:\n    name: Test with Python ${{ matrix.v }}\n    steps:\n      - run: python -m pytest -vvv tests/\n' > .github/workflows/test.yml
+}
+# checks <conclusion of 3.11> [app [head]] -> TMP/checks.json: an older failed 3.10 run, then the
+# latest 3.10 success, a 3.11 run, and a run of another job.
+checks() {
+  jq -n --arg c "$1" --arg a "${2:-github-actions}" --arg h "${3:-$H}" '[
+    {id: 1, name: "Test with Python 3.10", app_slug: "github-actions", status: "completed", conclusion: "failure", head_sha: $h},
+    {id: 5, name: "Test with Python 3.10", app_slug: "github-actions", status: "completed", conclusion: "success", head_sha: $h},
+    {id: 3, name: "Test with Python 3.11", app_slug: $a, status: "completed", conclusion: $c, head_sha: $h},
+    {id: 4, name: "Ruff Format check", app_slug: "github-actions", status: "completed", conclusion: "failure", head_sha: $h}]' > "$TMP/checks.json"
+}
+printf '%s\n%s\n' "$LINE" "$TLINE" > "$TMP/treach.txt"
+tested() { jq -r '.files[0].tested' <<< "$OUT"; }
+# trun [repo setup at base [, at head]] -> runs with the tested-by reach file and the checks file
+tcase() { # name, base setup, head setup, conclusion [, app [, head]] -> holds when the file is tested
+  repo "$1" "$2" "${3-}"; checks "${4:-success}" "${5-}" "${6-}"
+  RF="$TMP/treach.txt" run --checks "$TMP/checks.json"; [ "$ST" = 0 ] && [ "$(tested)" = true ]
+}
+untested() { ! tcase "$@" && [ "$ST" = 0 ] && [ "$(tested)" = false ]; }
+t_tested() { tcase tested tsetup "" success && [ "$(un)" = '["examples/ex"]' ]; }
+t_tested; check "tests that import the file and green check runs at the head: the file is tested" $?
+t_tnochecks() { repo tnochecks tsetup; RF="$TMP/treach.txt" run; [ "$ST" = 0 ] && [ "$(tested)" = false ]; }
+t_tnochecks; check "no check runs file: nothing is tested" $?
+t_tnoline() { repo tnoline tsetup; checks success; run --checks "$TMP/checks.json"; [ "$ST" = 0 ] && [ "$(tested)" = false ]; }
+t_tnoline; check "no tested-by line: nothing is tested" $?
+t_tred() { untested tred tsetup "" failure; }
+t_tred; check "a matching check run that failed at the head: not tested" $?
+t_tpending() { repo tpending tsetup; checks success; jq '.[2].status = "in_progress"' "$TMP/checks.json" > "$TMP/c2.json"
+  RF="$TMP/treach.txt" run --checks "$TMP/c2.json"; [ "$ST" = 0 ] && [ "$(tested)" = false ]; }
+t_tpending; check "a matching check run not completed: not tested" $?
+t_tlatest() { repo tlatest tsetup; checks success; jq '.[0].id = 9' "$TMP/checks.json" > "$TMP/c2.json"
+  RF="$TMP/treach.txt" run --checks "$TMP/c2.json"; [ "$ST" = 0 ] && [ "$(tested)" = false ]; }
+t_tlatest; check "the latest run of a name failed while an older one passed: not tested" $?
+t_tnomatch() { repo tnomatch tsetup; jq -n '[{id: 1, name: "Ruff", app_slug: "github-actions", status: "completed", conclusion: "success", head_sha: "x"}]' > "$TMP/c2.json"
+  RF="$TMP/treach.txt" run --checks "$TMP/c2.json"; [ "$ST" = 0 ] && [ "$(tested)" = false ]; }
+t_tnomatch; check "no check run whose name starts with the prefix: not tested" $?
+t_tapp() { untested tapp tsetup "" success other-app; }
+t_tapp; check "a matching check run of another app: not tested" $?
+t_tsha() { untested tsha tsetup "" success github-actions 0000000000000000000000000000000000000000; }
+t_tsha; check "a matching check run of another commit: not tested" $?
+gh_other() { printf 'x: 1\n' > .github/workflows/other.yml; }
+jq -n '[{filename: "package.py", status: "modified"}, {filename: ".github/workflows/other.yml", status: "added"}]' > "$TMP/fgh.json"
+t_tgithub() { FILES="$TMP/fgh.json" untested tgithub tsetup gh_other success; }
+t_tgithub; check "a change that edits a file under .github/: not tested" $?
+wf_edit() { printf '# edited\n' >> .github/workflows/test.yml; }
+t_twfdiff() { untested twfdiff tsetup wf_edit success; }
+t_twfdiff; check "a workflow that differs between the merge base and the head, even unlisted: not tested" $?
+wf_nopytest() { tsetup; perl -pi -e 's/python -m pytest -vvv tests\//make test/' .github/workflows/test.yml; }
+t_twfnopy() { untested twfnopy wf_nopytest; }
+t_twfnopy; check "a workflow that names no pytest run of the tests dir: not tested" $?
+wf_link() { tsetup; mv .github/workflows/test.yml .github/workflows/pytest-tests.yml; ln -s pytest-tests.yml .github/workflows/test.yml; }
+t_twflink() { untested twflink wf_link; }
+t_twflink; check "a workflow that is a link: not tested" $?
+jq -n '[{filename: "package.py", status: "modified"}, {filename: "tests/test_new.py", status: "added"}]' > "$TMP/ftests.json"
+t_new() { printf 'def test_n():\n    pass\n' > tests/test_new.py; }
+t_ttests() { FILES="$TMP/ftests.json" untested ttests tsetup "" success; }
+t_ttests; check "a change that lists a file of the tests dir: not tested" $?
+t_ttree() { untested ttree tsetup t_new success; }
+t_ttree; check "a tests dir that differs between the merge base and the head, even unlisted: not tested" $?
+jq -n '[{filename: "package.py", status: "modified"}, {filename: "sub/pyproject.toml", status: "added"}]' > "$TMP/fcfg.json"
+t_cfg() { mkdir -p sub; printf '[tool.pytest]\n' > sub/pyproject.toml; }
+t_tcfg() { FILES="$TMP/fcfg.json" untested tcfg tsetup t_cfg success; }
+t_tcfg; check "a change that edits a Python test or packaging config at any path: not tested" $?
+noimport() { tsetup; perl -pi -e 's/^from package import BuildPlanManager$/from packaging import x/' tests/test_zip.py; }
+t_tnoimport() { untested tnoimport noimport; }
+t_tnoimport; check "no test file imports the changed file: not tested" $?
+indented() { tsetup; perl -pi -e 's/^from package import/    from package import/' tests/test_zip.py; }
+t_tindent() { untested tindent indented; }
+t_tindent; check "an import that does not start its line: not tested" $?
+shadow() { tsetup; printf 'x = 1\n' > tests/package.py; }
+t_tshadow() { untested tshadow shadow; }
+t_tshadow; check "a tests dir entry that shadows the module: not tested" $?
+t_tsubdir() {
+  repo tsubdir tsetup; checks success
+  printf 'tested-by example/terraform-aws-lambda sub/package.py tests .github/workflows/test.yml checks Test with Python\n' > "$TMP/tsub.txt"
+  jq -n '{schema_version: 1, capped: 0, triggers: [{id: "T-001", file: "package.py", line: 1, category: "non-hcl-dependency"}]}' > "$TMP/beh2.json"
+  OUT="$(bash "$NR" --git "$R" --head "$H" --base "$B" --repo example/terraform-aws-lambda --behaviour "$TMP/beh2.json" \
+    --files "$TMP/files.json" --reach "$TMP/tsub.txt" --checks "$TMP/checks.json" --prefix sub 2> /dev/null)"
+  [ $? = 0 ] && [ "$(tested)" = false ]
+}
+t_tsubdir; check "a changed file below the repository root: not tested" $?
+t_tother() { repo tother tsetup; checks success; printf '%s\n' "${TLINE/example\/terraform-aws-lambda/other/repo}" > "$TMP/to.txt"
+  RF="$TMP/to.txt" run --checks "$TMP/checks.json"; [ "$ST" = 0 ] && [ "$(tested)" = false ]; }
+t_tother; check "a tested-by line of another repository tests nothing" $?
+t_tbadpx() { bad_reach tbadpx "${TLINE/Test with Python/Test \$with}"; }
+t_tbadpx; check "a tested-by prefix outside the grammar refuses the whole file" $?
+t_tbadck() { bad_reach tbadck "${TLINE/ checks / runs }"; }
+t_tbadck; check "a tested-by line without its checks keyword refuses the whole file" $?
+t_ttwice() { bad_reach ttwice "$TLINE" "${TLINE/tests .github/test .github}"; }
+t_ttwice; check "a file with two tested-by lines refuses the whole file" $?
+
 # --- Negative self-check: each mutation of a temp copy must make its named case fail.
 mutate() { # name, perl substitution, case function
   local d="$TMP/mut"; mkdir -p "$d"; cp "$NR" "$d/nonhcl-reach.sh"
@@ -337,7 +434,7 @@ mutate "a template directive read as text" 's/if \(\(c == "\$" \|\| c == "%"\) &
 mutate "the root gate not read at the head" 's/hg="\$\(gate_at "\$head"/hg="\$(gate_at "\$base"/' t_gatediff
 mutate "the root gate not compared" 's/\[ "\$hg" = "\$bg" \] \|\| continue/:/' t_gatediff
 mutate "an ungated root block taken" 's/<<< "\$gl" \|\| return 1/<<< "\$gl" || :/' t_ungated
-mutate "a module root with no naming block taken" 's/\[ -n "\$list" \] \|\| return 1\n  printf .%s. "\$list" \| sort\n\}\n\n# A change/printf "%s" "\$list" | sort\n}\n\n# A change/' t_nogate
+mutate "a module root with no naming block taken" 's/\[ -n "\$list" \] \|\| return 1\n  printf .%s. "\$list" \| sort\n\}\n\n# The test evidence/printf "%s" "\$list" | sort\n}\n\n# The test evidence/' t_nogate
 mutate "an edited root .tf file ignored" 's/\|\| root_changed=true/|| :/' t_rootchg
 mutate "the module root taken as the repository root under a prefix" 's/root="\$\{prefix:-\.\}" ents mode type path t r name/root="." ents mode type path t r name/' t_prefixroot
 mutate "an example file read through a pipe" 's/! grep -Fq -- "\$b" <<< "\$t" \|\| return 1/! printf "%s\\n" "\$t" | grep -Fq -- "\$b" || return 1/' t_bigtxt
@@ -350,5 +447,27 @@ mutate "a byte outside printable ASCII taken in a .tf file" 's/    \{ line = \$0
 mutate "a byte order mark taken in another file" 's/    ! grep -Eq "\$wide" <<< "\$t" \|\| return 1\n//' t_bomtxt
 mutate "a partial clone read" 's/\[ -z "\$\(g config --get extensions\.partialclone 2> \/dev\/null\)" \] \|\| die/:/' t_partial
 
+mutate "the check run conclusion not read" 's/\.status == "completed" and \.conclusion == "success"/.status == "completed"/' t_tred
+mutate "the check run status not read" 's/\.status == "completed" and \.conclusion == "success"/.conclusion == "success"/' t_tpending
+mutate "an older run of a name read for its latest" 's/max_by\(\.id\)/min_by(.id)/' t_tlatest
+mutate "no matching check run taken" 's/\| \(\$m \| length\) > 0\n      and /| true\n      and /' t_tnomatch
+mutate "the check run app not read" 's/\n            and \.app_slug == "github-actions"\)\)/))/' t_tapp
+mutate "the check run commit not read" 's/ and \.head_sha == \$h\)/)/' t_tsha
+mutate "a change under .github/ taken" 's/  ! grep -Eq .\^\\\.github\/. <<< "\$changed" \|\| return 1\n//' t_tgithub
+mutate "a workflow that differs at the head taken" 's/  \[ "\$\(g rev-parse "\$head:\$wf" 2> \/dev\/null\)" = "\$\(g rev-parse "\$base:\$wf" 2> \/dev\/null\)" \] \|\| return 1\n//' t_twfdiff
+mutate "a workflow with no pytest run taken" 's/grep -Fq pytest <<< "\$t" && //' t_twfnopy
+mutate "a linked workflow taken" 's/\[ "\$\(g ls-tree "\$head" -- "\$wf" 2> \/dev\/null \| cut -d. . -f1-2\)" = "100644 blob" \] \|\| return 1/:/' t_twflink
+mutate "a change in the tests dir taken" 's/  ! awk -v d="\$td\/" .index\(\$0, d\) == 1 \{ t = 1 \} END \{ exit !t \}. <<< "\$changed" \|\| return 1\n//' t_ttests
+mutate "a tests dir that differs at the head taken" 's/  \[ "\$\(g rev-parse "\$head:\$td" 2> \/dev\/null\)" = "\$\(g rev-parse "\$base:\$td" 2> \/dev\/null\)" \] \|\| return 1\n//' t_ttree
+mutate "a config change taken" 's/  ! grep -Eq "\$cfgre" <<< "\$changed" \|\| return 1\n//' t_tcfg
+mutate "a test file with no import taken" 's/\[ -n "\$hit" \] \|\| return 1/:/' t_tnoimport
+mutate "an import anywhere on a line taken" 's/grep -Eq "\^\(from \$mod/grep -Eq "(from \$mod/' t_tindent
+mutate "a shadowing entry taken" 's/    \[ "\$path" != "\$mod\.py" \] && \[ "\$path" != "\$mod" \] \|\| return 1\n//' t_tshadow
+mutate "a changed file below the repository root read by its base name" 's/mod="\$\{f%\.py\}"/mod="\${f##*\/}"; mod="\${mod%.py}"/' t_tsubdir
+mutate "the repository of a tested-by line not compared" 's/\[ "\$r" != "\$repo" \] \|\| tests=/tests=/' t_tother
+mutate "a tested-by prefix outside the grammar taken" 's/\[\[ "\$\{px-\}" =~ .+? \]\] \|\| die/[[ -n "\${px-}" ]] || die/' t_tbadpx
+mutate "a tested-by line without checks taken" 's/ && \[ "\$\{ck-\}" = checks \]//' t_tbadck
+mutate "two tested-by lines of a file taken" 's/case "\$seen" in \*"\|tested \$r \$f\|"\*\) die ;; esac//' t_ttwice
+mutate "the checks file not read" 's/ \|\| te=true/ || :/' t_tested
 echo
 if [ "$fails" -eq 0 ]; then echo "nonhcl reach: all checks hold"; else echo "nonhcl reach: $fails failed"; exit 1; fi

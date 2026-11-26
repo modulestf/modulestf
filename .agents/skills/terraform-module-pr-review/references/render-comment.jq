@@ -291,10 +291,12 @@ def valid_covered:
 
 # --- Changes outside Terraform (verdict.md). The evidence review-run.sh writes as nonhcl
 # (nonhcl-reach.sh): per changed file outside HCL, the example directories the module profile proves
-# run no such file, each line's guard checked at the head and the merge base. Bound to the head and
-# host.json's merge base.
+# run no such file, each line's guard checked at the head and the merge base, and tested, whether the
+# repository's own tests import the file and passed at the head. Bound to the head and host.json's
+# merge base.
 def valid_nonhcl: type == "object" and keys == ["base_sha", "files", "head_sha"] and all(.head_sha, .base_sha; sha40)
-  and (.files | type == "array" and length <= 40 and all(.[]; type == "object" and keys == ["file", "unreached"]
+  and (.files | type == "array" and length <= 40 and all(.[]; type == "object"
+        and (keys == ["file", "unreached"] or (keys == ["file", "tested", "unreached"] and (.tested | type == "boolean")))
         and (.file | canon_path)
         and (.unreached | type == "array" and length <= 1000 and all(.[]; canon_path) and . == unique))
         and (map(.file) | length == (unique | length)));
@@ -665,6 +667,8 @@ def texts: {
   "unplanned-covered-refused": "- Not planned: {dir} (the plan proxy refused a host its data sources read, by design, `environment ({reason})`, at head {head} and at base {base}).",
   "nonhcl-unreached-one": "- By the module profile, 1 example above runs no changed file outside Terraform, so it leaves nothing unknown.",
   "nonhcl-unreached-many": "- By the module profile, {count} examples above run no changed file outside Terraform, so they leave nothing unknown.",
+  "nonhcl-tested-one": "- The repository's own tests import every changed file outside Terraform and passed at the head, so 1 example above, not planned for a runner or design reason, leaves nothing unknown.",
+  "nonhcl-tested-many": "- The repository's own tests import every changed file outside Terraform and passed at the head, so {count} examples above, not planned for a runner or design reason, leave nothing unknown.",
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
   "behaviour-trigger": "- Behaviour change at {location} ({category}): not verified.",
   "behaviour-trigger-groups": "- {count} behaviour changes not verified: {categories}.",
@@ -1424,7 +1428,11 @@ def covered_of($in; $l; $b):
 # inert is capped at approve with nits: no plan shows what the changed file does. When every such
 # trigger is outside Terraform alone and no other rule 4 unknown is open, each example not planned
 # that the module profile proves runs none of the changed files leaves rule 4, whatever its reason;
-# every other example not planned stays an unknown. Covered skips take precedence.
+# every other example not planned stays an unknown. Covered skips take precedence. When every changed
+# file is tested, an example not planned for a runner or design reason alone leaves rule 4 too, while
+# at least one example was planned.
+def nonhcl_test_reasons: ["exception: needs a Docker daemon", "exception: example assumes a role in another account",
+  "environment (access-denied)", "environment (refused-host)"];
 def nonhcl_only: .category == "non-hcl-dependency" and (((.also_categories // []) - ["non-hcl-dependency"]) == []);
 def nonhcl_triggers($b): [($b // {triggers: []}).triggers[] | select(.state != "inert")];
 def nonhcl_cap($b): $b != null and $b.status == "ran"
@@ -1440,11 +1448,15 @@ def nonhcl_of($in; $l; $b; $cov):
       | [$fs[] as $f | $n.files[] | select(.file == $f)] as $e
       | if ($e | length) != ($fs | length) then []
         else [$u[] | select(.reason != "no example directory") | .dir as $d
-              | select(all($e[]; any(.unreached[]; . == $d))) | . + {by: "profile"}] end
+              | if all($e[]; any(.unreached[]; . == $d)) then . + {by: "profile"}
+                elif all($e[]; .tested == true) and IN(.reason; nonhcl_test_reasons[])
+                     and ($u | length) < ($run.examples.count // 0) then . + {by: "tests"}
+                else empty end] end
     else [] end;
 def nonhcl_lines($nh):
-  ($nh | length) as $p
-  | if $p == 0 then [] elif $p == 1 then [tx("nonhcl-unreached-one")] else [tx("nonhcl-unreached-many"; {count: $p})] end;
+  ([$nh[] | select(.by == "profile")] | length) as $p | ([$nh[] | select(.by == "tests")] | length) as $q
+  | (if $p == 0 then [] elif $p == 1 then [tx("nonhcl-unreached-one")] else [tx("nonhcl-unreached-many"; {count: $p})] end)
+  + (if $q == 0 then [] elif $q == 1 then [tx("nonhcl-tested-one")] else [tx("nonhcl-tested-many"; {count: $q})] end);
 
 # --- The whole render. $in: {findings, host, checks, run, assessment, standard, registry}.
 

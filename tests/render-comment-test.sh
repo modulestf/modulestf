@@ -1527,16 +1527,60 @@ t_nh_hclcap() {
   [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$NHR7" "$O/comment.md"
 }
 t_nh_hclcap; check "outside Terraform: a verified Terraform trigger beside it keeps the cap" $?
+# Test evidence (verdict.md, Changes outside Terraform): every changed file tested clears an example
+# not planned for a runner or design reason, while at least one example was planned.
+NHT='The repository'"'"'s own tests import every changed file outside Terraform and passed at the head'
+nhtest() { nhrun "$1" "${2:-[]}" ".nonhcl.files[0].tested = true | ${3-.}"; }
+t_nh_tested() {
+  render "$NONE" "" "$NHC" "$(nhtest tested)"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$NHR7" "$O/comment.md" \
+    && grep -qxF '### Examples not planned' "$O/comment.md" \
+    && grep -qxF -- "- $NHT, so 2 examples above, not planned for a runner or design reason, leave nothing unknown." "$O/comment.md" \
+    && ! grep -qF 'By the module profile' "$O/comment.md"
+}
+t_nh_tested; check "outside Terraform: tested files clear every example not planned for a Docker daemon, approve with nits" $?
+t_nh_tested_mix() {
+  render "$NONE" "" "$NHC" "$(nhtest mix '["examples/build-package"]' '.coverage.unplanned[0].reason = "environment (access-denied)"')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] \
+    && grep -qxF -- '- By the module profile, 1 example above runs no changed file outside Terraform, so it leaves nothing unknown.' "$O/comment.md" \
+    && grep -qxF -- "- $NHT, so 1 example above, not planned for a runner or design reason, leaves nothing unknown." "$O/comment.md"
+}
+t_nh_tested_mix; check "outside Terraform: a profile line and test evidence each clear their example, one line each" $?
+t_nh_tested_reason() { nh_rule4 treason '[]' '.nonhcl.files[0].tested = true | .coverage.unplanned[0].reason = "environment (timeout)"'; }
+t_nh_tested_reason; check "outside Terraform: test evidence clears no example not planned for a timeout" $?
+t_nh_tested_gate() { nh_rule4 tgate '[]' '.nonhcl.files[0].tested = true | .coverage.unplanned[1].reason = "plan gate G1"'; }
+t_nh_tested_gate; check "outside Terraform: test evidence clears no example skipped by a gate" $?
+t_nh_tested_false() { nh_rule4 tfalse '[]' '.nonhcl.files[0].tested = false'; }
+t_nh_tested_false; check "outside Terraform: a file not tested clears nothing" $?
+t_nh_tested_two() {
+  nh_rule4 ttwo '[]' '.nonhcl.files[0].tested = true
+    | .behaviour.triggers += [{id: "T-002", file: "other.py", line: 1, category: "non-hcl-dependency", state: "unverifiable"}]
+    | .nonhcl.files += [{file: "other.py", unreached: [], tested: false}]'
+}
+t_nh_tested_two; check "outside Terraform: one changed file tested and another not clears nothing" $?
+t_nh_tested_none() { nh_rule4 tnone '[]' '.nonhcl.files[0].tested = true | .examples = {count: 2, skipped: 0, validated: 2}'; }
+t_nh_tested_none; check "outside Terraform: test evidence clears nothing when no example was planned" $?
+t_nh_tested_hcl() { nh_rule4 thcl '[]' ".nonhcl.files[0].tested = true | .behaviour.triggers += [$(bt T-002 literal-argument-change verified)]"; }
+t_nh_tested_hcl; check "outside Terraform: test evidence beside a Terraform trigger clears nothing" $?
+t_nh_badtv() { render "$NONE" "" "" "$(nhrun badtv '[]' '.nonhcl.files[0].tested = "yes"')"; [ "$ST" = 2 ] && empty_out; }
+t_nh_badtv; check "refused: a nonhcl tested value that is no boolean" $?
+mutate "test evidence read for any reason" 's/ and IN\(\.reason; nonhcl_test_reasons\[\]\)//' t_nh_tested_reason
+mutate "a timeout read as a design reason" 's/"environment \(access-denied\)", "environment \(refused-host\)"\]/"environment (access-denied)", "environment (refused-host)", "environment (timeout)"]/' t_nh_tested_reason
+mutate "test evidence taken from a file not tested" 's/elif all\(\$e\[\]; \.tested == true\)/elif true/' t_nh_tested_false
+mutate "test evidence read for one changed file only" 's/elif all\(\$e\[\]; \.tested == true\)/elif any(\$e[]; .tested == true)/' t_nh_tested_two
+mutate "test evidence taken with no example planned" 's/\n                     and \(\$u \| length\) < \(\$run\.examples\.count \/\/ 0\)//' t_nh_tested_none
+mutate "the test evidence line not rendered" 's/\+ \(if \$q == 0 then \[\]/+ (if true then []/' t_nh_tested
+mutate "a tested value of another type taken" 's/ and \(\.tested \| type == "boolean"\)//' t_nh_badtv
 refused "a nonhcl key with another field" "$NONE" "" "" "$(nhrun badk '[]' '.nonhcl.note = "x"')"
 refused "a nonhcl entry with test evidence" "$NONE" "" "" "$(nhrun badt '[]' '.nonhcl.files[0].tested_by = ["tests/test_x.py"]')"
 refused "a nonhcl example that climbs out" "$NONE" "" "" "$(nhrun badp '["../x"]')"
 refused "a nonhcl head that is not a SHA" "$NONE" "" "" "$(nhrun bads '[]' '.nonhcl.head_sha = "HEAD"')"
 mutate "the outside-Terraform cap dropped" 's/ or \.nonhcl_cap then \{rule: 7/ then {rule: 7/' t_nh_all
-mutate "an example the profile does not prove cleared" 's/\| select\(all\(\$e\[\]; any\(\.unreached\[\]; \. == \$d\)\)\) //' t_nh_partial
+mutate "an example the profile does not prove cleared" 's/if all\(\$e\[\]; any\(\.unreached\[\]; \. == \$d\)\) then/if true then/' t_nh_partial
 mutate "the outside-Terraform evidence not bound to the merge base" 's/ and \$n\.base_sha == \$in\.host\.merge_base//' t_nh_bind
 mutate "the outside-Terraform clearing beside a Terraform trigger" 's/all\(\$t\[\]; nonhcl_only\)/true/' t_nh_merged
 mutate "a changed file with no evidence entry ignored" 's/if \(\$e \| length\) != \(\$fs \| length\) then \[\]/if false then []/' t_nh_nofile
-mutate "the profile read for one changed file only" 's/select\(all\(\$e\[\]; any/select(any(\$e[]; any/' t_nh_twofiles
+mutate "the profile read for one changed file only" 's/if all\(\$e\[\]; any\(\.unreached/if any(\$e[]; any(.unreached/' t_nh_twofiles
 mutate "the cap read only when every trigger is outside Terraform" 's/and any\(nonhcl_triggers\(\$b\)\[\];/and all(nonhcl_triggers(\$b)[];/' t_nh_hclcap
 mutate "the outside-Terraform rationale not used" 's/and \$in\.nonhcl_cap then tx\("rationale-7-nonhcl"\)/and false then tx("rationale-7-nonhcl")/' t_nh_all
 # Job-less workflow runs: CI that never ran. Ended action_required or failure with every read
