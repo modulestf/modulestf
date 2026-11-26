@@ -82,13 +82,15 @@ def context: split("\n") | (length - 1) as $last
 # Reviews in list order, the resolved login, and whether the run is render-only. The login's
 # own reviews are left out in every run, render-only included: a body this run does not post
 # can still be posted later by that login, and it then replaces the earlier review.
-# $render_only is kept for callers and changes nothing. Only a reviewer with write access
+# $render_only is kept for callers and changes nothing. The login's own latest non-comment review
+# keeps its id, state and commit; host-pass.sh adds the SHA-256 of its body for the edit check of
+# the earlier review (github-io.md, The Post Record). Only a reviewer with write access
 # counts, as in GitHub's own review decision: an approval or change request from an author
 # whose association is not OWNER, MEMBER or COLLABORATOR decides nothing.
 def decision($login; $render_only):
   [.[] | select(.state != "COMMENTED" and .state != "PENDING")] as $nc
   | ($nc | map(select($login != "" and ((.user.login // "") | ascii_downcase) == ($login | ascii_downcase))) | last
-     | if . == null then null else {state, commit_id} end) as $own
+     | if . == null then null else {id, state, commit_id} end) as $own
   | [$nc[] | select(($login == "" or ((.user.login // "") | ascii_downcase) != ($login | ascii_downcase))
       and (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")))]
   | group_by(.user.id) | map(last.state) as $latest
@@ -337,7 +339,8 @@ def valid_host($head):
        and (.mergeability | IN("pass", "fail", "unknown", "not-applicable")))
   # A closed or merged pull request has no mergeability to read, and only it can be not-applicable.
   and (.signals.mergeability != "not-applicable" or .state.state == "closed")
-  and (.own_review == null or (.own_review | type == "object" and keys == ["commit_id", "state"]
+  and (.own_review == null or (.own_review | type == "object" and keys == ["body_sha256", "commit_id", "id", "state"]
+       and (.id | nat and . > 0) and (.body_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
        and (.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED")) and (.commit_id | sha)))
   and (.could_not_run | type == "array" and all(.[]; type == "object" and (
         (keys == ["kind", "path"] and .kind == "patch-unavailable" and (.path | plain_path))

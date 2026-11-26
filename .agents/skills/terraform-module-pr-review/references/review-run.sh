@@ -27,15 +27,19 @@
 #                                        the module profile snapshot (state/profile.json)
 #                                        and the README evidence (readme-regions.sh)
 #   review-run.sh render <run> --findings <file> --assessment <file> --out <dir>
-#       [--summary <file>] [--standard]
+#       [--summary <file>] [--standard] [--event <EVENT>]
 #                                        the run file, depth.sh verify, render-comment.sh, plan.json,
 #                                        fix-plan.md
 #   review-run.sh cleanup <run>         deletes the run directory
+#   review-run.sh record --out <dir> --review-id <id>
+#                                        after the confirmed write of Step 12: keeps the posted
+#                                        review's plan.json and body digest in this user's record
+#                                        store, which prepare reads back (github-io.md, The Post Record)
 #
 # Every subcommand prints at most 30 lines. Host strings never reach a command line or an
 # eval: they travel in files and through jq --arg. Exit 0 done, 1 a refusal or a failed step
 # with its fixed reason printed, 2 a usage error. There is no post command: posting stays the
-# skill's confirmed step (SKILL.md, Rule 1).
+# skill's confirmed step (SKILL.md, Rule 1); record only reads the posted review back.
 set -uo pipefail
 set -f
 # SHA-256 with GNU coreutils or macOS sha256sum, else the slower Perl shasum.
@@ -169,6 +173,132 @@ affected_to() { # mtf-facts, root, files list, out: the affected report, or no f
   fi
 }
 
+# --- the post record (github-io.md, The Post Record) ---------------------------------------
+
+# This user's own store of the reviews this skill posted, outside every run directory: one
+# directory per pull request, three files per review id. Fails, so nothing is read or kept, with no
+# absolute XDG_STATE_HOME and no HOME, a base of / or with a . or .. segment, or a repository name of dots.
+records_dir() { # owner/name, number
+  local b="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
+  case "$b" in /?*) ;; *) return 1 ;; esac
+  case "/$b/" in */./* | */../*) return 1 ;; esac
+  [[ "$1" =~ $repo_re ]] && ! [[ "${1#*/}" =~ ^[.]+$ ]] && [[ "$2" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+  printf '%s/modulestf/pr-review/records/%s/%s' "${b%/}" "$1" "$2"
+}
+# The store is this user's alone: every directory from records/ down to the pull request's, and each
+# record file, owned by this user and writable by no one else.
+store_private() { # pull request directory, file...
+  local d="$1" top p; shift
+  top="${d%/*/*/*}"
+  for p in "$top" "${d%/*/*}" "${d%/*}" "$d" "$@"; do
+    [ -O "$p" ] && [ ! -L "$p" ] || return 1
+    [ -z "$(find "$p" -prune \( -perm -g+w -o -perm -o+w \) 2> /dev/null)" ] || return 1
+  done
+}
+sha_file() { openssl dgst -sha256 -r < "$1" | cut -d' ' -f1; }
+META_JQ='type == "object" and keys == ["body_sha256", "carried_sha256", "format", "plan_sha256", "review_id", "state", "target"]
+  and .format == 1 and (.review_id | type == "number" and . >= 1 and . == floor)
+  and (.body_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and (.plan_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+  and (.carried_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+  and (.state | IN("APPROVED", "CHANGES_REQUESTED", "COMMENTED")) and (.target | type == "string")'
+
+# The path grammar of the render (render-comment.jq, plain_path), so a finding the render took and
+# posted is read back, and the id of an earlier finding: its own id, and for one a later record
+# carried, the id of the review that raised it after an @.
+EARLIER_JQ='def plain: type == "string" and length > 0 and length <= 1024
+    and test("^(\\.|(?!/)(?!.*\\\\)(?!(.*/)?\\.\\.(/|$)).+)$") and (test("[\\x00-\\x1f\\x7f`]") | not);
+  def earlier_id: type == "string" and test("^F-[0-9]{3,4}(@[0-9]{1,16})?$");
+  def seven: type == "object" and keys == ["file", "id", "line", "rule_id", "severity", "suggested_fix", "summary"];
+  def chain_reasons: ["missing", "edited", "mismatch", "unreadable", "broken"];
+  def carried_ok: (type == "array" and length <= 1000
+      and all(.[]; seven and (.id | earlier_id) and (.severity | IN("CRITICAL", "HIGH", "MEDIUM"))))
+    or (type == "object" and keys == ["broken_chain"] and (.broken_chain | IN(chain_reasons[])));'
+# The form of the reviewer's git-safety.md, in the clone: ls-tree and cat-file read the head's
+# objects only and run no driver, filter or textconv, with pathspecs taken literally.
+safe_clone_git() {
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_LAZY_FETCH=1 \
+  GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null GIT_LITERAL_PATHSPECS=1 \
+  GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat \
+  git -C "$RUN/clone" --no-pager -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+    -c protocol.allow=never -c diff.external= -c log.showSignature=false \
+    -c advice.graftFileDeprecated=false "$@"
+}
+
+# Our earlier review: when host.json names an own CHANGES_REQUESTED, the record kept when this
+# skill posted it, checked against the review as GitHub holds it now. earlier.json says ok with the
+# record's blocking findings, module-relative, or why the block cannot be checked: the plan's
+# findings at MEDIUM and above, and the earlier findings that review left not resolved, carried.
+read_earlier() { # owner/name, number, token user id, prefix
+  local h="$RUN/host/host.json" rid d m pl c rec=missing
+  [ "$(jq -r '.own_review.state // ""' "$h")" = CHANGES_REQUESTED ] || return 0
+  rid="$(jq -r '.own_review.id' "$h")"
+  if d="$(records_dir "$1" "$2")"; then
+    m="$d/$rid.json"; pl="$d/$rid.plan.json"; c="$d/$rid.carried.json"
+    if [ -e "$m" ] || [ -L "$m" ] || [ -e "$pl" ] || [ -L "$pl" ]; then
+      rec=unreadable
+      if [ -f "$m" ] && [ ! -L "$m" ] && [ -f "$pl" ] && [ ! -L "$pl" ] && [ -f "$c" ] && [ ! -L "$c" ] &&
+          store_private "$d" "$m" "$pl" "$c" && [ "$(wc -c < "$m")" -le 4096 ] &&
+          [ "$(wc -c < "$pl")" -le 4194304 ] && [ "$(wc -c < "$c")" -le 4194304 ] && jq -e "$META_JQ" "$m" > /dev/null 2>&1 &&
+          jq -e -L "$HERE" 'include "stage-contract"; stage_ok("review-plan")' "$pl" > /dev/null 2>&1 &&
+          [ "$(sha_file "$pl")" = "$(jq -r '.plan_sha256' "$m")" ] &&
+          [ "$(sha_file "$c")" = "$(jq -r '.carried_sha256' "$m")" ] &&
+          jq -e -s "$EARLIER_JQ"' length == 1 and (.[0] | carried_ok)' "$c" > /dev/null 2>&1; then
+        if [ "$(jq -r '.body_sha256' "$m")" != "$(jq -r '.own_review.body_sha256' "$h")" ]; then rec=edited
+        elif ! jq -e -n --slurpfile m "$m" --slurpfile p "$pl" --slurpfile h "$h" --arg t "$1#$2" --arg u "$3" --arg pre "$4" '
+            $m[0].review_id == $h[0].own_review.id and $m[0].state == "CHANGES_REQUESTED" and $m[0].target == $t
+            and $p[0].pin.target == $t and $p[0].pin.head_sha == $h[0].own_review.commit_id
+            and ($p[0].reviewer_id | tostring) == $u and $p[0].module_prefix == $pre' > /dev/null 2>&1; then rec=mismatch
+        # The review replaced a block of ours whose record did not check out: its requests were never
+        # judged, so ours stands until it is dismissed or a person confirms an APPROVE.
+        elif jq -e 'type == "object"' "$c" > /dev/null 2>&1; then rec=broken
+        else rec=ok
+        fi
+      fi
+    fi
+  fi
+  jq -n --slurpfile h "$h" --arg rec "$rec" --arg pre "$4" --slurpfile p "$( [ "$rec" = ok ] && echo "$pl" || echo /dev/null)" \
+    --slurpfile c "$( [ "$rec" = ok ] && echo "$c" || echo /dev/null)" "$EARLIER_JQ"'
+    def rel: if $pre == "" then . elif . == $pre then "." elif startswith($pre + "/") then .[($pre | length) + 1:] else null end;
+    ([($p[0].findings // [])[] | select(.severity | IN("CRITICAL", "HIGH", "MEDIUM"))] + ($c[0] // []) | map(.file |= (if type == "string" then rel else . end))) as $f
+    # Each finding in the grammar the render holds the run file to, else the record is unreadable.
+    | (all($f[]; (.id | earlier_id) and (.rule_id | type == "string" and test("^[a-z][a-z0-9_.-]{0,127}$"))
+        and (.line == null or (.line | type == "number" and . >= 1 and . == floor))
+        and (.file == null or (.file | plain)))
+       and ($f | map(.id) | length == (unique | length))) as $g
+    | (if $rec != "ok" then $rec elif $f == [] then "empty" elif ($g | not) then "unreadable"
+       elif any($f[]; .file == null) then "mismatch" else "ok" end) as $r
+    | {review_id: $h[0].own_review.id, commit_id: $h[0].own_review.commit_id, record: $r,
+       findings: (if $r == "ok" then $f else [] end)}' > "$RUN/earlier.json" 2> /dev/null ||
+    jq -n --slurpfile h "$h" '{review_id: $h[0].own_review.id, commit_id: $h[0].own_review.commit_id,
+      record: "unreadable", findings: []}' > "$RUN/earlier.json"
+}
+
+# carried.json, beside plan.json: the earlier blocking findings this review left not resolved, each
+# with its id and, when it has none yet, @ and the id of the review that raised it, paths
+# repository-relative as in plan.json. A record of this review keeps it, so a block that replaces
+# ours keeps every open item of ours; [] when there is no earlier block or every item is resolved.
+# Over a block of ours whose record did not check out (missing, edited, mismatch, unreadable or an
+# earlier broken chain), {"broken_chain": <reason>}: its requests are unknown, so a later run reads
+# the chain as broken and our block stands. An empty record came from a host signal or a refuted
+# state, which every run reads again, and carries [].
+write_carried() { # out directory, run file
+  local o="$1"
+  jq -n --slurpfile r "$2" --slurpfile e "$( [ -f "$RUN/earlier.json" ] && echo "$RUN/earlier.json" || echo /dev/null)" --arg p "$PREFIX" '
+    def repo_path: if $p == "" then . elif . == "." then $p else $p + "/" + . end;
+    ($e[0] // null) as $e | ($r[0].earlier // null) as $x
+    | if $e == null or $e.record == "empty" then []
+      elif $e.record != "ok" then {broken_chain: $e.record}
+      elif $x == null or $x.record != "ok" or $x.review_id != $e.review_id then []
+      else [$x.items[] | select(.judgment != "resolved") | .id as $id | $e.findings[] | select(.id == $id)
+        | {id: (if $id | test("@") then $id else "\($id)@\($e.review_id)" end), rule_id, severity,
+           file: (.file | repo_path), line, summary, suggested_fix}] end' > "$o/carried.json.tmp" 2> /dev/null &&
+    jq -e "$EARLIER_JQ"' carried_ok' "$o/carried.json.tmp" > /dev/null 2>&1 &&
+    mv -- "$o/carried.json.tmp" "$o/carried.json" ||
+    { rm -f "$o/carried.json.tmp"; echo "carried: not written, the record of this review keeps no open earlier finding"; return 0; }
+  jq -r '"carried: \(input_filename) " + (if type == "array" then "(\(length) open earlier findings)"
+    else "(broken chain: \(.broken_chain), our block stands until dismissed)" end)' "$o/carried.json"
+}
+
 # --- prepare ---------------------------------------------------------------------------------
 
 refuse() { # fixed reason, words: index.json says refused and nothing else
@@ -255,6 +385,7 @@ cmd_prepare() {
   local head base mb prefix
   head="$(jq -r '.head_sha' "$RUN/host/host.json")"; base="$(jq -r '.base_sha' "$RUN/host/host.json")"
   mb="$(jq -r '.merge_base // ""' "$RUN/host/host.json")"; prefix="$(jq -r '.prefix' "$RUN/host/host.json")"
+  read_earlier "$repo" "$pr" "$uid" "$prefix"
   "${hp[@]}" checks --repo "$repo" --head "$head" --out "$RUN/checks" --own-pairs "" > /dev/null 2>&1
   local checks_file=rejected
   [ "$("${hp[@]}" check "$RUN/checks" --head "$head" 2> /dev/null)" = "checks accepted" ] && checks_file=accepted
@@ -387,6 +518,8 @@ cmd_prepare() {
   echo "RUN=$RUN"
   echo "identity: $login_shown, posting $posting$( [ "$render_only" = false ] || echo ", render-only")"
   summary_lines
+  [ ! -f "$RUN/earlier.json" ] || jq -r '"earlier review: changes requested on \(.commit_id[:12]), record \(.record)"
+    + (if .record == "ok" then ", \(.findings | length) blocking findings for the reviewer to judge" else ", the block stands" end)' "$RUN/earlier.json"
 }
 
 # index.json: enumerated fields and validated paths only, never prose, a title or a branch.
@@ -1077,8 +1210,21 @@ cmd_handover() {
         ! grep -qvE "$REGION_LINE_RE" "$RUN/readme/regions.txt"; then
       sed 's/^/README regions: /' "$RUN/readme/regions.txt"
     fi
-    printf 'Output: write the findings list as JSON to %s, the summary line and the profile lines to %s and the facts comparison note to %s, and nothing else.\n' \
-      "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt"
+    # Our earlier review, only with a record that checked out: its blocking findings for the
+    # reviewer to judge at the head (findings-schema.md, Earlier Review Task Line).
+    # The findings are earlier review output that can quote the change: the file holds them inside an
+    # untrusted block of its own suffix, as the task's block holds the pull request's text.
+    local es=""
+    es="$(openssl rand -hex 6 2> /dev/null)" || es=""
+    if [[ "$es" =~ ^[0-9a-f]{12}$ ]] && jq -e '.record == "ok"' "$RUN/earlier.json" > /dev/null 2>&1 &&
+        { printf 'UNTRUSTED-%s BEGIN\n' "$es"; jq '.findings' "$RUN/earlier.json" && printf 'UNTRUSTED-%s END\n' "$es"; } > "$out/earlier-task.txt"; then
+      printf 'Earlier review: %s\n' "$out/earlier-task.txt"
+      printf 'Output: write the findings list as JSON to %s, the summary line and the profile lines to %s, the facts comparison note to %s and the earlier review judgments as JSON to %s, and nothing else.\n' \
+        "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt" "$RUN/review/earlier.json"
+    else
+      printf 'Output: write the findings list as JSON to %s, the summary line and the profile lines to %s and the facts comparison note to %s, and nothing else.\n' \
+        "$RUN/review/findings.json" "$RUN/review/summary.txt" "$RUN/review/facts-comparison.txt"
+    fi
     [ ! -f "$out/reviewer-references.md" ] || printf 'References: %s\n' "$out/reviewer-references.md"
     sed -n "$n,\$p" "$t" | sed '$d'
     [ "$TRIAGE" = true ] || { printf 'RECORD-%s\n' "$s"; cat "$out/record.txt"; }
@@ -1087,6 +1233,8 @@ cmd_handover() {
   [ ! -f "$RUN/depth.json" ] || cp "$RUN/state/depth.sha256" "$RUN/state/handover.sha256"
   # The skipped files the reviewer was handed, pinned as the depth is: render refuses another list.
   shasum -a 256 < "$RUN/skipped.json" | cut -d' ' -f1 > "$RUN/state/skipped.sha256"
+  # The earlier review the reviewer was handed, pinned the same way.
+  [ ! -f "$RUN/earlier.json" ] || shasum -a 256 < "$RUN/earlier.json" | cut -d' ' -f1 > "$RUN/state/earlier.sha256"
   echo "handover: $out/task.md ($(wc -l < "$out/task.md" | tr -d ' ') lines, record $( [ -f "$out/record.txt" ] && wc -l < "$out/record.txt" | tr -d ' ' || echo 0) lines)"
   [ ! -f "$out/reviewer-references.md" ] ||
     echo "references: $out/reviewer-references.md ($(wc -c < "$out/reviewer-references.md" | tr -d ' ') bytes, ${left:-0} sections left out)"
@@ -1096,7 +1244,7 @@ cmd_handover() {
 # --- render ----------------------------------------------------------------------------------
 
 cmd_render() {
-  local findings="" assessment="" summary="" out="" std=()
+  local findings="" assessment="" summary="" out="" std=() ev=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --findings) findings="${2-}"; shift 2 || die "--findings needs a value" ;;
@@ -1104,6 +1252,8 @@ cmd_render() {
       --summary) summary="${2-}"; shift 2 || die "--summary needs a value" ;;
       --out) out="${2-}"; shift 2 || die "--out needs a value" ;;
       --standard) std=(--standard); shift ;;
+      --event) [[ "${2-}" =~ ^(COMMENT|APPROVE|REQUEST_CHANGES)$ ]] || die "--event takes COMMENT, APPROVE or REQUEST_CHANGES"
+        ev=(--event "$2"); shift 2 ;;
       *) die "unexpected argument" ;;
     esac
   done
@@ -1119,9 +1269,14 @@ cmd_render() {
     stop "depth.json changed after the handover"
   [ "$(shasum -a 256 < "$RUN/skipped.json" 2> /dev/null | cut -d' ' -f1)" = "$(cat "$RUN/state/skipped.sha256" 2> /dev/null)" ] ||
     stop "skipped.json changed after the handover"
+  if [ -e "$RUN/earlier.json" ] || [ -e "$RUN/state/earlier.sha256" ]; then
+    [ -f "$RUN/earlier.json" ] && [ ! -L "$RUN/earlier.json" ] &&
+      [ "$(shasum -a 256 < "$RUN/earlier.json" | cut -d' ' -f1)" = "$(cat "$RUN/state/earlier.sha256" 2> /dev/null)" ] ||
+      stop "earlier.json changed after the handover"
+  fi
   case "$out" in /?*) ;; *) die "--out must be an absolute path" ;; esac
   [ -d "$out" ] || mkdir -p -- "$out" || die "--out cannot be made"
-  local f; for f in plan.json plan.json.tmp fix-plan.md fix-plan.md.tmp; do
+  local f; for f in plan.json plan.json.tmp fix-plan.md fix-plan.md.tmp carried.json carried.json.tmp; do
     [ ! -e "$out/$f" ] || fail "the output directory already holds $f"
   done
   if [ -f "$RUN/depth.json" ]; then
@@ -1162,7 +1317,7 @@ cmd_render() {
   local line rc
   line="$(bash "$HERE/render-comment.sh" --head "$HEAD_SHA" --findings "$r/findings.json" --host "$RUN/host/host.json" \
     --checks "$RUN/checks" --run "$r/run-file.json" --assessment "$assessment" --run-dir "$RUN" --out "$out" \
-    --links ${std[@]+"${std[@]}"} 2>&1)"
+    --links ${std[@]+"${std[@]}"} ${ev[@]+"${ev[@]}"} 2>&1)"
   rc=$?
   printf '%s\n' "$line" | head -n 20
   [ "$rc" = 0 ] || exit 1
@@ -1174,6 +1329,7 @@ cmd_render() {
   echo "body: $out/comment.md"
   jq -r '"identity: \(.login | if . == "" then "none" else . end), posting \(.posting)" + (if .render_only then ", render-only" else "" end)' "$RUN/state/args.json"
   write_plan "$out"
+  [ ! -f "$out/plan.json" ] || write_carried "$out" "$r/run-file.json"
 }
 
 # plan.json (stage-contract.md, review-plan): after result.json, the pull request read again once and
@@ -1251,6 +1407,47 @@ floors_of() {
   jq -c -n --arg h "$HEAD_SHA" --arg b "$mbs" --argjson d "$out" '{head_sha: $h, base_sha: $b, dirs: $d}'
 }
 
+# The run file's earlier (render-comment.sh): earlier.json with the reviewer's judgment of each
+# blocking finding from review/earlier.json. A judgments file that is missing, a link, over its cap,
+# not one JSON document or not one entry per finding in its shape leaves every finding not judged,
+# so the block stands. A resolved judgment counts only when its file is a file of the head under the
+# module root and its line is in it; else that finding is not judged.
+earlier_of() {
+  local j="$RUN/review/earlier.json" jud='null' heads='{}' e f l n
+  if [ -f "$j" ] && [ ! -L "$j" ] && [ "$(wc -c < "$j")" -le 262144 ]; then
+    jud="$(jq -c -s 'if length == 1 then .[0] else null end' "$j" 2> /dev/null)" || jud='null'
+  fi
+  # The line count at the head of each place a resolved judgment names, from the clone's objects in
+  # the safe form: only a regular file, mode 100644 or 100755, counts; a link, a directory or a
+  # submodule does not.
+  local t sha
+  while IFS= read -r e; do
+    f="$(jq -r .file <<< "$e")"; l="$(jq -r .line <<< "$e")"
+    t="$(safe_clone_git ls-tree HEAD -- "${PREFIX:+$PREFIX/}$f" 2> /dev/null)" || continue
+    [[ "$t" =~ ^100(644|755)\ blob\ ([0-9a-f]{40,64})$'\t' ]] && [ "${t#*$'\t'}" = "${PREFIX:+$PREFIX/}$f" ] || continue
+    sha="${BASH_REMATCH[2]}"
+    n="$(safe_clone_git cat-file blob "$sha" 2> /dev/null | awk 'END { print NR }')"
+    [[ "$n" =~ ^[0-9]+$ ]] && [ "$l" -le "$n" ] 2> /dev/null || continue
+    heads="$(jq -c --arg k "$f:$l" '. + {($k): true}' <<< "$heads")"
+  done < <(jq -c "$EARLIER_JQ"' if type == "array" then .[] | objects | select(.judgment == "resolved" and (.file | plain)
+      and (.line | type == "number" and . >= 1 and . == floor and . <= 10000000)) | {file, line} else empty end' <<< "${jud:-null}" 2> /dev/null)
+  # The judgments reach jq on a descriptor: at the 262144 byte cap they are over one argument's limit.
+  jq -c --slurpfile j <(printf '%s' "${jud:-null}") --argjson heads "$heads" "$EARLIER_JQ"'
+    ($j[0]) as $j | .findings as $f
+    | ($j | type == "array" and all(.[]; type == "object"
+         and keys == ["file", "id", "judgment", "line"] and (.id | type == "string")
+         and (.judgment | IN("resolved", "partly", "not resolved"))
+         and (.file == null or (.file | plain)) and (.line == null or (.line | type == "number" and . >= 1 and . == floor))
+         and (.judgment != "resolved" or (.file != null and .line != null)))
+       and ((map(.id) | sort) == ($f | map(.id) | sort))) as $ok
+    | {review_id, commit_id, record,
+       items: [$f[] | .id as $id | ($j | if $ok then (map(select(.id == $id))[0]) else null end) as $x
+         | (if $x != null and $x.judgment == "resolved" and ($heads["\($x.file):\($x.line)"] | not) then null else $x end) as $x
+         | {id, rule_id, severity, file, line,
+            judgment: (if $x == null then "not-judged" else ($x.judgment | sub(" "; "-")) end),
+            at: (if $x != null and $x.judgment == "resolved" then {file: $x.file, line: $x.line} else null end)}]}' "$RUN/earlier.json"
+}
+
 # The evidence of a change outside Terraform (verdict.md, Changes outside Terraform): nonhcl-reach.sh
 # on the clone's objects at the head and the merge base, with the reach file of the run's shipped
 # module profile from this skill checkout, never from the workspace; a custom profile has none.
@@ -1275,23 +1472,25 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
   [ ! -f "$RUN/depth.json" ] || dj="$(cat "$RUN/depth.json")"
   [ "$TRIAGE" = true ] || [ ! -f "$RUN/tests.json" ] || tj="$(cat "$RUN/tests.json")"
   local sk; sk="$(cat "$RUN/skipped.json")" || return 1
-  local prof=null fl=null nh=null
+  local prof=null fl=null ear=null nh=null
   [ ! -f "$RUN/state/profile.json" ] || prof="$(cat "$RUN/state/profile.json")"
+  [ ! -f "$RUN/earlier.json" ] || ear="$(earlier_of)" || return 1
   [ "$TRIAGE" = true ] || fl="$(floors_of)" || fl=null
   [ "$TRIAGE" = true ] || ! needs_tests || nh="$(nonhcl_of)" || nh=null
   [ -n "$nh" ] || nh=null
   mode="$(plan_mode)"
-  # The behaviour, verify, coverage, skip check and skipped files values have no size cap that
+  # The behaviour, verify, coverage, skip check, skipped files and earlier values have no size cap that
   # keeps them under one argument's limit (128 KiB on Linux), so they reach jq on a descriptor,
   # each held to exactly one JSON value as --argjson held it.
   jq -n --argjson triage "$triage" --argjson counts "$1" --slurpfile beh <(printf '%s' "$beh") --slurpfile ver <(printf '%s' "$ver") \
     --slurpfile cov <(printf '%s' "$cov") --slurpfile skip <(printf '%s' "$skip") --argjson depth "$dj" --argjson tests "$tj" --arg mode "$mode" --argjson prof "$prof" \
     --argjson floors "$fl" --argjson nonhcl "$nh" --slurpfile skipped <(printf '%s' "$sk") \
+    --slurpfile earlier <(printf '%s' "$ear") \
     --argjson planned "$( [ -f "$RUN/state/plan" ] && echo true || echo false)" \
     --slurpfile sel "$RUN/selection.json" "
     def one: if length == 1 then .[0] else error(\"not one JSON value\") end;
     (\$beh | one) as \$beh | (\$ver | one) as \$ver | (\$cov | one) as \$cov | (\$skip | one) as \$skip
-    | (\$skipped | one) as \$skipped |
+    | (\$skipped | one) as \$skipped | (\$earlier | one) as \$earlier |
     {format: 1, triage: \$triage, plan_ran: \$planned,
      verify_gaps: (if \$triage then []
        elif \$ver != null then (\$ver | $GAPS_JQ)
@@ -1312,8 +1511,66 @@ build_run_file() { # counts JSON -> the run file of render-comment.sh on stdout
     + (if \$floors != null then {floors: \$floors} else {} end)
     + (if \$nonhcl != null then {nonhcl: \$nonhcl} else {} end)
     + (if \$skipped != [] then {skipped_files: \$skipped} else {} end)
+    + (if \$earlier != null then {earlier: \$earlier} else {} end)
     + (if \$prof != null and (\$prof.label != \"shipped:terraform-aws-modules\" or \$prof.tree != \"none\")
        then {profile: {label: \$prof.label, tree: \$prof.tree}} else {} end)"
+}
+
+# --- record ----------------------------------------------------------------------------------
+
+# After the confirmed write of Step 12, with the review id the write returned: the review as GitHub
+# holds it must be the token user's, of the plan's head, and carry the rendered body exactly as
+# posted; then plan.json and the body's digest are kept under that id. It reads, never writes, the host.
+cmd_record() {
+  local out="" id=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out) out="${2-}"; shift 2 || die "--out needs a value" ;;
+      --review-id) id="${2-}"; shift 2 || die "--review-id needs a value" ;;
+      *) die "unexpected argument" ;;
+    esac
+  done
+  case "$out" in /?*) ;; *) die "--out must be an absolute path" ;; esac
+  [[ "$id" =~ ^[1-9][0-9]{0,15}$ ]] || die "--review-id must be a review id"
+  local p="$out/plan.json" c="$out/comment.md" k="$out/carried.json" w repo pr uid d
+  [ -f "$p" ] && [ ! -L "$p" ] && [ -f "$c" ] && [ ! -L "$c" ] || fail "record refused: the output directory holds no plan.json and comment.md"
+  jq -e -L "$HERE" 'include "stage-contract"; stage_ok("review-plan") and (.reviewer_id | type == "number")' "$p" > /dev/null 2>&1 ||
+    fail "record refused: plan.json is not a review plan with the token user's id"
+  [ -f "$k" ] && [ ! -L "$k" ] && [ "$(wc -c < "$k")" -le 4194304 ] &&
+    jq -e -s "$EARLIER_JQ"' length == 1 and (.[0] | carried_ok)' "$k" > /dev/null 2>&1 ||
+    fail "record refused: the output directory holds no carried.json of earlier findings"
+  repo="$(jq -r '.pin.base_repo' "$p")"; pr="$(jq -r '.pin.number' "$p")"
+  [[ "$repo" =~ $repo_re ]] && [[ "$pr" =~ ^[1-9][0-9]{0,9}$ ]] && [ "$(jq -r '.pin.target' "$p")" = "$repo#$pr" ] ||
+    fail "record refused: plan.json names no pull request"
+  uid="$(gh api user --jq '.id' 2> /dev/null)" && [ "$uid" = "$(jq -r '.reviewer_id' "$p")" ] ||
+    fail "record refused: the token user is not the one the plan was rendered for"
+  w="$(mktemp -d "${TMPDIR:-/tmp}/pr-record.XXXXXX")" || fail "record refused: no temporary directory"
+  gh api "repos/$repo/pulls/$pr/reviews/$id" > "$w/review.json" 2> /dev/null &&
+    jq -e --argjson id "$id" --argjson u "$uid" --slurpfile p "$p" '.id == $id and .user.id == $u
+      and .commit_id == $p[0].pin.head_sha and (.state | IN("APPROVED", "CHANGES_REQUESTED", "COMMENTED"))
+      and (.body | type == "string")' "$w/review.json" > /dev/null 2>&1 ||
+    { rm -rf "$w"; fail "record refused: review $id is not the token user's review of the plan's head"; }
+  # The write sent "$(cat comment.md)", which drops the final newlines.
+  jq -j '.body' "$w/review.json" > "$w/body"
+  printf '%s' "$(cat "$c")" > "$w/sent"
+  cmp -s "$w/body" "$w/sent" || { rm -rf "$w"; fail "record refused: review $id does not carry the rendered body"; }
+  d="$(records_dir "$repo" "$pr")" || { rm -rf "$w"; fail "record refused: no absolute XDG_STATE_HOME or HOME"; }
+  [ ! -e "$d/$id.json" ] && [ ! -L "$d/$id.json" ] && [ ! -e "$d/$id.plan.json" ] && [ ! -L "$d/$id.plan.json" ] &&
+    [ ! -e "$d/$id.carried.json" ] && [ ! -L "$d/$id.carried.json" ] ||
+    { rm -rf "$w"; fail "record refused: review $id is already recorded"; }
+  (umask 077 && mkdir -p -- "$d") && [ -d "$d" ] && [ ! -L "$d" ] &&
+    chmod 700 "${d%/*/*/*}" "${d%/*/*}" "${d%/*}" "$d" 2> /dev/null && store_private "$d" ||
+    { rm -rf "$w"; fail "record refused: the record store is not this user's alone"; }
+  ( umask 077 && cp -- "$p" "$d/$id.plan.json.tmp" && cp -- "$k" "$d/$id.carried.json.tmp" ) &&
+    jq -n --argjson id "$id" --arg t "$repo#$pr" --arg st "$(jq -r '.state' "$w/review.json")" \
+      --arg b "$(sha_file "$w/body")" --arg ps "$(sha_file "$d/$id.plan.json.tmp")" --arg cs "$(sha_file "$d/$id.carried.json.tmp")" \
+      '{format: 1, review_id: $id, target: $t, state: $st, body_sha256: $b, plan_sha256: $ps, carried_sha256: $cs}' | ( umask 077 && cat > "$d/$id.json.tmp" ) &&
+    jq -e "$META_JQ" "$d/$id.json.tmp" > /dev/null &&
+    mv -- "$d/$id.plan.json.tmp" "$d/$id.plan.json" && mv -- "$d/$id.carried.json.tmp" "$d/$id.carried.json" &&
+    mv -- "$d/$id.json.tmp" "$d/$id.json" ||
+    { rm -f "$d/$id.json.tmp" "$d/$id.plan.json.tmp" "$d/$id.carried.json.tmp"; rm -rf "$w"; fail "record refused: the record could not be written"; }
+  rm -rf "$w"
+  echo "record: review $id ($(jq -r '.state' "$d/$id.json")) kept in $d"
 }
 
 # --- cleanup ---------------------------------------------------------------------------------
@@ -1350,9 +1607,10 @@ timed() { # command...: its output with the seconds it took after the first line
 
 # --- main ------------------------------------------------------------------------------------
 
-cmd="${1-}"; CMD="$cmd"; shift || die "usage: review-run.sh <prepare|schema|verify|plan|skip-coverage|ladder|tests|evidence|handover|render|cleanup> ..."
+cmd="${1-}"; CMD="$cmd"; shift || die "usage: review-run.sh <prepare|schema|verify|plan|skip-coverage|ladder|tests|evidence|handover|render|cleanup|record> ..."
 case "$cmd" in
   prepare) cmd_prepare "$@" ;;
+  record) cmd_record "$@" ;;
   schema | verify | plan | skip-coverage | ladder | tests | evidence | handover | render | cleanup)
     run_dir="${1-}"; shift || die "$cmd needs the run directory"
     RUN=""; open_run "$run_dir"

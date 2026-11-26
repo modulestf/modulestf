@@ -6,7 +6,7 @@
 # head or the workspace.
 #
 #   render-comment.sh --head <sha> --findings <file> --host <host.json> --checks <dir>
-#       --run <file> --assessment <file> --run-dir <dir> --out <dir> [--standard] [--links]
+#       --run <file> --assessment <file> --run-dir <dir> --out <dir> [--standard] [--links] [--event <EVENT>]
 #
 #   --findings    the merged findings, modulestf/facts schema/merged-findings.schema.json, with
 #                 paths relative to the module root
@@ -48,6 +48,8 @@
 #                 paragraphs and 700 characters, no line that starts like a heading, a bold line, HTML or a list item
 #   --run-dir     the run directory, which the leak scan looks for and --out must lie outside
 #   --out         an existing directory holding none of the files written
+#   --event       the event the user confirmed when it is not the proposed one: section 6 and the
+#                 Earlier review section follow it; result.json keeps the proposed event
 #   --standard    render the STANDARD tier even when every COMPACT condition holds
 #                 (comment-format.md, Tiers); nothing forces COMPACT
 #   The rule registry is read from the reviewer skill beside this one,
@@ -58,6 +60,13 @@
 #                 repository host.json names (comment-format.md, Location links); without it the
 #                 location is a plain code span
 #
+#   One optional key more, "earlier": {"review_id", "commit_id", "record", "items"}, the record of
+#   the posting login's own CHANGES_REQUESTED that review-run.sh prepare read back, record one of
+#   ok, missing, edited, mismatch, unreadable or empty, and per blocking finding of an ok record
+#   {"id", "rule_id", "severity", "file", "line", "judgment", "at"}, judgment resolved, partly,
+#   not-resolved or not-judged and at {"file", "line"} only when resolved; any other shape is
+#   refused. Bound to host.json's own_review id and commit, it decides APPROVE or COMMENT over that
+#   block and renders the Earlier review section (verdict.md, Our Earlier Block).
 #   One optional key more, "floors": {"head_sha", "base_sha", "dirs": [{"dir", "provider",
 #   "old_floor", "floor", "read"} and an optional "old_floor_none"]}, the provider floors the schema pass read, written by
 #   review-run.sh; with Check A run and its SHAs equal to --head and host.json's merge_base, a
@@ -122,7 +131,7 @@ sha_re='^[0-9a-f]{40}$'
 die() { echo "render-comment.sh: $1" >&2; exit 2; }
 stop() { echo "render-comment.sh: $1" >&2; exit 1; }
 
-head="" findings="" host="" checks="" run="" assessment="" rundir="" out="" standard=false links=false
+head="" findings="" host="" checks="" run="" assessment="" rundir="" out="" standard=false links=false confirmed=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --standard) standard=true; shift ;;
@@ -135,10 +144,12 @@ while [ $# -gt 0 ]; do
     --assessment) assessment="${2-}"; shift 2 || die "--assessment needs a value" ;;
     --run-dir) rundir="${2-}"; shift 2 || die "--run-dir needs a value" ;;
     --out) out="${2-}"; shift 2 || die "--out needs a value" ;;
+    --event) confirmed="${2-}"; shift 2 || die "--event needs a value" ;;
     *) die "unexpected argument" ;;
   esac
 done
 [[ "$head" =~ $sha_re ]] || die "--head must be a 40 character SHA"
+[ -z "$confirmed" ] || [[ "$confirmed" =~ ^(COMMENT|APPROVE|REQUEST_CHANGES)$ ]] || die "--event takes COMMENT, APPROVE or REQUEST_CHANGES"
 
 input() { # name, path, cap
   [ -n "$2" ] || die "$1 is required"
@@ -222,10 +233,12 @@ lits="$(jq -n --arg run "$RUN" --arg home "${HOME-}" --arg pwd "${PWD-}" --arg t
       | {name: "the value of \(.key)", v: .value} ]')" || die "the leak scan set cannot be built"
 
 RJ -n --slurpfile f "$findings" --slurpfile h "$host" --slurpfile r "$run" --rawfile a "$assessment" \
-  --argjson c "$cj" --argjson lits "$lits" --argjson std "$standard" --arg link_base "$link_base" --argjson reg "$registry" '
+  --argjson c "$cj" --argjson lits "$lits" --argjson std "$standard" --arg link_base "$link_base" --argjson reg "$registry" \
+  --arg confirmed "$confirmed" '
   include "render-comment";
   ($a | sub("\n+$"; "")) as $text
-  | render({findings: $f[0], host: $h[0], checks: $c, run: $r[0], assessment: $text, standard: $std, registry: $reg}) as $o
+  | render({findings: $f[0], host: $h[0], checks: $c, run: $r[0], assessment: $text, standard: $std, registry: $reg,
+            confirmed: (if $confirmed == "" then null else $confirmed end)}) as $o
   | (if $r[0].plan_ran then
        [ "(AKIA|ASIA)[A-Z0-9]{16}", "eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+", "-----BEGIN", "X-Amz-Signature",
          "Authorization:" ] | map({name: ., v: .})
