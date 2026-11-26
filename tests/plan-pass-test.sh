@@ -1359,6 +1359,13 @@ check "PDIFF_JQ: a recorded dynamic block that joins an id to a changed literal 
   "$([ "$(pdq "$PDF/dynamic-base.json" "$PDF/dynamic-head.json" "$PDF/dynamic-schema.json")" = unknown ]; echo $?)"
 check "PDIFF_JQ: a recorded batch environment whose launch template version, at block depth 2, joins an id to a changed literal is unknown" \
   "$([ "$(pdq "$PDF/depth2-base.json" "$PDF/depth2-head.json" "$PDF/depth2-schema.json")" = unknown ]; echo $?)"
+# Recorded the same way: an aws_instance ebs_block_device written as a static block and as a
+# dynamic block, the dynamic content setting kms_key_id from an id. A plan's configuration holds
+# the static block alone, so the count of planned instances decides it.
+check "PDIFF_JQ: a recorded block type written as a static and a dynamic block, the dynamic content joining an id to a changed literal, is unknown" \
+  "$([ "$(pdq "$PDF/static-dynamic-mix-base.json" "$PDF/static-dynamic-mix-head.json" "$PDF/static-dynamic-schema.json")" = unknown ]; echo $?)"
+check "PDIFF_JQ: a recorded block type written as a static and a dynamic block, the dynamic content reading another id, is unknown" \
+  "$([ "$(pdq "$PDF/static-dynamic-ref-base.json" "$PDF/static-dynamic-ref-head.json" "$PDF/static-dynamic-schema.json")" = unknown ]; echo $?)"
 check "PDIFF_JQ: the recorded round 1 case with its configuration is unknown" \
   "$([ "$(pdq "$PDF/data-base.json" "$PDF/data-head.json" "$PDF/data-schema.json")" = unknown ]; echo $?)"
 check "PDIFF_JQ: a value the child joins to an id, unknown at both revisions, is unknown" \
@@ -1368,7 +1375,9 @@ jq -n '{provider_schemas: {"registry.terraform.io/hashicorp/aws": {resource_sche
     blob: {optional: true, computed: true}, req: {required: true, computed: true}},
   block_types: {rule: {nesting_mode: "list", block: {attributes: {id: {computed: true}, v: {optional: true}, w: {optional: true, computed: true}},
       block_types: {sub: {nesting_mode: "list", block: {attributes: {x: {optional: true, computed: true}},
-        block_types: {deep: {nesting_mode: "list", block: {attributes: {y: {optional: true}}}}}}}}}},
+        block_types: {deep: {nesting_mode: "list", block: {attributes: {y: {optional: true, computed: true}}}}}}},
+        one: {nesting_mode: "single", block: {attributes: {v: {optional: true}, w: {optional: true, computed: true}}}}}}},
+    st: {nesting_mode: "set", block: {attributes: {v: {optional: true}, w: {optional: true, computed: true}}}},
     lc: {nesting_mode: "list", block: {attributes: {v: {optional: true}}}},
     lc2: {nesting_mode: "list", block: {attributes: {w2: {optional: true, computed: true}}}},
     bymap: {nesting_mode: "map", block: {attributes: {id: {computed: true}, v: {optional: true}, w: {optional: true, computed: true}}}}}}}},
@@ -1432,6 +1441,26 @@ pdboth "an optional computed attribute a block inside a block does not set, unkn
   | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{}]}]' equal
 pdboth "a block written at depth 3, wholly unknown, is unknown" '.resource_changes[0].change.after_unknown.rule = [{sub: [{deep: true}]}]
   | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{deep: [{y: {constant_value: "q"}}]}]}]' unknown
+# A nested block type is read with its configuration only when the configuration writes as many
+# instances as are planned, counted over every instance its configuration describes, and it is no
+# set block written more than once.
+pdboth "a list block written once and planned twice, unknown in an optional computed attribute, is unknown" '.resource_changes[0].change.after_unknown.rule = [{w: true}, {w: true}]' unknown
+pdboth "a block inside a block that one instance writes and the other does not, planned in both, is unknown" '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}, {sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{}]}, {v: {constant_value: "b"}}]' unknown
+pdboth "a block inside a block every instance writes, not setting the unknown, is equal" '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}, {sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{sub: [{}]}, {sub: [{}]}]' equal
+pdboth "a block at depth 3 planned once more than written, the parents written alike, is unknown" '.resource_changes[0].change.after_unknown.rule = [{sub: [{deep: [{y: true}, {y: true}]}]}, {sub: [{deep: [{}]}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{sub: [{deep: [{}]}]}, {sub: [{deep: [{}]}]}]' unknown
+pdboth "a set block written twice, unknown in an optional computed attribute, is unknown" '.resource_changes[0].change.after_unknown.st = [{w: true}, {w: true}]
+  | .configuration.root_module.resources[0].expressions.st = [{v: {constant_value: "a"}}, {v: {constant_value: "b"}}]' unknown
+pdboth "a set block written once, not setting the unknown, is equal" '.resource_changes[0].change.after_unknown.st = [{w: true}]
+  | .configuration.root_module.resources[0].expressions.st = [{v: {constant_value: "a"}}]' equal
+pdboth "a single block the second instance sets the unknown in is unknown" '.resource_changes[0].change.after_unknown.rule = [{one: {w: true}}, {one: {w: true}}]
+  | .configuration.root_module.resources[0].expressions.rule = [{one: {v: {constant_value: "a"}}}, {one: {w: {references: ["aws_y.z.id"]}}}]' unknown
+pdboth "a single block every instance writes, not setting the unknown, is equal" '.resource_changes[0].change.after_unknown.rule = [{one: {w: true}}, {one: {w: true}}]
+  | .configuration.root_module.resources[0].expressions.rule = [{one: {v: {constant_value: "a"}}}, {one: {v: {constant_value: "b"}}}]' equal
+pdboth "an empty block list in the configuration is unknown" '.resource_changes[0].change.after_unknown.rule = [{w: true}]
+  | .configuration.root_module.resources[0].expressions.rule = []' unknown
 pdboth "a map block whose configuration is no object is unknown" '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
   | .configuration.root_module.resources[0].expressions.bymap = "x"' unknown
 pdboth "a module key holding a bracket is removed whole" '.resource_changes[0].module_address = "module.m[\"x]y\"]" | .resource_changes[0].address = "module.m[\"x]y\"].aws_x.this[0]"
@@ -1465,9 +1494,9 @@ pdjmut "without the marker check" 's/ or \(\.change\.after_sensitive \| marker \
 pdjmut "that takes an optional attribute as computed-only" 's/\(\.optional \| not\)/true/' '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].expressions.tags = {references: ["aws_y.z.id"]}' "" unknown
 pdjmut "that ignores what the configuration sets" 's/\(\$ex != null and \(\$set \| not\) and \$v == true\)\)\)/true))/' \
   '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].expressions.tags = {references: ["aws_y.z.id"]}' "" unknown
-pdjmut "that reads a map block by its keys" 's/\n          elif \$bt\.nesting_mode == "map" then [^\n]*//' '.resource_changes[0].change.after_unknown.bymap = {id: {v: true}}' "" unknown
+pdjmut "that reads a map block by its keys" 's/\n          elif \$m == "map" then [^\n]*//' '.resource_changes[0].change.after_unknown.bymap = {id: {v: true}}' "" unknown
 pdjmut "that takes an attribute the schema does not name" 's/      else \(\$v \| has_true \| not\) end\)/      else true end)/' '.resource_changes[0].change.after_unknown.other = true' "" unknown
-pdjmut "that takes a nested configurable attribute" 's/elif \(\$v \| type\) == "array" then all\(\$v\[\]; computed_only\(\$nb; \$nex\)\)/elif (\$v | type) == "array" then true/' '.resource_changes[0].change.after_unknown.rule = [{v: true}]' "" unknown
+pdjmut "that takes a nested configurable attribute" 's/elif \(\$v \| type\) == "array" then all\(\$v\[\]; computed_only\(\$nb; \$nex; \$nall\)\)/elif (\$v | type) == "array" then true/' '.resource_changes[0].change.after_unknown.rule = [{v: true}]' "" unknown
 pdjmut "that takes a whole block the configuration writes" 's/elif \$v == true then \$ex != null and \(\$set \| not\)/elif \$v == true then true/' '.resource_changes[0].change.after_unknown.rule = true' "" unknown
 pdcfgmut() { # name, perl substitution, base update, head update: the real comparison says unknown
   local m; m="$(printf '%s\n' "$PDJ" | perl -0pe "$2")"
@@ -1484,17 +1513,27 @@ pdjmut "that takes a required computed attribute" 's/ and \(\.required \| not\)/
 pdjmut "that finds a resource of another mode" 's/ and \.mode == \$c\.mode\)/)/' '.resource_changes[0].change.after_unknown.tags = true | .configuration.root_module.resources[0].mode = "data"' "" unknown
 pdjmut "that looks a data source up without its data prefix" 's/\(if \$c\.mode == "data" then "data\." else "" end\) \+ //' '.resource_changes[0] |= (.address = "data.aws_x.this" | .mode = "data" | .change.after_unknown = {id: true})
   | .configuration.root_module.resources[0] |= (.address = "data.aws_x.this" | .mode = "data" | .expressions = {})' "" equal
-pdjmut "that reads a map block by its labels" 's/\n           elif \$bt\.nesting_mode == "map" then \(\$ex\[\$k\][^\n]*//' '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
+pdjmut "that reads a map block by its labels" 's/\(if \$m == "map" then \[\.\[\]\] else \[\.\] end\)/[.]/' '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
   | .configuration.root_module.resources[0].expressions.bymap = {a: {w: {constant_value: "x"}}}' "" unknown
 pdjmut "that cuts a module key at a bracket" 's/\(\$c\.module_address \/\/ "" \| nokey/(\$c.module_address \/\/ "" | gsub("\\\\[[^\\\\]]*\\\\]"; "")/' '.resource_changes[0].module_address = "module.m[\"x]y\"]" | .resource_changes[0].address = "module.m[\"x]y\"].aws_x.this[0]"
   | .resource_changes[0].change.after_unknown.tags = true
   | .configuration.root_module = {module_calls: {m: {module: {resources: .configuration.root_module.resources}}}}' "" equal
-pdjmut "that collapses a nested block to its keys" 's/\.\[\$e\.key\] = \(if \(\.\[\$e\.key\] \| type\) == "array" and \(\$e\.value \| type\) == "array" then \.\[\$e\.key\] \+ \$e\.value\n                   else \.\[\$e\.key\] \/\/ \$e\.value end\)/.[\$e.key] = true/; s/\n  else null end;/\n  else {} end;/' '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}]
-  | .configuration.root_module.resources[0].expressions.rule = [{v: {constant_value: "a"}, sub: [{x: {references: ["aws_y.z.id"]}}]}]' "" unknown
-pdjmut "that reads a map block of another shape as nothing set" 's/then \[\.\[\]\] \| merge_cfg else null end\)/then [.[]] | merge_cfg else {} end)/' '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
+pdjmut "that reads a map block of another shape as one with nothing set" 's/ else \[\] end;/ else [{}] end;/' '.resource_changes[0].change.after_unknown.bymap = {a: {w: true}}
   | .configuration.root_module.resources[0].expressions.bymap = "x"' "" unknown
-pdjmut "that reads a block of another shape as nothing set" 's/                   else \.\[\$e\.key\] \/\/ \$e\.value end\)\)\)\n  else null end;/                   else .[\$e.key] \/\/ \$e.value end)))\n  else {} end;/' '.resource_changes[0].change.after_unknown.rule = [{w: true}]
+pdjmut "that reads a block of another shape as one with nothing set" 's/ else \[\] end;/ else [{}] end;/' '.resource_changes[0].change.after_unknown.rule = [{w: true}]
   | .configuration.root_module.resources[0].expressions.rule = "x"' "" unknown
+pdjmut "that keeps the first instance of a key" 's/\.\[\$e\.key\] = if has\(\$e\.key\) then [^\n]* else \$e\.value end/.[\$e.key] = (.[\$e.key] \/\/ \$e.value)/' '.resource_changes[0].change.after_unknown.rule = [{one: {w: true}}, {one: {w: true}}]
+  | .configuration.root_module.resources[0].expressions.rule = [{one: {v: {constant_value: "a"}}}, {one: {v: {constant_value: "b"}}}]' "" equal
+pdjmut "that joins lists without their instances" 's/ \| if type == "array" then \.\[\] else \. end\] else \$e\.value end/] else \$e.value end/' '.resource_changes[0].change.after_unknown.rule = [{sub: [{x: true}]}, {sub: [{x: true}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{sub: [{}]}, {sub: [{}]}]' "" equal
+pdjmut "without the count" 's/if length != \(\$nall \| length\) or /if /' '.resource_changes[0].change.after_unknown.rule = [{w: true}, {w: true}]' "" unknown
+pdjmut "without the set rule" 's/ or \(\$m == "set" and length > 1\)//' '.resource_changes[0].change.after_unknown.st = [{w: true}, {w: true}]
+  | .configuration.root_module.resources[0].expressions.st = [{v: {constant_value: "a"}}, {v: {constant_value: "b"}}]' "" unknown
+pdjmut "that counts the instances of one parent only" 's/elif \(\$v \| type\) == "array" then all\(\$v\[\]; computed_only\(\$nb; \$nex; \$nall\)\)/elif (\$v | type) == "array" then all(\$v[]; computed_only(\$nb; \$nex; \$v))/' '.resource_changes[0].change.after_unknown.rule = [{sub: [{deep: [{y: true}, {y: true}]}]}, {sub: [{deep: [{}]}]}]
+  | .configuration.root_module.resources[0].expressions.rule = [{sub: [{deep: [{}]}]}, {sub: [{deep: [{}]}]}]' "" unknown
+check "PDIFF_JQ: the mutation without the count is caught on the recorded static and dynamic block" \
+  "$(m="$(printf '%s\n' "$PDJ" | perl -0pe 's/if length != \(\$nall \| length\) or /if /')"
+     [ "$m" != "$PDJ" ] && [ "$(PDQ="$m" pdq "$PDF/static-dynamic-mix-base.json" "$PDF/static-dynamic-mix-head.json" "$PDF/static-dynamic-schema.json")" = equal ]; echo $?)"
 pdjmut "that takes a type the schema lacks" 's/\(\$blk == null\) or //' '.resource_changes[0].type = "aws_y" | .resource_changes[0].change.after_unknown = {}' "" unknown
 
 # The runner phases of the plan diff, from a copy without the container check: diff-init adds the

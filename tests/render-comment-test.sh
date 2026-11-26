@@ -3042,6 +3042,12 @@ t_id_keep() { # run update [findings] -> rule 4, the trigger in section 5, nothi
   [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qE '^- Behaviour change at `variables\.tf:40` \([a-z-]+\): not verified\.$' "$O/comment.md" \
     && ! grep -qF 'Same plan:' "$O/comment.md"
 }
+IDNRAT="$(jq -nr -L "$REF" 'include "render-comment"; texts["rationale-7-identical-nonhcl"]')"
+t_id_nonhcl() {
+  render "$NONE" "" "$NHC" "$(RID nh '.behaviour.triggers += [{id: "T-003", file: "package.py", line: 3, category: "non-hcl-dependency", state: "unverifiable"}]')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && grep -qxF "$IDNRAT" "$O/comment.md" && ! grep -qxF "$IDRAT" "$O/comment.md" && grep -qxF "$IDL" "$O/comment.md"
+}
+t_id_nonhcl; check "identical: beside a change outside Terraform the rationale gives both reasons" $?
 t_id_mark() { t_id_keep '.behaviour.triggers |= map(del(.identical))'; }
 t_id_mark; check "identical: a trigger not marked identical stays an unknown" $?
 t_id_partial() { t_id_keep '.coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/x", reason: "plan gate G1"}]}'; }
@@ -3065,6 +3071,7 @@ mutate "any category read as identical" 's/and \(\[\.category, \(\.also_categori
 mutate "identical triggers counted as gaps" 's/select\(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\), \.claims/select((ci_gated or floor_ok or demo_ok) | not)), .claims/' t_id
 mutate "rule 7 not reached by identical plans" 's/ or \.identical > 0 or / or /' t_id
 mutate "the identical section dropped" 's/     \+ section\("Changes the examples plan the same"/     + [] + section("dropped"/' t_id
+mutate "the identical and outside-Terraform rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.identical > 0 and \$in\.nonhcl_cap then tx\("rationale-7-identical-nonhcl"\)//' t_id_nonhcl
 mutate "the identical rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.identical > 0 then tx\("rationale-7-identical"\)//' t_id
 mutate "an identical mark on a trigger that passed accepted" 's/and \. == unique\) and \.state == "unverifiable"/and . == unique)/' t_id_state
 mutate "an identical mark beside unexercised accepted" 's/ or has\("evidence_digest"\) or has\("unexercised"\) \| not\)/ or has("evidence_digest") | not)/' t_id_beside

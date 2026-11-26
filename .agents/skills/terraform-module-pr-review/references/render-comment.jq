@@ -566,6 +566,7 @@ def texts: {
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
   "rationale-7-undemonstrated": "No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-identical": "No finding is open, and an added input planned the same as before in the existing examples, which shows only its default. With such a change, approve with nits is the best verdict (ladder rule 7).",
+  "rationale-7-identical-nonhcl": "No finding is open, an added input planned the same as before in the existing examples, which shows only its default, and a behaviour change is outside Terraform, where a plan does not show what the changed file does. With such changes, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-covered": "No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-nonhcl": "No finding is open, and a behaviour change is outside Terraform, where a plan does not show what the changed file does. With such a change, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-jobless": "No finding is open, and a workflow ended without starting a job, so the repository's CI did not run. While it has not run, approve with nits is the best verdict (ladder rule 7).",
@@ -782,6 +783,7 @@ def rationale($in):
     # Rule 7 with no LOW finding: covered skips alone keep the verdict off rule 8.
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.covered > 0 then tx("rationale-7-covered")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.undemonstrated > 0 then tx("rationale-7-undemonstrated")
+    elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.identical > 0 and $in.nonhcl_cap then tx("rationale-7-identical-nonhcl")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.identical > 0 then tx("rationale-7-identical")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.nonhcl_cap then tx("rationale-7-nonhcl")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) then tx("rationale-7-jobless")

@@ -979,20 +979,26 @@ def rc: [.resource_changes[] | select(type == "object" and (.address | type == "
 def part: .change | {actions, after, after_unknown, after_sensitive, replace_paths};
 def marker: . == null or . == false or type == "object";
 def has_true: [.. | select(. == true)] != [];
-# The configuration of a nested block as one object: a single block as it is; the instances of a
-# list or set merged, each key kept with the instances of a block nested in it joined into one
-# list, so the next level reads what every instance sets; null for any other shape, which reads
-# as no configuration.
-def merge_cfg: if type == "object" then .
-  elif type == "array" and all(.[]; type == "object") then
+# The instances of a block type in a value, $m its nesting mode: a list or set block is a list, a
+# map block an object of labels, a single or group block an object; the joined configuration of
+# several instances is a list of these.
+def insts($m): if type == "array" then [.[] | if $m == "map" and type == "object" then .[] else . end]
+  elif type == "object" then (if $m == "map" then [.[]] else [.] end) else [] end;
+# The configuration of a list of block instances as one object: each key kept, the values of a key
+# that several instances set joined into one list, so the next level reads what every instance
+# sets; null for any other shape, which reads as no configuration.
+def merge_cfg: if type == "array" and length > 0 and all(.[]; type == "object") then
     reduce .[] as $o ({}; reduce ($o | to_entries[]) as $e (.;
-      .[$e.key] = (if (.[$e.key] | type) == "array" and ($e.value | type) == "array" then .[$e.key] + $e.value
-                   else .[$e.key] // $e.value end)))
+      .[$e.key] = if has($e.key) then [(.[$e.key], $e.value) | if type == "array" then .[] else . end] else $e.value end))
   else null end;
 # Every true leaf of an after_unknown value at block level ($blk) is in an attribute the schema
 # marks computed that the configuration at this level ($ex, null when not known) does not set, or
-# in a nested block it does not write.
-def computed_only($blk; $ex):
+# in a nested block it does not write. $all holds every planned instance at this level that $ex
+# describes. A nested block type is read with its configuration only when the configuration writes
+# as many instances as are planned, counted over $all, and it is no set block written more than
+# once; otherwise a dynamic block, which a plan'"'"'s configuration does not show, or a set that merged
+# equal elements made some instances, and its contents read as not known.
+def computed_only($blk; $ex; $all):
   if . == null or . == false then true
   elif type != "object" then false
   elif $blk == null then has_true | not
@@ -1003,15 +1009,15 @@ def computed_only($blk; $ex):
         or ($blk.attributes[$k] | .computed == true and (.required | not)
             and ((.optional | not) or ($ex != null and ($set | not) and $v == true)))
       elif ($blk.block_types[$k] | type) == "object" then
-        $blk.block_types[$k] as $bt | $bt.block as $nb
+        $blk.block_types[$k] as $bt | $bt.block as $nb | $bt.nesting_mode as $m
+        | [$all[] | objects | .[$k] | insts($m)[]] as $nall
         | (if $ex == null or ($set | not) then null
-           elif $bt.nesting_mode == "map" then ($ex[$k] | if type == "object" then [.[]] | merge_cfg else null end)
-           else ($ex[$k] | merge_cfg) end) as $nex
+           else $ex[$k] | insts($m) | if length != ($nall | length) or ($m == "set" and length > 1) then null else merge_cfg end end) as $nex
         | if $v == null or $v == false then true
           elif $v == true then $ex != null and ($set | not)
-          elif $bt.nesting_mode == "map" then ($v | type) == "object" and all($v[]; computed_only($nb; $nex))
-          elif ($v | type) == "array" then all($v[]; computed_only($nb; $nex))
-          elif ($v | type) == "object" then ($v | computed_only($nb; $nex))
+          elif $m == "map" then ($v | type) == "object" and all($v[]; computed_only($nb; $nex; $nall))
+          elif ($v | type) == "array" then all($v[]; computed_only($nb; $nex; $nall))
+          elif ($v | type) == "object" then ($v | computed_only($nb; $nex; $nall))
           else false end
       else ($v | has_true | not) end)
   end;
@@ -1031,7 +1037,7 @@ $a[0] as $A | $b[0] as $B
              or (.change.after_unknown | marker | not) or (.change.after_sensitive | marker | not)))
   then {result: "unknown", differs: []}
   elif any(($A, $B) | rc[]; . as $c | block_of($c) as $blk
-      | ($blk == null) or any(cfg_of($A; $c), cfg_of($B; $c); . as $ex | $c.change.after_unknown | computed_only($blk; $ex) | not))
+      | ($blk == null) or any(cfg_of($A; $c), cfg_of($B; $c); . as $ex | $c.change.after_unknown | computed_only($blk; $ex; [$c.change.after_unknown]) | not))
   then {result: "unknown", differs: []}
   else ($A | rc | map({key: .address, value: part}) | from_entries) as $x
     | ($B | rc | map({key: .address, value: part}) | from_entries) as $y
