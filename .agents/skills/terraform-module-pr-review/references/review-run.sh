@@ -484,11 +484,11 @@ cmd_prepare() {
     if [ "$mraff" = true ]; then
       if ! (cd "$RUN/state" && limit 70 "$facts" affected "$RUN/clone" --module-root "$prefix" --diff "$RUN/host/files.json" --json) \
           > "$RUN/affected.json" 2> /dev/null || ! jq -e --arg p "$prefix" 'type == "object" and .module_root == $p' "$RUN/affected.json" > /dev/null 2>&1; then
-        rm -f "$RUN/affected.json"
+        # The engine refused the prefix or its report did not validate: the older path below.
+        rm -f "$RUN/affected.json"; mraff=false
       fi
-    else
-      affected_to "$facts" "$mroot" "$RUN/state/files-module.json" "$RUN/affected.json"
     fi
+    [ "$mraff" = true ] || affected_to "$facts" "$mroot" "$RUN/state/files-module.json" "$RUN/affected.json"
     local od=(); [ -z "$owner_depth" ] || od=(--owner-depth deep)
     [ "$base_tree" = true ] || refuse merge-base-unavailable "the merge base could not be checked out for the depth binding"
     # mtf-facts depth reads the trees from the repository root, so its classifier and affected
@@ -1231,7 +1231,7 @@ cmd_handover() {
     # with no name of dots: Check E reads the repository's own wrapper address from it.
     jq -r 'select(.repo | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
       and (test("/[.]+$") | not)) | "Base repository: \(.repo)"' "$RUN/host/host.json" 2> /dev/null || true
-    # The host's mtf-facts as one fact line from facts-resolve.sh (review-run.md, Handover).
+    # The host's mtf-facts as one fact line from facts-resolve.sh (review-run-details.md, section "The mtf-facts line").
     [ ! -s "$RUN/state/facts" ] || head -n 1 "$RUN/state/facts" | grep -E '^mtf-facts: [ -~]+$' || true
     # The host's wrapper evidence as its own fact lines, read as eval reads it: every line in the
     # grammar of behaviour-pass.sh wrappers and at most 256 of them, or no line at all.
