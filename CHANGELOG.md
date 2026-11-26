@@ -1,3 +1,12 @@
+## [0.13.1](https://github.com/modulestf/modulestf/compare/v0.13.0...v0.13.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Judge our earlier block at the head and propose APPROVE only when every request is resolved ([#218](https://github.com/modulestf/modulestf/issues/218)) ([a52a80b](https://github.com/modulestf/modulestf/commit/a52a80b9d7ddd9d984f63cbfab76ba939e43d57b))
+
+
+
 # [0.13.0](https://github.com/modulestf/modulestf/compare/v0.12.28...v0.13.0) (2026-11-25)
 
 
