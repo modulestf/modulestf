@@ -280,7 +280,8 @@ read_earlier() { # owner/name, number, token user id, prefix
 # repository-relative as in plan.json. A record of this review keeps it, so a block that replaces
 # ours keeps every open item of ours; [] when there is no earlier block or every item is resolved.
 # Over a block of ours whose record did not check out (missing, edited, mismatch, unreadable or an
-# earlier broken chain), {"broken_chain": <reason>}: its requests are unknown, so a later run reads
+# earlier broken chain), {"broken_chain": <reason>}, and over an ok record the run file's earlier does
+# not match, {"broken_chain": "mismatch"}: its requests are unknown, so a later run reads
 # the chain as broken and our block stands. An empty record came from a host signal or a refuted
 # state, which every run reads again, and carries [].
 write_carried() { # out directory, run file
@@ -290,7 +291,7 @@ write_carried() { # out directory, run file
     ($e[0] // null) as $e | ($r[0].earlier // null) as $x
     | if $e == null or $e.record == "empty" then []
       elif $e.record != "ok" then {broken_chain: $e.record}
-      elif $x == null or $x.record != "ok" or $x.review_id != $e.review_id then []
+      elif $x == null or $x.record != "ok" or $x.review_id != $e.review_id then {broken_chain: "mismatch"}
       else [$x.items[] | select(.judgment != "resolved") | .id as $id | $e.findings[] | select(.id == $id)
         | {id: (if $id | test("@") then $id else "\($id)@\($e.review_id)" end), rule_id, severity,
            file: (.file | repo_path), line, summary, suggested_fix}] end' > "$o/carried.json.tmp" 2> /dev/null &&
