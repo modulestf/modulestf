@@ -1376,8 +1376,14 @@ check "nothing in a host string ran, end of run" "$(no_stray)"
 # --- 5b. End to end with the real mtf-facts: depth from prepare, the handover diff for lint ------------
 # The binary is built from the facts repository named by MTF_FACTS_SRC (default: a sibling checkout
 # ../facts); without Go or that checkout the section is skipped with a note.
-# MTF_FACTS_BIN names a built binary to use instead.
+# MTF_FACTS_BIN names a built binary to use instead. With MTF_FACTS_REQUIRED=1 (CI) no usable binary fails.
 FACTS_SRC="${MTF_FACTS_SRC:-$SRC/../facts}"
+e2e_unavailable() { # no binary: a skip note, or with MTF_FACTS_REQUIRED=1 a failed check
+  if [ "${MTF_FACTS_REQUIRED:-}" = 1 ]; then check "e2e: MTF_FACTS_REQUIRED=1 and no usable mtf-facts (MTF_FACTS_BIN='${MTF_FACTS_BIN:-}')" 1
+  else echo "skip end to end: no MTF_FACTS_BIN, and no Go toolchain or no facts checkout at $FACTS_SRC (set MTF_FACTS_SRC)"; fi
+}
+check "e2e: a missing binary fails under MTF_FACTS_REQUIRED=1 and is skipped without it" \
+  "$(MTF_FACTS_REQUIRED=1 e2e_unavailable | grep -q '^FAIL' && MTF_FACTS_REQUIRED= e2e_unavailable | grep -q '^skip'; echo $?)"
 mkdir -p "$TMP/real"
 if { [ -n "${MTF_FACTS_BIN:-}" ] && [ -x "$MTF_FACTS_BIN" ] && cp "$MTF_FACTS_BIN" "$TMP/real/mtf-facts"; } ||
     { command -v go > /dev/null && [ -d "$FACTS_SRC/cmd/mtf-facts" ] &&
@@ -1441,7 +1447,7 @@ if { [ -n "${MTF_FACTS_BIN:-}" ] && [ -x "$MTF_FACTS_BIN" ] && cp "$MTF_FACTS_BI
     "$([ "$(jq -r '.depth' "$RUN/index.json")" = deep ]; echo $?)"
   (cd "$TMP/cwd" && "$SH" "$SK2/review-run.sh" cleanup "$RUN") > /dev/null
 else
-  echo "skip end to end: no MTF_FACTS_BIN, and no Go toolchain or no facts checkout at $FACTS_SRC (set MTF_FACTS_SRC)"
+  e2e_unavailable
 fi
 
 # --- 5c. A branch that merged the base into work older than the merge base ----------------------------
