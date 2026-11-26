@@ -1016,6 +1016,8 @@ if [ -n "$MF" ] && grep -qxF flag:rules:json <<< "$MF_FEATS"; then
   rules_parity "$MF" "$RF" > "$TMP/rules.diff" &&
     fail "engine rules" "$RF" "differs from mtf-facts rules --json: $(head -n 6 "$TMP/rules.diff" | tr '\n\t' '  ')"
   nrules=$(rf_engine_rows "$RF" | wc -l | tr -d ' ')
+elif [ "${MTF_FACTS_REQUIRED:-}" = 1 ]; then
+  fail "engine rules" "${MF:-mtf-facts}" "no mtf-facts with rules --json, and MTF_FACTS_REQUIRED=1"
 else
   echo "note engine rules: no mtf-facts with rules --json, parity with it not checked"
 fi
@@ -1061,7 +1063,7 @@ a rule's class changed~.rules[2].class |= (if . == "path" then "config-semantic"
 a rule's scope changed~.rules[0].scope |= (if . == "any-file-in-area" then "touched-block" else "any-file-in-area" end)
 cross_area flipped~.rules[0].cross_area |= not
 cross_area as a string~.rules[0].cross_area |= (if . then "yes" else "no" end)
-an area kind added~.rules[0].area_kinds |= (. + ["example", "root", "submodule"] | unique)
+an area kind added~.rules[0].area_kinds |= (. + ["no-such-kind"] | unique)
 an area kind dropped~.rules[0].area_kinds |= .[1:]
 no output~empty
 MUT
