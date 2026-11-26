@@ -95,6 +95,9 @@ def valid_behaviour($split):
         # Contract 2: the categories of the triggers merged into this one, each a category once.
         and ((has("also_categories") | not) or (.also_categories | type == "array" and length > 0
               and all(.[]; IN(cats[])) and length == (unique | length)))
+        # The caller code mark, when present, is a boolean: eval reads it as `== true`, so any other
+        # value would leave the trigger inert under a module root prefix.
+        and ((has("caller_code") | not) or (.caller_code | type == "boolean"))
         # The required case set, when present: at most 32 cases, each with its own id once.
         and ((has("cases") | not) or (.cases | type == "array" and length <= 32
               and all(.[]; type == "object" and (.id | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$"))

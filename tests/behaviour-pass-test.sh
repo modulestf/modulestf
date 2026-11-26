@@ -1573,6 +1573,20 @@ t_caller_render() { # prefix -> the render message in RMSG; called directly, so 
 }
 t_caller_render_none() { t_caller_render "" && case "$RMSG" in "rendered approve (ladder rule 8),"*) ;; *) return 1 ;; esac; }
 t_caller_render_pfx() { t_caller_render "$CPFX" && case "$RMSG" in "rendered inconclusive (ladder rule 4),"*) ;; *) return 1 ;; esac; }
+# A caller_code that is not a boolean is refused, so a string or a number never leaves a trigger inert
+# under a prefix.
+t_caller_type() { # value of caller_code as JSON -> refused with a prefix
+  setup; printf '%s\n' "$CBEH" | jq -c --argjson v "$1" '.triggers[0].caller_code = $v' > "$TMP/behaviour.out"; printf '%s\n' "$CEV" > "$TMP/eval.out"
+  DIFF="$TMP/files-c-pfx.json" PFX="$CPFX" classify; evalp --prefix "$CPFX"
+  jq -e '. == {status: "not-run", reason: "output refused", triggers: [], claims: [], capped: 0}' "$O/run-behaviour.json" > /dev/null 2>&1
+}
+t_caller_type_str() { t_caller_type '"true"'; }
+t_caller_type_num() { t_caller_type '1'; }
+t_caller_type_ok() { setup; printf '%s\n' "$CBEH" | jq -c '.triggers[0].caller_code = false' > "$TMP/behaviour.out"; printf '%s\n' "$CEV" > "$TMP/eval.out"
+  DIFF="$TMP/files-c-pfx.json" PFX="$CPFX" classify; evalp --prefix "$CPFX"; [ "$(q '.status == "ran"')" = 0 ]; }
+t_caller_type_str; check "caller code: a string caller_code is refused" $?
+t_caller_type_num; check "caller code: a number caller_code is refused" $?
+t_caller_type_ok; check "caller code: a boolean caller_code is accepted" $?
 t_caller_none; check "caller code: with no prefix the tool's inert reading stands and a refuted trigger stays refuted" $?
 t_caller_pfx; check "caller code: under a module root prefix the marked trigger is unverifiable, an unmarked inert one stays inert and a refuted one stays refuted" $?
 t_caller_empty; check "caller code: an empty prefix is no prefix" $?
@@ -1581,6 +1595,7 @@ t_caller_render_pfx; check "caller code render: the same change under a module r
 wmutate "caller code: the prefix not required" 's/if \$pre != "" and \.state == "inert" and \(first/if .state == "inert" and (first/' t_caller_none
 wmutate "caller code: the inert state not required" 's/if \$pre != "" and \.state == "inert" and \(first/if \$pre != "" and (first/' t_caller_pfx
 wmutate "caller code: every inert trigger dropped" 's/ and \(first\(\$b\.triggers\[\] \| select\(\.id == \$id\)\) \| \.caller_code == true\)\n/\n/' t_caller_pfx
+wmutate "caller code: the type of the mark not checked" 's/\n        and \(\(has\("caller_code"\) \| not\) or \(\.caller_code \| type == "boolean"\)\)//' t_caller_type_str
 wmutate "caller code: the drop never made" 's/if \$pre != "" and \.state == "inert" and/if false and \.state == "inert" and/' t_caller_render_pfx
 
 echo
