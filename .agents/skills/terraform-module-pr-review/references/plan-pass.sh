@@ -1249,7 +1249,7 @@ if [ "$GMODE" = laptop ] && [ -z "$PHASE" ]; then
   else pcd=; fi
   if [ -n "$pcd" ]; then
     case "$pcd" in /?*) (umask 077 && mkdir -p "$pcd") 2> /dev/null ;; esac
-    PCTF="$(env -i PATH="/usr/bin:/bin:$TFDIR" HOME="$PLAN/home" TMPDIR="$PLAN/tmp" TF_CLI_CONFIG_FILE="$PLAN/cli.tfrc" \
+    PCTF="$(env -i PATH="/usr/bin:/bin:$TFDIR" HOME="$PLAN/home" TMPDIR="$PTMP" TF_CLI_CONFIG_FILE="$PLAN/cli.tfrc" \
       CHECKPOINT_DISABLE=1 terraform version -json < /dev/null 2> /dev/null | jq -r '"\(.terraform_version) \(.platform)"' 2> /dev/null |
       grep -Ex '[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]* [a-z0-9_]+')"
     # The parent the user owns, or one with the sticky bit, so no other user can rename the
