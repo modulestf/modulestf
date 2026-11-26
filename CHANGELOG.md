@@ -1,3 +1,12 @@
+## [0.16.1](https://github.com/modulestf/modulestf/compare/v0.16.0...v0.16.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Harden example selection and the mtf-facts feature check ([#242](https://github.com/modulestf/modulestf/issues/242)) ([4458ca4](https://github.com/modulestf/modulestf/commit/4458ca40786d439aa7581f74bd4393abd666faf0))
+
+
+
 # [0.16.0](https://github.com/modulestf/modulestf/compare/v0.15.0...v0.16.0) (2026-11-26)
 
 
