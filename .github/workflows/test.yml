@@ -42,6 +42,18 @@ jobs:
           fetch-depth: 0 # reviewer-index-test.sh compares sentences with a recorded base commit
       - name: Install test tools
         run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep zsh
+      # The suites that run the real mtf-facts get the pinned release, its hash checked;
+      # a wrong hash fails the job. No other suite sees it.
+      - name: Install the pinned mtf-facts
+        if: matrix.suite == 'skills-test.sh' || matrix.suite == 'review-run-test.sh'
+        run: |
+          mkdir -p "$RUNNER_TEMP/mtf-facts"
+          bash .agents/skills/terraform-module-pr-review/references/mtf-facts-install.sh "$RUNNER_TEMP/mtf-facts"
+          {
+            echo "MTF_FACTS=$RUNNER_TEMP/mtf-facts/mtf-facts"
+            echo "MTF_FACTS_BIN=$RUNNER_TEMP/mtf-facts/mtf-facts"
+            echo "MTF_FACTS_REQUIRED=1"
+          } >> "$GITHUB_ENV"
       - name: Run the suite
         env:
           SUITE: ${{ matrix.suite }}

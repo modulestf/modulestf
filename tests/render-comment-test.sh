@@ -3488,6 +3488,10 @@ t_own_broken() { render "$NONE" "$HOWN" "" "$(erun ebroken broken '[]')"
   grep -qxF "This account requested changes on \`${BASE:0:7}\`, and that review cannot be checked against this head: it replaced an earlier block of this account that could not be checked, whose requests were never judged." "$O/comment.md"; }
 t_own_broken; check "earlier review: a broken chain keeps the block, approve proposes COMMENT and says why" $?
 mutate "a broken chain refused as a record state" 's/, "empty", "broken"\]/, "empty"]/' t_own_broken
+t_own_broken_identical() { render "$NONE" "$HOWN" "" "$(RID ownbr '.earlier = {review_id: 41, commit_id: "'"$BASE"'", record: "broken", items: []}')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md" && grep -qF 'Same plan:' "$O/comment.md"; }
+t_own_broken_identical; check "earlier review: identical triggers beside a broken chain propose COMMENT and say the block stands" $?
+mutate "the stands line dropped beside a broken chain and identical triggers" 's/\[tx\("earlier-stands"\)\]/[]/' t_own_broken_identical
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

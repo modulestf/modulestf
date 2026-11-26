@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "version": "v0.8.0",
+  "platforms": {
+    "darwin_amd64": {
+      "url": "https://github.com/modulestf/facts/releases/download/v0.8.0/mtf-facts_v0.8.0_darwin_amd64",
+      "sha256": "e9d47c2c00b8854e7d4e02f78264a1b46bda5538121f7909ca65e903f96156d9"
+    },
+    "darwin_arm64": {
+      "url": "https://github.com/modulestf/facts/releases/download/v0.8.0/mtf-facts_v0.8.0_darwin_arm64",
+      "sha256": "8f5de9fd42f5bc5d0f0e62a2abfa282bdd01bd0ab1dcec11f53b3b289e8b39c8"
+    },
+    "linux_amd64": {
+      "url": "https://github.com/modulestf/facts/releases/download/v0.8.0/mtf-facts_v0.8.0_linux_amd64",
+      "sha256": "e113efbe423271c5bbf8a8a0264f2615000e7306fc6fc94369d5e155e726bbdc"
+    },
+    "linux_arm64": {
+      "url": "https://github.com/modulestf/facts/releases/download/v0.8.0/mtf-facts_v0.8.0_linux_arm64",
+      "sha256": "7d7b427d8da44bc4aa9459510b4f949485071a4ce53192bc8a6c7e0109d509b6"
+    }
+  }
+}

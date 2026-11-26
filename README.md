@@ -62,7 +62,13 @@ How the skills fit together, and which skills come next: [docs/skills-architectu
    brew install modulestf/tap/mtf-facts
    ```
 
-   Without Homebrew: `go install github.com/modulestf/facts/cmd/mtf-facts@latest`.
+   Without Homebrew, install the release this repository pins, its SHA-256 checked against [the pin file](.agents/skills/terraform-module-pr-review/references/mtf-facts-pin.json), into a directory on your `PATH`:
+
+   ```bash
+   # from the root of your clone of this repository
+   mkdir -p ~/.local/bin
+   bash .agents/skills/terraform-module-pr-review/references/mtf-facts-install.sh ~/.local/bin
+   ```
 
 4. Ask your agent:
 
