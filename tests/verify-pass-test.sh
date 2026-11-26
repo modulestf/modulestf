@@ -10,6 +10,8 @@ VP="$SRC/.agents/skills/terraform-module-pr-review/references/verify-pass.sh"
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/verify-pass-test.XXXXXX")" && pwd -P)" && [ -n "$TMP" ] || { echo "FAIL no temporary directory"; exit 1; }
 trap 'rm -rf "$TMP"' EXIT
 fails=0
+# The mutated copies of the script below source the resolver from their own directory.
+cp "${VP%/*}/facts-resolve.sh" "$TMP/facts-resolve.sh"
 
 check() { # name, command status (0 = holds)
   if [ "$2" = 0 ]; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
@@ -59,10 +61,17 @@ chmod +x "$TMP/bin/terraform"
 
 # mtf-facts affected, stubbed: logs its arguments and prints facts.out, or fails.
 mkdir -p "$TMP/facts"
+# version --json prints facts.version when that file exists; else it fails as a release before
+# the version report does.
 cat > "$TMP/facts/mtf-facts" <<EOF
 #!/bin/sh
+if [ "\$1" = version ]; then
+  [ "\${2:-}" = --json ] || { echo v0.8.0; exit 0; }
+  [ -f "$TMP/facts.version" ] || { echo 'mtf-facts: unknown flag: --json' >&2; exit 2; }
+  cat "$TMP/facts.version"; exit 0
+fi
 echo "\$*" >> "$TMP/facts.log"
-cp "\$4" "$TMP/facts-diff.json"
+while [ \$# -gt 0 ]; do [ "\$1" = --diff ] && cp "\$2" "$TMP/facts-diff.json"; shift; done
 case "\$(cat "$TMP/facts.mode" 2> /dev/null)" in
 fail) echo boom >&2; exit 2 ;;
 garbage) echo 'not json' ;;
@@ -150,6 +159,43 @@ newrun() { # a run directory holding a clone of upstream at the head
 d() { printf '.dirs[] | select(.dir == "examples/%s") | %s' "$1" "$2"; }
 
 for sh in bash zsh; do
+  # facts-resolve.sh, sourced: one line per binary state, the bounds of the version report,
+  # and a binary inside a refused directory never run.
+  FR="${VP%/*}/facts-resolve.sh"
+  mkdir -p "$TMP/fr/bin" "$TMP/fr/refused"
+  frstub() { printf '#!/bin/sh\n%s\n' "$1" > "$2/mtf-facts"; chmod +x "$2/mtf-facts"; }
+  frline() { PATH="${1:-$TMP/fr/bin}:/usr/bin:/bin" "$sh" -c '. "$1"; facts_resolve "$2"; printf "%s|" "$FACTS_STATE"; facts_line' sh "$FR" "$TMP/fr/refused"; }
+  frstub 'echo "{\"schema_version\":1,\"version\":\"v0.13.0\",\"features\":[\"flag:affected:module-root\",\"flag:profile-check:profile-dir\"]}"' "$TMP/fr/bin"
+  check "$sh: resolver: a binary with every feature is one plain line" "$([ "$(frline)" = "ok|mtf-facts: v0.13.0" ]; echo $?)"
+  frstub 'echo "{\"schema_version\":1,\"version\":\"v0.11.1\",\"features\":[\"flag:profile-check:profile-dir\"]}"' "$TMP/fr/bin"
+  check "$sh: resolver: a binary one release too old names the feature and the release it needs" \
+    "$([ "$(frline)" = "ok|mtf-facts: v0.11.1, missing flag:affected:module-root (v0.12.0 or later reports it); the steps that need it use their older path" ]; echo $?)"
+  frstub '[ "$2" = --json ] && exit 2; echo v0.8.0' "$TMP/fr/bin"
+  check "$sh: resolver: a release before the version report names its version and the one it needs" \
+    "$([ "$(frline)" = "old|mtf-facts: v0.8.0, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path" ]; echo $?)"
+  frstub 'echo "{\"schema_version\":2,\"version\":\"v9.0.0\",\"features\":[]}"' "$TMP/fr/bin"
+  check "$sh: resolver: a report of another schema is refused, not read as old" "$(case "$(frline)" in "refused|mtf-facts: version unknown, its version report was refused;"*) echo 0 ;; *) echo 1 ;; esac)"
+  frstub 'head -c 70000 /dev/zero | tr "\0" x' "$TMP/fr/bin"
+  check "$sh: resolver: a report over 64 KiB is refused" "$(case "$(frline)" in refused*) echo 0 ;; *) echo 1 ;; esac)"
+  frstub 'sleep 30' "$TMP/fr/bin"
+  t0=$SECONDS
+  check "$sh: resolver: a report past 10 seconds times out and leaves no process" \
+    "$(case "$(frline)" in timeout*) [ $((SECONDS - t0)) -le 15 ] && ! pgrep -f "$TMP/fr/bin/mtf-facts" > /dev/null; echo $? ;; *) echo 1 ;; esac)"
+  frstub 'echo "{\"schema_version\":1,\"version\":\"v0.13.0\",\"features\":[]}"' "$TMP/fr/refused"
+  check "$sh: resolver: a binary inside a refused directory is never run" "$([ "$(frline "$TMP/fr/refused")" = "absent|mtf-facts: not installed" ]; echo $?)"
+  check "$sh: resolver: facts_has matches a whole feature name only" \
+    "$(PATH="$TMP/fr/bin:/usr/bin:/bin" "$sh" -c '. "$1"; FACTS_FEATURES="flag:affected:module-root"; facts_has flag:affected:module-root && ! facts_has flag:affected && ! facts_has module-root' sh "$FR"; echo $?)"
+  # The negative self-check: a copy that reads any exit of version --json as old, and one with
+  # no output cap.
+  perl -0pe 's/    125\) FACTS_STATE=refused ;;\n//' "$FR" > "$TMP/fr-cap.sh"
+  frstub 'head -c 70000 /dev/zero | tr "\0" x; exit 0' "$TMP/fr/bin"
+  check "$sh: resolver: the mutation that reads an over-cap report as old is caught" \
+    "$( ! cmp -s "$FR" "$TMP/fr-cap.sh" && [ "$(PATH="$TMP/fr/bin:/usr/bin:/bin" "$sh" -c '. "$1"; facts_resolve; echo "$FACTS_STATE"' sh "$TMP/fr-cap.sh")" != refused ]; echo $?)"
+  perl -0pe 's/\$n \+= \$k; \$stop->\(125\) if \$n > \$cap;/\$n += \$k;/' "$FR" > "$TMP/fr-nocap.sh"
+  jq -nc '{schema_version:1, version:"v0.13.0", features:[range(700) | "flag:x:" + ("y" * 100) + tostring]}' > "$TMP/fr/big.json"
+  frstub "cat '$TMP/fr/big.json'" "$TMP/fr/bin"
+  check "$sh: resolver: the mutation without the output cap is caught" \
+    "$( ! cmp -s "$FR" "$TMP/fr-nocap.sh" && [ "$(PATH="$TMP/fr/bin:/usr/bin:/bin" "$sh" -c '. "$1"; facts_resolve; echo "$FACTS_STATE"' sh "$TMP/fr-nocap.sh")" != refused ]; echo $?)"
   command -v "$sh" > /dev/null 2>&1 || { echo "FAIL $sh: not installed"; fails=$((fails + 1)); continue; }
   run() { PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$VP" "$@" 2>&1; }
 
@@ -353,6 +399,61 @@ $BASE" --out "$R3/x.json")"
   jq -n '{schema_version:1, inert:false, fallback:null, changed:["main.tf"], examples:[{dir:"examples/own", reason:"touched"}]}' > "$TMP/facts.out"; : > "$TMP/facts.mode"
   check "$sh: with mtf-facts, the root examples follow the tool's own list" \
     "$(q <(sel9 modules/a "$TMP/facts") '.selection.tool == "mtf-facts" and [.dirs[] | "\(.affected) \(.dir)"] == ["touched modules/a/examples/own", "touched examples/touched", "caller examples/calls"]')"
+  # An mtf-facts whose version report lists affected --module-root: one run on the repository
+  # root gives the module root's examples and the root examples that call it; the selection is
+  # the one the scan gives. A report that does not fit falls back to the scan.
+  feat() { jq -n --argjson f "$1" '{schema_version:1, name:"mtf-facts", version:"v0.13.0", reports:{affected:1}, features:$f}' > "$TMP/facts.version"; }
+  feat '["cmd:affected","flag:affected:module-root"]'
+  rootrep() { jq -n "$1" > "$TMP/facts.out"; : > "$TMP/facts.mode"; }
+  rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf","examples/touched/main.tf"],
+    examples:[{dir:"examples/touched", reason:"touched"}, {dir:"modules/a/examples/own", reason:"touched"}, {dir:"examples/calls", reason:"caller"}]}'
+  : > "$TMP/facts.log"
+  check "$sh: with affected --module-root, the selection is the scan's order, own examples first" \
+    "$(q <(sel9 modules/a "$TMP/facts") '.selection == {tool:"mtf-facts", fallback:null, inert:false} and [.dirs[] | "\(.affected) \(.dir)"] == ["touched modules/a/examples/own", "touched examples/touched", "caller examples/calls"]')"
+  check "$sh: affected --module-root runs once, on the repository root with the whole files list" \
+    "$([ "$(cat "$TMP/facts.log")" = "affected $C9 --module-root modules/a --diff $TMP/files9.json --json" ]; echo $?)"
+  rootrep '{schema_version:1, module_root:"modules/a", inert:false, fallback:null, changed:["modules/a/main.tf"],
+    examples:[{dir:"modules/a/examples/own", reason:"caller"}, {dir:"examples/zz", reason:"all", unresolved:true}, {dir:"examples/touched", reason:"all"}, {dir:"examples/calls", reason:"caller"}]}'
+  check "$sh: a root example that calls the module root is a caller, one the tool could not resolve comes last with reason all" \
+    "$(q <(sel9 modules/a "$TMP/facts") '[.dirs[] | "\(.affected) \(.dir)"] == ["caller modules/a/examples/own", "caller examples/calls", "caller examples/touched"]')"
+  for bad in '.module_root = "modules/b"' '.examples += [{dir:"examples/a b", reason:"all"}]' '.examples |= map(select(.dir != "modules/a/examples/own"))' \
+      '.examples += [{dir:"modules/a/examples/nope", reason:"all"}]' '.examples[0].unresolved = true'; do
+    jq "$bad" "$TMP/facts.out" > "$TMP/facts.bad" && cp "$TMP/facts.out" "$TMP/facts.good" && cp "$TMP/facts.bad" "$TMP/facts.out"
+    check "$sh: a module root report that does not fit ($bad) is invalid, the scan selects" \
+      "$(q <(sel9 modules/a "$TMP/facts") '.selection.tool == "invalid" and [.dirs[] | "\(.affected) \(.dir)"] == ["all modules/a/examples/own", "touched examples/touched", "caller examples/calls"]')"
+    cp "$TMP/facts.good" "$TMP/facts.out"
+  done
+  feat '["cmd:affected"]'; : > "$TMP/facts.log"
+  check "$sh: a version report without the feature keeps the run on the module root and the scan" \
+    "$([ "$(q <(sel9 modules/a "$TMP/facts") '[.dirs[1:][] | "\(.affected) \(.dir)"] == ["touched examples/touched", "caller examples/calls"]')" = 0 ] && grep -q "^affected $C9/modules/a --diff" "$TMP/facts.log"; echo $?)"
+  # The negative self-check: a copy that takes the module root path with no feature check, and
+  # one that does not check the report's module root.
+  feat '["cmd:affected","flag:affected:module-root"]'
+  rootrep '{schema_version:1, module_root:"modules/b", inert:false, fallback:null, changed:[], examples:[{dir:"modules/a/examples/own", reason:"all"}]}'
+  perl -0pe 's/ and \.module_root == \(\$pre \| rtrimstr\("\/"\)\)//' "$VP" > "$TMP/vp-mr.sh"
+  check "$sh: the mutation without the module root check is caught" \
+    "$( ! cmp -s "$VP" "$TMP/vp-mr.sh" && PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/vp-mr.sh" select "$R9" --files "$TMP/files9.json" --prefix modules/a 2>&1 | jq -e '.selection.tool == "mtf-facts"' > /dev/null; echo $?)"
+  rm -f "$TMP/facts.version"; : > "$TMP/facts.log"
+  perl -0pe 's/\[ -n "\$PREFIX" \] && facts_has flag:affected:module-root/[ -n "\$PREFIX" ]/' "$VP" > "$TMP/vp-gate.sh"
+  PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/vp-gate.sh" select "$R9" --files "$TMP/files9.json" --prefix modules/a > /dev/null 2>&1
+  check "$sh: the mutation without the feature check is caught" \
+    "$( ! cmp -s "$VP" "$TMP/vp-gate.sh" && grep -q -- '--module-root' "$TMP/facts.log"; echo $?)"
+  # Live, with MTF_FACTS_BIN naming an mtf-facts that has the feature: the module root path and
+  # the scan, the same binary with its version report hidden, give the same selection.
+  if [ -n "${MTF_FACTS_BIN:-}" ] && [ -x "$MTF_FACTS_BIN" ] && "$MTF_FACTS_BIN" version --json 2> /dev/null | jq -e '.features | index("flag:affected:module-root")' > /dev/null; then
+    mkdir -p "$TMP/live" "$TMP/liveold"; ln -sf "$MTF_FACTS_BIN" "$TMP/live/mtf-facts"
+    printf '#!/bin/sh\n[ "$1 ${2:-}" = "version --json" ] && exit 2\nexec %s "$@"\n' "$MTF_FACTS_BIN" > "$TMP/liveold/mtf-facts"; chmod +x "$TMP/liveold/mtf-facts"
+    # The engine also lists, with reason all, a root example it cannot resolve, such as one
+    # whose .tf file is a link, which the scan leaves out: the one difference.
+    for p in modules/a modules/b; do
+      sel9 "$p" "$TMP/live" > "$TMP/live-new.json"; sel9 "$p" "$TMP/liveold" > "$TMP/live-old.json"
+      check "$sh: live, $p: the module root path and the scan select the same examples, the unresolved one added" \
+        "$(cmp -s <(jq -c '[.dirs[] | select(. != {dir:"examples/tflink", reason:"verified", affected:"all"})]' "$TMP/live-new.json") \
+          <(jq -c .dirs "$TMP/live-old.json") && [ "$(q "$TMP/live-new.json" '.dirs[-1] == {dir:"examples/tflink", reason:"verified", affected:"all"}')" = 0 ]; echo $?)"
+    done
+  else
+    echo "skip $sh: live module root comparison (MTF_FACTS_BIN with affected --module-root not set)"
+  fi
   EXPECT_CACHE="$R9/plugin-cache" run run "$R9" --files "$TMP/files9.json" --base "$BASE" --out "$R9/v.json" --prefix modules/b > /dev/null
   check "$sh: the pass verifies a root example that calls the submodule" \
     "$(q "$R9/v.json" '[.dirs[] | {dir, reason}] == [{dir:"examples/commented", reason:"verified"}, {dir:"examples/other", reason:"verified"}] and .dirs[1].head.record == "code-result"')"

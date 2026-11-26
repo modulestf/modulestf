@@ -262,8 +262,8 @@ for my $n (sort grep { $_ ne "." && $_ ne ".." } readdir $dh) {
 }
 '
 
-# With a module root prefix, the example directories at the repository root that call the
-# module root: "examples/<name>", a real directory reached through no link, holding a .tf file
+# With a module root prefix and an mtf-facts with no affected --module-root, the example
+# directories at the repository root that call the module root: "examples/<name>", a real directory reached through no link, holding a .tf file
 # directly with a module block whose own source argument, a local path resolved from it, is the
 # module root, through no link. Comments, heredocs, strings and other blocks are never read as
 # a source: the scanner below walks the text and tracks the blocks.
@@ -429,18 +429,12 @@ $line = substr($line, 0, 300);
 print $env ? "environment" : "code", "\n", $line, "\n";
 '
 
-# The example selection (verify-pass.md, Example selection). mtf-facts is resolved from a
-# working directory outside the workspace, as the reviewer's facts-engine.md resolves it, and
-# a path inside the clone or the run directory counts as no binary. Writes $W/sel.tsv,
+# The example selection (verify-pass.md, Example selection). mtf-facts is resolved by
+# facts-resolve.sh, outside the workspace as the reviewer's facts-engine.md resolves it, and a
+# path inside the clone or the run directory counts as no binary. Writes $W/sel.tsv,
 # "<affected><TAB><dir>" per selected example in order, and $W/selection.json.
-facts_bin() {
-  fb="$(cd / && command -v mtf-facts 2> /dev/null)" || return 1
-  case "$fb" in /*) ;; *) return 1 ;; esac
-  fb="$(cd / && perl -MCwd=realpath -e 'my $r = realpath($ARGV[0]); print $r if defined $r' "$fb")"
-  [ -n "$fb" ] && [ -f "$fb" ] && [ -x "$fb" ] || return 1
-  case "$fb/" in "$CROOT"/*|"$(cd "$RUN" && pwd -P)"/*) return 1 ;; esac
-  printf '%s\n' "$fb"
-}
+# shellcheck source=facts-resolve.sh
+. "${0%/*}/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
 # shellcheck disable=SC2016 # a jq program
 AFFECTED_JQ='
 def name_ok: type == "string" and test("^examples/[A-Za-z0-9._-]+$") and (test("^examples/[.][.]?$") | not);
@@ -456,27 +450,75 @@ def name_ok: type == "string" and test("^examples/[A-Za-z0-9._-]+$") and (test("
   and all(.examples[]; .dir as $d | $dirs | index([$pre + $d]) != null)
   and all($real[]; . as $d | any($in.examples[]; $pre + .dir == $d))
 '
+# The report of affected --module-root: every path repository-relative, the module root's own
+# examples and the repository-root examples that call it. Each own example in the list, every
+# real own example listed, a repository-root example named in the plain example charset.
+# shellcheck disable=SC2016 # a jq program
+AFFECTED_ROOT_JQ='
+def root_ok: type == "string" and test("^examples/[A-Za-z0-9._-]+$") and (test("^examples/[.][.]?$") | not);
+($all | map(.dir)) as $dirs | ($all | map(select(.kind == "real") | .dir)) as $real
+| type == "object" and .schema_version == 1 and .module_root == ($pre | rtrimstr("/")) and (.inert | type == "boolean")
+  and (.fallback == null or (.fallback | IN("unparsed", "dynamic-source", "no-change-input")))
+  and (.inert == false or .fallback == null)
+  and (.changed | type == "array" and all(.[]; type == "string"))
+  and (.examples | type == "array" and all(.[]; type == "object" and (.reason | IN("touched", "caller", "all"))
+        and (.unresolved == null or .unresolved == true)
+        and (if (.dir | type == "string" and startswith($pre)) then (.dir as $d | $dirs | index([$d]) != null) and .unresolved == null
+             else (.dir | root_ok) end)))
+  and (.fallback == null or all(.examples[]; .reason == "all"))
+  and ([.examples[].dir] | length == (unique | length))
+  and all($real[]; . as $d | any($in.examples[]; .dir == $d))
+'
 select_examples() {
   perl -e "$ALL_PL" "$CROOT" "$PREFIX" > "$W/all.tsv" || die "an example directory name outside [A-Za-z0-9._-]"
   TAB="$(printf '\t')"
   while IFS="$TAB" read -r kind rel; do jq -cn --arg k "$kind" --arg d "$rel" '{kind:$k, dir:$d}'; done < "$W/all.tsv" \
     | jq -s . > "$W/all.json"
-  tool=absent
-  if fb="$(facts_bin)"; then
+  tool=absent mroot=false
+  facts_resolve "$CROOT" "$RUN"
+  if [ -n "$FACTS_BIN" ]; then
     tool=failed
-    if [ -n "$PREFIX" ]; then
-      jq --arg p "$PREFIX" '[.[] | select((.filename | startswith($p)) or ((.previous_filename // "") | startswith($p)))
-        | .filename |= ltrimstr($p) | if .previous_filename then .previous_filename |= ltrimstr($p) else . end]' \
-        "$FILES" > "$W/affected-files.json" 2> /dev/null || die "--files is not a JSON array of file objects"
+    if [ -n "$PREFIX" ] && facts_has flag:affected:module-root; then
+      # One run on the repository root reads the module root's examples and the root examples
+      # that call it (verify-pass.md, Example selection).
+      mroot=true
+      if CAP_QUIET_ERR=1 run_capped 70 "$W/affected.json" / "$FACTS_BIN" affected "$CROOT" --module-root "${PREFIX%/}" \
+          --diff "$FILES" --json && jq -e . "$W/affected.json" > /dev/null 2>&1; then
+        tool=invalid
+        jq -e --slurpfile all "$W/all.json" --arg pre "$PREFIX" '. as $in | $all[0] as $all | '"$AFFECTED_ROOT_JQ" \
+          "$W/affected.json" > /dev/null 2>&1 && tool=mtf-facts
+      fi
     else
-      cp -- "$FILES" "$W/affected-files.json"
+      if [ -n "$PREFIX" ]; then
+        jq --arg p "$PREFIX" '[.[] | select((.filename | startswith($p)) or ((.previous_filename // "") | startswith($p)))
+          | .filename |= ltrimstr($p) | if .previous_filename then .previous_filename |= ltrimstr($p) else . end]' \
+          "$FILES" > "$W/affected-files.json" 2> /dev/null || die "--files is not a JSON array of file objects"
+      else
+        cp -- "$FILES" "$W/affected-files.json"
+      fi
+      if CAP_QUIET_ERR=1 run_capped 70 "$W/affected.json" / "$FACTS_BIN" affected "$MROOT" --diff "$W/affected-files.json" --json \
+        && jq -e . "$W/affected.json" > /dev/null 2>&1; then
+        tool=invalid
+        jq -e --slurpfile all "$W/all.json" --arg pre "$PREFIX" '. as $in | $all[0] as $all | '"$AFFECTED_JQ" \
+          "$W/affected.json" > /dev/null 2>&1 && tool=mtf-facts
+      fi
     fi
-    if CAP_QUIET_ERR=1 run_capped 70 "$W/affected.json" / "$fb" affected "$MROOT" --diff "$W/affected-files.json" --json \
-      && jq -e . "$W/affected.json" > /dev/null 2>&1; then
-      tool=invalid
-      jq -e --slurpfile all "$W/all.json" --arg pre "$PREFIX" '. as $in | $all[0] as $all | '"$AFFECTED_JQ" \
-        "$W/affected.json" > /dev/null 2>&1 && tool=mtf-facts
-    fi
+  fi
+  if [ "$tool" = mtf-facts ] && [ "$mroot" = true ]; then
+    # The module root's own examples in the tool's order, then any linked one it left out, then
+    # the repository-root examples as the scan lists them: touched, then the ones that call the
+    # module root, then any the tool could not resolve, reason all; each group in byte order.
+    jq -r --slurpfile all "$W/all.json" --arg pre "$PREFIX" '
+      [.examples[] | select(.dir | startswith($pre))] as $own | [.examples[] | select(.dir | startswith($pre) | not)] as $root
+      | [$own[].dir] as $t
+      | ($own[] | "\(.reason)\t\(.dir)"),
+        ($all[0][] | select(.kind == "link") | .dir as $d | select(($t | index($d)) == null) | "all\t\($d)"),
+        ($root | map(select(.reason == "touched")) | sort_by(.dir)[] | "touched\t\(.dir)"),
+        ($root | map(select(.reason != "touched" and .unresolved != true)) | sort_by(.dir)[] | "caller\t\(.dir)"),
+        ($root | map(select(.reason != "touched" and .unresolved == true)) | sort_by(.dir)[] | "all\t\(.dir)")
+      ' "$W/affected.json" > "$W/sel.tsv"
+    jq -c '{tool: "mtf-facts", fallback, inert}' "$W/affected.json" > "$W/selection.json"
+    return 0
   fi
   if [ "$tool" = mtf-facts ]; then
     # The tool's order, then any linked example it left out. An inert change keeps the whole

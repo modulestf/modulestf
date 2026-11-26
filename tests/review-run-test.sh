@@ -188,7 +188,12 @@ EOF
 # depth.sh accepts (verify-pass.sh finds it invalid and selects every example), anything else fails.
 cat > "$TMP/bin/mtf-facts" <<'EOF'
 #!/bin/bash
+# With FACTS_LOG set each call is logged; with FACTS_VERSION_JSON set version --json prints that
+# file, else it fails as a release before the version report does.
+[ -z "${FACTS_LOG-}" ] || echo "$*" >> "$FACTS_LOG"
 case "$1" in
+  version) [ -n "${FACTS_VERSION_JSON-}" ] && [ "${2-}" = --json ] && { cat "$FACTS_VERSION_JSON"; exit 0; }
+    [ "${2-}" = --json ] && exit 2; echo v0.8.0 ;;
   depth) jq -n --arg d "${DEPTH_STUB:-light}" '{format: 1, depth: $d,
       reasons: (if $d == "light" then ["light-docs-only"] elif $d == "focused" then ["focused-within-limits"] else ["deep-limits"] end),
       checks_out_of_scope: ({"light": ["A", "B", "D", "G-ladder"], "focused": ["B"], "deep": []}[$d]),
@@ -196,7 +201,8 @@ case "$1" in
       touched_types: (if $d == "focused" then ["aws_s3_bucket"] else [] end), walk: {complete: true, unwalked: 0},
       limits: {tf_files: (if $d == "light" then 0 else 1 end), changed_lines: 3, changed_blocks: 0, selected_examples: 1},
       schema_providers: [], schema_types: [], schema_locks: []}' ;;
-  affected) echo '{"schema_version": 1, "inert": false, "fallback": null, "changed": [], "examples": []}' ;;
+  affected) m=""; for a in "$@"; do [ "$p" != --module-root ] || m="$a"; p="$a"; done
+    jq -nc --arg m "$m" '{schema_version: 1, inert: false, fallback: null, changed: [], examples: []} + (if $m == "" then {} else {module_root: $m} end)' ;;
   # With PROFILE_STUB set: a snapshot copy and a valid, relaxing profile-check.
   profile-snapshot) [ -n "${PROFILE_STUB-}" ] || exit 1
     d="$(mktemp -d "${TMPDIR:-/tmp}/snap.XXXXXX")"; cp -R "$3/." "$d/"
@@ -278,6 +284,17 @@ for dots in . .. ...; do
   run_rr handover "$FB" > /dev/null 2>&1
   check "handover: the repository name $dots gives no base repository line" "$(! grep -q '^Base repository:' "$FB/handover/task.md" 2> /dev/null; echo $?)"
 done
+# The mtf-facts line prepare wrote reaches the task after the base repository line, and the task is
+# otherwise the same; a line outside its grammar is left out.
+FM="$(mktemp -d "$ROOTD/pr-review.XXXXXX")"
+cp -R "$FX/." "$FM/"; rm -rf "$FM/expected" "$FM/reviewer"; mkdir "$FM/clone"
+echo 'mtf-facts: v0.11.1, missing flag:affected:module-root (v0.12.0 or later reports it); the steps that need it use their older path' > "$FM/state/facts"
+run_rr handover "$FM" > /dev/null 2>&1
+check "handover: the mtf-facts line follows the base repository line, the task otherwise unchanged" \
+  "$(grep -A1 '^Base repository: ' "$FM/handover/task.md" | tail -n 1 | grep -qx "$(cat "$FM/state/facts")" &&
+     grep -v '^mtf-facts: ' "$FM/handover/task.md" | sed -e "s#$FM/#RUN/#g" | cmp -s - "$FX/expected/task.md"; echo $?)"
+printf 'mtf-facts: \001bad\n' > "$FM/state/facts"; run_rr handover "$FM" > /dev/null 2>&1
+check "handover: an mtf-facts line outside its grammar is left out" "$(! grep -q '^mtf-facts:' "$FM/handover/task.md"; echo $?)"
 check "acceptance: handover reproduces the hand-assembled verification record" "$(cmp -s "$FR/handover/record.txt" "$FX/expected/record.txt"; echo $?)"
 check "acceptance: handover prints at most 30 lines" "$(lines_ok "$TMP/h.out")"
 B="$FR/handover/reviewer-references.md"
@@ -1239,6 +1256,38 @@ jq '[{filename: "modules/a/main.tf", status: "modified", additions: 1, deletions
 HP="$SK/host-pass.sh"
 GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login octo-reviewer --out "$TMP/hp1" > /dev/null 2>&1
 check "defect: several module roots resolve to the one holding every changed path" "$(q "$TMP/hp1/host.json" '.prefix == "modules/a"')"
+# The mtf-facts line and the module root report: with affected --module-root in the version
+# report, prepare runs affected once on the clone root for the depth, and verify-pass select
+# once; a binary with no version report keeps the module root run and the second run for the
+# depth. The line reaches the summary and the reviewer's task.
+jq -n '{schema_version: 1, name: "mtf-facts", version: "v0.13.0", reports: {}, features: ["flag:affected:module-root", "flag:profile-check:profile-dir"]}' > "$TMP/fv.json"
+mrprep() { # review-run.sh copy, version file or "" -> prepare output in mr.out, the affected calls in mr.log
+  : > "$TMP/mr.log"
+  FACTS_LOG="$TMP/mr.log" FACTS_VERSION_JSON="$2" PATH="$TMP/bin:$PATH" bash "$1" prepare --repo example-org/widget --pr 7 > "$TMP/mr.out" 2>&1
+  RUN="$(sed -n 's/^RUN=//p' "$TMP/mr.out")"
+}
+mrprep "$RR" "$TMP/fv.json"
+check "prepare: with affected --module-root, one affected run for the depth on the clone root and one for the selection" \
+  "$([ "$(grep -c '^affected ' "$TMP/mr.log")" = 2 ] && [ "$(grep -c "^affected $RUN/clone --module-root modules/a --diff " "$TMP/mr.log")" = 2 ] &&
+     [ "$(q "$RUN/affected.json" '.module_root == "modules/a"')" = 0 ] && [ ! -e "$RUN/state/affected-depth.json" ] &&
+     grep -q "^depth .* --affected $RUN/affected.json" "$TMP/mr.log"; echo $?)"
+check "prepare: the mtf-facts line is in the summary and its version report in the run" \
+  "$(grep -qx 'mtf-facts: v0.13.0' "$TMP/mr.out" && cmp -s <(jq -c . "$TMP/fv.json") <(jq -c . "$RUN/state/facts-version.json"); echo $?)"
+run_rr cleanup "$RUN" > /dev/null 2>&1
+mrprep "$RR" ""
+check "prepare: a binary with no version report runs affected on the module root and again on the clone root" \
+  "$([ "$(grep -c '^affected ' "$TMP/mr.log")" = 3 ] && grep -q "^affected $RUN/clone/modules/a --diff " "$TMP/mr.log" &&
+     grep -q "^affected $RUN/clone --diff " "$TMP/mr.log" && ! grep -q -- '--module-root' "$TMP/mr.log"; echo $?)"
+check "prepare: a binary with no version report names its version and the release it needs" \
+  "$(grep -qx 'mtf-facts: v0.8.0, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path' "$TMP/mr.out" && [ ! -e "$RUN/state/facts-version.json" ]; echo $?)"
+run_rr cleanup "$RUN" > /dev/null 2>&1
+# The negative self-check: a copy that runs the module root report with no feature check.
+sed 's/\[ -z "\$prefix" \] || ! facts_has flag:affected:module-root || mraff=true/[ -z "$prefix" ] || mraff=true/' "$RR" > "$SK/review-run-nogate.sh"
+mrprep "$SK/review-run-nogate.sh" ""
+check "self-check: the mutant without the feature check runs --module-root for a binary with no version report" \
+  "$( ! cmp -s "$RR" "$SK/review-run-nogate.sh" && grep -q -- '--module-root' "$TMP/mr.log"; echo $?)"
+[ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null 2>&1
+rm -f "$SK/review-run-nogate.sh"
 check "host-pass: an empty login is refused without --render-only" \
   "$(GH_TOKEN=x bash "$HP" run --repo example-org/widget --pr 7 --login "" --out "$TMP/hp2" > /dev/null 2>&1; [ $? = 2 ]; echo $?)"
 # The closing issues' text (github-io.md, Issue Text): the first two in this repository, as
