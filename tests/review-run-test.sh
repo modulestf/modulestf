@@ -100,6 +100,8 @@ EOF
 cat > "$SK/ladder-pass.sh" <<'EOF'
 #!/bin/bash
 echo "ladder $*" >> "${STUB_LOG:?}"
+# BASE_SWAP=1: the merge base worktree's modules/ becomes a link to a copy, before classify reads it.
+[ "$1" != acquire ] || [ -z "${BASE_SWAP-}" ] || { mv "$2/base/modules" "$2/base/real-modules" && ln -s real-modules "$2/base/modules"; }
 [ "$1" = acquire ] && { echo "acquisition failed: stub"; exit 1; }
 [ "$1" != run ] || [ -z "${EV_MARK:-}" ] || touch "$EV_MARK"
 exit 0
@@ -213,7 +215,9 @@ case "$1" in
     # A run with --base lists the files list's paths under the directory it was given, both of a
     # rename, as the real tree comparison does; AFFECTED_BASE=short lists none, as for a gitlink.
     r=""; [ -n "$m" ] || case "$2" in */clone/*) r="${2##*/clone/}/" ;; esac
-    ch='[]'; [ -z "$b" ] || [ "${AFFECTED_BASE-}" = short ] || ch="$(jq -c --arg r "$r" '[.[] | .filename, (.previous_filename // empty)
+    # AFFECTED_BASE=noprev leaves out the old path of a rename.
+    ch='[]'; [ -z "$b" ] || [ "${AFFECTED_BASE-}" = short ] || ch="$(jq -c --arg r "$r" --arg np "${AFFECTED_BASE-}" '[.[]
+      | .filename, (if $np == "noprev" then empty else .previous_filename // empty end)
       | select(startswith($r)) | .[($r | length):]] | unique' "$GHD/files")"
     jq -nc --arg m "$m" --argjson ch "$ch" '{schema_version: 1, inert: false, fallback: null, changed: $ch, examples: []} + (if $m == "" then {} else {module_root: $m} end)' ;;
   # With PROFILE_STUB set: a snapshot copy and a valid, relaxing profile-check.
@@ -2603,6 +2607,45 @@ t_mrfb_fail() { t_mrfb "$1" fail; }
 t_mrfb_short() { t_mrfb "$1" short; }
 t_mrfb_fail "$RR"; check "prepare: a module root base run that fails falls back to the module root run with the files list" $?
 t_mrfb_short "$RR"; check "prepare: a module root base report that leaves a changed path out falls back the same way" $?
+# A rename whose old path the base report leaves out falls back to the files list.
+t_noprev() { # review-run.sh copy -> 0 when the report without the old path was dropped
+  jq -n '[{filename: "modules/a/main.tf", previous_filename: "modules/a/old.tf", status: "renamed", additions: 0, deletions: 0}]' > "$GHD/files"
+  export AFFECTED_BASE=noprev; mrprep "$1" ""; unset AFFECTED_BASE; local s=1
+  grep -q "^affected $RUN/clone/modules/a --base " "$TMP/mr.log" && grep -q "^affected $RUN/clone/modules/a --diff $RUN/state/files-module.json " "$TMP/mr.log" &&
+    [ -f "$RUN/state/fallback-affected" ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; mbt_setup; return "$s"
+}
+t_noprev "$RR"; check "prepare: a base report that leaves out the old path of a rename falls back to the files list" $?
+rmut "the old path of a rename not held" 's/\.filename, \(\.previous_filename \/\/ empty\)\n        \| select\(test\("\(\^\|\/\)\\\\\.\(git\|terraform\)/.filename\n        | select(test("(^|\/)\\\\.(git|terraform)/' t_noprev
+# A module root under a link inside the merge base worktree gets no --base in prepare.
+t_swap() { # review-run.sh copy -> 0 when no module root call took the tree
+  : > "$STUB_LOG"; export BASE_SWAP=1; mrprep "$1" ""; unset BASE_SWAP; local s=1
+  ! grep -q -- "--base $RUN/base/modules/a" "$TMP/mr.log" "$STUB_LOG" && grep -q "^affected $RUN/clone/modules/a --diff $RUN/state/files-module.json " "$TMP/mr.log" &&
+    grep -q "^affected $RUN/clone --base $RUN/base " "$TMP/mr.log" && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_swap "$RR"; check "prepare: a module root under a link in the merge base worktree takes the files list" $?
+rmut "prepare not checking the module root of the tree" 's/\[ "\$new_module" = true \] \|\| ! base_root_ok "\$prefix" \|\| bmod=/[ "\$new_module" = true ] || bmod=/' t_swap
+# The skip rules of AFF_COVERS, on the filter taken from the script.
+AC_SRC() { awk '/^AFF_COVERS=/ { on = 1 } on { print } on && /'"'"'$/ { exit }' "${1:-$RR}"; }
+acv() { # script, files list JSON, changed JSON -> 0 when the report counts
+  printf '%s\n' "$2" > "$TMP/ac-files.json"; jq -n --argjson c "$3" '{schema_version: 1, changed: $c}' > "$TMP/ac-rep.json"
+  bash -c "$(AC_SRC "$1")"'; jq -e --slurpfile f "$0" "$AFF_COVERS" "$1"' "$TMP/ac-files.json" "$TMP/ac-rep.json" > /dev/null 2>&1
+}
+t_ac_tfdir() { acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".terraform/x", "status": "added"}, {"filename": "m/.git/y", "status": "added"}]' '["a.tf"]'; }
+t_ac_unch() { acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": "b.tf", "status": "unchanged"}]' '["a.tf"]'; }
+t_ac_dot() { ! acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".gitignore", "status": "modified"}]' '["a.tf"]' &&
+  ! acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".terraform.lock.hcl", "status": "modified"}]' '["a.tf"]'; }
+t_ac_rename() { ! acv "$1" '[{"filename": "new.tf", "previous_filename": "old.tf", "status": "renamed"}]' '["new.tf"]' &&
+  acv "$1" '[{"filename": "new.tf", "previous_filename": "old.tf", "status": "renamed"}]' '["new.tf", "old.tf"]'; }
+t_ac_tfdir "$RR"; check "affected covers: a .terraform or .git path left out keeps the base report" $?
+t_ac_unch "$RR"; check "affected covers: an unchanged entry left out keeps the base report" $?
+t_ac_dot "$RR"; check "affected covers: a left out .gitignore or .terraform.lock.hcl drops the base report" $?
+t_ac_rename "$RR"; check "affected covers: a rename needs both paths" $?
+rmut "the covers skip of .git and .terraform paths dropped" 's/\n        \| select\(test\("\(\^\|\/\)\\\\\.\(git\|terraform\)\(\/\|\$\)"\) \| not\)\]/]/' t_ac_tfdir
+rmut "the covers skip of unchanged entries dropped" 's/\$f\[0\]\[\] \| select\(\.status != "unchanged"\) \| \.filename/\$f[0][] | .filename/' t_ac_unch
+rmut "the covers skip matching a name prefix" 's/\(git\|terraform\)\(\/\|\$\)"\) \| not\)/(git|terraform)") | not)/' t_ac_dot
+rmut "the covers rename paths dropped in the filter" 's/\.filename, \(\.previous_filename \/\/ empty\)\n/.filename\n/' t_ac_rename
 rmut "the module root fallback after the base run dropped" 's/      if \[ "\$mrok" = false \]; then/      if false; then/' t_mrfb_fail
 rmut "the module root base report not held to the files list" 's/"\$AFF_COVERS"'"'"' and \.module_root == \$p'"'"'/'"'"'type == "object" and .module_root == \$p'"'"'/' t_mrfb_short
 # examples_all counts the selected examples whose affected reason is all: with no affected
@@ -2640,6 +2683,14 @@ t_bt_rootlink "$RR"; check "base tree line: none when the module root is a link"
 rmut "the base tree line with no merge base check" 's/ \|\| \[ "\$\(git -C "\$RUN\/base" rev-parse HEAD 2> \/dev\/null\)" != "\$2" \]//' t_bt_head
 rmut "the base tree line through a linked base" 's/ \|\| \[ -L "\$RUN\/base" \] \|\|\n    ! base_root_ok/ ||\n    ! base_root_ok/' t_bt_link
 rmut "the base tree line with no module root check" 's/\n    ! base_root_ok "\$PREFIX" \|\| \[/\n    [/' t_bt_missing
+t_bt_uplink() { bt_base; mv "$BTW/run/base/modules" "$BTW/up" && ln -s "$BTW/up" "$BTW/run/base/modules"; [ -z "$(btl "$1" false "$BTC" modules/a)" ]; }
+t_bt_nogit() { bt_base; mv "$BTW/run/base/.git" "$BTW/gitdir" && printf 'gitdir: %s\n' "$BTW/gitdir" > "$BTW/run/base/.git"
+  [ "$(git -C "$BTW/run/base" rev-parse HEAD)" = "$BTC" ] && [ -z "$(btl "$1" false "$BTC" modules/a)" ]; }
+t_bt_uplink "$RR"; check "base tree line: none when a directory above the module root is a link" $?
+t_bt_nogit "$RR"; check "base tree line: none when the base has no .git directory, though it reads as the merge base" $?
+rmut "the module root guard testing only its own path" 's/  \[ -d "\$d" \] && r="\$\(cd "\$d" 2> \/dev\/null && pwd -P\)" && \[ "\$r" = [^\n]*\n/  [ -d "\$d" ] \&\& [ ! -L "\$d" ]\n/' t_bt_uplink
+rmut "the base tree line for a new module" 's/  \[ "\$1" = true \] \|\| \[ -z "\$2" \]/  [ -z "\$2" ]/' t_bt_nm
+rmut "the base tree line with no .git directory check" 's/ \[ ! -d "\$RUN\/base\/\.git" \] \|\| \[ -L "\$RUN\/base" \] \|\|\n    ! base_root_ok "\$PREFIX"/ [ -L "\$RUN\/base" ] ||\n    ! base_root_ok "\$PREFIX"/' t_bt_nogit
 rmut "the module root guard following a link" 's/ && r="\$\(cd "\$d" 2> \/dev\/null && pwd -P\)" && \[ "\$r" = [^\n]*\n/\n/' t_bt_rootlink
 
 echo
