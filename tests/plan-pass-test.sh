@@ -71,7 +71,7 @@ cat > "$TMP/bin/terraform" <<EOF
 #!/bin/sh
 echo "\${PWD##*/} \$1" >> "$TMP/tf.log"
 echo "\${TMPDIR:-}" >> "$TMP/tmpdir.log"
-# With the file short-tmp, a provider plugin socket at $TMPDIR/plugin<10 digits> over macOS's
+# With the file short-tmp, a provider plugin socket at \$TMPDIR/plugin<10 digits> over macOS's
 # 103 bytes fails as terraform 1.17 fails it
 if [ -f "$TMP/short-tmp" ] && [ \${#TMPDIR} -gt 86 ] && { [ "\$1" = validate ] || [ "\$1" = plan ]; }; then
   printf 'Error: Failed to load plugin schemas\n\nError while loading schemas for plugin components: Failed to obtain provider schema: Could not load the schema for provider registry.terraform.io/hashicorp/aws: failed to instantiate provider "registry.terraform.io/hashicorp/aws" to obtain schema: Unrecognized remote plugin message:\n'; exit 1
@@ -847,16 +847,16 @@ for sh in bash zsh; do
   out="$(run plan /tmp demo --role-arn "$ROLE" examples/ok)"
   check "$sh: a path that is not a run directory is refused" "$(lacks "$out" 'example:')"
 
-  # A long caller TMPDIR: terraform gets a short directory of the pass under /tmp, removed at
-  # the end and on an interrupt.
+  # A long caller TMPDIR, which holds the run directory as on a laptop: terraform gets a short
+  # directory of the pass under /tmp, removed at the end and on an interrupt.
   LONGT="$TMP/$(printf 't%.0s' $(seq 1 $((119 - ${#TMP}))))"; mkdir -p "$LONGT"
-  RT="$(newrun)"; run g0 "$RT" > /dev/null; : > "$TMP/short-tmp"; : > "$TMP/tmpdir.log"
+  RT="$(mktemp -d "$LONGT/pr-review.XXXXXX")"; git clone -q "$up" "$RT/clone"; run g0 "$RT" > /dev/null; : > "$TMP/short-tmp"; : > "$TMP/tmpdir.log"
   out="$(TMPDIR="$LONGT" run plan "$RT" demo --role-arn "$ROLE" examples/ok)"
   check "$sh: a caller TMPDIR of ${#LONGT} characters still plans" "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')"
   check "$sh: terraform saw a TMPDIR of at most 86 characters under /tmp, the same for every command" \
     "$(sort -u "$TMP/tmpdir.log" | { read -r t && ! read -r _ && case "$t" in /tmp/pp.??????) [ ${#t} -le 86 ] ;; *) false ;; esac; }; echo $?)"
   check "$sh: the short TMPDIR is gone after the pass" "$(t="$(head -n 1 "$TMP/tmpdir.log")"; [ -n "$t" ] && [ ! -e "$t" ]; echo $?)"
-  RT="$(newrun)"; run g0 "$RT" > /dev/null; : > "$TMP/tmpdir.log"; : > "$TMP/slow-plan"
+  RT="$(mktemp -d "$LONGT/pr-review.XXXXXX")"; git clone -q "$up" "$RT/clone"; run g0 "$RT" > /dev/null; : > "$TMP/tmpdir.log"; : > "$TMP/slow-plan"
   # perl restores the default INT disposition a background job would otherwise ignore
   TMPDIR="$LONGT" PATH="$TMP/bin:/usr/bin:/bin" perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV' \
     "$sh" "$PP" plan "$RT" demo --role-arn "$ROLE" examples/ok > /dev/null 2>&1 &
@@ -870,7 +870,7 @@ for sh in bash zsh; do
   # The negative self-check: a copy that gives terraform the run directory's tmp again.
   rm -rf "$TMP/ppt"; cp -R "${PP%/*}" "$TMP/ppt"
   perl -0pe 's/TMPDIR="\$PTMP"/TMPDIR="\$PLAN\/tmp"/' "$PP" > "$TMP/ppt/plan-pass.sh"
-  RT="$(newrun)"; run g0 "$RT" > /dev/null; : > "$TMP/tmpdir.log"
+  RT="$(mktemp -d "$LONGT/pr-review.XXXXXX")"; git clone -q "$up" "$RT/clone"; run g0 "$RT" > /dev/null; : > "$TMP/tmpdir.log"
   out="$(TMPDIR="$LONGT" PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/ppt/plan-pass.sh" plan "$RT" demo --role-arn "$ROLE" examples/ok 2>&1)"
   check "$sh: the mutation that gives terraform the run directory's tmp is caught" \
     "$( ! cmp -s "$PP" "$TMP/ppt/plan-pass.sh" && [ "$(lacks "$out" 'plan: planned |')" = 0 ]; echo $?)"

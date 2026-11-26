@@ -52,7 +52,7 @@ init)
     printf 'Error: Unsupported argument\n\n  on main.tf line 1, in module "b":\n   1: module "b" { bogus = 1 }\n'; exit 1
   fi ;;
 validate)
-  # A provider plugin socket at $TMPDIR/plugin<10 digits> over macOS's 103 bytes fails as
+  # A provider plugin socket at \$TMPDIR/plugin<10 digits> over macOS's 103 bytes fails as
   # terraform 1.17 fails it
   if [ \${#TMPDIR} -gt 86 ]; then
     printf 'Error: Failed to load plugin schemas\n\nError while loading schemas for plugin components: Failed to obtain provider schema: Could not load the schema for provider registry.terraform.io/hashicorp/aws: failed to instantiate provider "registry.terraform.io/hashicorp/aws" to obtain schema: Unrecognized remote plugin message:\n'; exit 1
