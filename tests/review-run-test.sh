@@ -201,7 +201,12 @@ case "$1" in
       touched_types: (if $d == "focused" then ["aws_s3_bucket"] else [] end), walk: {complete: true, unwalked: 0},
       limits: {tf_files: (if $d == "light" then 0 else 1 end), changed_lines: 3, changed_blocks: 0, selected_examples: 1},
       schema_providers: [], schema_types: [], schema_locks: []}' ;;
-  affected) m=""; for a in "$@"; do [ "$p" != --module-root ] || m="$a"; p="$a"; done
+  affected) m="" b="" sf=""; for a in "$@"; do [ "$p" != --module-root ] || m="$a"; [ "$p" != --stats-file ] || sf="$a"; [ "$a" != --base ] || b=1; p="$a"; done
+    # With --stats-file, a stats record of 1.5 seconds; STATS_BAD=1 makes it one the totals refuse.
+    [ -z "$sf" ] || if [ -n "${STATS_BAD-}" ]; then echo '{"schema_version": 2, "command": "affected", "outcome": "completed", "wall_ns": 1, "max_rss_bytes": 1}' > "$sf"
+      else echo '{"schema_version": 1, "command": "affected", "outcome": "completed", "wall_ns": 1500000000, "max_rss_bytes": 1000}' > "$sf"; fi
+    # AFFECTED_BASE=fail: a run given the merge base tree fails.
+    [ -z "$b" ] || [ "${AFFECTED_BASE-}" != fail ] || exit 2
     # AFFECTED_MR=refuse: the engine refuses a module root prefix; =other: its report names another one.
     [ -z "$m" ] || [ "${AFFECTED_MR-}" != refuse ] || { echo 'mtf-facts: module root refused' >&2; exit 2; }
     [ -z "$m" ] || [ "${AFFECTED_MR-}" != other ] || m=elsewhere
@@ -538,6 +543,8 @@ check "handover: the merge base line names the bound merge base, the output line
   "$(grep -qx "Merge base: $(jq -r .binding.merge_base "$RUN/depth.json")" "$T" &&
      grep -qx "Output: write the findings list as JSON to $RUN/review/findings.json, the summary line and the profile lines to $RUN/review/summary.txt and the facts comparison note to $RUN/review/facts-comparison.txt, and nothing else." "$T" &&
      [ -d "$RUN/review" ]; echo $?)"
+check "handover: the base tree line names the merge base worktree after the merge base line" \
+  "$(grep -qx "Base tree: $RUN/base" "$T" && awk '/^Merge base: /{m=NR} /^Base tree: /{t=NR} END{exit !(m && m + 1 == t)}' "$T"; echo $?)"
 check "bundle: a docs-only change at light carries C, E, F and G's summaries and C, E, F's Read First only" \
   "$(grep -qx "References: $RUN/handover/reviewer-references.md" "$T" &&
      [ "$(blist "$RUN/handover/reviewer-references.md")" = "$(printf 'references/%s ' inputs.md#inputs workflow.md#step-1-establish-scope \
@@ -1275,7 +1282,8 @@ mrprep() { # review-run.sh copy, version file or "" -> prepare output in mr.out,
 }
 mrprep "$RR" "$TMP/fv.json"
 check "prepare: with affected --module-root, one affected run for the depth on the clone root and one for the selection" \
-  "$([ "$(grep -c '^affected ' "$TMP/mr.log")" = 2 ] && [ "$(grep -c "^affected $RUN/clone --module-root modules/a --diff " "$TMP/mr.log")" = 2 ] &&
+  "$([ "$(grep -c '^affected ' "$TMP/mr.log")" = 2 ] && [ "$(grep -c "^affected $RUN/clone --module-root modules/a --base $RUN/base --json" "$TMP/mr.log")" = 1 ] &&
+     [ "$(grep -c "^affected $RUN/clone --module-root modules/a --diff " "$TMP/mr.log")" = 1 ] &&
      [ "$(q "$RUN/affected.json" '.module_root == "modules/a"')" = 0 ] && [ ! -e "$RUN/state/affected-depth.json" ] &&
      grep -q "^depth .* --affected $RUN/affected.json" "$TMP/mr.log"; echo $?)"
 check "prepare: the mtf-facts line is in the summary and its version report in the run" \
@@ -1284,7 +1292,7 @@ run_rr cleanup "$RUN" > /dev/null 2>&1
 mrprep "$RR" ""
 check "prepare: a binary with no version report runs affected on the module root and again on the clone root" \
   "$([ "$(grep -c '^affected ' "$TMP/mr.log")" = 3 ] && grep -q "^affected $RUN/clone/modules/a --diff " "$TMP/mr.log" &&
-     grep -q "^affected $RUN/clone --diff " "$TMP/mr.log" && ! grep -q -- '--module-root' "$TMP/mr.log"; echo $?)"
+     grep -qx "affected $RUN/clone --base $RUN/base --json" "$TMP/mr.log" && ! grep -q -- '--module-root' "$TMP/mr.log"; echo $?)"
 check "prepare: a binary with no version report names its version and the release it needs" \
   "$(grep -qx 'mtf-facts: v0.8.0, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path' "$TMP/mr.out" && [ ! -e "$RUN/state/facts-version.json" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null 2>&1
@@ -1296,7 +1304,7 @@ for mrmode in refuse other; do
   unset AFFECTED_MR
   check "prepare: a module root run that is $mrmode falls back to the module root run and a clone root run for the depth" \
     "$(grep -q -- '--module-root' "$TMP/mr.log" && grep -q "^affected $RUN/clone/modules/a --diff " "$TMP/mr.log" &&
-       grep -q "^affected $RUN/clone --diff " "$TMP/mr.log" && [ "$(q "$RUN/affected.json" 'has("module_root") | not')" = 0 ] &&
+       grep -q "^affected $RUN/clone --base $RUN/base " "$TMP/mr.log" && [ "$(q "$RUN/affected.json" 'has("module_root") | not')" = 0 ] &&
        grep -q "^depth .* --affected $RUN/state/affected-depth.json" "$TMP/mr.log"; echo $?)"
   run_rr cleanup "$RUN" > /dev/null 2>&1
 done
@@ -1306,6 +1314,51 @@ export AFFECTED_MR=refuse; mrprep "$SK/review-run-nofall.sh" "$TMP/fv.json"; uns
 check "self-check: the mutant that keeps the module root path gives the depth no affected report" \
   "$( ! cmp -s "$RR" "$SK/review-run-nofall.sh" && ! grep -q "^depth .* --affected " "$TMP/mr.log"; echo $?)"
 [ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null 2>&1
+# The merge base tree (review-run-details.md, The Merge Base Tree): an affected run given the
+# merge base tree that fails falls back to the files list, as a run given only that list, and the
+# fallback is in facts-stats.json. Here the merge base holds no file under modules/a, so the module
+# root run takes the files list alone and the clone root run for the depth takes the tree.
+t_base_fb() { # review-run.sh copy -> 0 when the fallbacks hold
+  export AFFECTED_BASE=fail; mrprep "$1" ""; unset AFFECTED_BASE
+  local s=1
+  ! grep -q "^affected $RUN/clone/modules/a --base " "$TMP/mr.log" && grep -q "^affected $RUN/clone/modules/a --diff " "$TMP/mr.log" &&
+    grep -q "^affected $RUN/clone --base $RUN/base " "$TMP/mr.log" && grep -q "^affected $RUN/clone --diff " "$TMP/mr.log" &&
+    [ -f "$RUN/affected.json" ] && [ -f "$RUN/state/affected-depth.json" ] &&
+    [ "$(q "$RUN/facts-stats.json" '(.fallbacks.base_to_diff | index("affected-depth")) != null and (.fallbacks.base_to_diff | index("affected")) == null and .records == 0')" = 0 ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_base_fb "$RR"; check "prepare: an affected run on the merge base tree that fails falls back to the files list, recorded in facts-stats.json" $?
+# The stats records: with flag:affected:stats-file each affected call writes one under state/stats
+# and facts-stats.json sums them; without the flag no call gets --stats-file; a record outside its
+# shape is counted refused and adds nothing.
+jq '.features += ["flag:affected:stats-file"]' "$TMP/fv.json" > "$TMP/fv-stats.json"
+t_stats() { # review-run.sh copy -> 0 when the totals hold
+  mrprep "$1" "$TMP/fv-stats.json"; local s=1
+  grep -q -- "--stats-file $RUN/state/stats/affected-module-root.json" "$TMP/mr.log" &&
+    [ "$(q "$RUN/facts-stats.json" '.format == 1 and .records == 1 and .records_refused == 0 and .facts_seconds == 1.5
+      and .by_command.affected.calls == 1 and .max_rss_bytes == 1000 and (.fallbacks.base_to_diff | index("affected-module-root")) == null')" = 0 ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_stats_off() { mrprep "$1" "$TMP/fv.json"; local s=1
+  ! grep -q -- --stats-file "$TMP/mr.log" && [ ! -e "$RUN/state/stats" ] && [ "$(q "$RUN/facts-stats.json" '.records == 0')" = 0 ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_stats_bad() { export STATS_BAD=1; mrprep "$1" "$TMP/fv-stats.json"; unset STATS_BAD; local s=1
+  [ "$(q "$RUN/facts-stats.json" '.records == 0 and .records_refused == 1 and .facts_seconds == 0')" = 0 ] &&
+    [ "$(q "$RUN/affected.json" '.module_root == "modules/a"')" = 0 ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_stats "$RR"; check "prepare: the stats record of each mtf-facts call is summed in facts-stats.json" $?
+t_stats_off "$RR"; check "prepare: a binary without the stats flag gets no --stats-file" $?
+t_stats_bad "$RR"; check "prepare: a stats record outside its shape is counted refused and changes no report" $?
+rmut() { # name, perl substitution, case function
+  perl -0pe "$2" "$RR" > "$SK/review-run-smut.sh"
+  if cmp -s "$RR" "$SK/review-run-smut.sh"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
+  "$3" "$SK/review-run-smut.sh" > /dev/null 2>&1; check "self-check: $1 is caught" "$([ $? != 0 ]; echo $?)"
+}
+rmut "the affected fallback after the base run dropped" 's/(note "fallback-\$5" "[^"]*")\n/$1; rm -f "\$4"; return 0\n/' t_base_fb
+rmut "stats passed without the feature" 's/  facts_has "flag:\$1:stats-file" && \[\[/  [[/' t_stats_off
+rmut "a stats record taken unchecked" 's/if length == 1 and \(\.\[0\] \| type == "object" and \.schema_version == 1/if length == 1 and (.[0] | type == "object"/' t_stats_bad
 rm -f "$SK/review-run-nofall.sh"
 # The negative self-check: a copy that runs the module root report with no feature check.
 sed 's/\[ -z "\$prefix" \] || ! facts_has flag:affected:module-root || mraff=true/[ -z "$prefix" ] || mraff=true/' "$RR" > "$SK/review-run-nogate.sh"
@@ -1621,7 +1674,7 @@ full; run_rr handover "$RUN" > /dev/null
 T="$RUN/handover/task.md"
 check "empty base: the task states the new module shape and names no diff, changed paths or merge base" \
   "$(grep -qx 'New module: the workspace holds a whole module with no base. Its merge base holds no file under the module root, so every file in the workspace, .git/ excluded, is added.' "$T" &&
-     ! grep -q '^Changed paths:$\|^The diff:$\|^```diff$\|^Diff: \|^Merge base: \|^+++ b/' "$T" &&
+     ! grep -q '^Changed paths:$\|^The diff:$\|^```diff$\|^Diff: \|^Merge base: \|^Base tree: \|^+++ b/' "$T" &&
      grep -qx "Head revision: $HEADC" "$T" && grep -q '^Write short: ' "$T" &&
      awk '/^New module: /{m=NR} /^Write short: /{w=NR} /^UNTRUSTED-[0-9a-f]{12} BEGIN$/{b=NR} END{exit !(m && m < w && w < b)}' "$T"; echo $?)"
 printf '[{"id": "F-001", "rule_id": "profile.owner-identifier", "severity": "MEDIUM", "file": "versions.tf", "line": null, "summary": "The owner is not the family organization.", "suggested_fix": "Name terraform-aws-modules as the owner."}]\n' > "$TMP/f9.json"
