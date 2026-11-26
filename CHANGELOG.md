@@ -1,3 +1,12 @@
+## [0.16.7](https://github.com/modulestf/modulestf/compare/v0.16.6...v0.16.7) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Give terraform a short TMPDIR in the verify and laptop plan passes ([#254](https://github.com/modulestf/modulestf/issues/254)) ([0e5b057](https://github.com/modulestf/modulestf/commit/0e5b057695da98b79c7f7d79a565a3450a340b94))
+
+
+
 ## [0.16.6](https://github.com/modulestf/modulestf/compare/v0.16.5...v0.16.6) (2026-11-26)
 
 
