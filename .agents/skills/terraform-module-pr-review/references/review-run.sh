@@ -181,13 +181,21 @@ stats_for() { # command, name
   STATS=(--stats-file "$RUN/state/stats/$2.json") SPASS=(--stats "$RUN/state/stats/$2.json")
 }
 
+# A report of affected --base counts only when its changed list holds every path of the files list,
+# relative to the same root, a rename at both paths, as behaviour-pass.sh's covers holds a classifier
+# report: a change the tree comparison does not see, such as a gitlink, is no report of the change.
+AFF_COVERS='type == "object" and (.changed | type == "array" and all(.[]; type == "string"))
+  and (([$f[0][] | select(.status != "unchanged") | .filename, (.previous_filename // empty)
+        | select(test("(^|/)\\.(git|terraform)(/|$)") | not)] - .changed) == [])'
+
 # mtf-facts affected (verify-pass.md, Example selection): no file when it gave nothing. With a merge
-# base tree, that tree first; the files list only when that run gave no report, as it would alone.
+# base tree, that tree first; the files list only when that run gave no report that covers it, as it
+# would alone.
 affected_to() { # mtf-facts, root, files list, out, name[, base tree]
   if [ -n "${6-}" ]; then
     stats_for affected "$5"
     (cd "$RUN/state" && limit 70 "$1" affected "$2" --base "$6" --json ${STATS[@]+"${STATS[@]}"}) > "$4" 2> /dev/null &&
-      jq -e 'type == "object"' "$4" > /dev/null 2>&1 && return 0
+      jq -e --slurpfile f "$3" "$AFF_COVERS" "$4" > /dev/null 2>&1 && return 0
     note "fallback-$5" "affected: diff after the merge base tree gave no report"
   fi
   stats_for affected "$5${6:+.diff}"
@@ -195,6 +203,22 @@ affected_to() { # mtf-facts, root, files list, out, name[, base tree]
       ! jq -e 'type == "object"' "$4" > /dev/null 2>&1; then
     rm -f "$4"
   fi
+}
+
+# The module root of the merge base worktree is a real directory at its own path: no link at it or
+# at any directory above it inside <run>/base.
+base_root_ok() { # prefix
+  local d="$RUN/base${1:+/$1}" r
+  [ -d "$d" ] && r="$(cd "$d" 2> /dev/null && pwd -P)" && [ "$r" = "$(cd "$RUN/base" && pwd -P)${1:+/$1}" ]
+}
+
+# The handover's Base tree: line, the merge base worktree at the module root for the reviewer's
+# mtf-facts lint --base, with Diff: as its fallback (review-run-details.md, The Merge Base Tree):
+# only a checkout of that merge base, not a link, holding the module root, never for a new module.
+base_tree_line() { # new module, merge base
+  [ "$1" = true ] || [ -z "$2" ] || [ ! -d "$RUN/base/.git" ] || [ -L "$RUN/base" ] ||
+    ! base_root_ok "$PREFIX" || [ "$(git -C "$RUN/base" rev-parse HEAD 2> /dev/null)" != "$2" ] ||
+    printf 'Base tree: %s\n' "$RUN/base${PREFIX:+/$PREFIX}"
 }
 
 # <run>/facts-stats.json: the totals of the stats records of this run's mtf-facts calls and the
@@ -234,7 +258,7 @@ facts_totals() {
     --slurpfile b "$( [ -f "$RUN/behaviour/run-behaviour.json" ] && echo "$RUN/behaviour/run-behaviour.json" || echo /dev/null)" \
     --arg cl "$(cat "$RUN/behaviour/status" 2> /dev/null)" '
     .fallbacks += {depth: [($d[0].reasons // [])[] | strings | select(IN("deep-classifier-unavailable", "deep-affected-fallback"))],
-      examples_all: ([($s[0].dirs // [])[] | objects | select(.reason == "all")] | length),
+      examples_all: ([($s[0].dirs // [])[] | objects | select(.affected == "all")] | length),
       behaviour_not_run: ($cl != "" or ($b[0].status? == "not-run"))}' "$RUN/facts-stats.raw" > "$RUN/facts-stats.json" 2> /dev/null ||
     rm -f "$RUN/facts-stats.json"
   rm -f "$RUN/facts-stats.raw"
@@ -537,7 +561,7 @@ cmd_prepare() {
     local bt=() bmod=() broot=""
     if [ "$base_tree" = true ] && [ -d "$RUN/base/.git" ] && [ ! -L "$RUN/base" ]; then
       broot="$RUN/base"; bt=(--base "$RUN/base")
-      [ "$new_module" = true ] || [ ! -d "$RUN/base${prefix:+/$prefix}" ] || bmod=(--base "$RUN/base${prefix:+/$prefix}")
+      [ "$new_module" = true ] || ! base_root_ok "$prefix" || bmod=(--base "$RUN/base${prefix:+/$prefix}")
     fi
     stats_for behaviour classify
     bash "$HERE/behaviour-pass.sh" classify --facts "$facts" --dir "$mroot" --diff "$RUN/host/files.json" \
@@ -560,8 +584,8 @@ cmd_prepare() {
       if [ -n "$broot" ]; then
         stats_for affected affected-module-root
         (cd "$RUN/state" && limit 70 "$facts" affected "$RUN/clone" --module-root "$prefix" --base "$broot" --json ${STATS[@]+"${STATS[@]}"}) \
-          > "$RUN/affected.json" 2> /dev/null && jq -e --arg p "$prefix" 'type == "object" and .module_root == $p' "$RUN/affected.json" > /dev/null 2>&1 &&
-          mrok=true
+          > "$RUN/affected.json" 2> /dev/null && jq -e --arg p "$prefix" --slurpfile f "$RUN/host/files.json" \
+          "$AFF_COVERS"' and .module_root == $p' "$RUN/affected.json" > /dev/null 2>&1 && mrok=true
         [ "$mrok" = true ] || note fallback-affected-module-root "affected: diff after the merge base tree gave no report"
       fi
       if [ "$mrok" = false ]; then
@@ -1317,12 +1341,7 @@ cmd_handover() {
       sed 's/^schema pass: latest_not_mirrored /Latest not mirrored: /' "$RUN/state/schema-lnm.txt"
     [ "$nm" = true ] || printf 'Diff: %s\n' "$out/change.diff"
     [ -z "$mbl" ] || printf 'Merge base: %s\n' "$mbl"
-    # The merge base worktree at the module root, for the reviewer's mtf-facts lint --base, with
-    # Diff: as its fallback (review-run-details.md, The Merge Base Tree): only a checkout of that
-    # merge base holding the module root, never for a new module.
-    [ "$nm" = true ] || [ -z "$mbl" ] || [ ! -d "$RUN/base/.git" ] || [ -L "$RUN/base" ] ||
-      [ ! -d "$RUN/base${PREFIX:+/$PREFIX}" ] || [ "$(git -C "$RUN/base" rev-parse HEAD 2> /dev/null)" != "$mbl" ] ||
-      printf 'Base tree: %s\n' "$RUN/base${PREFIX:+/$PREFIX}"
+    base_tree_line "$nm" "$mbl"
     # The base repository as its own fact line, from host.json in the grammar valid_host holds it to,
     # with no name of dots: Check E reads the repository's own wrapper address from it.
     jq -r 'select(.repo | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
