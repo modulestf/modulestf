@@ -1,3 +1,12 @@
+## [0.16.11](https://github.com/modulestf/modulestf/compare/v0.16.10...v0.16.11) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Name the reason of an unknown plan diff with a closed token ([#256](https://github.com/modulestf/modulestf/issues/256)) ([194b044](https://github.com/modulestf/modulestf/commit/194b044c3dd0dc024fd79e9293fbeace31c66b82))
+
+
+
 ## [0.16.10](https://github.com/modulestf/modulestf/compare/v0.16.9...v0.16.10) (2026-11-26)
 
 
