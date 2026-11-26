@@ -41,6 +41,8 @@ shift 2
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 SELF="$HERE/${0##*/}"
 TPL="$HERE/ladder-templates"
+# shellcheck source=facts-resolve.sh
+. "$HERE/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
 
 PINS=; CACHE=; SCHEMA_OUT=; SCHEMA=; BEH=; BASESHA=; HEADSHA=; OUT=; COVER=; OWNER=0
 while [ $# -gt 0 ]; do
@@ -617,6 +619,11 @@ if [ -n "$SCHEMA" ]; then
   jq -e '.provider_schemas | type == "object"' "$SCHEMA" > /dev/null 2>&1 || die "--schema is not a providers schema"
 fi
 setup; tools
+# The engine builds the fixtures only when the binary tools found is the one facts-resolve.sh
+# accepts and its version report lists cmd:fixture-build; read once, here.
+FB_GO=0
+facts_resolve "$RUN"
+if [ "$FACTS_STATE" = ok ] && [ -n "$FACTS" ] && [ "$FACTS_BIN" = "$FACTS" ] && facts_has cmd:fixture-build; then FB_GO=1; fi
 chmod -R u+w "$L/fixtures"; rm -rf -- "${L:?}/fixtures" && mkdir -m 700 "$L/fixtures"
 START="$(date +%s)"
 prove
@@ -849,6 +856,118 @@ done({ok => JSON::PP::true, wrap => $wrap, sides => \@sides, canaries => [map { 
   cases => [map { {id => $_->{id}, inputs => $_->{inputs}, unknown_inputs => $_->{unknown}, addr => $_->{addr}} } @cases]});
 '
 
+# fixbuild trigger template out [resource-template|-] [attribute] [resource|L2]: the fixture
+# builder, with the arguments of FIX_PL. When mtf-facts lists cmd:fixture-build in its
+# version report (read once by facts_resolve, in the run's parent shell, which sets FB_GO),
+# the engine builds the fixture; otherwise FIX_PL does. The engine runs under facts_run with
+# the L1 budget left and a 1 MiB output cap. Nothing the ladder can know is taken from its
+# answer: fb_expect derives the whole answer from the trigger (and checks the builder's expect
+# trees against the canaries it derives), and an exit 0 object must equal it (schema_version 1,
+# exactly the known keys, the sides from the trigger's expressions, the wrap from its count and
+# each references and none at L2 and L3, the canaries from its inputs, and per case the id,
+# inputs, unknown inputs and instance address). A trigger FIX_PL would refuse has no expected
+# answer, so any exit 0 answer for it fails. An exit 1 refusal is exactly ok false, a reason of
+# 1 to 200 characters and schema_version 1; anything else fails. Prints the builder's JSON
+# object, or fails.
+# shellcheck disable=SC2016 # jq programs
+FB_NORM_JQ='def norm: with_entries(.value |= {value, unknown: (.unknown // false), "null": (.["null"] // false),
+  omitted: (.omitted // false), unknown_elements: (.unknown_elements // [])});
+def okstate: type == "object" and ((keys - ["value", "unknown", "null", "omitted", "unknown_elements"]) | length) == 0
+  and (to_entries | all(.[]; if .key == "value" then true elif .key == "unknown_elements" then (.value | type == "array") else (.value | type == "boolean") end))
+  and ([.unknown, .["null"], .omitted] | map(select(. == true)) | length) <= 1
+  and (if ([.unknown, .["null"], .omitted] | any(. == true)) then ((.unknown_elements // []) | length) == 0 else true end)
+  and ((.unknown_elements // []) | all(.[]; (type == "string" or type == "number") and (tostring | test("^[A-Za-z0-9_.-]{1,64}\\z"))));'
+# shellcheck disable=SC2016
+FB_EXPECT_JQ='def bad: error("no expected answer");
+$t[0] as $t
+| (($t.contextual_ref_details // []) | if type == "array" then . else [] end) as $det
+| ($t.cases // null) as $cs
+| [$det[] | .kind] as $kinds
+| if ($cs | type) != "array" or ($cs | length) == 0 or ($cs | length) > 32
+     or ($cs | all(.[]; type == "object" and (.id | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}\\z"))) | not)
+     or ($cs | map(.id) | unique | length) != ($cs | length)
+     or ($sides | length) == 0
+     or ($det | all(.[]; type == "object" and (.kind | type == "string") and (.text | type == "string" and length <= 256)) | not)
+     or ($kinds | all(.[]; . == "resource" or . == "data" or . == "count" or . == "each") | not)
+     or ([$det[] | select((.kind == "count" and .text != "count.index") or (.kind == "each" and .text != "each.key"))] | length) > 0
+     or (($kinds | index("count")) != null and ($kinds | index("each")) != null)
+     or ((($t.contextual_refs // []) | type == "array" and length > 0) and ($det | length) == 0)
+  then bad else . end
+| (if ($kinds | index("count")) != null then "count" elif ($kinds | index("each")) != null then "for_each" else "none" end) as $wrap
+| (if $lvl != "l1" and $wrap != "none" then bad else . end)
+| ([($t.referenced_inputs // [])[]
+      | if type == "object" and (.name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]{0,63}\\z")) and (.type | type == "string")
+        then {name: .name, e: (.type | test("^\\s*(list|set|map)\\s*\\("))} else bad end]
+   + [$det[] | select(.kind == "resource" or .kind == "data")
+      | (.text | capture("^(?:data\\.)?[a-z][a-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_-]*(?<ix>\\[\\*\\]|\\[[0-9]+\\]|\\.\\*)?\\.(?<attr>[A-Za-z_][A-Za-z0-9_]*)\\z") // bad) as $m
+      | if (.type | type == "string") or $m.attr == "id"
+        then {name: .text, e: ((($m.ix // "") | contains("*")) or ((.type // "") | type == "string" and test("^\\s*(list|set|map)\\s*\\(")))} else bad end]
+   | reduce .[] as $i ([]; if any(.[]; .name == $i.name) then . else . + [$i] end)) as $ins
+| ($ins | map(.name)) as $names
+| ($ins | to_entries | map("canary_ladder_u_\(.key)", (if .value.e then "canary_ladder_ue_\(.key)" else empty end))) as $canaries
+| (if $trees != $canaries then bad else . end)
+| (if ($t.category // "") == "default-change" and ($t.address | type == "string") and ($t.address | test("^var\\.[A-Za-z_][A-Za-z0-9_-]{0,63}\\z")) then ($t.address | ltrimstr("var.")) else null end) as $omit
+| (if $omit != null and (($names | index($omit)) == null) then bad else . end)
+| (if $omit != null and ($wrap != "none" or $lvl != "l1") then bad else . end)
+| (if $wrap == "count" then "count.index" elif $wrap == "for_each" then "each.key" else null end) as $winput
+| (if all($cs[]; (.inputs | type == "object") and ((.inputs | keys) == ((($names + [$winput]) | map(select(. != null))) | sort))
+        and (.inputs | to_entries | all(.[]; .value | okstate))
+        and (.inputs | to_entries | all(.[]; if .value.omitted == true then ($omit != null and .key == $omit) else true end))
+        and (. as $c | $ins | all(.[]; . as $i | $i.e or ((($c.inputs[$i.name].unknown_elements // []) | length) == 0)))
+        and (if $winput == null then true else (.inputs[$winput] | .unknown != true and .["null"] != true and .omitted != true and ((.unknown_elements // []) | length) == 0) end))
+   then . else bad end)
+| {ok: true, schema_version: 1, wrap: $wrap, sides: $sides, canaries: $canaries,
+   cases: [$cs[] as $c | ($c.inputs | norm) as $ci
+     | {id: $c.id, inputs: $ci,
+        unknown_inputs: [$names[] | select(($ci[.] // {}) | (.unknown == true or ((.unknown_elements // []) | length) > 0))],
+        addr: (if $wrap == "none" then ""
+               elif $wrap == "count" then ($ci["count.index"].value | if type == "number" or type == "string" then tostring else bad end
+                 | if test("^[0-9]\\z") then "terraform_data.subject[" + . + "]" else bad end)
+               else ($ci["each.key"].value | if type == "number" or type == "string" then tostring else bad end
+                 | if test("^[A-Za-z0-9_.-]{0,64}\\z") then "terraform_data.subject[\"" + . + "\"]" else bad end) end)}]}'
+fb_expect() { # trigger, out dir, level (l1, l2 or l3): the object the builder must answer, or fail
+  local sides s c cj="" f
+  sides="$(jq -c '[(if (.base_expr | type) == "string" and (.base_expr | length) > 0 then "base" else empty end),
+    (if (.head_expr | type) == "string" and (.head_expr | length) > 0 then "head" else empty end)]' "$1" 2> /dev/null)" || return 1
+  for s in $(printf '%s' "$sides" | jq -r '.[]'); do
+    f="$2/expect/$s.json"
+    [ -f "$f" ] && [ ! -L "$f" ] || return 1
+    c="$(jq -c '[.files["main.tf"].blocks[]? | select(.type == "output") | .labels[0]? | select(type == "string" and startswith("canary_ladder_"))]' "$f" 2> /dev/null)" || return 1
+    if [ -z "$cj" ]; then cj=$c; else [ "$c" = "$cj" ] || return 1; fi
+  done
+  [ -n "$cj" ] || return 1
+  jq -cn --slurpfile t "$1" --argjson sides "$sides" --argjson trees "$cj" --arg lvl "$3" "$FB_NORM_JQ $FB_EXPECT_JQ"
+}
+fixbuild() {
+  [ "$FB_GO" = 1 ] || { perl -e "$FIX_PL" "$@"; return; }
+  local a=("$1" --template "$2" --out "$3") rc=0 out t lvl=l1 want="$L/out/fb-expect.json"
+  if [ -n "${4:-}" ] && [ "$4" != - ]; then a+=(--level L3 --attribute "$5" --resource "$6" --resource-template "$4"); lvl=l3
+  elif [ "${6:-}" = L2 ]; then a+=(--level L2 --attribute "$5"); lvl=l2; fi
+  t="$(left 120)" || return 1
+  out="$(facts_run "$t" "$MIB" "$FACTS" fixture-build "${a[@]}")" || rc=$?
+  case "$rc" in
+    0) fb_expect "$1" "$3" "$lvl" > "$want" || return 1
+       printf '%s\n' "$out" | jq -e -s --slurpfile e "$want" "$FB_NORM_JQ"'$e[0] as $e | length == 1 and (.[0] | type == "object"
+         and keys == ["canaries", "cases", "ok", "schema_version", "sides", "wrap"]
+         and .ok == true
+         and .schema_version == 1
+         and .wrap == $e.wrap
+         and .sides == $e.sides
+         and .canaries == $e.canaries
+         and (.cases | type == "array" and all(.[]; type == "object" and keys == ["addr", "id", "inputs", "unknown_inputs"]))
+         and [.cases[].id] == [$e.cases[].id]
+         and ([.cases[].inputs[]] | all(.[]; okstate))
+         and [.cases[].inputs | norm] == [$e.cases[].inputs]
+         and [.cases[].unknown_inputs] == [$e.cases[].unknown_inputs]
+         and [.cases[].addr] == [$e.cases[].addr])' > /dev/null 2>&1 || return 1 ;;
+    1) printf '%s\n' "$out" | jq -e -s 'length == 1 and (.[0] | type == "object" and keys == ["ok", "reason", "schema_version"]
+         and .ok == false and .schema_version == 1
+         and (.reason | type == "string" and length > 0 and length <= 200))' > /dev/null 2>&1 || return 1 ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$out"
+}
+
 # Projects one plan shown as JSON into an observation, and checks the canaries. At L3
 # ($wrap "l3") the subject is the target attribute of the resource under test, with its
 # planned action and whether it equals the prior state, and "control" says whether the rest
@@ -933,7 +1052,7 @@ l1() { # trigger file, id: one run record
   mode_exec
   left 1 > /dev/null || { record "$id" unverifiable "budget" "" "" "$nob"; return; }
   mkdir -m 700 "$F" || { record "$id" unverifiable "fixture directory" "" "" "$nob"; return; }
-  meta="$(perl -e "$FIX_PL" "$tf" "$TPL/l1.tf.tmpl" "$F" 2> /dev/null)" || meta='{"ok":false,"reason":"fixture builder failed"}'
+  meta="$(fixbuild "$tf" "$TPL/l1.tf.tmpl" "$F" 2> /dev/null)" || meta='{"ok":false,"reason":"fixture builder failed"}'
   if [ "$(printf '%s' "$meta" | jq -r '.ok')" != true ]; then
     record "$id" unverifiable "$(printf '%s' "$meta" | jq -r '.reason // "fixture builder failed"')" "" "" "$nob"; return
   fi
@@ -1050,7 +1169,7 @@ l2() { # trigger file, id
   attr="$(jq -r '.attribute // ""' "$tf")"
   [[ "$attr" =~ ^(count|for_each)$ ]] || { [[ "$attr" =~ ^[a-z0-9_.-]{1,64}$ ]] || attr=other; record "$id" unverifiable "no L2 template for attribute $attr" "" "" "$nob"; return; }
   mkdir -m 700 "$F" || { record "$id" unverifiable "fixture directory" "" "" "$nob"; return; }
-  meta="$(perl -e "$FIX_PL" "$tf" "$TPL/l1.tf.tmpl" "$F" - "$attr" L2 2> /dev/null)" || meta='{"ok":false,"reason":"fixture builder failed"}'
+  meta="$(fixbuild "$tf" "$TPL/l1.tf.tmpl" "$F" - "$attr" L2 2> /dev/null)" || meta='{"ok":false,"reason":"fixture builder failed"}'
   if [ "$(printf '%s' "$meta" | jq -r '.ok')" != true ]; then
     record "$id" unverifiable "$(printf '%s' "$meta" | jq -r '.reason // "fixture builder failed"')" "" "" "$nob"; return
   fi
@@ -1181,7 +1300,7 @@ l3() { # trigger file, id
   [ "$(jq '.control != null' "$L/etc/l3sel.json")" = true ] || { r3 "no all-known case for the control"; return; }
   jq -c --slurpfile s "$L/etc/l3sel.json" '.cases = ($s[0].cases + [$s[0].control])' "$tf" > "$L/etc/trigger-l3.json"
   mkdir -m 700 "$F" || { r3 "fixture directory"; return; }
-  meta="$(perl -e "$FIX_PL" "$L/etc/trigger-l3.json" "$TPL/l1.tf.tmpl" "$F" "$lib/template.tf.tmpl" "$attr" "$typ" 2> /dev/null)" \
+  meta="$(fixbuild "$L/etc/trigger-l3.json" "$TPL/l1.tf.tmpl" "$F" "$lib/template.tf.tmpl" "$attr" "$typ" 2> /dev/null)" \
     || meta='{"ok":false,"reason":"fixture builder failed"}'
   if [ "$(printf '%s' "$meta" | jq -r '.ok')" != true ]; then r3 "$(printf '%s' "$meta" | jq -r '.reason // "fixture builder failed"')"; return; fi
   [ "$(printf '%s' "$meta" | jq -r '.sides | join(",")')" = base,head ] || { r3 "an added attribute has no control"; return; }
