@@ -472,36 +472,53 @@ def root_ok: type == "string" and test("^examples/[A-Za-z0-9._-]+$") and (test("
   and ([.examples[].dir] | length == (unique | length))
   and all($real[]; . as $d | any($in.examples[]; .dir == $d))
 '
-# One `affected` report per review. select, check, run and coverage each select the examples in
-# a process of their own, so the report is kept in $RUN/affected-cache, named by a SHA-256 over
-# everything the run reads: the kind of run, the clone and module root, the files list, the clone's
-# head, the binary's path and its version report. The file holds the key it was made for and the
-# report; a file that is a link, is not JSON, or holds another key is not used, and the run is made
-# again. The base commit is no input of `affected`, so it is not part of the key.
-affected_key() { # kind (root or plain); the key on standard output, nothing when an input is unreadable
+# One `affected` report per review for the commands that select before any provider code runs.
+# select writes and reads the report in $RUN/affected-cache and run reads it, then removes the
+# directory, so no later command trusts a file that code of the head could have rewritten. check and
+# coverage never read it: the providers of the head run between the selection and them, as the same
+# user. The name is a SHA-256 over everything the run reads: the clone, the prefix, the files list
+# as handed to the tool, the clone's head, the binary's path and content, and its version report
+# (which holds the version and the features, so the mode of the run and the version are in it). The
+# file holds the key it was made for and the report. It is not used when the directory or the file
+# is a link, not ours, writable by group or others, over 1 MiB, not exactly one JSON object with this
+# key and a report object, and the run is made again. The base commit is no input of `affected`.
+AFFCACHE=0
+case "$CMD" in select | run) AFFCACHE=1 ;; esac
+affected_key() { # the key on standard output; fails when an input is unreadable
   ak_head="$(git -C "$DIR" rev-parse HEAD 2> /dev/null)" && sha_ok "$ak_head" || return 1
-  ak_files="$(shasum -a 256 < "$FILES")" || return 1
+  ak_files="$(shasum -a 256 < "$W/affected-files.json")" || return 1
   ak_rep="$(printf '%s' "$FACTS_REPORT" | shasum -a 256)" || return 1
-  printf '%s\0' "$1" "$CROOT" "$PREFIX" "${ak_files%% *}" "$ak_head" "$FACTS_BIN" "$FACTS_VERSION" "${ak_rep%% *}" \
+  ak_bin="$(shasum -a 256 < "$FACTS_BIN")" || return 1
+  printf '%s\0' "$CROOT" "$PREFIX" "${ak_files%% *}" "$ak_head" "$FACTS_BIN" "${ak_bin%% *}" "${ak_rep%% *}" \
     | shasum -a 256 | { read -r ak_sum _; printf '%s' "$ak_sum"; }
 }
+owned_private() { # path: ours and not writable by group or others (a link is followed here, so test it apart)
+  perl -e 'my @s = stat shift or exit 1; exit(($s[4] == $< && !($s[2] & 022)) ? 0 : 1)' "$1"
+}
 affected_cached() { # key: the cached report into $W/affected.json
-  ac_f="$RUN/affected-cache/$1.json"
-  [ -d "$RUN/affected-cache" ] && [ ! -L "$RUN/affected-cache" ] && [ -f "$ac_f" ] && [ ! -L "$ac_f" ] || return 1
-  jq -e --arg k "$1" 'type == "object" and .key == $k and (.report | type == "object")' "$ac_f" > /dev/null 2>&1 || return 1
-  jq -c .report "$ac_f" > "$W/affected.json" 2> /dev/null
+  ac_d="$RUN/affected-cache"; ac_f="$ac_d/$1.json"
+  [ -d "$ac_d" ] && [ ! -L "$ac_d" ] && [ -f "$ac_f" ] && [ ! -L "$ac_f" ] || return 1
+  owned_private "$ac_d" || return 1
+  owned_private "$ac_f" || return 1
+  [ "$(wc -c < "$ac_f")" -le 1048576 ] || return 1
+  jq -e -s --arg k "$1" 'length == 1 and (.[0] | type == "object" and .key == $k and (.report | type == "object"))' "$ac_f" > /dev/null 2>&1 || return 1
+  jq -s -c '.[0].report' "$ac_f" > "$W/affected.json" 2> /dev/null
 }
 affected_store() { # key: the report in $W/affected.json, kept for the next run of this review
-  [ ! -L "$RUN/affected-cache" ] && { [ -d "$RUN/affected-cache" ] || mkdir -m 700 "$RUN/affected-cache" 2> /dev/null; } || return 0
-  jq -c --arg k "$1" '{key: $k, report: .}' "$W/affected.json" > "$RUN/affected-cache/$1.tmp" 2> /dev/null \
-    && mv -- "$RUN/affected-cache/$1.tmp" "$RUN/affected-cache/$1.json" || rm -f -- "$RUN/affected-cache/$1.tmp"
+  as_d="$RUN/affected-cache"
+  # A directory that is a link, or not ours, or open to others, is replaced, never written into.
+  if [ -L "$as_d" ] || { [ -e "$as_d" ] && ! { [ -d "$as_d" ] && owned_private "$as_d"; }; }; then rm -rf -- "$as_d"; fi
+  [ -d "$as_d" ] || mkdir -m 700 "$as_d" 2> /dev/null || return 0
+  as_t="$(mktemp "$as_d/.tmp.XXXXXX" 2> /dev/null)" || return 0
+  jq -c --arg k "$1" '{key: $k, report: .}' "$W/affected.json" > "$as_t" 2> /dev/null \
+    && mv -- "$as_t" "$as_d/$1.json" || rm -f -- "$as_t"
 }
-affected_run() { # kind, then the command; leaves a JSON report in $W/affected.json or fails
-  ar_kind=$1; shift
-  ar_key="$(affected_key "$ar_kind")" || ar_key=''
+affected_run() { # the command; leaves a JSON report in $W/affected.json or fails
+  ar_key=''
+  [ "$AFFCACHE" = 1 ] && { ar_key="$(affected_key)" || ar_key=''; }
   if [ -n "$ar_key" ] && affected_cached "$ar_key"; then return 0; fi
   CAP_QUIET_ERR=1 run_capped 70 "$W/affected.json" / "$@" && jq -e . "$W/affected.json" > /dev/null 2>&1 || return 1
-  [ -z "$ar_key" ] || affected_store "$ar_key"
+  [ -n "$ar_key" ] && [ "$CMD" = select ] && affected_store "$ar_key"
   return 0
 }
 select_examples() {
@@ -519,7 +536,7 @@ select_examples() {
       mroot=true
       # The engine runs from /, so the files list goes in as an absolute path.
       cp -- "$FILES" "$W/affected-files.json"
-      if affected_run root "$FACTS_BIN" affected "$CROOT" --module-root "${PREFIX%/}" \
+      if affected_run "$FACTS_BIN" affected "$CROOT" --module-root "${PREFIX%/}" \
           --diff "$W/affected-files.json" --json; then
         tool=invalid
         jq -e --slurpfile all "$W/all.json" --arg pre "$PREFIX" '. as $in | $all[0] as $all | '"$AFFECTED_ROOT_JQ" \
@@ -533,7 +550,7 @@ select_examples() {
       else
         cp -- "$FILES" "$W/affected-files.json"
       fi
-      if affected_run plain "$FACTS_BIN" affected "$MROOT" --diff "$W/affected-files.json" --json; then
+      if affected_run "$FACTS_BIN" affected "$MROOT" --diff "$W/affected-files.json" --json; then
         tool=invalid
         jq -e --slurpfile all "$W/all.json" --arg pre "$PREFIX" '. as $in | $all[0] as $all | '"$AFFECTED_JQ" \
           "$W/affected.json" > /dev/null 2>&1 && tool=mtf-facts
@@ -789,6 +806,8 @@ fi
 HEAD="$(git -C "$DIR" rev-parse HEAD 2> /dev/null)"
 sha_ok "$HEAD" || die "the clone has no head commit"
 dirs_list "$W/list.tsv"
+# The selection is made; no provider of the head has run yet. The report is not read again.
+rm -rf -- "$RUN/affected-cache"
 if [ -n "$ONLY" ]; then
   printf '%s' "$ONLY" | while IFS= read -r rel; do
     cut -f3 "$W/list.tsv" | grep -qxF -- "$rel" || { echo "verify-pass.sh: not an example directory of this change: $rel" >&2; exit 2; }
