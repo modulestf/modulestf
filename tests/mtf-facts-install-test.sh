@@ -116,7 +116,7 @@ check "the installer reads the shipped pin by default and gets to the download" 
 # Started by a relative path with CDPATH naming a directory that holds a same-named
 # subdirectory, the installer still reads the pin beside itself, not the decoy's.
 t_cdpath() {
-  rm -rf "$TMP/cd" "$TMP/decoy" "$TMP/cdd"; mkdir -p "$TMP/cd/refs" "$TMP/decoy/refs" "$TMP/cdd"
+  rm -rf "$TMP/cd" "$TMP/decoy" "$TMP/cdd" "$TMP/curl.log"; mkdir -p "$TMP/cd/refs" "$TMP/decoy/refs" "$TMP/cdd"
   cp "$INST" "$TMP/cd/refs/mtf-facts-install.sh"; cp "$REF/mtf-facts-pin.json" "$TMP/cd/refs/"
   sed -E 's/v[0-9]+\.[0-9]+\.[0-9]+/v0.0.1/g' "$REF/mtf-facts-pin.json" > "$TMP/decoy/refs/mtf-facts-pin.json"
   (cd "$TMP/cd" && PATH="$TMP/bin:$PATH" CDPATH="$TMP/decoy" STUB_CURL_RC=22 STUB_LOG="$TMP/curl.log" STUB_PAYLOAD="$TMP/payload" \
