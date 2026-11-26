@@ -95,6 +95,9 @@ def valid_behaviour($split):
         # Contract 2: the categories of the triggers merged into this one, each a category once.
         and ((has("also_categories") | not) or (.also_categories | type == "array" and length > 0
               and all(.[]; IN(cats[])) and length == (unique | length)))
+        # The caller code mark, when present, is a boolean: eval reads it as `== true`, so any other
+        # value would leave the trigger inert under a module root prefix.
+        and ((has("caller_code") | not) or (.caller_code | type == "boolean"))
         # The required case set, when present: at most 32 cases, each with its own id once.
         and ((has("cases") | not) or (.cases | type == "array" and length <= 32
               and all(.[]; type == "object" and (.id | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$"))
@@ -422,7 +425,14 @@ evaluate() {
     $b[0] as $b | $l[0] as $l | $rq[0] as $rq | $pd[0] as $pd
     # An unverifiable trigger at a wrapper versions.tf the host found equal to its generator output
     # is inert, with no outstanding difference: the wrapper is the module file, as the hook writes it.
-    | ($e[0] | .triggers |= map(.id as $id | (first($b.triggers[] | select(.id == $id)) | .file) as $f
+    # A caller_code trigger (a literal of an example or tests file) is inert only for a tree that is the
+    # whole repository: the classifier seals the tree it was given, and under a module root prefix a
+    # root configuration outside it may load the example. With a prefix that inert reading is dropped
+    # and the trigger is unverifiable; a refuted one stays refuted.
+    | ($e[0] | .triggers |= map(.id as $id
+        | if $pre != "" and .state == "inert" and (first($b.triggers[] | select(.id == $id)) | .caller_code == true)
+          then {id, state: "unverifiable"} else . end)
+      | .triggers |= map(.id as $id | (first($b.triggers[] | select(.id == $id)) | .file) as $f
         | if .state == "unverifiable" and ($w[$f] // "" | IN("derived", "copied"))
           then {id, state: "inert", wrapper: $w[$f]} else . end)) as $e
     | def kstate($id): first($e.claims[] | select(.claim_id == $id) | .state) // "discarded";
