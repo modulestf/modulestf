@@ -701,7 +701,7 @@ fi
 # The comparison of each plan diff, read outside the containers that ran the head's code, as
 # the show phase is. Only a plan-diff line in its grammar reaches the record, and only an equal
 # one's addresses and local module calls, reduced by clean_addresses; anything else is not-run show.
-pdiff_re='^plan-diff: (equal|unknown|differs( [A-Za-z0-9_.-]+){0,50}|not-run (no-base|absent-at-base|base-plan|head-module-plan|show|budget))$'
+pdiff_re='^plan-diff: (equal|unknown (errored|deferred|marker|schema|config|configured|block|compare)|differs( [A-Za-z0-9_.-]+){0,50}|not-run (no-base|absent-at-base|base-plan|head-module-plan|show|budget))$'
 for n in ${diffs[@]+"${diffs[@]}"}; do
   rem=$(left)
   if [ "$rem" -le 0 ]; then echo 'plan-diff: not-run budget' > "$TMPRUN/pdiff.$n"; continue; fi

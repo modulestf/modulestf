@@ -982,7 +982,8 @@ def nokey: gsub("\\[(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)\\]"; ""); # a whole quoted o
 # neither configuration writes, wholly unknown: an
 # attribute the configuration sets, one the schema does not name, a resource whose configuration
 # cannot be found and a type the schema lacks are unknown, and so are a plan that errored, one that
-# deferred a change and a change whose markers are not objects. Prints {result, differs}: differs
+# deferred a change and a change whose markers are not objects. Prints {result, reason, differs}:
+# reason is the token an unknown result names, null otherwise, and differs
 # names the addresses, index keys removed, and outputs that differ: names only, no value leaves.
 # shellcheck disable=SC2016 # a jq program
 PDIFF_JQ='
@@ -1042,21 +1043,41 @@ def cfg_of($P; $c): ($c.module_address // "" | nokey
   | (reduce $mods[] as $m ($P.configuration.root_module; if type == "object" then .module_calls[$m].module else null end)) as $mod
   | if ($mod | type) != "object" then null
     else first($mod.resources[]? | select(.address == (if $c.mode == "data" then "data." else "" end) + "\($c.type).\($c.name)" and .mode == $c.mode) | (.expressions // {})) // null end;
+# Why a plan diff is unknown, a token of a closed set: the plan errored or holds no change list,
+# deferred a change, has a change whose markers are not objects, a type the schema lacks, a resource
+# with an unknown whose configuration cannot be found, an unknown at the top of a resource the rule
+# does not take, or one inside a nested block. The first, in that order, is the reason.
+def reasons: ["errored", "deferred", "marker", "schema", "config", "configured", "block"];
+def plan_reason: if type != "object" or .errored == true or (.resource_changes | type) != "array" then "errored"
+  elif ((.deferred_changes // []) | length) > 0 then "deferred"
+  elif any(.resource_changes[]; type != "object" or (.change | type) != "object"
+           or (.change.after_unknown | marker | not) or (.change.after_sensitive | marker | not)) then "marker"
+  else empty end;
+# The first of a list of reasons in the order of the set.
+def first_reason: [.[] | . as $r | reasons | index($r)] | min | reasons[.];
+# The reasons of one change: schema, config, or for each top-level key the rule does not take,
+# block when the key is a nested block type and configured otherwise; every such key counts, so the
+# reason does not depend on the order of the keys.
+def change_reasons($A; $B): . as $c | block_of($c) as $blk | $c.change.after_unknown as $u
+  | if $blk == null then "schema"
+    else (cfg_of($A; $c), cfg_of($B; $c)) as $ex
+      | select($u | computed_only($blk; $ex; [$u]) | not)
+      | if $ex == null then "config"
+        else [($u | to_entries[]) as $e | select({($e.key): $e.value} | computed_only($blk; $ex; [$u]) | not)
+            | if ($blk.block_types[$e.key] | type) == "object" then "block" else "configured" end]
+          | if . == [] then "configured" else first_reason end end
+    end;
 $a[0] as $A | $b[0] as $B
-| if any(($A, $B); type != "object" or .errored == true or (.resource_changes | type) != "array"
-      or (((.deferred_changes // []) | length) > 0)
-      or any(.resource_changes[]; type != "object" or (.change | type) != "object"
-             or (.change.after_unknown | marker | not) or (.change.after_sensitive | marker | not)))
-  then {result: "unknown", differs: []}
-  elif any(($A, $B) | rc[]; . as $c | block_of($c) as $blk
-      | ($blk == null) or any(cfg_of($A; $c), cfg_of($B; $c); . as $ex | $c.change.after_unknown | computed_only($blk; $ex; [$c.change.after_unknown]) | not))
-  then {result: "unknown", differs: []}
+| if any(($A, $B); plan_reason)
+  then {result: "unknown", reason: ([($A, $B) | plan_reason] | first_reason), differs: []}
+  elif any(($A, $B) | rc[]; change_reasons($A; $B))
+  then {result: "unknown", reason: ([($A, $B) | rc[] | change_reasons($A; $B)] | first_reason), differs: []}
   else ($A | rc | map({key: .address, value: part}) | from_entries) as $x
     | ($B | rc | map({key: .address, value: part}) | from_entries) as $y
     | ($A.output_changes // {}) as $oa | ($B.output_changes // {}) as $ob
     | ([($x + $y | keys[]) | select($x[.] != $y[.]) | nokey]
        + [($oa + $ob | keys[]) | select($oa[.] != $ob[.]) | "output.\(.)"] | unique) as $d
-    | {result: (if $d == [] then "equal" else "differs" end),
+    | {result: (if $d == [] then "equal" else "differs" end), reason: null,
        differs: ($d | map(select(length <= 300 and test("^[A-Za-z0-9_.-]+$"))) | .[:50])}
   end
 '
@@ -1081,12 +1102,14 @@ pd_schema() {
 # example's, as {"addresses": [...], "module_calls": {...}} (ADDR_JQ, names only).
 pd_compare() {
   PDADDR=
-  r="$(jq -n -c --slurpfile a "$1" --slurpfile b "$2" --slurpfile s "$3" "$PDIFF_JQ" 2> /dev/null)" || r='{"result":"unknown","differs":[]}'
-  case "$(printf '%s' "$r" | jq -r .result)" in
+  r="$(jq -n -c --slurpfile a "$1" --slurpfile b "$2" --slurpfile s "$3" "$PDIFF_JQ" 2> /dev/null)" || r='{"result":"unknown","reason":"compare","differs":[]}'
+  case "$(printf '%s' "$r" | jq -r .result 2> /dev/null)" in
     equal) PDADDR="$(jq -c --arg h '' --arg e '' "$ADDR_JQ"' | {addresses, module_calls}' "$2" 2> /dev/null)"
       if [ -n "$PDADDR" ]; then echo "plan-diff: equal"; else echo "plan-diff: not-run show"; fi ;;
     differs) printf '%s' "$r" | jq -r '"plan-diff: differs" + (.differs | map(" " + .) | join(""))' ;;
-    *) echo "plan-diff: unknown" ;;
+    unknown) printf '%s' "$r" | jq -r '"plan-diff: unknown " + (.reason | if IN("errored", "deferred", "marker", "schema", "config", "configured", "block") then . else "compare" end)' 2> /dev/null \
+      || echo "plan-diff: unknown compare" ;;
+    *) echo "plan-diff: unknown compare" ;;
   esac
 }
 # mixed_ready <example>: the head tree with this example directory as at the merge base, in

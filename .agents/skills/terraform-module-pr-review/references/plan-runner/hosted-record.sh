@@ -76,7 +76,8 @@ def counts:
   | map_values(tonumber);
 def path_ok: test("^examples/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$");
 # A plan-diff line (../plan-pass.md, Plan diff): result and reason only, no name
-def pdiff: if test("^(equal|unknown)$") then {result: ., reason: null}
+def pdiff: if . == "equal" then {result: ., reason: null}
+  elif test("^unknown (errored|deferred|marker|schema|config|configured|block|compare)$") then {result: "unknown", reason: .[8:]}
   elif test("^differs( [A-Za-z0-9_.-]{1,300}){0,50}$") then {result: "differs", reason: null}
   elif test("^not-run (no-base|absent-at-base|base-plan|head-module-plan|show|budget)$") then {result: "not-run", reason: .[8:]}
   else error("refused: a plan-diff line outside the grammar") end;

@@ -673,10 +673,12 @@ def part($base): type == "object" and keys == ["class", "plan"]
 def addrs: type == "array" and length <= 1000 and all(.[]; type == "string" and length <= 300
   and test("^(module\\.[A-Za-z0-9_-]+\\.)*(data\\.)?(?!data\\.|module\\.)[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z"));
 # The plan diff of an example, when present (plan-pass.md, Plan diff): a result, a reason only
-# for not-run, and addresses only for equal, of an example whose head planned.
+# for not-run and unknown, each of its closed set, and addresses only for equal, of an example
+# whose head planned.
 def pdiff($head): type == "object" and keys == ["addresses", "module_calls", "reason", "result"]
   and (if .result == "not-run" then .reason | IN("no-base", "absent-at-base", "base-plan", "head-module-plan", "show", "budget")
-       else (.result | IN("equal", "differs", "unknown")) and .reason == null end)
+       elif .result == "unknown" then .reason | IN("errored", "deferred", "marker", "schema", "config", "configured", "block", "compare")
+       else (.result | IN("equal", "differs")) and .reason == null end)
   and (.addresses | addrs) and (.result == "equal" or .addresses == [])
   and (.module_calls | type == "object" and length <= 1000 and all(keys[]; test("^[A-Za-z0-9_-]{1,64}\\z"))
        and all(.[]; type == "string" and test("^[.][.]?(/[A-Za-z0-9_.-]+)*/?\\z")))
