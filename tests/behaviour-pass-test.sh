@@ -963,7 +963,7 @@ frame
 mc=0
 mutate() { # name, perl substitution
   local d="$TMP/mut-$mc"; mc=$((mc + 1)); mkdir -p "$d"
-  cp "$BP" "$d/behaviour-pass.sh"; perl -0pi -e "$2" "$d/behaviour-pass.sh"
+  cp "$BP" "$d/behaviour-pass.sh"; cp "$REF/facts-resolve.sh" "$d/"; perl -0pi -e "$2" "$d/behaviour-pass.sh"
   if cmp -s "$d/behaviour-pass.sh" "$BP"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
   local keep="$BP" before="$fails"; BP="$d/behaviour-pass.sh"
   frame > /dev/null 2>&1; local caught=$((fails - before))
@@ -1188,7 +1188,7 @@ t_wr_render; check "wrappers render: a run whose only trigger is a derived wrapp
 mn=0
 wmutate() { # name, perl substitution, case function [, file mutated, behaviour-pass.sh by default]
   mn=$((mn + 1)); local d="$TMP/wmut-$mn"; mkdir -p "$d"
-  cp "$REF/behaviour-pass.sh" "$REF/wrapper-derive.pl" "$d/"
+  cp "$REF/behaviour-pass.sh" "$REF/wrapper-derive.pl" "$REF/facts-resolve.sh" "$d/"
   local f="${4:-behaviour-pass.sh}"; perl -0pi -e "$2" "$d/$f"
   if cmp -s "$d/$f" "$REF/$f"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
   local keep="$BP" before="$fails"; BP="$d/behaviour-pass.sh"
@@ -1362,6 +1362,8 @@ t_cap_raw '{"features": "behaviour.off-ladder-cap"}'; check "split cap: features
 t_cap_f() { FEATS="$SPLIT" capcase 40 1 '.follows = []'; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
 t_cap_a() { FEATS="$SPLIT" capcase 40 1 '.also_categories = ["literal-argument-change"]'; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
 t_cap_l() { FEATS="$SPLIT" capcase 40 1 '.levels = ["compat", "L4"]'; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
+t_cap_m() { FEATS="$SPLIT" capcase 40 1 '.category = "moved-or-renamed-address"'; grep -qxF 'behaviour: not run: output refused' "$O/classify.txt"; }
+wmutate "split cap: a moved address at any level read as off-ladder" 's/\(\.category == "moved-or-renamed-address" and \.levels == \[\]\)/(.category == "moved-or-renamed-address")/' t_cap_m
 wmutate "split cap: a follower read as off-ladder" 's/ and \(has\("follows"\) \| not\)\n/\n/' t_cap_f
 wmutate "split cap: a merged floor read as off-ladder" 's/def off_ladder: \(has\("also_categories"\) \| not\) and /def off_ladder: /' t_cap_a
 wmutate "split cap: a floor at any level read as off-ladder" 's/\.levels == \["compat"\]\)/true)/' t_cap_l
@@ -1384,7 +1386,7 @@ ENR='def d($n): {new_idle: {added: true, default: "null", nullable: "unset"}, ne
     | if (.address | test("^aws_")) and (.attribute | type == "string")
       then .schema_required = (if .attribute | IN("idle_timeout", "dynamic.default_action", "port") then "not_required" else "unknown" end) else . end)'
 # unexd [behaviour jq update after ENR]: unex with both features and the enriched output.
-unexd() { FEATS="$DECL" unex . "$ENR | ${1:-.}"; }
+unexd() { FEATS="$DECL" unex . "$ENR | ${1:-.}" "${2:-.}"; }
 t_decl_same() {
   unex; cp "$O/run-behaviour.json" "$TMP/decl-old-run.json"; cp "$O/record.txt" "$TMP/decl-old-record.txt"; cp "$O/nullvars.json" "$TMP/decl-old-nv.json"
   unexd && cmp -s "$O/run-behaviour.json" "$TMP/decl-old-run.json" && cmp -s "$O/record.txt" "$TMP/decl-old-record.txt" \
@@ -1433,15 +1435,62 @@ t_decl_dirs() { # a variable of a submodule keys its own directory
   unexd '.triggers |= map(if .id == "T-017" then .file = "modules/a/variables.tf" else . end)' && [ "$(cat "$O/nullvars.json")" = '[{"dir":"modules/a","name":"new_idle"}]' ] && [ "$(marked)" = '[]' ]
 }
 t_decl_dirs; check "declarations: a submodule's null variable keys its directory, so the root's arguments stay unmarked" $?
+# A variable trigger the report describes as added with a null default, hostile in one input each:
+# no entry in nullvars.json, so nothing is marked.
+declhost() { # jq update of T-017 -> nullvars.json is empty
+  unexd "$vt $1 else . end)" && [ "$(cat "$O/nullvars.json")" = '[]' ] && [ "$(marked)" = '[]' ]
+}
+t_decl_kind() { declhost '.change_kind = "modified"'; }
+t_decl_addr() { declhost '.address = "var.9bad"'; }
+t_decl_line() { declhost '.line = null'; }
+t_decl_file() { declhost '.file = "v$.tf"'; }
+t_decl_kind; check "declarations: a variable trigger the change did not add gives no entry" $?
+t_decl_addr; check "declarations: an address that is no variable name gives no entry" $?
+t_decl_line; check "declarations: a trigger with no line gives no entry" $?
+t_decl_file; check "declarations: a file outside the plain .tf pattern gives no entry" $?
+# Resource triggers of the enriched fixture the required list reads: one with no attribute, one with
+# no address, and one at an indexed address whose key holds a dot.
+XB='.triggers += [{id: "T-021", file: "main.tf", line: 9, category: "unclassified-change", change_kind: "modified", address: "aws_lb_listener.secondary", attribute: null,
+    base_expr: null, head_expr: null, levels: ["L4"], referenced_inputs: [], contextual_refs: [], reason: null},
+  {id: "T-022", file: "main.tf", line: 9, category: "unclassified-change", change_kind: "modified", address: null, attribute: "tcp_idle",
+    base_expr: null, head_expr: null, levels: ["L4"], referenced_inputs: [], contextual_refs: [], reason: null},
+  {id: "T-023", file: "main.tf", line: 9, category: "literal-argument-change", change_kind: "modified", address: "aws_lb_listener.keyed[\"a.b\"]", attribute: "zeta_attr",
+    base_expr: null, head_expr: "1", levels: ["L4"], referenced_inputs: [], contextual_refs: [], reason: null, schema_required: "unknown"}]'
+XE='.triggers += [range(21; 24) as $i | {id: "T-0\($i)", state: "unverifiable", reason: "x"}]'
+t_decl_xreq() {
+  unexd "$XB" "$XE" && [ "$(marked)" = '["T-008","T-014"]' ] \
+    && [ "$(cat "$O/required.json")" = "$(jq -c '. + ["aws_lb_listener.zeta_attr"] | unique' <<< '["aws_db_instance.engine","aws_db_instance.kms_key_id","aws_db_instance.provider","aws_db_instance.storage_encrypted","aws_db_instance.timeouts","aws_lb_listener.alpn_policy","aws_lb_listener.force_destroy","aws_lb_listener.ssl_policy"]')" ]
+}
+t_decl_xreq; check "declarations: no attribute, no address and an indexed address are read from the report" $?
+# A jq that fails on the required list leaves the list at everything.
+t_decl_fb() {
+  local real; real="$(command -v jq)"; mkdir -p "$TMP/jqfail"
+  cat > "$TMP/jqfail/jq" <<EOF2
+#!/bin/sh
+case "\$*" in *'!= "not_required"'*) exit 5 ;; esac
+exec "$real" "\$@"
+EOF2
+  chmod +x "$TMP/jqfail/jq"
+  PATH="$TMP/jqfail:$PATH" unexd && [ "$(cat "$O/required.json")" = '["*"]' ] && [ "$(marked)" = '[]' ]
+}
+t_decl_fb; check "declarations: a required list that cannot be read requires everything" $?
 t_decl_lit() { declno "$vt .declaration.default = \"literal\" else . end)"; }
 t_decl_nul() { declno "$vt .declaration.nullable = \"true\" else . end)"; }
 t_decl_add() { declno "$vt .declaration.added = false else . end)"; }
 wmutate "declarations: the default not checked" 's/ and \.default == "null" and \.nullable == "unset"\)/ and .nullable == "unset")/' t_decl_lit
 wmutate "declarations: nullable not checked" 's/ and \.default == "null" and \.nullable == "unset"\)/ and .default == "null")/' t_decl_nul
 wmutate "declarations: added not checked" 's/\.declaration \| type == "object" and \.added == true and /.declaration | type == "object" and /' t_decl_add
+wmutate "declarations: a variable the change did not add" 's/(decl_vars\(\) \{\n  jq -c .\[\.triggers\[\] \| select\()\.change_kind == "added" and /$1/' t_decl_kind
+wmutate "declarations: the variable address pattern dropped" 's/(decl_vars\(\) \{\n  jq -c .\[\.triggers\[\] \| select\(\.change_kind == "added" and )\(\.address \| type == "string" and test\("[^"]*"\)\)\n      and /$1/' t_decl_addr
+wmutate "declarations: the line check dropped" 's#\(\.line \| type == "number"\) and (\(\.file[^\n]*\n      and \(\.declaration)#$1#' t_decl_line
+wmutate "declarations: the file pattern dropped" 's#(\(\.line \| type == "number"\)) and \(\.file[^\n]*(\n      and \(\.declaration)#$1$2#' t_decl_file
+wmutate "declarations: a trigger with no attribute read" 's/ and \(\.attribute \| type == "string"\) and \.schema_required/ and .schema_required/' t_decl_xreq
+wmutate "declarations: a trigger with no address read" 's/select\(\(\.address \| type == "string"\) and \(\.attribute/select((.attribute/' t_decl_xreq
+wmutate "declarations: the index keys kept in the address" 's/\(\.address \| gsub\([^;]*; ""\) \| split/(.address | split/' t_decl_xreq
+wmutate "declarations: an unreadable required list requires nothing" 's/("\$out\/behaviour\.json" > "\$out\/required\.json" 2> \/dev\/null \|\| printf )\x27\["\*"\]\\n\x27/$1\x27[]\\n\x27/' t_decl_fb
 wmutate "declarations: unknown read as not required" 's/ and \.schema_required != "not_required"\)/ and .schema_required == "required")/' t_decl_unk
 wmutate "declarations: the report path not taken" 's/if \[ "\$decl" = true \]; then decl_vars; else null_vars; fi/null_vars/' t_decl_notok
-wmutate "declarations: one feature enough" 's/ && grep -qxF behaviour\.schema-required <<< "\$feats" && decl=true/ \&\& decl=true/' t_decl_one
+wmutate "declarations: one feature enough" 's/ && facts_has behaviour\.schema-required && decl=true/ \&\& decl=true/' t_decl_one
 
 echo
 if [ "$fails" -eq 0 ]; then echo "behaviour pass: all checks hold"; else echo "behaviour pass: $fails failed"; exit 1; fi
