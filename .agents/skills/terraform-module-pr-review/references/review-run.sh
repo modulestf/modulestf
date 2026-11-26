@@ -291,7 +291,9 @@ write_carried() { # out directory, run file
     ($e[0] // null) as $e | ($r[0].earlier // null) as $x
     | if $e == null or $e.record == "empty" then []
       elif $e.record != "ok" then {broken_chain: $e.record}
-      elif $x == null or $x.record != "ok" or $x.review_id != $e.review_id then {broken_chain: "mismatch"}
+      # A run file whose earlier disagrees with earlier.json: not ok, another review, other items.
+      elif $x == null or $x.record != "ok" or $x.review_id != $e.review_id
+        or ($x.items | map(.id) | sort) != ($e.findings | map(.id) | sort) then {broken_chain: "mismatch"}
       else [$x.items[] | select(.judgment != "resolved") | .id as $id | $e.findings[] | select(.id == $id)
         | {id: (if $id | test("@") then $id else "\($id)@\($e.review_id)" end), rule_id, severity,
            file: (.file | repo_path), line, summary, suggested_fix}] end' > "$o/carried.json.tmp" 2> /dev/null &&
