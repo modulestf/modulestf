@@ -1,3 +1,12 @@
+## [0.16.3](https://github.com/modulestf/modulestf/compare/v0.16.2...v0.16.3) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Read behaviour-pass features through the shared resolver and hold its guards with tests ([#244](https://github.com/modulestf/modulestf/issues/244)) ([03ce571](https://github.com/modulestf/modulestf/commit/03ce5719e72993c3612f9a08c52f76e119b37414))
+
+
+
 ## [0.16.2](https://github.com/modulestf/modulestf/compare/v0.16.1...v0.16.2) (2026-11-26)
 
 
