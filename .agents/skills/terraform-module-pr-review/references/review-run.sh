@@ -81,13 +81,15 @@ limit() { # seconds, command... : the time limit of github-io.md, Allowed Comman
   else perl -e 'alarm shift; exec @ARGV' "$s" "$@"; fi
 }
 
-# mtf-facts as facts-engine.md resolves it: from /, absolute, canonical, outside the run.
+# mtf-facts as facts-resolve.sh finds it: from /, canonical, outside the run, its version report
+# read once per command. No binary is /dev/null/mtf-facts, which each pass reads as not installed.
+# shellcheck source=facts-resolve.sh
+. "$HERE/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
+# Sets facts in the caller; never call it in a subshell, which would lose the report.
+FACTS_DONE=false
 facts_bin() {
-  local f
-  f="$(cd / && command -v mtf-facts 2> /dev/null)" || { echo /dev/null/mtf-facts; return; }
-  case "$f" in /*) ;; *) echo /dev/null/mtf-facts; return ;; esac
-  f="$(cd "$(dirname "$f")" 2> /dev/null && pwd -P)/$(basename "$f")" || { echo /dev/null/mtf-facts; return; }
-  case "$f" in "${RUN:-/nonexistent}"/*) echo /dev/null/mtf-facts ;; *) echo "$f" ;; esac
+  [ "$FACTS_DONE" = true ] || { facts_resolve "${RUN:-}"; FACTS_DONE=true; }
+  facts="${FACTS_BIN:-/dev/null/mtf-facts}"
 }
 
 # The run directory a later subcommand names: "<root>/pr-review.XXXXXX", a real directory of
@@ -449,7 +451,10 @@ cmd_prepare() {
 
   # Step 5.4's tool part and the depth, outside a triage run.
   local facts behaviour=skipped
-  facts="$(facts_bin)"
+  facts_bin
+  # The binary and what it reports it can do, for the summary and the reviewer's task.
+  facts_line > "$RUN/state/facts"
+  [ "$FACTS_STATE" != ok ] || printf '%s\n' "$FACTS_REPORT" > "$RUN/state/facts-version.json"
   if [ "$triage" = false ]; then
     mkdir "$RUN/behaviour"
     local mroot="$RUN/clone"; [ -z "$prefix" ] || mroot="$RUN/clone/$prefix"
@@ -464,24 +469,39 @@ cmd_prepare() {
     if [ -f "$RUN/behaviour/behaviour.json" ]; then behaviour=classified
     else behaviour="not-run: $(head -c 64 "$RUN/behaviour/status" 2> /dev/null | tr -cd 'a-z -')"; fi
     # mtf-facts affected, as verify-pass.md Example selection runs it; no file when it gave nothing.
+    # With a module root prefix and affected --module-root, one run on the clone root gives the
+    # repository-relative report depth reads; else the module root run below and, for the depth,
+    # a second run on the clone root.
+    local mraff=false
+    [ -z "$prefix" ] || ! facts_has flag:affected:module-root || mraff=true
     jq --arg p "$prefix" '[.[] | select($p == "" or (.filename | startswith($p + "/")))
       | .filename |= (if $p == "" then . else .[($p | length) + 1:] end)
       | if .previous_filename then .previous_filename |= (if $p == "" then . else ltrimstr($p + "/") end) else . end]' \
       "$RUN/host/files.json" > "$RUN/state/files-module.json"
-    affected_to "$facts" "$mroot" "$RUN/state/files-module.json" "$RUN/affected.json"
+    if [ "$mraff" = true ]; then
+      if ! (cd "$RUN/state" && limit 70 "$facts" affected "$RUN/clone" --module-root "$prefix" --diff "$RUN/host/files.json" --json) \
+          > "$RUN/affected.json" 2> /dev/null || ! jq -e --arg p "$prefix" 'type == "object" and .module_root == $p' "$RUN/affected.json" > /dev/null 2>&1; then
+        rm -f "$RUN/affected.json"
+      fi
+    else
+      affected_to "$facts" "$mroot" "$RUN/state/files-module.json" "$RUN/affected.json"
+    fi
     local od=(); [ -z "$owner_depth" ] || od=(--owner-depth deep)
     [ "$base_tree" = true ] || refuse merge-base-unavailable "the merge base could not be checked out for the depth binding"
     # mtf-facts depth reads the trees from the repository root, so its classifier and affected
-    # reports must have repository-relative paths: with a module root prefix, a second classify and
-    # affected run on the clone root, used for the depth alone.
+    # reports must have repository-relative paths: with a module root prefix, a second classify run
+    # on the clone root, and a second affected run there unless the module root run above gave one,
+    # used for the depth alone.
     local dcl="$RUN/behaviour/behaviour.json" daf="$RUN/affected.json"
     if [ -n "$prefix" ]; then
       mkdir "$RUN/state/depth-behaviour"
       bash "$HERE/behaviour-pass.sh" classify --facts "$facts" --dir "$RUN/clone" --diff "$RUN/host/files.json" \
         ${sch[@]+"${sch[@]}"} --out "$RUN/state/depth-behaviour" > "$RUN/state/depth-classify.out" 2>&1
       dcl="$RUN/state/depth-behaviour/behaviour.json"
-      affected_to "$facts" "$RUN/clone" "$RUN/host/files.json" "$RUN/state/affected-depth.json"
-      daf="$RUN/state/affected-depth.json"
+      if [ "$mraff" = false ]; then
+        affected_to "$facts" "$RUN/clone" "$RUN/host/files.json" "$RUN/state/affected-depth.json"
+        daf="$RUN/state/affected-depth.json"
+      fi
     fi
     local dargs=()
     [ ! -f "$dcl" ] || dargs+=(--classify "$dcl")
@@ -547,6 +567,7 @@ write_index() { # checks file, changed files, behaviour, mode, new module
 }
 
 summary_lines() {
+  [ ! -s "$RUN/state/facts" ] || head -n 1 "$RUN/state/facts"
   jq -r '"head \(.head[:12]), merge base \(.merge_base // "none" | .[:12]), \(.counts.files) files, \(.counts.examples) examples",
     "signals: threads \(.signals.threads), review decision \(.signals.review_decision), mergeability \(.signals.mergeability), checks file \(.signals.checks)",
     "depth: \(.depth)" + (if .reasons != [] then " (" + (.reasons[:6] | join(", ")) + ")" else "" end),
@@ -786,7 +807,7 @@ cmd_skip_coverage() {
 cmd_ladder() {
   need_full ladder
   local facts own=() opid
-  facts="$(facts_bin)"; opid="$(arg owner_pid)"; [ -z "$opid" ] || own=(--owner-pid "$opid")
+  facts_bin; opid="$(arg owner_pid)"; [ -z "$opid" ] || own=(--owner-pid "$opid")
   if [ "$(depth)" != light ] && [ -f "$RUN/behaviour/behaviour.json" ] && [ -n "$MB" ]; then
     [ -f "$RUN/coverage.json" ] || fail "ladder needs plan first"
     [ ! -e "$RUN/behaviour/ladder.json" ] || fail "ladder already ran in this run"
@@ -1066,12 +1087,15 @@ module_profile() {
     [ "$(head -n 1 "$src/PROFILE.md")" = "# Profile: $pid" ] || fail "profile refused: shipped profile name does not match its directory"
     label="shipped:$pid"
   fi
-  facts="$(facts_bin)"
+  facts_bin
   snap="$(limit 60 "$facts" profile-snapshot --profile-dir "$src" 2> /dev/null)" || snap=""
   tree="$(printf '%s' "$snap" | jq -r 'select(type == "object") | .tree_sha256 // empty' 2> /dev/null)"
   if [[ "$tree" =~ ^[0-9a-f]{64}$ ]]; then
     sdir="$(printf '%s' "$snap" | jq -r '.dir')"
-    if ! "$facts" profile-check --help 2>&1 | grep -qF 'profile-check --profile-dir'; then
+    # The feature from the version report; a binary with none is asked for its help, under the
+    # limit and the cap every other call has.
+    if ! { facts_has flag:profile-check:profile-dir ||
+        { [ "$FACTS_STATE" != ok ] && facts_run 60 1048576 "$facts" profile-check --help | grep -qF 'profile-check --profile-dir'; }; }; then
       rm -rf -- "$sdir"
       if relaxes_text "$src/PROFILE.md"; then fail "profile refused: profile relaxes, and mtf-facts has no profile-check or in_repo_downgrade"; fi
       fail "profile refused: profile-check failed"
@@ -1204,6 +1228,8 @@ cmd_handover() {
     # with no name of dots: Check E reads the repository's own wrapper address from it.
     jq -r 'select(.repo | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
       and (test("/[.]+$") | not)) | "Base repository: \(.repo)"' "$RUN/host/host.json" 2> /dev/null || true
+    # The host's mtf-facts as one fact line from facts-resolve.sh (review-run.md, Handover).
+    [ ! -s "$RUN/state/facts" ] || head -n 1 "$RUN/state/facts" | grep -E '^mtf-facts: [ -~]+$' || true
     # The host's wrapper evidence as its own fact lines, read as eval reads it: every line in the
     # grammar of behaviour-pass.sh wrappers and at most 256 of them, or no line at all.
     if [ "$TRIAGE" = false ] && [ -f "$RUN/behaviour/wrappers.txt" ] && [ "$(wc -l < "$RUN/behaviour/wrappers.txt")" -le 256 ] &&
