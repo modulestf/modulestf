@@ -325,9 +325,12 @@ def str_list(f): type == "array" and length <= 4096 and all(.[]; type == "string
 # $bound: the object depth.sh writes, with its binding; else the mtf-facts depth output alone.
 def valid_depth_shape($bound):
   type == "object"
-  and keys == (["format", "depth", "reasons", "checks_out_of_scope", "examples_selected", "examples_out_of_scope",
+  # schema_version: the mtf-facts releases that have it write it next to format, 1 when present.
+  # Only that raw report may hold it: depth.sh drops it, so a bound object never has it.
+  and (if $bound then keys else keys - ["schema_version"] end) == (["format", "depth", "reasons", "checks_out_of_scope", "examples_selected", "examples_out_of_scope",
                 "touched_types", "walk", "limits", "schema_providers", "schema_types", "schema_locks"]
                + (if $bound then ["binding"] else [] end) | sort)
+  and ($bound or (has("schema_version") | not) or .schema_version == 1)
   and .format == 1 and (.depth | IN("light", "focused", "deep"))
   and (.reasons | type == "array" and length > 0 and length <= 64 and all(.[]; depth_reason)
        and length == (unique | length))
