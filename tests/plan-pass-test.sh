@@ -1903,7 +1903,7 @@ check "stall watch: the program is taken from run-pass.sh" "$([ -n "$(swpl "$RP"
 check "stall watch: the refused targets are the filtered hosts and the CONNECT to another port, each once, in tinyproxy's own lines only" \
   "$([ "$(printf '%s\n' "$(swpl "$RP")" 'refused_targets < "$1"' | bash -s "$SW/proxy.log" | tr '\n' ' ')" = 'es.eu-west-1.amazonaws.com:443 ec2.us-east-1.amazonaws.com:80 portless.example ' ] && echo 0 || echo 1)"
 check "stall watch: the record's refused hosts come from the same function" \
-  "$(grep -qx 'refused_targets < "$record/proxy-plan.log" | sort -u > "$record/plan-refused-hosts.txt" || true' "$RP"; echo $?)"
+  "$(grep -qx '  docker logs "$1" 2>&1 | refused_targets | head -c "$max_bytes" >> "$TMPRUN/plan-refused" || true' "$RP" && grep -qx 'sort -u "$TMPRUN/plan-refused" | head -c "$max_bytes" > "$record/plan-refused-hosts.txt" || true' "$RP"; echo $?)"
 { for i in 1 2 3; do refused es.eu-west-1.amazonaws.com:443 "$i"; done; } > "$SW/three.log"
 { for i in 1 2; do refused es.eu-west-1.amazonaws.com:443 "$i"; done; refused sso.us-east-1.amazonaws.com:443 3; } > "$SW/mixed.log"
 swrun "$RP" "$SW/three.log" 0 1 4
@@ -2136,6 +2136,8 @@ in_runner() { # output file, docker arguments; the last is the example
       for i in $(seq 1 60); do [ -e "$W/killed.$runner" ] && break; sleep 0.1
         printf 'NOTICE    Nov 23 22:33:13.%03d [1]: Proxying refused on filtered url "es.eu-west-1.amazonaws.com:443"\n' "$i" >> "$W/proxy.$proxy_plan.log"; done ;;
     cred) printf 'example: %s\nplan: plan pass ended: credentials\ncredentials: session: not issued\n' "$ex" >> "$outf" ;;
+    two) printf 'example: %s\nplan: planned | Plan: 2 to add, 0 to change, 0 to destroy.\nplan: plan pass ended: credentials\n' "$ex" >> "$outf" ;;
+    boom) exit 3 ;;
     eat) sleep 0.3; touch "$W/left0"; printf 'example: %s\nplan: planned | Plan: 9 to add, 0 to change, 0 to destroy.\n' "$ex" >> "$outf" ;;
     err*) sleep 0.4; printf 'example: %s\nplan: code-error\nbase: deferred\nplan summary: forged\n' "$ex" >> "$outf" ;;
     *) sleep "$(awk -v t="${t#a}" 'BEGIN { print t / 10 }')"; printf 'example: %s\nplan: planned | Plan: %s to add, 0 to change, 0 to destroy.\n' "$ex" "${t#a}" >> "$outf" ;;
@@ -2151,6 +2153,8 @@ EOF
       stall) echo 'set -- ex/stall ex/a25 ex/a1' ;;
       budget) echo 'set -- ex/eat ex/a8 ex/a9 ex/a1 ex/a2 ex/a3' ;;
       cred) echo 'set -- ex/a1 ex/cred ex/a5 ex/a6 ex/a7' ;;
+      twoplan) echo 'set -- ex/two ex/a1 ex/a2 ex/a3' ;;
+      boom) echo 'set -- ex/boom ex/a9 ex/a1 ex/a2' ;;
     esac
     ploop "$1"
     # shellcheck disable=SC2016
@@ -2231,6 +2235,57 @@ check "mutation parallel-orphan is caught" "$([ "$(pjint "$PJ/parallel-orphan.sh
 perl -pe 's/^  kill \$all 2> \/dev\/null \|\| true$/  kill "\$1" 2> \/dev\/null || true/' "$RP" > "$PJ/parallel-root-only.sh"
 check "mutation parallel-root-only changes the script" "$(cmp -s "$RP" "$PJ/parallel-root-only.sh"; test $? -eq 1; echo $?)"
 check "mutation parallel-root-only is caught" "$([ "$(pjint "$PJ/parallel-root-only.sh")" = 1 ] && echo 0 || echo 1)"
+# The first plan line alone decides the credentials stop, in the job loop as in the record
+# loop: a block whose later line only reads like it does not stop the run. A job that left no
+# block stops new starts when it is reaped, and the run ends on it.
+pjrun "$RP" twoplan 1; pjrun "$RP" twoplan 3
+check "parallel plans: only the first plan line ends the run at credentials, as in the record loop" \
+  "$([ -s "$PJ/twoplan-1/out" ] && [ "$(pjout twoplan-3)" = "$(pjout twoplan-1)" ] && grep -qx 'r ex/a3' "$PJ/twoplan-3/names" && echo 0 || echo 1)"
+pjmut parallel-credentials-any-line "s/case \"\\\$\\(grep -m 1 '\\^plan: ' \"\\\$TMPRUN\\/block\\.\\\$\\{job_ex\\[k\\]\\}\" \\|\\| true\\)\" in 'plan: plan pass ended: credentials'\\*\\) stop=1 ;; esac/! grep -q '^plan: plan pass ended: credentials' \"\\\$TMPRUN\\/block.\\\${job_ex[k]}\" || stop=1/" \
+  twoplan 3 '[ "$(cat "$D/out")" = "$(pjout twoplan-1)" ]'
+pjrun "$RP" boom 2
+check "parallel plans: a job that left no block starts no further example and ends the run" \
+  "$(grep -q 'ended with no record block' "$PJ/boom-2/err" && ! grep -q 'ex/a1$' "$PJ/boom-2/names" && echo 0 || echo 1)"
+pjmut parallel-no-stop-without-block 's/      else\n        stop=1\n      fi\n/      fi\n/' boom 2 '! grep -q "ex/a1\$" "$D/names"'
+# plan-refused-hosts.txt: every plan proxy's refusals, read from each whole log before the cap,
+# the same for one proxy that saw them all and for one proxy per slot, though proxy-plan.log,
+# capped at max_bytes, keeps other lines.
+prf() { # script, mode (serial or slots) -> the refused hosts file, space separated
+  local d="$PJ/prf-$2"; rm -rf "$d"; mkdir -p "$d/record" "$d/tmp"
+  { printf 'set -uo pipefail\nTMPRUN="%s/tmp" record="%s/record" max_bytes=300 W="%s"\n' "$d" "$d" "$d"
+    echo 'die() { echo "die: $*" >&2; exit 2; }'
+    echo 'docker() { case $1 in logs) cat "$W/log.$2" ;; esac; }'
+    sed -n '/^check_record_size() {/,/^}/p' "$1"; sed -n '/^save_proxy_log() {/,/^}/p' "$1"; swpl "$1"
+    echo ': > "$TMPRUN/plan-refused"'
+    if [ "$2" = serial ]; then echo 'plan_refusals p; save_proxy_log p proxy-plan.log'
+    else echo 'for c in p p-2; do plan_refusals "$c"; save_proxy_log "$c" proxy-plan.log; done'; fi
+    grep -E '^(sort -u "\$TMPRUN/plan-refused"|refused_targets < "\$record/proxy-plan.log")' "$1"; } > "$d/run.sh"
+  refused es.eu-west-1.amazonaws.com:443 1 > "$d/log.p"; printf '%400s\n' pad >> "$d/log.p"
+  if [ "$2" = serial ]; then refused sso.us-east-1.amazonaws.com:443 2 >> "$d/log.p"; else refused sso.us-east-1.amazonaws.com:443 2 > "$d/log.p-2"; fi
+  bash "$d/run.sh" 2> "$d/err"; tr '\n' ' ' < "$d/record/plan-refused-hosts.txt" 2> /dev/null
+}
+check "parallel plans: plan-refused-hosts.txt is the same for one proxy and one proxy per slot, past the log cap" \
+  "$([ "$(prf "$RP" serial)" = 'es.eu-west-1.amazonaws.com:443 sso.us-east-1.amazonaws.com:443 ' ] && [ "$(prf "$RP" slots)" = "$(prf "$RP" serial)" ] && echo 0 || echo 1)"
+check "parallel plans: proxy-plan.log, the evidence, is capped and keeps other lines" \
+  "$([ "$(wc -c < "$PJ/prf-serial/record/proxy-plan.log")" -le 300 ] && ! grep -q sso "$PJ/prf-serial/record/proxy-plan.log" && grep -q sso "$PJ/prf-serial/record/plan-refused-hosts.txt" && echo 0 || echo 1)"
+perl -pe 's/^sort -u "\$TMPRUN\/plan-refused" \| head -c "\$max_bytes" > "\$record\/plan-refused-hosts.txt" \|\| true$/refused_targets < "\$record\/proxy-plan.log" | sort -u > "\$record\/plan-refused-hosts.txt" || true/' "$RP" > "$PJ/refused-from-capped-log.sh"
+check "mutation refused-from-capped-log changes the script" "$(cmp -s "$RP" "$PJ/refused-from-capped-log.sh"; test $? -eq 1; echo $?)"
+check "mutation refused-from-capped-log is caught" "$([ "$(prf "$PJ/refused-from-capped-log.sh" serial)" = 'es.eu-west-1.amazonaws.com:443 sso.us-east-1.amazonaws.com:443 ' ] && echo 1 || echo 0)"
+# A stored pid that is no running job of this shell, as after its job ended and the pid was
+# reused, is never killed.
+pjstale() { # script -> 0 when the unrelated process survives
+  local d="$PJ/stale"; rm -rf "$d"; mkdir -p "$d"
+  sleep 30 & local s=$!
+  { echo 'set -uo pipefail'; sed -n '/^kill_tree() {/,/^cleanup() {/p' "$1" | sed '$d'
+    echo "job_pid=([1]=$s); stop_jobs"; } > "$d/run.sh"
+  bash "$d/run.sh" > /dev/null 2>&1
+  # A killed child stays a zombie until waited for, and kill -0 still finds a zombie
+  case "$(ps -o stat= -p "$s" 2> /dev/null)" in '' | Z*) wait "$s" 2> /dev/null; echo 1 ;; *) kill "$s"; wait "$s" 2> /dev/null; echo 0 ;; esac
+}
+check "parallel plans: a stored pid that is no running job of the shell is not killed" "$(pjstale "$RP")"
+perl -pe 's/\[ -n "\$p" \] && job_running "\$p" && kill_tree/[ -n "\$p" ] \&\& kill_tree/' "$RP" > "$PJ/parallel-stale-pid.sh"
+check "mutation parallel-stale-pid changes the script" "$(cmp -s "$RP" "$PJ/parallel-stale-pid.sh"; test $? -eq 1; echo $?)"
+check "mutation parallel-stale-pid is caught" "$([ "$(pjstale "$PJ/parallel-stale-pid.sh")" = 1 ] && echo 0 || echo 1)"
 # The job cap's argument: 1 to 8, PLAN_JOBS or --jobs, default 3.
 check "parallel plans: the job cap is 1 to 8, from PLAN_JOBS or --jobs, 3 by default" \
   "$(grep -qx 'jobs="${PLAN_JOBS:-3}"' "$RP" && grep -qF '[[ "$jobs" =~ ^[1-8]$ ]] || die "--jobs must be a whole number, 1 to 8"' "$RP" && echo 0 || echo 1)"

@@ -247,8 +247,16 @@ the skill's plan pass whenever a container runtime is available.
   example order, so `plan-pass.txt` is the one a run of one slot writes, whatever order the
   plans end in. No example starts after one that ended at credentials, and a block of an
   example that ran beside it is dropped, as a run of one slot would never have started it.
-  Each container takes 4 GiB of memory at most, so three slots need up to 12 GiB. The init,
-  show, validate, merge base and plan diff phases run one container at a time.
+  Each container takes 4 GiB of memory at most, so three slots need up to 12 GiB. An example's
+  validate container runs in its own slot, after that slot's plan container; the init, show,
+  merge base and plan diff phases run one container at a time.
+  What a verdict reads is the same as with one slot: `plan-pass.txt`, `addresses-<n>.json`
+  and `plan-diff-<n>.json` come from each example's own block and saved plan, and
+  `plan-refused-hosts.txt` from the whole log of every plan proxy, read before any cap, so
+  neither the number of slots nor the 5 MiB cap of `proxy-plan.log` changes it. The evidence
+  files differ: `proxy-plan.log` holds each slot's log one after another, so its line order is
+  not the one-slot order and its cap may keep other lines; `runner.log` takes each plan job's
+  standard error in example order; and each slot from 2 on adds `network-check-plan-<slot>.txt`.
 - **Show phase:** every plan is saved with `-out` into a second volume, the saved plans'
   volume, made writable for the containers' user by a capability-free root container that
   only changes its mode. After the plan phase, one more container per example whose plan

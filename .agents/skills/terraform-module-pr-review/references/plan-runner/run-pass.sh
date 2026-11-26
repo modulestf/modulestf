@@ -19,8 +19,15 @@
 # Each slot has its own internal network and its own plan proxy, so a plan container reaches
 # only its own proxy and the refused-host watcher of each container reads only its own
 # refusals. Each example's block is written under its own index and the record is assembled
-# in example order, so the record is the one a run with --jobs 1 writes, whatever order the
-# plans end in. The init, show and merge base phases run one container at a time, in slot 1.
+# in example order, whatever order the plans end in. What a verdict reads is the same as with
+# --jobs 1: plan-pass.txt, addresses-<n>.json and plan-diff-<n>.json come from the blocks and
+# saved plans of each example alone, and plan-refused-hosts.txt from the whole log of every plan
+# proxy, before any cap. The evidence files are not: proxy-plan.log holds each slot's log one
+# after another, so its line order differs and its 5 MiB cap may keep other lines; runner.log
+# takes each plan job's standard error in example order; and each slot from 2 on adds its own
+# network-check-plan-<slot>.txt. An example's validate container runs in its slot after its
+# plan container; the init, show, merge base and plan diff phases run one container at a time,
+# in slot 1.
 #
 # --clone is a git checkout of the head, as the pull request skill's Workspace makes it, with
 # its origin remote, so the plan pass can fetch --base for a re-run. The record directory must
@@ -136,6 +143,7 @@ fi
 
 TMPRUN="$(mktemp -d "$tmp_parent/plan-runner.XXXXXX")"
 chmod 0700 "$TMPRUN"
+: > "$TMPRUN/plan-refused"
 id="$(basename "$TMPRUN" | tr -dc '[:alnum:]' | tr '[:upper:]' '[:lower:]')"
 sfx="$(printf '%s' "$id" | tail -c 6)"
 RUN="/work/pr-review.$sfx" # the plan pass's run directory, inside the work volume
@@ -169,9 +177,13 @@ kill_tree() { # pid
   kill $all 2> /dev/null || true
 }
 job_pid=() job_ex=() job_poll=1
+# A stored pid is ours only while it is a running job of this shell: once a job ends, its pid
+# may be reused, so neither the poll nor the kill trusts the number alone.
+job_running() { jobs -pr | grep -qx "$1"; }
 stop_jobs() {
   local p
-  for p in ${job_pid[@]+"${job_pid[@]}"}; do [ -z "$p" ] || kill_tree "$p"; done
+  for p in ${job_pid[@]+"${job_pid[@]}"}; do [ -n "$p" ] && job_running "$p" && kill_tree "$p"; done
+  return 0
 }
 cleanup() {
   [ -z "${wpid:-}" ] || kill "$wpid" 2> /dev/null || true
@@ -371,6 +383,12 @@ refused_targets() { # tinyproxy log on stdin -> one line per refused CONNECT tar
     $0 ~ (p "Request \\(file descriptor [0-9]+\\): CONNECT [^ ]+:[0-9]+ HTTP/1\\.[01]$") {
       t = $0; sub(/.*: CONNECT /, "", t); sub(/ HTTP\/1\.[01]$/, "", t); if (t !~ /:443$/) print t }'
 }
+# The refused targets of a plan proxy, read from its whole log before save_proxy_log caps it
+# into proxy-plan.log, so plan-refused-hosts.txt is every plan proxy's refusals however many
+# slots ran and however long the logs are.
+plan_refusals() { # container
+  docker logs "$1" 2>&1 | refused_targets | head -c "$max_bytes" >> "$TMPRUN/plan-refused" || true
+}
 # A host the plan proxy refuses by design (README.md, Refused hosts): the Identity Center and
 # public registry token endpoints, each a whole AWS name in a region of a known partition, on
 # port 443, a closed list. ../skip-coverage.jq holds the same pattern as design_host.
@@ -515,9 +533,15 @@ plan_jobs() {
     busy=0
     for ((k = 1; k <= slots; k++)); do
       [ -n "${job_pid[k]:-}" ] || continue
-      if kill -0 "${job_pid[k]}" 2> /dev/null; then busy=$((busy + 1)); continue; fi
+      if job_running "${job_pid[k]}"; then busy=$((busy + 1)); continue; fi
       wait "${job_pid[k]}" 2> /dev/null || true
-      ! grep -q '^plan: plan pass ended: credentials' "$TMPRUN/block.${job_ex[k]}" 2> /dev/null || stop=1
+      # The first plan line decides, as in the loop below; a job that left no block stops
+      # the run there too, so no example starts after it
+      if [ -f "$TMPRUN/block.${job_ex[k]}" ]; then
+        case "$(grep -m 1 '^plan: ' "$TMPRUN/block.${job_ex[k]}" || true)" in 'plan: plan pass ended: credentials'*) stop=1 ;; esac
+      else
+        stop=1
+      fi
       job_pid[k]=
     done
     k=1
@@ -557,8 +581,8 @@ for ex in "$@"; do
     'plan: plan pass ended: credentials'*) cut=1 ;;
   esac
 done
-save_proxy_log "$proxy_plan" proxy-plan.log
-for k in ${slot_names[@]+"${slot_names[@]}"}; do save_proxy_log "$proxy_plan-$k" proxy-plan.log; done
+plan_refusals "$proxy_plan"; save_proxy_log "$proxy_plan" proxy-plan.log
+for k in ${slot_names[@]+"${slot_names[@]}"}; do plan_refusals "$proxy_plan-$k"; save_proxy_log "$proxy_plan-$k" proxy-plan.log; done
 
 # The saved plan of each example that planned, read outside the container that ran the head's
 # code: no network, no credentials, both volumes read-only. Only an addresses-json line the
@@ -669,7 +693,7 @@ if [ "${#deferred[@]}" -gt 0 ] || [ "${#diffs[@]}" -gt 0 ]; then
     : > "$TMPRUN/example.out"
     plan_container "$TMPRUN/example.out" diff-plan "$n" "${examples[n - 1]}" "$rem"
   done
-  save_proxy_log "$proxy_plan" proxy-plan.log
+  plan_refusals "$proxy_plan"; save_proxy_log "$proxy_plan" proxy-plan.log
 fi
 # The comparison of each plan diff, read outside the containers that ran the head's code, as
 # the show phase is. Only a plan-diff line in its grammar reaches the record, and only an equal
@@ -733,7 +757,7 @@ check_record_size "$TMPRUN/assembled.txt"
 out="$record/plan-pass.txt"
 mv "$TMPRUN/assembled.txt" "$out"
 
-refused_targets < "$record/proxy-plan.log" | sort -u > "$record/plan-refused-hosts.txt" || true
+sort -u "$TMPRUN/plan-refused" | head -c "$max_bytes" > "$record/plan-refused-hosts.txt" || true
 
 for record_file in "$record"/*; do
   check_record_size "$record_file"
