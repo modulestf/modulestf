@@ -252,7 +252,7 @@ A review run again at the same head, as after a reviewer's question or a change 
 - the Terraform version and platform;
 - the bytes of `plan-pass.sh`, which holds the plan command, its fixed environment and region, and of `plan-session.sh` and `plan-session-policy.json`, which make the session;
 - the example's `.terraform.lock.hcl` after `init`, the provider versions and hashes;
-- every file and link under the example directory and each local module directory it reaches, the clone scope, names sorted, `.git` and `.terraform` directories and other lock files left out;
+- every file and link under the example directory and each local module directory it reaches, the clone scope, names sorted, each file read as its own SHA-256 so no file's bytes can pass for the next name, `.git` and `.terraform` directories and other lock files left out;
 - the registry modules `init` resolved, by source and version, and every file under the modules directory `init` filled, less its `modules.json`, which holds local paths.
 
 The plan takes no variables but those files hold: no `-var`, no `-var-file`, and G0 refuses every variables file Terraform reads on its own, so the files are the variables.

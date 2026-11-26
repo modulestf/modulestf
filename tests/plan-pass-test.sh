@@ -2957,6 +2957,13 @@ pc_case_ownerfn() { # private_dir, taken from the script, refuses a directory of
   [ "$(id -u)" != 0 ] || return 0
   ( eval "$(grep '^private_dir() ' "${PCP:-$PP}")"; ! private_dir /usr/bin && private_dir "$TMP" )
 }
+pc_case_frame() { # two trees whose file bytes would frame the same with no digest per file get different keys
+  local k pl; pl="$(sed -n "/^PC_KEY_PL='/,/^'\$/p" "${PCP:-$PP}")"; pl="${pl#PC_KEY_PL=\'}"; pl="${pl%\'}"
+  rm -rf "$TMP/fr"; mkdir -p "$TMP/fr/a" "$TMP/fr/b"
+  printf X > "$TMP/fr/a/a"; printf Y > "$TMP/fr/a/b"; printf 'X\0F\0/b\0Y' > "$TMP/fr/b/a"
+  k="$(perl -e "$pl" "d:$TMP/fr/a")$(perl -e "$pl" "d:$TMP/fr/b")"
+  [ "${#k}" = 128 ] && [ "${k:0:64}" != "${k:64}" ]
+}
 pc_case_owned() { # a cache directory whose parent the user owns is used
   pc_cold bash "${PCP:-$PP}" "$TMP/pc-own" examples/ok
   ! grep -qx 'plan pass: plan cache not used' "$TMP/pc.err" && [ -n "$(pc_entry "$TMP/pc-own" planned)" ]
@@ -2967,7 +2974,7 @@ for sh in bash zsh; do
   command -v "$sh" > /dev/null 2>&1 || continue
   pc_case_example "$sh"; check "$sh: plan cache: the same tree under another example path is a miss" $?
 done
-for c in session modules trim mark sweep exists noshow sticky owned ownerfn; do
+for c in session modules trim mark sweep exists noshow sticky owned ownerfn frame; do
   "pc_case_$c"; check "plan cache: case $c holds" $?
 done
 
@@ -3029,6 +3036,7 @@ pc_fmut exists 's/\[ ! -e "\$PCACHE\/\$PCKEY" \] && mv/mv/' pc_case_exists
 pc_fmut noshow 's/\[ -s "\$SHOWTO" \] && //' pc_case_noshow
 [ -z "$PCSTICKY" ] || pc_fmut sticky 's/ \|\| \[ -k "\$pcp" \]//' pc_case_sticky
 pc_fmut owner 's/(private_dir\(\) \{ \[ -d "\$1" \] && \[ ! -L "\$1" \] && )\[ -O "\$1" \] && /$1/' pc_case_ownerfn
+pc_fmut frame 's/\$d->add\(Digest::SHA->new\(256\)->addfile\(\$h\)->hexdigest, "\\0"\)/\$d->addfile(\$h); \$d->add("\\0")/' pc_case_frame
 pc_fmut owned 's/\[ -O "\$pcp" \] \|\| //' pc_case_owned
 [ -z "$PCSTICKY" ] || rm -rf "$PCSTICKY"
 # The store rule: a copy that stores any class stores the credentials end

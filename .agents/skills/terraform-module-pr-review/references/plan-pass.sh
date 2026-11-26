@@ -1142,7 +1142,8 @@ physical() { [ "$(CDPATH= cd -P -- "$1" 2> /dev/null && pwd -P)" = "$1" ]; }
 fsize() { wc -c < "$1" | tr -d ' '; }
 # The key: t: a text, f: a file's bytes, d: a tree, m: a tree less its top modules.json (Terraform
 # writes local paths there). A tree is every name under it, sorted, with each file's bytes and
-# each link's target; .git and .terraform directories and lock files are left out, the lock file
+# each link's target, each file by its own digest so no file's bytes can read as the next name;
+# .git and .terraform directories and lock files are left out, the lock file
 # of the example being an input of its own.
 PC_KEY_PL='
 use strict; use warnings; use Digest::SHA; use File::Find;
@@ -1150,7 +1151,7 @@ my $d = Digest::SHA->new(256); $d->add("modulestf plan cache 1\0");
 for my $arg (@ARGV) {
   my ($t, $v) = split /:/, $arg, 2;
   if ($t eq "t") { $d->add("t\0$v\0"); next }
-  if ($t eq "f") { exit 1 unless -f $v && !-l $v; $d->add("f\0"); $d->addfile($v, "b"); $d->add("\0"); next }
+  if ($t eq "f") { exit 1 unless -f $v && !-l $v; $d->add("f\0", Digest::SHA->new(256)->addfile($v, "b")->hexdigest, "\0"); next }
   exit 1 unless ($t eq "d" || $t eq "m") && -d $v && !-l $v;
   my @e;
   find({no_chdir => 1, wanted => sub {
@@ -1163,7 +1164,7 @@ for my $arg (@ARGV) {
   for my $x (sort { $a->[1] cmp $b->[1] } @e) {
     my ($k, $r) = @$x; $d->add("$k\0$r\0");
     if ($k eq "L") { $d->add(readlink("$v$r") // "", "\0") }
-    elsif ($k eq "F") { open(my $h, "<", "$v$r") or exit 1; binmode $h; $d->addfile($h); $d->add("\0") }
+    elsif ($k eq "F") { open(my $h, "<", "$v$r") or exit 1; binmode $h; $d->add(Digest::SHA->new(256)->addfile($h)->hexdigest, "\0") }
   }
 }
 print $d->hexdigest, "\n";
