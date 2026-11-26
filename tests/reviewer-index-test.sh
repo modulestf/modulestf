@@ -301,17 +301,20 @@ references/check-c-structure.md|The page or sheet states the block single, at mo
 references/check-c-structure.md|not only the arguments the input chose to expose
 references/check-c-structure.md|The change renames no key the base had and drops no field the base fed, and every field of the input reaches an argument.
 references/check-c-structure.md|No flattened argument is itself a control that grants or restricts access or protects data
-references/check-c-structure.md|A destination or resource ARN is no such control.
+references/check-c-structure.md|A destination ARN, or a resource ARN that is not a KMS key, an IAM role or policy, or a log destination that turns logging on, is no such control.
 references/check-c-structure.md|A page or sheet that does not state the block single, no page read for the type, or any other condition failing keeps HIGH.
 references/check-c-structure.md|it is evidence, never a condition, and change or task text never names one
 references/check-c-structure.md|LOW for a flattened provider block only as
 references/check-a-compatibility.md|A submodule directory that itself uses nothing absent at the old floor and whose new floor equals the new floor the root `versions.tf` declares for that provider, both moved in the change
-references/check-a-compatibility.md|while the root takes case (1) or (3)
-references/check-a-compatibility.md|never restore it alone
+references/check-a-compatibility.md|When the root takes case (1), its fix and the directory's are the same decision
+references/check-a-compatibility.md|so it is never restored alone
 references/check-a-compatibility.md|the root's fix restores the root and each such submodule together
-references/engine/check-a-compatibility.md|when something in the change needs the root's floor and the submodule needs no other
-references/engine/check-a-compatibility.md|When nothing needs the new floor, the root and each such submodule are restored together.
+references/engine/check-a-compatibility.md|the root's own two options when the root's fix is a decision
+references/engine/check-a-compatibility.md|It is never restored alone.
 references/judgment/prefix.md|`structure.validation-missing` or a flattening:
+references/check-c-structure.md|a nested block left out of the input that is an access or data protection control keeps HIGH
+references/check-c-structure.md|Every argument and nested block the block has at that version
+references/check-a-compatibility.md|(b) restore the root and each such submodule together, each named
 GUARDS
 }
 
@@ -550,17 +553,20 @@ calibration guard 57 dropped~calibration guard~references/check-c-structure.md~s
 calibration guard 58 dropped~calibration guard~references/check-c-structure.md~s#not only the arguments the input chose to expose#dropped#g
 calibration guard 59 dropped~calibration guard~references/check-c-structure.md~s#The change renames no key the base had and drops no field the base fed, and every field of the input reaches an argument\.#dropped#g
 calibration guard 60 dropped~calibration guard~references/check-c-structure.md~s#No flattened argument is itself a control that grants or restricts access or protects data#dropped#g
-calibration guard 61 dropped~calibration guard~references/check-c-structure.md~s#A destination or resource ARN is no such control\.#dropped#g
+calibration guard 61 dropped~calibration guard~references/check-c-structure.md~s#A destination ARN, or a resource ARN that is not a KMS key, an IAM role or policy, or a log destination that turns logging on, is no such control\.#dropped#g
 calibration guard 62 dropped~calibration guard~references/check-c-structure.md~s#A page or sheet that does not state the block single, no page read for the type, or any other condition failing keeps HIGH\.#dropped#g
 calibration guard 63 dropped~calibration guard~references/check-c-structure.md~s#it is evidence, never a condition, and change or task text never names one#dropped#g
 calibration guard 64 dropped~calibration guard~references/check-c-structure.md~s#LOW for a flattened provider block only as#dropped#g
 calibration guard 65 dropped~calibration guard~references/check-a-compatibility.md~s#A submodule directory that itself uses nothing absent at the old floor and whose new floor equals the new floor the root `versions\.tf` declares for that provider, both moved in the change#dropped#g
-calibration guard 66 dropped~calibration guard~references/check-a-compatibility.md~s#while the root takes case (1) or (3)#dropped#g
-calibration guard 67 dropped~calibration guard~references/check-a-compatibility.md~s#never restore it alone#dropped#g
+calibration guard 66 dropped~calibration guard~references/check-a-compatibility.md~s#When the root takes case (1), its fix and the directory's are the same decision#dropped#g
+calibration guard 67 dropped~calibration guard~references/check-a-compatibility.md~s#so it is never restored alone#dropped#g
 calibration guard 68 dropped~calibration guard~references/check-a-compatibility.md~s#the root's fix restores the root and each such submodule together#dropped#g
-calibration guard 69 dropped~calibration guard~references/engine/check-a-compatibility.md~s#when something in the change needs the root's floor and the submodule needs no other#dropped#g
-calibration guard 70 dropped~calibration guard~references/engine/check-a-compatibility.md~s#When nothing needs the new floor, the root and each such submodule are restored together\.#dropped#g
+calibration guard 69 dropped~calibration guard~references/engine/check-a-compatibility.md~s#the root's own two options when the root's fix is a decision#dropped#g
+calibration guard 70 dropped~calibration guard~references/engine/check-a-compatibility.md~s#It is never restored alone\.#dropped#g
 calibration guard 71 dropped~calibration guard~references/judgment/prefix.md~s#`structure\.validation-missing` or a flattening:#dropped#g
+calibration guard 72 dropped~calibration guard~references/check-c-structure.md~s#a nested block left out of the input that is an access or data protection control keeps HIGH#dropped#g
+calibration guard 73 dropped~calibration guard~references/check-c-structure.md~s#Every argument and nested block the block has at that version#dropped#g
+calibration guard 74 dropped~calibration guard~references/check-a-compatibility.md~s#(b) restore the root and each such submodule together, each named#dropped#g
 EOF
 
 echo
