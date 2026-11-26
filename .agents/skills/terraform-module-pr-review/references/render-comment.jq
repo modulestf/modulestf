@@ -835,7 +835,8 @@ def rationale($in):
     elif $r == 1 then open("CRITICAL")
     elif $r == 2 then (if any($f[]; .severity == "HIGH") then open("HIGH") else tx("rationale-2-refuted") end) elif $r == 6 then open("MEDIUM")
     elif $r == 3 then
-      if ($in | conflict_only) then tx("rationale-3-conflict")
+      # The conflict wording says the review is a comment, so it needs the event to be one.
+      if ($in | conflict_only) and $in.event == "COMMENT" then tx("rationale-3-conflict")
         + (if ($in | .signals.mergeability = "pass" | ladder).verdict == "inconclusive" then " " + tx("rationale-3-conflict-unknown") else "" end)
       else
       [("checks", "review-decision", "mergeability") as $s
@@ -1506,7 +1507,7 @@ def render($in):
   # Earlier review section say whether it replaces our earlier review (comment-format.md, section 6).
   | ($in.confirmed // $proposed) as $event
   | ($in + {event: $event}) as $in
-  | ($v | rationale($l)
+  | ($v | rationale($l + {event: $event})
      + (if $cov != [] then " " + covered_sentence("rationale-covered"; $in.run; $cov) else "" end)) as $why
   | causes($l; $h; $in.run; $b) as $c
   | (if $v.rule == 8 then [] else todo_items($l; $v.rule; $p;

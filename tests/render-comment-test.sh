@@ -3556,6 +3556,21 @@ mutate "a conflict beside a MEDIUM read as a conflict alone" 's/\n  and \(\(\.si
 mutate "a conflict beside an unknown held as more than a conflict" 's/\(\(\.signals\.mergeability = "pass" \| ladder\)\.verdict != "block"\)/((.signals.mergeability = "pass" | ladder).verdict | IN("block", "inconclusive") | not)/' t_mc_unknown
 mutate "the unknown left out of the conflict rationale" 's/ \+ \(if \(\$in \| \.signals\.mergeability = "pass" \| ladder\)\.verdict == "inconclusive" then " " \+ tx\("rationale-3-conflict-unknown"\) else "" end\)//' t_mc_unknown
 mutate "a conflict beside a failing check read as a conflict alone" 's/def conflict_only: \.signals\.mergeability == "fail" and ladder\.rule == 3\n  and \(\(\.signals\.mergeability = "pass" \| ladder\)\.verdict != "block"\)/def conflict_only: .signals.mergeability == "fail" and ladder.rule == 3 and (.findings | known_medium | not)/' t_mc_checks
+t_mc_confirmed() { render "$NONE" "$(host mc7 "$MC")" "" "" "" --event REQUEST_CHANGES
+  [ "$ST" = 0 ] && [ "$(verdict)" = "block COMMENT" ] && ! grep -qxF "$MCWHY" "$O/comment.md" &&
+  grep -qxF 'Failing host signal: mergeability. A failing host signal blocks merge (ladder rule 3).' "$O/comment.md"; }
+t_mc_confirmed; check "merge conflict: a confirmed REQUEST_CHANGES renders the failing signal rationale, not the comment one" $?
+t_mc_hold() { render "$(pair compat.type-narrowed CRITICAL structure.grouping MEDIUM)" "$(host mc8 "$MC")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 0 ] && [ "$(verdict)" = "hold for the next major COMMENT" ] &&
+  grep -qxF '**Breaking. Hold for the next major release.**' "$O/comment.md" && ! grep -qF 'Rebase needed' "$O/comment.md" &&
+  ! grep -qxF -- "$REBASE" "$O/comment.md"; }
+t_mc_hold; check "merge conflict: beside a rule 0 hold, the hold keeps its line and no rebase item" $?
+t_mc_review() { render "$NONE" "$(host mc9 "$MC"' | .signals.review_decision = "fail"')"
+  [ "$ST" = 0 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ] && grep -qxF -- '- [ ] Resolve the merge conflict.' "$O/comment.md"; }
+t_mc_review; check "merge conflict: beside a reviewer's request for changes, block still proposes REQUEST_CHANGES" $?
+mutate "the conflict rationale under a confirmed REQUEST_CHANGES" 's/conflict_only\) and \$in\.event == "COMMENT" then/conflict_only) then/' t_mc_confirmed
+mutate "the rule 3 guard of a conflict alone dropped" 's/ and ladder\.rule == 3\n/\n/' t_mc_hold
+mutate "a conflict beside a reviewer's request for changes read as a conflict alone" 's/def conflict_only: \.signals\.mergeability == "fail" and ladder\.rule == 3\n  and \(\(\.signals\.mergeability = "pass" \| ladder\)\.verdict != "block"\)/def conflict_only: .signals.mergeability == "fail" and ladder.rule == 3 and (.findings | known_medium | not)/' t_mc_review
 mutate "the rebase item dropped" 's/then "todo-rebase" else/then "todo-mergeability" else/' t_mc_alone
 mutate "the conflict verdict line dropped" 's/if \$conflict then tx\("verdict-conflict"\) else //; s/ \| verdict_line end\) \+ "\*\*"\]/ | verdict_line) + "**"]/' t_mc_alone
 
