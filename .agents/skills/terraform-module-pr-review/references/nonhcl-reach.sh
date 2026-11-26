@@ -255,21 +255,38 @@ gate_at() { # rev, file, var name
 }
 
 # The test evidence of one changed file (verdict.md, Changes outside Terraform): its tested-by line
-# holds when the file is a .py file at the repository root with a plain module name; the change edits
-# nothing under .github/ or the tests dir and no Python test or packaging config at any path; the
-# workflow is a regular file, the same blob at both revisions, naming pytest and the tests dir; the
+# holds when the file is a .py file at the repository root with a plain module name, a regular file at
+# the head with no other root entry named <module> or <module>.<suffix> that Python could import first
+# (any suffix but .tf, .json, .md, .txt, .yaml, .yml, .tftpl, .hcl and .sh); the change adds or renames
+# no path at the repository root but the file, and edits nothing under .github/ or the tests dir, no
+# Python test or packaging config at any path, and no .toml, .ini, .cfg or .pth file at the repository
+# root or in a parent of the tests dir, where pytest and Python read them; the workflow is a regular file, the same blob at both revisions, naming pytest and the tests dir; the
 # tests dir is the same tree at both revisions, holds no entry that shadows the module, and a regular
 # .py file directly in it imports the module at column 0; and the head's check runs whose name starts
 # with the prefix are at least one, each name's latest run completed, success, from github-actions,
 # for the head. Status 1 otherwise.
-cfgre='(^|/)(tox\.ini|pytest\.ini|setup\.cfg|setup\.py|pyproject\.toml|conftest\.py|Pipfile|Pipfile\.lock|requirements[^/]*\.txt)$'
+cfgre='(^|/)(tox\.ini|\.?pytest\.(ini|toml)|setup\.cfg|setup\.py|pyproject\.toml|conftest\.py|sitecustomize\.py|usercustomize\.py|Pipfile|Pipfile\.lock|requirements[^/]*\.txt)$'
 tested_at() { # repository path of the file, tests dir, workflow, prefix
-  local f="$1" td="$2" wf="$3" px="$4" mod ents mode type path t hit=""
+  local f="$1" td="$2" wf="$3" px="$4" mod ents mode type path t hit="" own="" added
   case "$f" in *.py) ;; *) return 1 ;; esac
   mod="${f%.py}"
   [[ "$mod" =~ ^[A-Za-z_][A-Za-z0-9_]{0,63}$ ]] || return 1
+  ents="$(entries "$head" .)" || return 1
+  while read -r mode type path; do
+    case "$path" in
+      "$mod.py") [ "$mode" = 100644 ] && [ "$type" = blob ] || return 1; own=1 ;;
+      "$mod") return 1 ;;
+      "$mod".*) case "${path##*.}" in tf | json | md | txt | yaml | yml | tftpl | hcl | sh) ;; *) return 1 ;; esac ;;
+    esac
+  done <<< "$ents"
+  [ -n "$own" ] || return 1
+  added="$(jq -r '.[] | select(.status != "modified" and .status != "removed") | .filename, (.previous_filename // empty)' "$files" 2> /dev/null)" || return 1
+  ! awk -v f="$f" '$0 != "" && index($0, "/") == 0 && $0 != f { x = 1 } END { exit !x }' <<< "$added" || return 1
   ! grep -Eq '^\.github/' <<< "$changed" || return 1
   ! grep -Eq "$cfgre" <<< "$changed" || return 1
+  ! awk -v td="$td" '{ n = split($0, a, "/"); if (a[n] !~ /\.(toml|ini|cfg|pth)$/) next
+      d = (n == 1) ? "" : substr($0, 1, length($0) - length(a[n]) - 1)
+      if (d == "" || index(td "/", d "/") == 1) x = 1 } END { exit !x }' <<< "$changed" || return 1
   ! awk -v d="$td/" 'index($0, d) == 1 { t = 1 } END { exit !t }' <<< "$changed" || return 1
   [ "$(g ls-tree "$head" -- "$wf" 2> /dev/null | cut -d' ' -f1-2)" = "100644 blob" ] || return 1
   [ "$(g rev-parse "$head:$wf" 2> /dev/null)" = "$(g rev-parse "$base:$wf" 2> /dev/null)" ] || return 1
@@ -280,7 +297,7 @@ tested_at() { # repository path of the file, tests dir, workflow, prefix
   ents="$(entries "$head" "$td")" || return 1
   while read -r mode type path; do
     [ -n "$path" ] || continue
-    [ "$path" != "$mod.py" ] && [ "$path" != "$mod" ] || return 1
+    case "$path" in "$mod" | "$mod".*) return 1 ;; esac
     case "$path" in *.py) ;; *) continue ;; esac
     [ "$mode" = 100644 ] && [ "$type" = blob ] || continue
     [ "$(g cat-file -s "$head:$td/$path" 2> /dev/null)" -le 1048576 ] 2> /dev/null || continue

@@ -377,6 +377,65 @@ t_tindent; check "an import that does not start its line: not tested" $?
 shadow() { tsetup; printf 'x = 1\n' > tests/package.py; }
 t_tshadow() { untested tshadow shadow; }
 t_tshadow; check "a tests dir entry that shadows the module: not tested" $?
+# listed <name> <path>... -> a files list of package.py and those paths, added
+listed() { local n="$1"; shift; jq -n --args '[{filename: "package.py", status: "modified"}] + [$ARGS.positional[] | {filename: ., status: "modified"}]' "$@" > "$TMP/l-$n.json"; }
+cfgcase() { # name, path -> holds when a change of that path tests nothing
+  listed "$1" "$2"; FILES="$TMP/l-$1.json" untested "$1" tsetup "" success
+}
+t_tpytoml() { cfgcase tpytoml sub/pytest.toml && cfgcase tdpytoml sub/.pytest.toml && cfgcase tdpyini sub/.pytest.ini; }
+t_tpytoml; check "a change of pytest.toml, .pytest.toml or .pytest.ini at any path: not tested" $?
+t_tsite() { cfgcase tsite sub/sitecustomize.py && cfgcase tuser sub/usercustomize.py; }
+t_tsite; check "a change of sitecustomize.py or usercustomize.py at any path: not tested" $?
+t_tconftest() { cfgcase tconftest deep/er/conftest.py; }
+t_tconftest; check "a change of conftest.py at any path: not tested" $?
+t_trootext() { cfgcase trootext custom.toml && cfgcase trootini setup.ini && cfgcase trootcfg x.cfg; }
+t_trootext; check "a change of a .toml, .ini or .cfg file at the repository root: not tested" $?
+t_trootpth() { cfgcase trootpth local.pth; }
+t_trootpth; check "a change of a .pth file at the repository root: not tested" $?
+t_tdeepext() { listed tdeep sub/other.toml; FILES="$TMP/l-tdeep.json" tcase tdeep tsetup "" success; }
+t_tdeepext; check "a .toml file outside the root and the tests dir's parents still tests the file" $?
+nested() {
+  mkdir -p a/tests .github/workflows
+  printf 'from package import X\n' > a/tests/test_zip.py
+  printf 'jobs:\n  t:\n    steps:\n      - run: python -m pytest a/tests/\n' > .github/workflows/test.yml
+}
+t_tparentext() {
+  repo tparentext nested; checks success; listed tparentext a/x.cfg
+  printf '%s\n' "${TLINE/ tests / a/tests }" > "$TMP/tnest.txt"
+  FILES="$TMP/l-tparentext.json" RF="$TMP/tnest.txt" run --checks "$TMP/checks.json"; [ "$ST" = 0 ] && [ "$(tested)" = false ] || return 1
+  RF="$TMP/tnest.txt" run --checks "$TMP/checks.json"; [ "$ST" = 0 ] && [ "$(tested)" = true ]
+}
+t_tparentext; check "a change of a .cfg file in a parent of the tests dir: not tested; none: tested" $?
+pkgdir() { mkdir -p package && printf '\n' > package/__init__.py; }
+t_tshadowdir() { untested tshadowdir tsetup pkgdir success; }
+t_tshadowdir; check "a package directory named like the module at the root, even unlisted: not tested" $?
+pkgso() { printf 'elf\n' > package.cpython-312-x86_64-linux-gnu.so; }
+t_tshadowso() { untested tshadowso tsetup pkgso success; }
+t_tshadowso; check "an extension module named like the module at the root, even unlisted: not tested" $?
+pkgpyc() { printf 'pyc\n' > package.pyc; git add -f package.pyc; } # forced past any global ignore
+t_tshadowpyc() { untested tshadowpyc tsetup pkgpyc success; }
+t_tshadowpyc; check "a bytecode file named like the module at the root: not tested" $?
+pkgmd() { printf 'notes\n' > package.md; }
+t_tsiblingok() { tcase tsiblingok tsetup pkgmd success; }
+t_tsiblingok; check "a root file named like the module with a suffix Python does not import still tests the file" $?
+pylink() { printf 'y\n' > real.py; rm package.py; ln -s real.py package.py; }
+t_tpylink() { untested tpylink tsetup pylink success; }
+t_tpylink; check "a changed file that is a link at the head: not tested" $?
+t_taddroot() {
+  jq -n '[{filename: "package.py", status: "modified"}, {filename: "notes.txt", status: "added"}]' > "$TMP/fadd.json"
+  FILES="$TMP/fadd.json" untested taddroot tsetup "" success
+}
+t_taddroot; check "a change that adds a path at the repository root: not tested" $?
+t_trenroot() {
+  jq -n '[{filename: "package.py", status: "modified"}, {filename: "docs/new.txt", previous_filename: "old.txt", status: "renamed"}]' > "$TMP/fren.json"
+  FILES="$TMP/fren.json" untested trenroot tsetup "" success
+}
+t_trenroot; check "a change that renames a path away from the repository root: not tested" $?
+t_taddbelow() {
+  jq -n '[{filename: "package.py", status: "modified"}, {filename: "docs/new.txt", status: "added"}]' > "$TMP/fbelow.json"
+  FILES="$TMP/fbelow.json" tcase taddbelow tsetup "" success
+}
+t_taddbelow; check "a path added below the repository root still tests the file" $?
 t_tsubdir() {
   repo tsubdir tsetup; checks success
   printf 'tested-by example/terraform-aws-lambda sub/package.py tests .github/workflows/test.yml checks Test with Python\n' > "$TMP/tsub.txt"
@@ -462,12 +521,24 @@ mutate "a tests dir that differs at the head taken" 's/  \[ "\$\(g rev-parse "\$
 mutate "a config change taken" 's/  ! grep -Eq "\$cfgre" <<< "\$changed" \|\| return 1\n//' t_tcfg
 mutate "a test file with no import taken" 's/\[ -n "\$hit" \] \|\| return 1/:/' t_tnoimport
 mutate "an import anywhere on a line taken" 's/grep -Eq "\^\(from \$mod/grep -Eq "(from \$mod/' t_tindent
-mutate "a shadowing entry taken" 's/    \[ "\$path" != "\$mod\.py" \] && \[ "\$path" != "\$mod" \] \|\| return 1\n//' t_tshadow
+mutate "a shadowing entry in the tests dir taken" 's/    case "\$path" in "\$mod" \| "\$mod"\.\*\) return 1 ;; esac\n//' t_tshadow
 mutate "a changed file below the repository root read by its base name" 's/mod="\$\{f%\.py\}"/mod="\${f##*\/}"; mod="\${mod%.py}"/' t_tsubdir
 mutate "the repository of a tested-by line not compared" 's/\[ "\$r" != "\$repo" \] \|\| tests=/tests=/' t_tother
 mutate "a tested-by prefix outside the grammar taken" 's/\[\[ "\$\{px-\}" =~ .+? \]\] \|\| die/[[ -n "\${px-}" ]] || die/' t_tbadpx
 mutate "a tested-by line without checks taken" 's/ && \[ "\$\{ck-\}" = checks \]//' t_tbadck
 mutate "two tested-by lines of a file taken" 's/case "\$seen" in \*"\|tested \$r \$f\|"\*\) die ;; esac//' t_ttwice
 mutate "the checks file not read" 's/ \|\| te=true/ || :/' t_tested
+mutate "pytest.toml and the dotted pytest files taken" 's/\\\.\?pytest\\\.\(ini\|toml\)\|/pytest\\.ini|/' t_tpytoml
+mutate "sitecustomize.py and usercustomize.py taken" 's/sitecustomize\\\.py\|usercustomize\\\.py\|//' t_tsite
+mutate "conftest.py taken" 's/\|conftest\\\.py\|/|/' t_tconftest
+mutate "a config file at the repository root taken" 's/if \(d == "" \|\| index/if (index/' t_trootext
+mutate "a .pth file at the repository root taken" 's/\(toml\|ini\|cfg\|pth\)\$\//(toml|ini|cfg)\$\//' t_trootpth
+mutate "a config file in a parent of the tests dir taken" 's/if \(d == "" \|\| index\(td "\/", d "\/"\) == 1\) x = 1/if (d == "") x = 1/' t_tparentext
+mutate "a root entry named like the module taken" 's/sh\) ;; \*\) return 1 ;; esac ;;/sh) ;; *) ;; esac ;;/' t_tshadowso
+mutate "a root package directory taken" 's/      "\$mod"\) return 1 ;;\n//' t_tshadowdir
+mutate "a root bytecode file taken" 's/tf \| json \| md \| txt/pyc | tf | json | md | txt/' t_tshadowpyc
+mutate "a linked changed file taken" 's/"\$mod\.py"\) \[ "\$mode" = 100644 \] && \[ "\$type" = blob \] \|\| return 1; own=1 ;;/"\$mod.py") own=1 ;;/' t_tpylink
+mutate "a path added at the repository root taken" 's/  ! awk -v f="\$f" .*?<<< "\$added" \|\| return 1\n//' t_taddroot
+mutate "the old name of a renamed path not read" 's/"removed"\) \| \.filename, \(\.previous_filename \/\/ empty\)/"removed") | .filename/' t_trenroot
 echo
 if [ "$fails" -eq 0 ]; then echo "nonhcl reach: all checks hold"; else echo "nonhcl reach: $fails failed"; exit 1; fi
