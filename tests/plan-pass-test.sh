@@ -84,6 +84,7 @@ case "\$1" in
 show)
   # The saved plan is read with no credentials, from the file the plan wrote
   [ -z "\$AWS_ACCESS_KEY_ID" ] || echo "show with credentials" >> "$TMP/tf.log"
+  [ ! -f "$TMP/showfail" ] || exit 1 # a plan cache case: a show that prints nothing
   for a; do f="\$a"; done; [ -f "\$f" ] || { echo "Error: no saved plan"; exit 1; }
   cat "$TMP/show.json" ;;
 init)
@@ -93,8 +94,8 @@ init)
   if [ "\${PWD##*/}" = ok ]; then
     mkdir -p "\$TF_DATA_DIR/modules/s3"
     if [ -f "$TMP/modsrc" ]; then cat "$TMP/modsrc"; else echo 'resource "aws_s3_bucket" "this" {}'; fi > "\$TF_DATA_DIR/modules/s3/main.tf"
-    printf '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"s3","Source":"registry.terraform.io/terraform-aws-modules/s3-bucket/aws","Version":"4.1.0","Dir":"%s"}]}\n' \\
-      "\$TF_DATA_DIR/modules/s3" > "\$TF_DATA_DIR/modules/modules.json"
+    printf '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"s3","Source":"registry.terraform.io/terraform-aws-modules/s3-bucket/aws","Version":"%s","Dir":"%s"}]}\n' \\
+      "\$(cat "$TMP/modver" 2> /dev/null || echo 4.1.0)" "\$TF_DATA_DIR/modules/s3" > "\$TF_DATA_DIR/modules/modules.json"
   fi ;;
 plan)
   [ -n "\$AWS_ACCESS_KEY_ID" ] || { echo "Error: no valid credential sources"; exit 1; }
@@ -2790,7 +2791,7 @@ pc_plan() { # shell, plan-pass.sh, cache directory, run directory, then plan arg
 }
 pc_cold() { # shell, plan-pass.sh, cache, examples: a cold run into PCOLD and PCOLDA (the addresses files)
   local s=$1 p=$2 c=$3; shift 3
-  rm -rf "$c"; R="$(newrun)"
+  [ -n "${PC_KEEP:-}" ] || rm -rf "$c"; R="$(newrun)"
   PCOLD="$(pc_plan "$s" "$p" "$c" "$R" demo --role-arn "$ROLE" "$@")"
   PCOLDA="$(cat "$R"/plan-addresses/addresses-*.json 2> /dev/null)"
 }
@@ -2845,6 +2846,10 @@ for sh in bash zsh; do
   R="$(newrun)"; PCP="$TMP/pcm/plan-pass.sh" pc_miss "another plan-pass.sh" ok demo --role-arn "$ROLE" examples/ok
   rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"; echo ' ' >> "$TMP/pcm/plan-session-policy.json"
   R="$(newrun)"; PCP="$TMP/pcm/plan-pass.sh" pc_miss "another session policy" ok demo --role-arn "$ROLE" examples/ok
+  rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"; echo '# edit' >> "$TMP/pcm/plan-session.sh"
+  R="$(newrun)"; PCP="$TMP/pcm/plan-pass.sh" pc_miss "another plan-session.sh" ok demo --role-arn "$ROLE" examples/ok
+  R="$(newrun)"; echo 4.2.0 > "$TMP/modver"
+  pc_miss "another registry module version" ok demo --role-arn "$ROLE" examples/ok; rm -f "$TMP/modver"
   for x in "$C"/*; do touch -t 200001010000 "$x/key"; done
   R="$(newrun)"; pc_miss "an entry older than a day" ok demo --role-arn "$ROLE" examples/ok
   : > "$TMP/tf.log"; pc_plan "$sh" "$PP" "$C" "$(newrun)" demo --role-arn "$ROLE" examples/ok > /dev/null
@@ -2893,6 +2898,79 @@ pc_dir "a cache directory with a trailing slash" "$TMP/pc-ref/"
 echo nonsense > "$TMP/tfver"; pc_dir "a Terraform version it cannot read" "$TMP/pc-ref"; rm -f "$TMP/tfver"
 check "plan cache: a relative cache directory is never made" "$([ ! -e pc-relative ]; echo $?)"
 
+# Case functions: status 0 when the rule held. They plan with ${PCP:-$PP}, so the self-check
+# below runs them on a mutated copy, where a status other than 0 means the mutation was caught.
+pc_withother() { # a run directory whose clone also holds other/err, a copy of examples/err that reaches the same root module
+  R="$(newrun)"; mkdir -p "$R/clone/other"; cp -R "$R/clone/examples/err" "$R/clone/other/err"
+}
+pc_case_example() { # shell: the same tree under another example path is a miss
+  local s=${1:-bash} C="$TMP/pc-ex"; rm -rf "$C"
+  pc_withother; pc_plan "$s" "${PCP:-$PP}" "$C" "$R" demo --role-arn "$ROLE" examples/err > /dev/null
+  pc_withother; : > "$TMP/tf.log"; pc_plan "$s" "${PCP:-$PP}" "$C" "$R" demo --role-arn "$ROLE" other/err > /dev/null
+  planned_in err
+}
+pc_case_session() { # an edited plan-session.sh is a miss (the copy is $TMP/pcm, or one made here)
+  local C="$TMP/pc-se" p="${PCP:-}"
+  if [ -z "$p" ]; then rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"; p="$TMP/pcm/plan-pass.sh"; fi
+  pc_cold bash "$p" "$C" examples/ok; echo '# edit' >> "${p%/*}/plan-session.sh"
+  : > "$TMP/tf.log"; pc_plan bash "$p" "$C" "$(newrun)" demo --role-arn "$ROLE" examples/ok > /dev/null; planned_in ok
+}
+pc_case_modules() { # another registry module version, the module files the same, is a miss
+  local C="$TMP/pc-mv"; pc_cold bash "${PCP:-$PP}" "$C" examples/ok; echo 4.2.0 > "$TMP/modver"
+  : > "$TMP/tf.log"; pc_plan bash "${PCP:-$PP}" "$C" "$(newrun)" demo --role-arn "$ROLE" examples/ok > /dev/null
+  planned_in ok; local r=$?; rm -f "$TMP/modver"; return "$r"
+}
+pc_case_trim() { # 256 entries and a store: the least recently used goes, the new entry stays
+  local C="$TMP/pc-trim" i; rm -rf "$C"; mkdir -m 700 "$C"
+  for i in $(seq 1 256); do mkdir "$C/$(printf '%064x' "$i")"; done
+  touch -t 200001010000 "$C"/0*; mkdir "$C/not-an-entry"; touch -t 199901010000 "$C/not-an-entry"
+  PC_KEEP=1 pc_cold bash "${PCP:-$PP}" "$C" examples/ok
+  [ "$(ls "$C" | grep -Ec '^[0-9a-f]{64}$')" = 256 ] && [ -n "$(pc_entry "$C" planned)" ] && [ -d "$C/not-an-entry" ]
+}
+pc_case_mark() { # a hit marks its entry used
+  local C="$TMP/pc-mark" E; pc_cold bash "${PCP:-$PP}" "$C" examples/ok; E="$(pc_entry "$C" planned)"
+  touch -t 200001010000 "$E"; touch -t 200101010000 "$TMP/mark"
+  : > "$TMP/tf.log"; pc_plan bash "${PCP:-$PP}" "$C" "$(newrun)" demo --role-arn "$ROLE" examples/ok > /dev/null
+  ! planned_in ok && [ -n "$(find "$E" -maxdepth 0 -newer "$TMP/mark")" ]
+}
+pc_case_sweep() { # a store removes a temporary directory over an hour old and keeps a younger one
+  local C="$TMP/pc-sw"; rm -rf "$C"; mkdir -m 700 "$C" "$C/.put.old" "$C/.put.new"; touch -t 200001010000 "$C/.put.old"
+  PC_KEEP=1 pc_cold bash "${PCP:-$PP}" "$C" examples/ok
+  [ ! -e "$C/.put.old" ] && [ -d "$C/.put.new" ] && [ -n "$(pc_entry "$C" planned)" ]
+}
+pc_case_exists() { # a store over an entry another run stored leaves it as it is and does nothing else
+  local C="$TMP/pc-ex2" E; pc_cold bash "${PCP:-$PP}" "$C" examples/ok; E="$(pc_entry "$C" planned)"
+  : > "$E/other-run"; mkdir "$C/.put.old"; touch -t 200001010000 "$C/.put.old"
+  : > "$TMP/tf.log"; pc_plan bash "${PCP:-$PP}" "$C" "$(newrun)" demo --role-arn "$ROLE" --diff-dir . examples/ok > /dev/null
+  planned_in ok && [ -e "$E/other-run" ] && [ -d "$C/.put.old" ] && [ -z "$(find "$E" -name '.put.*')" ]
+}
+pc_case_noshow() { # a planned result whose show printed nothing is not stored
+  local C="$TMP/pc-ns"; : > "$TMP/showfail"; pc_cold bash "${PCP:-$PP}" "$C" examples/ok; rm -f "$TMP/showfail"
+  [ -z "$(ls "$C")" ]
+}
+pc_case_sticky() { # a cache directory under a sticky parent the user does not own is used
+  [ -n "$PCSTICKY" ] || return 0
+  pc_cold bash "${PCP:-$PP}" "$PCSTICKY" examples/ok
+  ! grep -qx 'plan pass: plan cache not used' "$TMP/pc.err" && [ -n "$(pc_entry "$PCSTICKY" planned)" ]
+}
+pc_case_ownerfn() { # private_dir, taken from the script, refuses a directory of another owner
+  [ "$(id -u)" != 0 ] || return 0
+  ( eval "$(grep '^private_dir() ' "${PCP:-$PP}")"; ! private_dir /usr/bin && private_dir "$TMP" )
+}
+pc_case_owned() { # a cache directory whose parent the user owns is used
+  pc_cold bash "${PCP:-$PP}" "$TMP/pc-own" examples/ok
+  ! grep -qx 'plan pass: plan cache not used' "$TMP/pc.err" && [ -n "$(pc_entry "$TMP/pc-own" planned)" ]
+}
+PT="$(cd /tmp && pwd -P)"; PCSTICKY=
+if [ -k "$PT" ] && [ ! -O "$PT" ]; then PCSTICKY="$(mktemp -d "$PT/plan-pass-sticky.XXXXXX")"; else echo "note plan cache: no sticky /tmp of another owner, the sticky parent case is skipped"; fi
+for sh in bash zsh; do
+  command -v "$sh" > /dev/null 2>&1 || continue
+  pc_case_example "$sh"; check "$sh: plan cache: the same tree under another example path is a miss" $?
+done
+for c in session modules trim mark sweep exists noshow sticky owned ownerfn; do
+  "pc_case_$c"; check "plan cache: case $c holds" $?
+done
+
 # Negative self-check: a copy without one rule lets its bad case through
 pc_mut() { # name, perl substitution, then the case: miss <setup> <example> [plan args...] | bad <class> <cmd> <example> | dir <path>
   local n=$1 sub=$2 kind=$3 r; shift 3
@@ -2931,8 +3009,28 @@ pc_mut addresses-cap 's/\[ "\$\(fsize "\$1\/addresses\.json"\)" -le "\$PC_CAP_AD
 pc_mut kept-cap 's/-le 4096 \]/-le 99999999 ]/' bad planned '{ head -c 5000 /dev/zero | tr "\0" x; echo; } > "$E/kept"' ok
 pc_mut kept-line 's/ && \[ "\$\(grep -c .. "\$1\/kept"\)" = 1 \]//' bad planned 'echo more >> "$E/kept"' ok
 pc_mut code-error 's/code-error\) \[ ! -e "\$1\/addresses\.json" \] && \[ ! -L "\$1\/addresses\.json" \] ;;/code-error) ;;/' bad code-error ': > "$E/addresses.json"' err
-[ "$(id -u)" = 0 ] || pc_mut owner 's/(private_dir\(\) \{ \[ -d "\$1" \] && \[ ! -L "\$1" \] && )\[ -O "\$1" \] && /$1/' dir /usr/bin
 pc_mut physical 's/physical "\$pcd" && //' dir "$TMP/pc-ref/"
+pc_fmut() { # name, perl substitution, case function
+  rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"
+  perl -0pe "$2" "$PCREFS/plan-pass.sh" > "$TMP/pcm/plan-pass.sh"
+  if cmp -s "$PCREFS/plan-pass.sh" "$TMP/pcm/plan-pass.sh"; then check "plan cache mutation $1: applies" 1; return; fi
+  PCP="$TMP/pcm/plan-pass.sh" "$3"; local r=$?
+  rm -f "$TMP/lockver" "$TMP/tfver" "$TMP/modsrc" "$TMP/modver" "$TMP/showfail"
+  check "plan cache mutation $1: caught" "$([ "$r" != 0 ]; echo $?)"
+}
+pc_fmut example 's/ "t:example \$PEX"//' pc_case_example
+pc_fmut session 's/ "f:\$HERE\/plan-session\.sh"//' pc_case_session
+pc_fmut modules 's/ "t:modules \$VERSIONS"//' pc_case_modules
+pc_fmut trim 's/PC_MAX_ENTRIES=256/PC_MAX_ENTRIES=9999/' pc_case_trim
+pc_fmut trim-names "s/grep -Ex '\[0-9a-f\]\{64\}' \| tail/cat | tail/" pc_case_trim
+pc_fmut mark 's/  touch -c "\$PCACHE\/\$PCKEY" 2> \/dev\/null; PCKEY=/  PCKEY=/' pc_case_mark
+pc_fmut sweep-age 's/ -mmin \+60//' pc_case_sweep
+pc_fmut exists 's/\[ ! -e "\$PCACHE\/\$PCKEY" \] && mv/mv/' pc_case_exists
+pc_fmut noshow 's/\[ -s "\$SHOWTO" \] && //' pc_case_noshow
+[ -z "$PCSTICKY" ] || pc_fmut sticky 's/ \|\| \[ -k "\$pcp" \]//' pc_case_sticky
+pc_fmut owner 's/(private_dir\(\) \{ \[ -d "\$1" \] && \[ ! -L "\$1" \] && )\[ -O "\$1" \] && /$1/' pc_case_ownerfn
+pc_fmut owned 's/\[ -O "\$pcp" \] \|\| //' pc_case_owned
+[ -z "$PCSTICKY" ] || rm -rf "$PCSTICKY"
 # The store rule: a copy that stores any class stores the credentials end
 rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"
 perl -0pe 's/    code-error\) ;;\n    \*\) return 0 ;;/    *) ;;/' "$PCREFS/plan-pass.sh" > "$TMP/pcm/plan-pass.sh"

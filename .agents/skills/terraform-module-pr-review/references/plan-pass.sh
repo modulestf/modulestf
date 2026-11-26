@@ -1203,12 +1203,19 @@ pc_hit() { # key: true when a usable entry set CLASS, KEPT and the addresses fil
     if [ -L "$pce" ]; then rm -f "$pce"; elif [ -d "$pce" ] && [ -O "$pce" ]; then rm -rf "$pce"; fi
     return 1
   fi
+  # The entry checked, then copied into the pass's own directory and checked again there: what is
+  # read is the copy, so a run trimming the cache meanwhile can only make this a miss.
+  pce="$(mktemp -d "$PLAN/tmp/pc.XXXXXX" 2> /dev/null)" || return 1
+  for f in key class kept addresses.json; do
+    [ ! -e "$PCACHE/$PCKEY/$f" ] || cp -p "$PCACHE/$PCKEY/$f" "$pce/" 2> /dev/null || return 1
+  done
+  pc_ok "$pce" || return 1
   pcc="$(cat "$pce/class")"
   # A plan diff needs the plan itself, so an example that reaches a plan diff directory plans
   if [ "$pcc" != code-error ] && [ -n "$DIFFDIRS" ] && reaches "$PEX" "$pce/addresses.json"; then return 1; fi
-  CLASS=$pcc; KEPT="$(cat "$pce/kept")"; PCKEY=
+  CLASS=$pcc; KEPT="$(cat "$pce/kept")"
   [ "$CLASS" = code-error ] || cat "$pce/addresses.json" > "$SHOWTO"
-  touch -c "$pce" 2> /dev/null
+  touch -c "$PCACHE/$PCKEY" 2> /dev/null; PCKEY=
   echo "plan pass: plan cache hit $PEX" >&2
 }
 pc_put() { # key: the head plan just run, stored as an entry, whole or not at all
@@ -1244,7 +1251,11 @@ if [ "$GMODE" = laptop ] && [ -z "$PHASE" ]; then
     PCTF="$(env -i PATH="/usr/bin:/bin:$TFDIR" HOME="$PLAN/home" TMPDIR="$PLAN/tmp" TF_CLI_CONFIG_FILE="$PLAN/cli.tfrc" \
       CHECKPOINT_DISABLE=1 terraform version -json < /dev/null 2> /dev/null | jq -r '"\(.terraform_version) \(.platform)"' 2> /dev/null |
       grep -Ex '[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]* [a-z0-9_]+')"
-    case "$pcd" in /?*) physical "$pcd" && private_dir "$pcd" && [ -n "$PCTF" ] && PCACHE=$pcd ;; esac
+    # The parent the user owns, or one with the sticky bit, so no other user can rename the
+    # directory away and put another in its place
+    pcp="${pcd%/*}"; [ -n "$pcp" ] || pcp=/
+    case "$pcd" in /?*) physical "$pcd" && private_dir "$pcd" && { [ -O "$pcp" ] || [ -k "$pcp" ]; } &&
+      [ -n "$PCTF" ] && PCACHE=$pcd ;; esac
     [ -n "$PCACHE" ] || echo "plan pass: plan cache not used" >&2
   fi
 fi
