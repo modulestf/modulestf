@@ -271,7 +271,7 @@ for my $n (sort grep { $_ ne "." && $_ ne ".." } readdir $dh) {
 # a source: the scanner below walks the text and tracks the blocks.
 # One line each, "touched<TAB><dir>" when the change has a path under it, else
 # "caller<TAB><dir>", touched first, each in byte order. A name outside [A-Za-z0-9._-], a link,
-# a .tf file that is a link or over 1 MiB, and a source that climbs out of the repository are
+# a .tf file that is a link or over 2 MiB, and a source that climbs out of the repository are
 # never read or followed. Exit 3: not an array of file objects.
 ROOTEX_PL='
 use strict; use warnings; use JSON::PP; use Cwd qw(realpath);
@@ -343,7 +343,7 @@ for my $n (sort grep { /\A[A-Za-z0-9._-]+\z/ && $_ ne "." && $_ ne ".." } readdi
   for my $f (sort grep { /\.tf\z/ } readdir $d2) {
     my $fp = "$p/$f";
     my $sz = -s $fp // 0;
-    next if -l $fp || !-f $fp || $sz > 1048576;
+    next if -l $fp || !-f $fp || $sz > 2097152;
     $bytes_left -= $sz;
     if (--$files_left < 0 || $bytes_left < 0) { $files_left = -1; last }
     open my $fh, "<", $fp or next;

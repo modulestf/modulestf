@@ -881,7 +881,8 @@ run_rr cleanup "$RUN" > /dev/null
 # schema_inputs, taken from the script, on a tree with each case of the handoff's file set.
 SI="$TMP/si"; mkdir -p "$SI/state" "$SI/clone/a"
 (cd "$SI/clone" && git init -q && printf 'x\n' > a/main.tf && printf 'y\n' > run.tf && chmod 755 run.tf &&
-  ln -s a/main.tf link.tf && head -c 1048577 /dev/zero > big.tf && head -c 1048576 /dev/zero > max.tf &&
+  ln -s a/main.tf link.tf && head -c 2097153 /dev/zero > big.tf && head -c 2097152 /dev/zero > max.tf &&
+  head -c 1572864 /dev/zero | tr '\0' ' ' > mid.tf &&
   printf 'z\n' > notes.md && git add . && git -c user.name=t -c user.email=t@t commit -qm i)
 SIC="$(git -C "$SI/clone" rev-parse HEAD)"
 si_fn() { sed -n '/^if command -v sha256sum /p; /^clone_git() {/,/^}/p; /^schema_inputs() {/,/^}/p' "${1:-$RR}"; }
@@ -890,17 +891,17 @@ si() { # [script] commit...: the tokens, then "status <n>"
   bash -c "set -uo pipefail; set -f; $(si_fn "$f")"'; RUN="$1"; shift; schema_inputs "$@"; echo "status $?"' _ "$SI" "$@"
 }
 sha_of() { git -C "$SI/clone" cat-file blob "$SIC:$1" | shasum -a 256 | cut -d' ' -f1; }
-check "schema_inputs: regular .tf blobs of at most 1 MiB, 100644 and 100755, no link, no larger blob, no other file" \
-  "$([ "$(si "$SIC")" = "$(printf '%s\n' "$SIC:$(sha_of a/main.tf):a/main.tf" "$SIC:$(sha_of max.tf):max.tf" "$SIC:$(sha_of run.tf):run.tf" 'status 0')" ]; echo $?)"
+check "schema_inputs: regular .tf blobs of at most 2 MiB, the facts engine's file size cap, 100644 and 100755, no link, no larger blob, no other file" \
+  "$([ "$(si "$SIC")" = "$(printf '%s\n' "$SIC:$(sha_of a/main.tf):a/main.tf" "$SIC:$(sha_of max.tf):max.tf" "$SIC:$(sha_of mid.tf):mid.tf" "$SIC:$(sha_of run.tf):run.tf" 'status 0')" ]; echo $?)"
 (cd "$SI/clone" && printf 'h\n' > "$(printf 'x.tf\n%s:%s:y' "$SIC" "$(printf 'cd%.0s' $(seq 32))").tf" && git add -A && git -c user.name=t -c user.email=t@t commit -qm n)
 SIN="$(git -C "$SI/clone" rev-parse HEAD)"
 check "schema_inputs: a path with a newline forges no token and gives no inputs" "$([ "$(si "$SIN")" = 'status 1' ]; echo $?)"
 (cd "$SI/clone" && git reset -q --hard "$SIC" && printf 'h\n' > 'my file.tf' && git add -A && git -c user.name=t -c user.email=t@t commit -qm s)
 check "schema_inputs: a path with a space gives no inputs" "$([ "$(si "$(git -C "$SI/clone" rev-parse HEAD)")" = 'status 1' ]; echo $?)"
-(cd "$SI/clone" && git reset -q --hard "$SIC" && mkdir m && for i in $(seq 597); do printf '%s\n' "$i" > "m/f$i.tf"; done &&
+(cd "$SI/clone" && git reset -q --hard "$SIC" && mkdir m && for i in $(seq 596); do printf '%s\n' "$i" > "m/f$i.tf"; done &&
   git add -A && git -c user.name=t -c user.email=t@t commit -qm c)
 SIM="$(git -C "$SI/clone" rev-parse HEAD)"
-check "schema_inputs: 600 inputs pass, 603 across two commits give none" \
+check "schema_inputs: 600 inputs pass, 604 across two commits give none" \
   "$([ "$(si "$SIM" | tail -n 1)" = 'status 0' ] && [ "$(si "$SIM" | wc -l | tr -d ' ')" = 601 ] && [ "$(si "$SIM" "$SIC")" = 'status 1' ]; echo $?)"
 check "schema_inputs: a commit that is not in the clone gives no inputs" "$([ "$(si "$(printf 'ef%.0s' $(seq 20))")" = 'status 1' ]; echo $?)"
 # A module root below the repository root: only the blobs under it, each path relative to it,
@@ -925,7 +926,10 @@ si_mut() { # name, perl expression, commits as one word, expected output of the 
   if cmp -s "$RR" "$m"; then check "self-check: schema_inputs mutation $1 changes the script" 1; return; fi
   check "self-check: schema_inputs mutation $1 is caught" "$([ "$(si "$m" $3)" != "$4" ]; echo $?)"
 }
-si_mut no-size 's/\]\] && \[ "\$s" -le 1048576 \] \|\| continue$/]] || continue/' "$SIC" "$(si "$SIC")"
+si_mut no-size 's/\]\] && \[ "\$s" -le 2097152 \] \|\| continue$/]] || continue/' "$SIC" "$(si "$SIC")"
+# The cap of 1 MiB the gate had before the facts engine raised its own: a 1.5 MiB .tf blob is left out,
+# so the handoff tree hash would not match the one the engine computes for the same tree.
+si_mut one-mib 's/\]\] && \[ "\$s" -le 2097152 \] \|\| continue$/]] && [ "\$s" -le 1048576 ] || continue/' "$SIC" "$(si "$SIC")"
 si_mut no-mode 's/\^100\(644\|755\)\$/^[0-9]+\$/' "$SIC" "$(si "$SIC")"
 si_mut no-charset 's/\[\[ "\$p" =~ \^\[A-Za-z0-9\._\/-\]\+\$ && /[[ /' "$SIN" 'status 1'
 si_root_mut() { # name, perl expression: a weakened copy must change the module root a tokens

@@ -796,6 +796,21 @@ $BASE" --out "$R3/x.json")"
   for i in 1 2 3 4 5 6; do mkdir "$C10/examples/copy$i"; cp "$C10/examples/big/main.tf" "$C10/examples/copy$i/"; done
   check "$sh: past 8 MiB read, every root example is selected with reason all" \
     "$(q <(sel10) '[.dirs[].affected] | length == 9 and all(. == "all")')"
+  # A .tf file of 1.5 MiB, under the facts engine's 2 MiB file size cap, is read and its call found;
+  # one over 2 MiB is not read. A copy that keeps the 1 MiB cap misses the 1.5 MiB call.
+  R11="$(mktemp -d "$TMP/pr-review.XXXXXX")"; C11="$R11/clone"
+  mkdir -p "$C11/modules/a" "$C11/examples/mid" "$C11/examples/over"
+  echo 'variable "v" {}' > "$C11/modules/a/main.tf"
+  for e in mid:1572864 over:2100000; do
+    { head -c "${e#*:}" /dev/zero | tr '\0' '\n'; printf 'module "a" {\n  source = "../../modules/a"\n}\n'; } > "$C11/examples/${e%%:*}/main.tf"
+  done
+  git -C "$C11" init -q && git -C "$C11" add -A && git -C "$C11" -c user.name=t -c user.email=t@example.invalid commit -qm head
+  sel11() { PATH="$TMP/none:$TMP/bin:/usr/bin:/bin" "$sh" "${1:-$VP}" select "$R11" --files "$TMP/files10.json" --prefix modules/a 2>&1; }
+  check "$sh: a .tf file of 1.5 MiB is read and its call found, one over 2 MiB is not read" \
+    "$(q <(sel11) '[.dirs[] | "\(.affected) \(.dir)"] == ["caller examples/mid"]')"
+  perl -pe 's/\$sz > 2097152;/\$sz > 1048576;/' "$VP" > "$TMP/vp-1mib.sh"
+  check "$sh: the mutation that keeps the 1 MiB cap is caught" \
+    "$( ! cmp -s "$VP" "$TMP/vp-1mib.sh" && [ "$(q <(sel11 "$TMP/vp-1mib.sh") '[.dirs[] | "\(.affected) \(.dir)"] == ["caller examples/mid"]')" != 0 ]; echo $?)"
 
   # The selection reaches the results and the check binds it.
   facts '{schema_version:1, inert:false, fallback:null, changed:["main.tf"],

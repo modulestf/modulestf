@@ -34,6 +34,7 @@ set -f
 export LC_ALL=C
 
 CAP=1048576
+TF_CAP=2097152 # the facts engine's file size cap: a .tf file null_vars reads
 CLAIMS_CAP=65536
 sha_re='^[0-9a-f]{40}$'
 deadline="${BEHAVIOUR_PASS_TIMEOUT:-120}"
@@ -194,7 +195,7 @@ run_facts() {
 # over {}, [] and (), the block ends where it returns to zero within 200 lines, and the block must
 # hold exactly one `default` attribute at depth 1, whose value is exactly `null`, and no `nullable`
 # attribute at depth 1. A `default` deeper in is part of the type and ignored. Anything else, a
-# link, a file that resolves outside the module root or is over 1 MiB gives no entry. A variable is
+# link, a file that resolves outside the module root or is over 2 MiB gives no entry. A variable is
 # one of its module directory, so the directory is part of the key.
 # <out>/required.json, "<type>.<path>" for each attribute the given provider schema requires and
 # each block with min_items above 0, at every block depth, on a type a trigger names; a schema this
@@ -204,7 +205,7 @@ null_vars() {
   root="$(cd "$dir" && pwd -P)" || return 0
   while IFS=$'\t' read -r name file line; do
     local f="$dir/$file" real
-    [ -f "$f" ] && [ ! -L "$f" ] && [ "$(wc -c < "$f")" -le "$CAP" ] || continue
+    [ -f "$f" ] && [ ! -L "$f" ] && [ "$(wc -c < "$f")" -le "$TF_CAP" ] || continue
     real="$(CDPATH= cd -- "$(dirname -- "$f")" && pwd -P)/$(basename "$f")" || continue
     case "$real" in "$root"/*) ;; *) continue ;; esac
     perl -e '

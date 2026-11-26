@@ -433,8 +433,15 @@ t_unex_open() { blk 'variable "new_idle" {' '  description = "open' '  default =
 t_unex_open; check "unexercised: a string left open is not read" $?
 t_unex_long() { { echo 'variable "new_idle" {'; for _ in $(seq 205); do echo; done; echo '  default = null'; echo '}'; } > "$TMP/blk-$c"; nvblock "$TMP/blk-$c"; }
 t_unex_long; check "unexercised: a block past 200 lines is not read" $?
-t_unex_big() { { echo 'variable "new_idle" {'; echo '  default = null'; echo '}'; head -c 1100000 /dev/zero | tr '\0' ' '; echo; } > "$TMP/blk-$c"; nvblock "$TMP/blk-$c"; }
-t_unex_big; check "unexercised: a variables file over 1 MiB is not read" $?
+t_unex_big() { { echo 'variable "new_idle" {'; echo '  default = null'; echo '}'; head -c 2200000 /dev/zero | tr '\0' ' '; echo; } > "$TMP/blk-$c"; nvblock "$TMP/blk-$c"; }
+t_unex_big; check "unexercised: a variables file over 2 MiB, the facts engine's file size cap, is not read" $?
+# A variables file of 1.5 MiB, under that cap, is read and its variable marked.
+t_unex_mid() {
+  local keep="$UMOD"; UMOD="$TMP/unex-head-mid"; rm -rf "$UMOD"; cp -R "$keep" "$UMOD"
+  { cat "$keep/variables.tf"; head -c 1572864 /dev/zero | tr '\0' ' '; echo; } > "$UMOD/variables.tf"
+  unex; UMOD="$keep"; [ "$(marked)" != '[]' ] && [ "$(cat "$O/nullvars.json")" != '[]' ]
+}
+t_unex_mid; check "unexercised: a variables file of 1.5 MiB is read and its variable marked" $?
 # The same name in two module directories (a root variable that defaults to true, a submodule that
 # adds it with a null default): only the submodule's pass-through and variable are marked.
 UMOD2="$TMP/unex-dirs"; mkdir -p "$UMOD2/modules/a"
@@ -1260,7 +1267,8 @@ wmutate "unexercised: a variable of another directory accepted" 's/\(\{dir: \(\$
 wmutate "unexercised: the variable's trigger of another directory accepted" 's/and \(\{dir: \(\$t\.file \| tdir\), name: ltrimstr\("var\."\)\} \| IN\(\$nv\[\]\)\)/and (ltrimstr("var.") | IN(\$nv[].name))/' t_unex_dirs_follow
 wmutate "unexercised: the directory not written" 's/list="\$list\$\(dirname "\$file"\)"/list="\$list."/' t_unex_dirs
 wmutate "unexercised: a file outside the module root read" 's/    case "\$real" in "\$root"\/\*\) ;; \*\) continue ;; esac\n//' t_unex_outside
-wmutate "unexercised: the 1 MiB cap dropped" 's/ && \[ "\$\(wc -c < "\$f"\)" -le "\$CAP" \]//' t_unex_big
+wmutate "unexercised: the 2 MiB cap dropped" 's/ && \[ "\$\(wc -c < "\$f"\)" -le "\$TF_CAP" \]//' t_unex_big
+wmutate "unexercised: the 1 MiB cap kept" 's/^TF_CAP=2097152/TF_CAP=1048576/m' t_unex_mid
 wmutate "unexercised: the 200-line bound dropped" 's/rmax=200/rmax=100000/' t_unex_long
 wmutate "unexercised: a function around the variable accepted" 's/else \$t\.head_expr == "var\.\\\(\$n\)" end/else true end/' t_unex_wrap
 wmutate "unexercised: other references accepted" 's/def null_pass\(\$t\): \(\$t\.contextual_refs == \[\]\) and/def null_pass(\$t): true and/' t_unex_ctx
