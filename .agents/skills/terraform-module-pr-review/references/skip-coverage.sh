@@ -35,7 +35,9 @@ case "$ROOT" in /?*) ;; *) die "the run directory must be absolute" ;; esac
 case "$RUN" in "$ROOT"/pr-review.??????) ;; *) die "not a run directory: $RUN" ;; esac
 [ -d "$RUN/clone" ] || die "no clone in $RUN"
 shift 2
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+# shellcheck source=facts-resolve.sh
+. "$HERE/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
 PP="$HERE/plan-pass.sh"
 [ -f "$PP" ] || die "no plan-pass.sh beside this script"
 
@@ -146,38 +148,45 @@ CLONE="$(cd "$RUN/clone" && pwd -P)"
 HEADOK=false
 [ "$(git -C "$CLONE" rev-parse --verify 'HEAD^{commit}' 2> /dev/null)" = "$HEADSHA" ] && HEADOK=true
 
-# The facts engine's changes report (skip-coverage.md, The facts engine): the first mtf-facts on
-# PATH from an absolute entry, every link resolved and outside the run directory, whose
-# version --json lists the feature cmd:changes and changes report version 1. It rebuilds the base
-# from --files and reads both sides with the HCL parser. A missing, old, failing, late or
-# oversized engine leaves the report null: no .tf file is then allowed and no directory declares
-# a data source type.
+# The facts engine's changes report (skip-coverage.md, The facts engine). mtf-facts is found by
+# facts-resolve.sh: from /, canonical, outside the run directory and the clone, its version
+# report read once under its limits. The engine runs only when that report lists the feature
+# cmd:changes and changes report version 1, under a deadline of SKIP_COVERAGE_FACTS_TIMEOUT
+# seconds and an output cap, and its whole report must have the shape below before any of it
+# is read. It rebuilds the base from --files and reads both sides with the HCL parser. A
+# missing, old, failing, late, oversized or malformed engine leaves the report null: no .tf file
+# is then allowed and no directory declares a data source type.
 FACTS_TIMEOUT=${SKIP_COVERAGE_FACTS_TIMEOUT:-120}
+case "$FACTS_TIMEOUT" in ''|*[!0-9]*|0*) die "SKIP_COVERAGE_FACTS_TIMEOUT must be a whole number of seconds, 1 or more" ;; esac
 FACTS_CAP=16777216
-facts_bin() {
-  local f d
-  f="$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r d; do
-         case "$d" in /?*) [ -f "$d/mtf-facts" ] && [ -x "$d/mtf-facts" ] && { printf '%s\n' "$d/mtf-facts"; break; } ;; esac
-       done)"
-  [ -n "$f" ] || return 0
-  f="$(perl -MCwd=abs_path -e 'print abs_path(shift) // ""' "$f")"
-  case "$f/" in "$RUN"/*|"$CLONE"/*|/) return 0 ;; esac
-  printf '%s' "$f"
-}
-run_facts() { # output file, arguments: 0 when mtf-facts exited 0 within the deadline and the cap
-  local o="$1"; shift
-  { (cd "$W" && exec perl -e 'alarm shift; exec @ARGV or exit 127' "$FACTS_TIMEOUT" "$FACTS" "$@") 2> /dev/null
-    echo "$?" > "$W/rc"; } | head -c $((FACTS_CAP + 1)) > "$o"
-  [ "$(cat "$W/rc")" = 0 ] && [ "$(wc -c < "$o")" -le "$FACTS_CAP" ]
-}
-FACTS="$(facts_bin)"
+# shellcheck disable=SC2016 # a jq program
+CHANGES_SHAPE_JQ='length == 1 and (.[0] | type == "object" and .schema_version == 1
+  and (.files | type == "array" and all(.[]; type == "object" and (.path | type == "string") and (.status | type == "string")
+    and (.parsed | type == "boolean") and (.outside | type == "boolean")
+    and (.blocks | type == "array" and all(.[]; type == "object" and (.address | type == "string" and test("^[!-~]{1,300}\\z"))
+      and (.kind | type == "string") and (.status | type == "string") and (.structural | type == "boolean")
+      and (.attributes | type == "array" and all(.[]; type == "object"
+        and (.name | type == "string" and test("^[A-Za-z0-9_-]{1,255}\\z"))
+        and (.read == "read" or .read == "unread" or .read == "unknown")
+        and (.plain | type == "object" and (.head | type == "boolean") and (.base | type == "boolean"))))))))
+  and (.data_sources | type == "array" and all(.[]; type == "object" and (.dir | type == "string") and (.complete | type == "boolean")
+    and (.types | type == "array" and all(.[]; type == "string")))))'
+facts_resolve "$RUN" "$CLONE"
+FACTS=$FACTS_BIN
 echo null > "$W/changes.json"
-if [ -n "$FACTS" ] && run_facts "$W/version.json" version --json \
-  && jq -e '(.features | index("cmd:changes")) != null and .reports.changes == 1' "$W/version.json" > /dev/null 2>&1 \
-  && run_facts "$W/changes.out" changes "$CLONE" --diff "$FILES" --json --timeout "${FACTS_TIMEOUT}s" \
-  && jq -e 'type == "object" and .schema_version == 1 and (.files | type == "array") and (.data_sources | type == "array")' \
-       "$W/changes.out" > /dev/null 2>&1; then
+: > "$W/refs.txt"
+# The changed attributes some expression of the module reads (skip-coverage.md, Design skips):
+# each "<address> <attribute>" pair the report does not give as unread. A report whose pairs
+# cannot be listed is no report.
+if [ "$FACTS_STATE" = ok ] && facts_has cmd:changes \
+  && printf '%s\n' "$FACTS_REPORT" | jq -e '.reports | type == "object" and .changes == 1' > /dev/null 2>&1 \
+  && (cd "$W" && facts_run "$FACTS_TIMEOUT" "$FACTS_CAP" "$FACTS" changes "$CLONE" --diff "$FILES" --json --timeout "${FACTS_TIMEOUT}s") > "$W/changes.out" \
+  && jq -e -s "$CHANGES_SHAPE_JQ" "$W/changes.out" > /dev/null 2>&1 \
+  && jq -r '.files[]?.blocks[]? | .address as $a | .attributes[] | select(.read != "unread") | "\($a) \(.name)"' \
+       "$W/changes.out" > "$W/refs.tmp" \
+  && LC_ALL=C sort -u "$W/refs.tmp" > "$W/refs.new"; then
   mv -- "$W/changes.out" "$W/changes.json"
+  mv -- "$W/refs.new" "$W/refs.txt"
 fi
 
 # Per changed file one JSON line {file, dir, ok, attrs}: a modified *.md is allowed with no
@@ -206,18 +215,13 @@ while IFS= read -r row; do
     | (if $kind == "md" then {ok: $mdok, attrs: []}
        elif $e != null and $e.status == "modified" and $e.parsed == true and $e.outside == false and ($e.blocks | length) > 0
          and all($e.blocks[]; .status == "edited" and .structural == false and (.attributes | length) > 0
-           and ((.kind == "resource" and (.address | test("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$")))
-             or (.kind == "data" and (.address | test("^data\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"))))
+           and ((.kind == "resource" and (.address | test("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z")))
+             or (.kind == "data" and (.address | test("^data\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z"))))
            and all(.attributes[]; .plain.head == true and .plain.base == true))
        then {ok: true, attrs: [$e.blocks[] | .address as $a | .attributes[] | {address: $a, attribute: .name}]}
        else {ok: false, attrs: []} end)
     | {file: $f, dir: ($f | if test("/") then sub("/[^/]*$"; "") else "." end)} + .' "$W/changes.json" >> "$W/classes.jsonl"
 done < "$W/files.jsonl"
-
-# The changed attributes some expression of the module reads (skip-coverage.md, Design skips):
-# each "<address> <attribute>" pair the report does not give as unread.
-jq -r '.files[]?.blocks[]? | .address as $a | .attributes[] | select(.read != "unread") | "\($a) \(.name)"' \
-  "$W/changes.json" | sort -u > "$W/refs.txt"
 
 # The data source types of each refused-host example directory (skip-coverage.md, Design skips):
 # one {dir: [type]} line per directory, the report's types when it read every file there, none
