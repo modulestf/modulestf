@@ -1520,5 +1520,68 @@ t_cdpath; check "with CDPATH set the script reads facts-resolve.sh from its own 
 wmutate "the script directory read through the script name" 's/HERE="\$\(CDPATH= cd -- "\$\(dirname -- "\$0"\)" && pwd -P\)"/HERE="\${0%\/*}"/' t_bare
 wmutate "the script directory looked up through CDPATH" 's/CDPATH= cd -- /cd /' t_cdpath
 
+# --- Caller code (behaviour-pass.md, Caller Code): the classifier marks a literal of an examples/ or
+# tests/ file `caller_code` and claims-eval reads it as inert, after a refuted check. That reading
+# holds only for a tree that is the whole repository: under a module root prefix a root configuration
+# outside the tree may load the example, so the pass drops it and the trigger is unverifiable. A
+# refuted trigger, an inert one the tool did not mark and a prefix of "" are as before.
+CBEH='{"schema_version":1,"inert":false,
+ "entries":[{"path":"examples/complete/main.tf","change_kind":"modified","inert":false,"trigger_ids":["T-001"]},
+            {"path":"main.tf","change_kind":"modified","inert":false,"trigger_ids":["T-002"]},
+            {"path":"tests/basic/main.tf","change_kind":"modified","inert":false,"trigger_ids":["T-003"]}],
+ "triggers":[{"id":"T-001","file":"examples/complete/main.tf","line":3,"category":"literal-argument-change","caller_code":true},
+  {"id":"T-002","file":"main.tf","line":2,"category":"literal-argument-change"},
+  {"id":"T-003","file":"tests/basic/main.tf","line":4,"category":"literal-argument-change","caller_code":true}],"capped":0}'
+CEV='{"schema_version":1,"capped":0,"triggers":[{"id":"T-001","state":"inert"},{"id":"T-002","state":"inert"},{"id":"T-003","state":"refuted"}],
+ "claims":[],"discarded_claims":[]}'
+CPFX=modules/sub
+jq -n --arg p "$CPFX/" '[{filename: ($p + "examples/complete/main.tf"), status: "modified"}, {filename: ($p + "main.tf"), status: "modified"},
+  {filename: ($p + "tests/basic/main.tf"), status: "modified"}]' > "$TMP/files-c-pfx.json"
+jq 'map(.filename |= ltrimstr("modules/sub/"))' "$TMP/files-c-pfx.json" > "$TMP/files-c.json"
+caller() { # prefix ("" for none) -> the eval of the caller code fixture, run object in $O
+  setup; printf '%s\n' "$CBEH" > "$TMP/behaviour.out"; printf '%s\n' "$CEV" > "$TMP/eval.out"
+  if [ -n "$1" ]; then DIFF="$TMP/files-c-pfx.json" PFX="$1" classify; evalp --prefix "$1"; else DIFF="$TMP/files-c.json" classify; evalp; fi
+}
+t_caller_none() { # no prefix: the tool's reading stands
+  caller "" && [ "$(q '[.triggers[] | {id, state}] == [{id: "T-001", state: "inert"}, {id: "T-002", state: "inert"}, {id: "T-003", state: "refuted"}]')" = 0 ] \
+    && grep -qxF 'trigger T-001 `examples/complete/main.tf` line 3 literal-argument-change: inert' "$O/record.txt"
+}
+t_caller_pfx() { # a prefix: the marked trigger is unverifiable, the unmarked inert one and the refuted one stay
+  caller "$CPFX" && [ "$(q '[.triggers[] | {id, state}] == [{id: "T-001", state: "unverifiable"}, {id: "T-002", state: "inert"}, {id: "T-003", state: "refuted"}]')" = 0 ] \
+    && grep -qxF 'trigger T-001 `examples/complete/main.tf` line 3 literal-argument-change: unverifiable' "$O/record.txt" \
+    && ! grep -q '^change T-001' "$O/record.txt"
+}
+t_caller_empty() { # an empty prefix is no prefix
+  setup; printf '%s\n' "$CBEH" > "$TMP/behaviour.out"; printf '%s\n' "$CEV" > "$TMP/eval.out"
+  DIFF="$TMP/files-c.json" classify; evalp --prefix ""; [ "$(q '.triggers[0].state == "inert"')" = 0 ]
+}
+# The render of a change whose only trigger is caller code, with its example not planned: every
+# trigger inert makes the change inert for plan coverage, so with no prefix it approves; under a
+# prefix the trigger is unverifiable, the change is no longer inert, and the unplanned example is
+# an unknown at rule 4.
+t_caller_render() { # prefix -> the render message in RMSG; called directly, so the case counter moves on
+  setup; jq -c '.entries |= .[:1] | .triggers |= .[:1]' <<< "$CBEH" > "$TMP/behaviour.out"; jq -c '.triggers |= .[:1]' <<< "$CEV" > "$TMP/eval.out"
+  jq '.[:1]' "$TMP/files-c-pfx.json" > "$TMP/files-c-pfx1.json"; jq '.[:1]' "$TMP/files-c.json" > "$TMP/files-c1.json"
+  if [ -n "$1" ]; then DIFF="$TMP/files-c-pfx1.json" PFX="$1" classify; evalp --prefix "$1"; else DIFF="$TMP/files-c1.json" classify; evalp; fi
+  jq -e '.status == "ran"' "$O/run-behaviour.json" > /dev/null || return 1
+  jq -n --slurpfile b "$O/run-behaviour.json" '{format: 1, triage: false, plan_ran: false, verify_gaps: [], behaviour: $b[0],
+    coverage: {class: "partial", inert: false, unplanned: [{dir: "examples/complete", reason: "plan gate G1"}]},
+    counts: {"instruction-like-text-from-others": 0, "conversation-claims-unread": 0, "review.quoted-claim-unverifiable": 0}}' > "$TMP/run-c.json"
+  printf '[]\n' > "$TMP/findings-c.json"; local rd; rd="$(mktemp -d "$TMP/render-c.XXXXXX")"
+  RMSG="$(bash "$RCU" --head "$HEAD" --findings "$TMP/findings-c.json" --host "$TMP/host.json" --checks "$TMP/checks" \
+    --run "$TMP/run-c.json" --assessment "$TMP/assess.txt" --run-dir "$TMP/rundir" --out "$rd" 2>&1)"
+}
+t_caller_render_none() { t_caller_render "" && case "$RMSG" in "rendered approve (ladder rule 8),"*) ;; *) return 1 ;; esac; }
+t_caller_render_pfx() { t_caller_render "$CPFX" && case "$RMSG" in "rendered inconclusive (ladder rule 4),"*) ;; *) return 1 ;; esac; }
+t_caller_none; check "caller code: with no prefix the tool's inert reading stands and a refuted trigger stays refuted" $?
+t_caller_pfx; check "caller code: under a module root prefix the marked trigger is unverifiable, an unmarked inert one stays inert and a refuted one stays refuted" $?
+t_caller_empty; check "caller code: an empty prefix is no prefix" $?
+t_caller_render_none; check "caller code render: a change of caller code literals alone approves with no prefix" $?
+t_caller_render_pfx; check "caller code render: the same change under a module root prefix is inconclusive at rule 4" $?
+wmutate "caller code: the prefix not required" 's/if \$pre != "" and \.state == "inert" and \(first/if .state == "inert" and (first/' t_caller_none
+wmutate "caller code: the inert state not required" 's/if \$pre != "" and \.state == "inert" and \(first/if \$pre != "" and (first/' t_caller_pfx
+wmutate "caller code: every inert trigger dropped" 's/ and \(first\(\$b\.triggers\[\] \| select\(\.id == \$id\)\) \| \.caller_code == true\)\n/\n/' t_caller_pfx
+wmutate "caller code: the drop never made" 's/if \$pre != "" and \.state == "inert" and/if false and \.state == "inert" and/' t_caller_render_pfx
+
 echo
 if [ "$fails" -eq 0 ]; then echo "behaviour pass: all checks hold"; else echo "behaviour pass: $fails failed"; exit 1; fi

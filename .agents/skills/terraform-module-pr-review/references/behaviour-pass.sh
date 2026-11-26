@@ -422,7 +422,14 @@ evaluate() {
     $b[0] as $b | $l[0] as $l | $rq[0] as $rq | $pd[0] as $pd
     # An unverifiable trigger at a wrapper versions.tf the host found equal to its generator output
     # is inert, with no outstanding difference: the wrapper is the module file, as the hook writes it.
-    | ($e[0] | .triggers |= map(.id as $id | (first($b.triggers[] | select(.id == $id)) | .file) as $f
+    # A caller_code trigger (a literal of an example or tests file) is inert only for a tree that is the
+    # whole repository: the classifier seals the tree it was given, and under a module root prefix a
+    # root configuration outside it may load the example. With a prefix that inert reading is dropped
+    # and the trigger is unverifiable; a refuted one stays refuted.
+    | ($e[0] | .triggers |= map(.id as $id
+        | if $pre != "" and .state == "inert" and (first($b.triggers[] | select(.id == $id)) | .caller_code == true)
+          then {id, state: "unverifiable"} else . end)
+      | .triggers |= map(.id as $id | (first($b.triggers[] | select(.id == $id)) | .file) as $f
         | if .state == "unverifiable" and ($w[$f] // "" | IN("derived", "copied"))
           then {id, state: "inert", wrapper: $w[$f]} else . end)) as $e
     | def kstate($id): first($e.claims[] | select(.claim_id == $id) | .state) // "discarded";
