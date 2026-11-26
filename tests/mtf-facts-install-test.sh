@@ -113,6 +113,18 @@ PATH="$TMP/bin:$PATH" STUB_CURL_RC=22 STUB_LOG="$TMP/curl.log" STUB_PAYLOAD="$TM
 check "the installer reads the shipped pin by default and gets to the download" "$([ "$RC" = 1 ] &&
   grep -qF "/releases/download/$(jq -r .version "$PIN")/" "$TMP/curl.log"; echo $?)"
 
+# Started by a relative path with CDPATH naming a directory that holds a same-named
+# subdirectory, the installer still reads the pin beside itself, not the decoy's.
+t_cdpath() {
+  rm -rf "$TMP/cd" "$TMP/decoy" "$TMP/cdd"; mkdir -p "$TMP/cd/refs" "$TMP/decoy/refs" "$TMP/cdd"
+  cp "$INST" "$TMP/cd/refs/mtf-facts-install.sh"; cp "$REF/mtf-facts-pin.json" "$TMP/cd/refs/"
+  sed -E 's/v[0-9]+\.[0-9]+\.[0-9]+/v0.0.1/g' "$REF/mtf-facts-pin.json" > "$TMP/decoy/refs/mtf-facts-pin.json"
+  (cd "$TMP/cd" && PATH="$TMP/bin:$PATH" CDPATH="$TMP/decoy" STUB_CURL_RC=22 STUB_LOG="$TMP/curl.log" STUB_PAYLOAD="$TMP/payload" \
+    STUB_OS=Linux STUB_ARCH=x86_64 bash refs/mtf-facts-install.sh "$TMP/cdd" > /dev/null 2>&1)
+  [ "$?" = 1 ] && grep -qF "/releases/download/$(jq -r .version "$REF/mtf-facts-pin.json")/" "$TMP/curl.log"
+}
+t_cdpath; check "with CDPATH set the installer reads the pin beside itself" $?
+
 # Negative self-check: each weakened copy of the installer must fail the check it guards.
 mutate() { # label, perl substitution, test that must now fail
   local d; d="$(mktemp -d "$TMP/mut.XXXXXX")"; cp "$REF/mtf-facts-pin.json" "$d/"
@@ -139,6 +151,7 @@ mutate "the directory target check dropped" 's/\[ ! -d "\$DIR\/mtf-facts" \] \|\
   'rm -rf "$TMP/dest"; mkdir -p "$TMP/dest/mtf-facts"; PATH="$TMP/bin:$PATH" STUB_LOG="$TMP/curl.log" STUB_PAYLOAD="$TMP/payload" STUB_MARK="$TMP/ran" STUB_OS=Linux STUB_ARCH=x86_64 bash "$INST" "$TMP/dest" --pin "$TMP/pin.json"; [ $? = 2 ]'
 mutate "https-only dropped from curl" "s/--proto '=https' //" \
   'run; grep -qF -- "--proto =https" "$TMP/curl.log"'
+mutate "the script directory looked up through CDPATH" 's/CDPATH= cd -- /cd /' 't_cdpath'
 mutate "the binary moved before the check" 's/(curl [^\n]*\n[^\n]*\n)/$1mv -f "\$tmp\/mtf-facts" "\$DIR\/mtf-facts"; cp "\$DIR\/mtf-facts" "\$tmp\/mtf-facts"\n/' \
   'mkpin 0000000000000000000000000000000000000000000000000000000000000000; run; mkpin "$GOOD"; [ "$RC" = 1 ] && none'
 

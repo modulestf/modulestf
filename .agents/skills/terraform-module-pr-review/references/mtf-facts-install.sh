@@ -8,7 +8,7 @@
 # Exits 0 when installed, 1 when the download, the hash or the version check fails, 2 on
 # bad usage or a pin it refuses.
 set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 PIN="$HERE/mtf-facts-pin.json"
 DIR=""
 while [ "$#" -gt 0 ]; do
