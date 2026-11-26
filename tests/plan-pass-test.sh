@@ -1522,6 +1522,22 @@ jq -c '.resource_changes += [range(60) as $i | .resource_changes[0] | .address =
   | .resource_changes += [.resource_changes[0] | .address = "aws_x.bad name"]' "$TMP/pdq-a.json" > "$TMP/pdq-b.json"
 check "PDIFF_JQ: at most 50 names, each in the name charset" \
   "$(o="$(pdq "$TMP/pdq-a.json" "$TMP/pdq-b.json")"; [ "$(printf '%s\n' "$o" | wc -w | tr -d ' ')" = 51 ] && printf '%s\n' "$o" | grep -q '^differs ' && ! printf '%s\n' "$o" | grep -q 'bad'; echo $?)"
+# pd_compare taken from the script: a show that is no JSON is unknown compare, and so is a reason
+# outside the closed set, with a mutation of the allowlist.
+pdcmp() { # script, PDIFF_JQ override or "", base show -> the plan-diff line
+  { sed -n "/^PDIFF_JQ='\$/,/^'\$/p" "$1"; sed -n '/^pd_compare() {/,/^}$/p' "$1"
+    [ -z "$2" ] || printf 'PDIFF_JQ=%q\n' "$2"
+    printf 'pd_compare %q %q %q\n' "$3" "$TMP/pdq-a.json" "$TMP/pdq-schema.json"; } > "$TMP/pdcmp.sh"
+  bash "$TMP/pdcmp.sh" 2> /dev/null
+}
+printf '{"resource_changes": [' > "$TMP/pdcmp-bad.json"
+check "pd_compare: a show that is no JSON is unknown compare" "$([ "$(pdcmp "$PP" "" "$TMP/pdcmp-bad.json")" = 'plan-diff: unknown compare' ]; echo $?)"
+PDBOGUS='{result: "unknown", reason: "account-123", differs: []}'
+check "pd_compare: a reason outside the set is unknown compare" "$([ "$(pdcmp "$PP" "$PDBOGUS" "$TMP/pdq-a.json")" = 'plan-diff: unknown compare' ]; echo $?)"
+perl -pe 's/\(\.reason \| if IN\([^)]*\) then \. else "compare" end\)/.reason/' "$PP" > "$TMP/pp-cmp.sh"
+check "pd_compare: the mutation that takes any reason is caught" \
+  "$( ! cmp -s "$PP" "$TMP/pp-cmp.sh" && [ "$(pdcmp "$TMP/pp-cmp.sh" "$PDBOGUS" "$TMP/pdq-a.json")" = 'plan-diff: unknown account-123' ]; echo $?)"
+
 pdjmut() { # name, perl substitution, case jq update, schema file or "", the result the real comparison gives
   local m; m="$(printf '%s\n' "$PDJ" | perl -0pe "$2")"
   jq -c "$3" "$TMP/pdq-a.json" > "$TMP/pdq-ba.json"; jq -c "$3" "$TMP/pdq-a.json" > "$TMP/pdq-b.json"
@@ -1591,6 +1607,8 @@ pdjmut "that names the last reason" 's/\| min \| reasons\[\.\]/| max | reasons[.
   | .resource_changes[0].change.after_unknown.name = true' "" "unknown schema"
 pdjmut "that names a nested block configured" 's/then "block" else "configured" end/then "configured" else "configured" end/' '.resource_changes[0].change.after_unknown.rule = [{v: true}]' "" "unknown block"
 pdjmut "that names a top-level attribute block" 's/then "block" else "configured" end/then "block" else "block" end/' '.resource_changes[0].change.after_unknown.name = true' "" "unknown configured"
+pdboth "a block key before a configured key names configured, whatever the key order" '.resource_changes[0].change.after_unknown = ({rule: [{v: true}]} + (.resource_changes[0].change.after_unknown | del(.rule)) + {name: true})' "unknown configured"
+pdjmut "that names the reason of the first key only" 's/else \[\(\$u \| to_entries\[\]\) as \$e \| select\(([^\n]*)\n([^\n]*)\]\n          \| if \. == \[\] then "configured" else first_reason end end/else first((\$u | to_entries[]) as \$e | select($1\n$2) \/\/ "configured" end/' '.resource_changes[0].change.after_unknown = ({rule: [{v: true}]} + (.resource_changes[0].change.after_unknown | del(.rule)) + {name: true})' "" "unknown configured"
 pdjmut "that names a resource with no configuration configured" 's/if \$ex == null then "config"/if false then "config"/' '.resource_changes[0].change.after_unknown.tags = true | del(.configuration)' "" "unknown config"
 pdjmut "that names an errored plan marker" 's/\.errored == true or \(\.resource_changes \| type\) != "array" then "errored"/false then "errored"/' '.errored = true | .resource_changes[0].change.after_unknown = true' "" "unknown errored"
 pdjmut "that names a deferred plan marker" 's/> 0 then "deferred"/> 0 and false then "deferred"/' '.deferred_changes = [{reason: "x"}] | .resource_changes[0].change.after_unknown = true' "" "unknown deferred"

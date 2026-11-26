@@ -1053,17 +1053,20 @@ def plan_reason: if type != "object" or .errored == true or (.resource_changes |
   elif any(.resource_changes[]; type != "object" or (.change | type) != "object"
            or (.change.after_unknown | marker | not) or (.change.after_sensitive | marker | not)) then "marker"
   else empty end;
+# The first of a list of reasons in the order of the set.
+def first_reason: [.[] | . as $r | reasons | index($r)] | min | reasons[.];
 # The reasons of one change: schema, config, or for each top-level key the rule does not take,
-# block when the key is a nested block type and configured otherwise.
+# block when the key is a nested block type and configured otherwise; every such key counts, so the
+# reason does not depend on the order of the keys.
 def change_reasons($A; $B): . as $c | block_of($c) as $blk | $c.change.after_unknown as $u
   | if $blk == null then "schema"
     else (cfg_of($A; $c), cfg_of($B; $c)) as $ex
       | select($u | computed_only($blk; $ex; [$u]) | not)
       | if $ex == null then "config"
-        else first(($u | to_entries[]) as $e | select({($e.key): $e.value} | computed_only($blk; $ex; [$u]) | not)
-            | if ($blk.block_types[$e.key] | type) == "object" then "block" else "configured" end) // "configured" end
+        else [($u | to_entries[]) as $e | select({($e.key): $e.value} | computed_only($blk; $ex; [$u]) | not)
+            | if ($blk.block_types[$e.key] | type) == "object" then "block" else "configured" end]
+          | if . == [] then "configured" else first_reason end end
     end;
-def first_reason: [.[] | . as $r | reasons | index($r)] | min | reasons[.];
 $a[0] as $A | $b[0] as $B
 | if any(($A, $B); plan_reason)
   then {result: "unknown", reason: ([($A, $B) | plan_reason] | first_reason), differs: []}
