@@ -646,9 +646,11 @@ if [ -z "$PHASE" ] || [ "$PHASE" = init ]; then
   : > "$PLAN/cli.tfrc"; : > "$PLAN/aws-config"; : > "$PLAN/aws-credentials"
 fi
 PGIDS=""
+PTMP="$PLAN/tmp" # terraform's TMPDIR; in laptop mode a short directory made below
 plan_stop() { # kill every process group this pass started, then remove the pass's own files
   for g in $(printf '%s\n' "$PGIDS"); do kill -KILL -- "-$g" 2>/dev/null; done
   wait 2>/dev/null
+  case "$PTMP" in /tmp/pp.??????) rm -rf -- "$PTMP" ;; esac
   case "$ROOT" in /?*) ;; *) RUN= ;; esac
   case "$RUN" in
     "$ROOT"/pr-review.??????) rm -rf -- "$RUN/plan" ;;
@@ -673,6 +675,13 @@ else
   trap 'plan_abort; exit 130' INT TERM
   trap plan_stop EXIT
 fi
+# terraform starts each provider on a unix socket at $TMPDIR/plugin<digits>, and a socket
+# path has at most 103 bytes on macOS and 107 on Linux. A laptop run directory sits under the
+# caller's TMPDIR, which can be long, so terraform gets a short directory instead; the
+# runner's /work/pr-review.XXXXXX/plan/tmp is short already.
+if [ "$GMODE" = laptop ]; then
+  PTMP="$(mktemp -d /tmp/pp.XXXXXX)" && chmod 700 "$PTMP" || { echo "plan pass not run: no short TMPDIR under /tmp"; exit 0; }
+fi
 
 TFDIR="$(dirname "$(command -v terraform)")"
 AWSBIN="$(command -v aws)"
@@ -680,7 +689,7 @@ AK=; SK=; ST=
 # The role ARN and its account id are never recorded: any line holding one is dropped
 LEAKS="$ROLE_ARN $(printf '%s\n' "$ROLE_ARN" | sed -nE 's/^arn:[^:]*:iam::([0-9]{12}):.*/\1/p')"
 set_env() { # example key
-  TFENV=(env -i PATH="/usr/bin:/bin:$TFDIR" HOME="$PLAN/home" TMPDIR="$PLAN/tmp"
+  TFENV=(env -i PATH="/usr/bin:/bin:$TFDIR" HOME="$PLAN/home" TMPDIR="$PTMP"
     TF_DATA_DIR="$PLAN/data/$1" TF_PLUGIN_CACHE_DIR="$PLAN/cache"
     TF_CLI_CONFIG_FILE="$PLAN/cli.tfrc" TF_IN_AUTOMATION=1 TF_INPUT=0
     CHECKPOINT_DISABLE=1 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null

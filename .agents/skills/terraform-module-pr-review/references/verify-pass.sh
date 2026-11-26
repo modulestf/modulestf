@@ -110,10 +110,12 @@ printf '%s\n' "$BUDGET" | grep -Eqx '[1-9][0-9]{0,4}' || die "--budget must be a
 case "$CMD" in run) W="$RUN/verify" ;; *) W="$RUN/verify-$CMD" ;; esac
 if ! { rm -rf -- "$W" && mkdir -m 700 "$W"; }; then die "cannot create $W"; fi
 PGIDS=""
+VPT="" # terraform's TMPDIR, made below; removed here by its exact path only
 stop_all() { # kill every process group this pass started, then remove the work files
   for g in $(printf '%s\n' "$PGIDS"); do kill -KILL -- "-$g" 2> /dev/null; done
   wait 2> /dev/null
   rm -rf -- "$W"
+  case "$VPT" in /tmp/vp.??????) rm -rf -- "$VPT" ;; esac
 }
 trap stop_all EXIT
 trap 'stop_all; exit 130' INT TERM
@@ -763,6 +765,11 @@ perl -e "$HOSTS_PL" "$FILES" > "$W/hosts.txt" || die "--files is not a JSON arra
 mkdir -p "$RUN/plugin-cache"
 
 mkdir "$W/home"
+# terraform starts each provider on a unix socket at $TMPDIR/plugin<digits>, and a socket
+# path has at most 103 bytes on macOS and 107 on Linux, so a long caller TMPDIR fails every
+# provider schema load: terraform gets a short directory of this run instead.
+VPT="$(mktemp -d /tmp/vp.XXXXXX)" || { VPT=; die "cannot create a short TMPDIR under /tmp for terraform"; }
+chmod 700 "$VPT" || die "cannot make $VPT private"
 env | sed -n 's/^\(TF_TOKEN_[A-Za-z0-9_]*\)=.*/\1/p' > "$W/tokens.txt"
 # terraform with no credential and no inherited terraform settings
 TFENV=(env)
@@ -775,7 +782,7 @@ TFENV+=(-u AWS_PROFILE -u AWS_DEFAULT_PROFILE -u AWS_ACCESS_KEY_ID
   -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_SSH -u GIT_SSH_COMMAND
   -u TF_CLI_ARGS -u TF_CLI_ARGS_init -u TF_CLI_ARGS_validate -u TF_DATA_DIR -u TF_WORKSPACE
   -u CAP_QUIET_ERR
-  HOME="$W/home" NETRC=/dev/null TF_CLI_CONFIG_FILE=/dev/null
+  HOME="$W/home" TMPDIR="$VPT" NETRC=/dev/null TF_CLI_CONFIG_FILE=/dev/null
   AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true
   TF_PLUGIN_CACHE_DIR="$RUN/plugin-cache" TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE=true
   TF_IN_AUTOMATION=1 TF_INPUT=0 CHECKPOINT_DISABLE=1 GIT_TERMINAL_PROMPT=0

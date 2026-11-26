@@ -32,6 +32,7 @@ env | grep '^TF_TOKEN_' > /dev/null && echo tf-token >> "$TMP/leak.log"
 [ "\$NETRC" = /dev/null ] || echo "netrc \$NETRC" >> "$TMP/leak.log"
 [ "\$HOME" = "\${EXPECT_CACHE%/plugin-cache}/verify/home" ] || echo "home \$HOME" >> "$TMP/leak.log"
 h="\$(git config --get credential.helper)"; [ -z "\$h" ] || echo "credential helper \$h" >> "$TMP/leak.log"
+echo "\${TMPDIR:-}" >> "$TMP/tmpdir.log"
 case "\$1" in
 version) echo '{"terraform_version":"1.9.8","platform":"darwin_arm64"}' ;;
 init)
@@ -51,6 +52,11 @@ init)
     printf 'Error: Unsupported argument\n\n  on main.tf line 1, in module "b":\n   1: module "b" { bogus = 1 }\n'; exit 1
   fi ;;
 validate)
+  # A provider plugin socket at $TMPDIR/plugin<10 digits> over macOS's 103 bytes fails as
+  # terraform 1.17 fails it
+  if [ \${#TMPDIR} -gt 86 ]; then
+    printf 'Error: Failed to load plugin schemas\n\nError while loading schemas for plugin components: Failed to obtain provider schema: Could not load the schema for provider registry.terraform.io/hashicorp/aws: failed to instantiate provider "registry.terraform.io/hashicorp/aws" to obtain schema: Unrecognized remote plugin message:\n'; exit 1
+  fi
   if [ -f validate.fail ]; then
     printf 'Error: Missing required argument\n\n  on main.tf line 1:\n   1: dial tcp\n'; exit 1
   fi ;;
@@ -593,6 +599,33 @@ $BASE" --out "$R3/x.json")"
     "$(q "$R5/c.json" "$(d codeok '.head == {init:124, validate:null, record:"not-run-limit", line:null}')")"
   out="$(run run "$R5" --files "$TMP/files.json" --base "$BASE" --out "$R5/x.json" --budget 0)"
   check "$sh: a budget that is not a number of seconds is refused" "$([ ! -e "$R5/x.json" ]; echo $?)"
+
+  # A long caller TMPDIR: terraform gets a short directory of the run under /tmp, removed at
+  # the end and on an interrupt.
+  LONGT="$TMP/$(printf 't%.0s' $(seq 1 $((119 - ${#TMP}))))"; mkdir -p "$LONGT"
+  R6="$(newrun)"; : > "$TMP/tmpdir.log"
+  TMPDIR="$LONGT" EXPECT_CACHE="$R6/plugin-cache" run run "$R6" --files "$TMP/files.json" --base "$BASE" --out "$R6/v.json" --dir examples/codeok > /dev/null
+  check "$sh: a caller TMPDIR of ${#LONGT} characters still validates" \
+    "$(q "$R6/v.json" "$(d codeok '.head == {init:0, validate:0, record:"code-result", line:null}')")"
+  check "$sh: terraform saw a TMPDIR of at most 86 characters under /tmp, the same for every command" \
+    "$(sort -u "$TMP/tmpdir.log" | { read -r t && ! read -r _ && case "$t" in /tmp/vp.??????) [ ${#t} -le 86 ] ;; *) false ;; esac; }; echo $?)"
+  check "$sh: the short TMPDIR is gone after the run" "$(t="$(head -n 1 "$TMP/tmpdir.log")"; [ -n "$t" ] && [ ! -e "$t" ]; echo $?)"
+  : > "$TMP/tmpdir.log"; : > "$R6/clone/examples/codeok/init.slow"
+  # perl restores the default INT disposition a background job would otherwise ignore
+  TMPDIR="$LONGT" EXPECT_CACHE="$R6/plugin-cache" PATH="$TMP/bin:/usr/bin:/bin" perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV' \
+    "$sh" "$VP" run "$R6" --files "$TMP/files.json" --base "$BASE" --out "$R6/i.json" --dir examples/codeok --budget 3 > /dev/null 2>&1 &
+  ipid=$!; n=0
+  while [ ! -s "$TMP/tmpdir.log" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+  t="$(head -n 1 "$TMP/tmpdir.log")"
+  kill -INT "$ipid" 2> /dev/null; wait "$ipid"; ist=$?
+  check "$sh: an interrupt ends the pass with 130 and removes the short TMPDIR" \
+    "$([ "$ist" = 130 ] && case "$t" in /tmp/vp.??????) [ ! -e "$t" ] ;; *) false ;; esac; echo $?)"
+  rm -f "$R6/clone/examples/codeok/init.slow"
+  # The negative self-check: a copy that leaves terraform the caller's TMPDIR.
+  perl -0pe 's/ TMPDIR="\$VPT"//' "$VP" > "$TMP/vp-tmp.sh"
+  TMPDIR="$LONGT" EXPECT_CACHE="$R6/plugin-cache" PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/vp-tmp.sh" run "$R6" --files "$TMP/files.json" --base "$BASE" --out "$R6/m.json" --dir examples/codeok > /dev/null 2>&1
+  check "$sh: the mutation without TMPDIR in the terraform environment is caught" \
+    "$( ! cmp -s "$VP" "$TMP/vp-tmp.sh" && [ "$(q "$R6/m.json" "$(d codeok '.head.record == "not-run-environment"')")" = 0 ]; echo $?)"
 
   # Plan coverage of the selection.
   cov() { run coverage "$R4" --files "$TMP/files.json" --out "$TMP/cov.json" "$@" > /dev/null; }
