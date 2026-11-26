@@ -537,6 +537,16 @@ cmd_run() {
       jq -s '.' "$w/rv" > "$w/rv.json" 2> /dev/null; then
     RJ --arg login "$login" --argjson ro "$render_only" 'include "host-records"; decision($login; $ro)' \
       "$w/rv.json" > "$w/decision.json"
+    # The edit check of the earlier review (github-io.md, The Post Record): the SHA-256 of the own
+    # review's body as GitHub returns it, nothing added.
+    local oid osum
+    oid="$(jq -r '.own_review.id // empty' "$w/decision.json")"
+    if [ -n "$oid" ]; then
+      osum="$(jq -j --argjson i "$oid" '[.[] | select(.id == $i)][0].body // ""' "$w/rv.json" | openssl dgst -sha256 -r | cut -d' ' -f1)"
+      [[ "$osum" =~ ^[0-9a-f]{64}$ ]] || fail_run "the own review body could not be hashed"
+      jq --arg s "$osum" '.own_review.body_sha256 = $s' "$w/decision.json" > "$w/decision.tmp" &&
+        mv "$w/decision.tmp" "$w/decision.json" || fail_run "the own review body could not be hashed"
+    fi
   else
     echo '{"review_decision": "unknown", "own_review": null}' > "$w/decision.json"
     echo null > "$w/rv.json"

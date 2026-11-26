@@ -527,7 +527,7 @@ Only after Rule 1 and Rule 4, and only once:
 ```
 BODY="$(cat <rendered-body-file>)"
 jq -n --arg body "$BODY" --arg event COMMENT '{body:$body, event:$event}' \
-  | gh api repos/<owner>/<repo>/pulls/<number>/reviews --input -
+  | gh api repos/<owner>/<repo>/pulls/<number>/reviews --input - --jq .id
 ```
 
 `jq -n --arg` is what makes a body full of backticks, quotes and dollar signs survive intact. Never interpolate the body into a command line.
@@ -558,7 +558,19 @@ jq -n --arg body "$BODY" '{body:$body}' \
 
 `<sha>` is the full SHA pinned at the commit read. The object has one key, `body`: no `path`, `position` or `line`, so the comment is never placed inline, and no event, because a commit comment carries no decision. Immediately before the command, re-read the commit, `gh api repos/<owner>/<repo>/commits/<sha> --jq .sha`, and repeat the containment check from [Commit Target](#commit-target) against the same branch, a user-named witness's branch read included: a commit cannot move, but a force push can take it off the branch, and a failed read, a different SHA, or a status other than `identical` or `behind` aborts the write. If the write may have landed, read `gh api repos/<owner>/<repo>/commits/<sha>/comments --paginate` for the confirmed body before any retry.
 
-Afterwards, the run ends with [Cleanup](#cleanup).
+Afterwards, a pull request review is recorded as [The Post Record](#the-post-record) says, and the run ends with [Cleanup](#cleanup).
+
+## The Post Record
+
+The next review of the same pull request needs to know what this one asked for, from a source the pull request cannot change: this skill's own record, kept where the post ran, never the posted body. Right after a pull request review is written, with the id the write printed, or the id of this account's review a read of the reviews list found after a write that may have landed:
+
+```
+bash <this skill>/references/review-run.sh record --out <render output directory> --review-id <id>
+```
+
+`record` reads the review back and keeps nothing unless it is the token user's review, of the plan's head, carrying the rendered body exactly as written (the write sends `$(cat)` of the body file, so without its final newlines), and the output directory holds the render's `plan.json` and `carried.json`, one JSON document of blocking findings or a broken chain marker. It then keeps three files under `${XDG_STATE_HOME:-$HOME/.local/state}/modulestf/pr-review/records/<owner>/<repo>/<number>/`, a directory only this user can read and write, with no store at all when `XDG_STATE_HOME` is not absolute and `HOME` is unset or empty, for a base with a `.` or `..` segment, or for a repository name of dots: `<id>.plan.json`, plan.json byte for byte, `<id>.carried.json`, the render's `carried.json` of the earlier blocking findings this review left not resolved, and `<id>.json`, the review id, target and state with the SHA-256 of plan.json, of carried.json and of the body as GitHub holds it. A review already recorded is refused, never overwritten. A refusal prints `record refused: <reason>` and changes nothing posted; the next review then finds no record, and an earlier block stands. A render with no plan.json, a commit target and a render-only run record nothing.
+
+`prepare` reads it back when host.json's `own_review` is a `CHANGES_REQUESTED`: `own_review` carries the review's id and the SHA-256 of its body as the reviews list returns it, so a body edited since it was posted is caught. A record whose files or directories, from `records/` down, are not this user's or are writable by anyone else is unreadable. The checks and what follows from them are in [verdict.md](verdict.md#our-earlier-block). `prepare` writes `earlier.json` and prints one `earlier review:` line; `handover` hands a record that checked out to the reviewer as the `Earlier review:` line ([findings-schema.md](../../terraform-module-reviewer/references/findings-schema.md#earlier-review-task-line)), a file holding the findings inside an untrusted block of its own, with its judgments file on the `Output:` line, and pins `earlier.json` as it pins the depth: `render` stops when it changed. `render` checks each `resolved` place against the head, adds the judgments to the run file, and writes `carried.json` beside plan.json. When the user confirms another event than the proposed one, `render --event <EVENT>` renders the body for it into a new output directory, and that body is the one posted and recorded ([comment-format.md](comment-format.md#section-order), section 6).
 
 ## Cleanup
 
