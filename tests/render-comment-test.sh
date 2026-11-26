@@ -1618,7 +1618,9 @@ refused "41 behaviour triggers that need evidence beside version floors" "$G" ""
 t_b41m() { render "$G" "" "" "$(brun b41m "[$(bts 40 wrapper-change 1), $(bt T-041 provider-version-floor-change verified | jq -c '.also_categories = ["literal-argument-change"]')]" '[]')"; [ "$ST" = 2 ] && empty_out; }
 t_b41m; check "refused: a merged version floor counts toward the evidence cap" $?
 t_b41f() { render "$G" "" "" "$(brun b41f2 "[$(bts 41 wrapper-change 1), $(bts 10 provider-version-floor-change 42)]" '[]')"; [ "$ST" = 2 ]; }
+t_b81() { render "$G" "" "" "$(brun b81m "[$(bts 40 wrapper-change 1), $(bts 41 provider-version-floor-change 41)]" '[]')"; [ "$ST" = 2 ]; }
 mutate "the old total cap of 40 kept" 's/length <= 80\n/length <= 40\n/' t_b80
+mutate "the total cap of 80 dropped" 's/type == "array" and length <= 80\n/type == "array"\n/' t_b81
 mutate "the evidence cap dropped" 's/\n        and \(\[\.\[\] \| select\(type == "object" and \(\(\(\.category \| IN\("provider-version-floor-change", "moved-or-renamed-address"\)\)\n               and \(has\("also_categories"\) \| not\)\) \| not\)\)\] \| length\) <= 40//' t_b41f
 mutate "a merged version floor read as off-ladder" 's/\n               and \(has\("also_categories"\) \| not\)\) \| not/) | not/' t_b41m
 refused "a ran behaviour with a reason" "$G" "" "" "$(runf br '.behaviour = {status: "ran", reason: "mtf-facts failed", triggers: [], claims: [], capped: 0}')"

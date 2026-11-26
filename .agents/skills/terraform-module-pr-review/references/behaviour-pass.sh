@@ -39,6 +39,8 @@ sha_re='^[0-9a-f]{40}$'
 deadline="${BEHAVIOUR_PASS_TIMEOUT:-120}"
 [[ "$deadline" =~ ^[1-9][0-9]{0,3}$ ]] || { echo "behaviour-pass.sh: BEHAVIOUR_PASS_TIMEOUT must be 1 to 9999 seconds" >&2; exit 2; }
 die() { echo "behaviour-pass.sh: $1" >&2; exit 2; }
+# shellcheck source=facts-resolve.sh
+. "${0%/*}/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
 
 cmd="${1-}"; shift 2> /dev/null
 facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder="" wrappers="" clone="" pdiff=""
@@ -240,24 +242,29 @@ null_vars() {
   fi
 }
 
-# features: the feature names mtf-facts version --json lists, one per line, under the same deadline and
-# output cap; nothing when it fails, as from a binary older than the command, which then keeps the
-# paths of a binary without features.
-features() {
-  [ "$(run_facts "$out/version.raw" version --json)" = ok ] &&
-    jq -r 'if (.features | type) == "array" then .features[] | strings else empty end' "$out/version.raw" 2> /dev/null
-  rm -f -- "$out/version.raw"
+# facts_features: the version report of the binary under --facts, read by the shared resolver
+# (facts-resolve.sh, under its 10 second and 64 KiB limits) from a directory of our own that holds
+# only a link named mtf-facts to it. facts_has then answers for it. A report that fails, as from a
+# binary older than the command, lists nothing, so the step keeps the path of a binary without
+# features.
+facts_features() {
+  local d="$out/facts-bin" p="$PATH"
+  FACTS_FEATURES=''
+  mkdir -p -- "$d" && ln -s -- "$facts" "$d/mtf-facts" || { rm -rf -- "$d"; return 0; }
+  PATH="$d:$p"; facts_resolve; PATH="$p"
+  rm -rf -- "$d"
 }
 
 # decl_vars: nullvars.json and required.json in the shapes null_vars writes, from the facts the binary
 # reports with behaviour.declarations and behaviour.schema-required. A variable trigger the change adds
 # is a null variable only when its declaration says added, a null default and no nullable argument,
-# each field read on its own; no declaration is no entry. With a schema, each resource or data source
+# each field read on its own; no declaration is no entry. Nothing is read from the clone here, and
+# valid_behaviour has already refused any file path with a `..` segment. With a schema, each resource or data source
 # trigger whose schema_required is not exactly not_required puts its own path on the required list, so
 # unknown and an absent field require it, and a trigger can never miss its own path there.
 decl_vars() {
   jq -c '[.triggers[] | select(.change_kind == "added" and (.address | type == "string" and test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$"))
-      and (.line | type == "number") and (.file | test("^[A-Za-z0-9_./-]+\\.tf$")) and (.file | split("/") | all(. != ".."))
+      and (.line | type == "number") and (.file | test("^[A-Za-z0-9_./-]+\\.tf$"))
       and (.declaration | type == "object" and .added == true and .default == "null" and .nullable == "unset"))
     | {dir: (.file | if test("/") then sub("/[^/]*$"; "") else "." end), name: (.address | ltrimstr("var."))}]' \
     "$out/behaviour.json" > "$out/nullvars.json" 2> /dev/null || printf '[]\n' > "$out/nullvars.json"
@@ -294,10 +301,10 @@ classify() {
   if [ ! -f "$facts" ] || [ ! -x "$facts" ]; then
     echo "mtf-facts not installed" > "$out/status"
   else
-    local feats split=false decl=false
-    feats="$(features)"
-    grep -qxF behaviour.off-ladder-cap <<< "$feats" && split=true
-    grep -qxF behaviour.declarations <<< "$feats" && grep -qxF behaviour.schema-required <<< "$feats" && decl=true
+    local split=false decl=false
+    facts_features
+    facts_has behaviour.off-ladder-cap && split=true
+    facts_has behaviour.declarations && facts_has behaviour.schema-required && decl=true
     case "$(run_facts "$out/behaviour.raw" behaviour "$dir" "$@" --json)" in
       big) echo "output refused" > "$out/status" ;;
       late) echo "mtf-facts timed out" > "$out/status" ;;
