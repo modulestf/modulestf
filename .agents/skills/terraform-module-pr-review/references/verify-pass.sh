@@ -640,8 +640,10 @@ def base_results: ["reproduces at base", "new under this change",
 def gate: if test("^plan gate G[0-3]( |$)") then .[0:12] else . end;
 def norm: gate | if IN(classes[]) then . else "output unrecognised" end;
 def bnorm: gate | if IN(classes[]) or IN(base_results[]) then . else "not available" end;
-# A plan-diff line (plan-pass.md, Plan diff) as {result, reason}; one outside the grammar is unknown
-def pnorm: if test("^(equal|unknown)$") then {result: ., reason: null}
+# A plan-diff line (plan-pass.md, Plan diff) as {result, reason}; one outside the grammar, a bare
+# unknown with no reason token among them, is unknown with no reason
+def pnorm: if . == "equal" then {result: ., reason: null}
+  elif test("^unknown (errored|deferred|marker|schema|config|configured|block|compare)$") then {result: "unknown", reason: .[8:]}
   elif test("^differs( [A-Za-z0-9_.-]{1,300}){0,50}$") then {result: "differs", reason: null}
   elif test("^not-run (no-base|absent-at-base|base-plan|head-module-plan|show|budget)$") then {result: "not-run", reason: .[8:]}
   else {result: "unknown", reason: null} end;
