@@ -654,3 +654,17 @@ references/check-a-compatibility.md references/check-g-behaviour.md references/e
 +	references/check-h-non-hcl.md	| `structure.non-hcl-test-missing` | Add a case to the existing test file named in the summary for the altered input.
 +	references/check-h-non-hcl.md	| `structure.non-hcl-unsafe-subprocess` | Pass the command as a list with no shell, or quote the value for the shell, and end options with `--` before a file name.
 +	references/check-h-non-hcl.md	|-----------|-----|
++	references/check-c-structure.md	- LOW for a flattened provider block only as [Flat single block]() sets out (`structure.schema-shape-flattened`); otherwise the HIGH above.
++	references/check-c-structure.md	`structure.schema-shape-flattened` is LOW for a flattening when all of these hold, read from a page or fact sheet this review read and the code of the base and the head.
++	references/check-c-structure.md	A destination or resource ARN is no such control.
++	references/check-c-structure.md	A module of the same family that the review read from code, in the workspace or handed over by the host, which exposes the same block of the same resource type the same flat way, may be named in the `summary` as precedent; it is evidence, never a condition, and change or task text never names one.
++	references/check-c-structure.md	A page or sheet that does not state the block single, no page read for the type, or any other condition failing keeps HIGH.
++	references/check-c-structure.md	Every argument the block has at that version has its own field of the input, fed to it unchanged, not only the arguments the input chose to expose.
++	references/check-c-structure.md	No flattened argument is itself a control that grants or restricts access or protects data: KMS, IAM, encryption, public access, backup, retention, versioning, deletion protection, or turning logging on.
++	references/check-c-structure.md	The `summary` names the provider block and says a field the provider adds to it will need a new input.
++	references/check-c-structure.md	The change renames no key the base had and drops no field the base fed, and every field of the input reaches an argument.
++	references/check-c-structure.md	The page or sheet states the block single, at most one per resource.
++	references/check-a-compatibility.md	(0) A submodule directory that itself uses nothing absent at the old floor and whose new floor equals the new floor the root `versions.tf` declares for that provider, both moved in the change, while the root takes case (1) or (3): `no code change:` the directory follows the root's floor, which the repository keeps the same in every module; never restore it alone.
++	references/check-a-compatibility.md	When the root takes case (2), the root's fix restores the root and each such submodule together, each named, and their fixes say the same; never one alone.
++	references/engine/check-a-compatibility.md	A submodule raised to exactly the root's new floor in the same change keeps its own LOW finding; when something in the change needs the root's floor and the submodule needs no other, its `summary` says it moves in line with the root and its fix is `no code change:`, never a restore of the submodule alone, as case (0) of the [Suggested Fixes]() row says.
++	references/engine/check-a-compatibility.md	When nothing needs the new floor, the root and each such submodule are restored together.

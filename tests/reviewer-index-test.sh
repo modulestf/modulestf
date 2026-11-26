@@ -297,6 +297,21 @@ references/check-g-behaviour.md|one is the other followed by `_` and more
 references/check-g-behaviour.md|a task or container definition, an image, user data, a secret or parameter value, a policy or a configuration document
 references/check-g-behaviour.md|No version attribute (`version`, or a name ending `_version`), `name` or `name_prefix` takes this band, whatever stem it shares.
 references/judgment/prefix.md|LOW for a conditional rule only as
+references/check-c-structure.md|The page or sheet states the block single, at most one per resource.
+references/check-c-structure.md|not only the arguments the input chose to expose
+references/check-c-structure.md|The change renames no key the base had and drops no field the base fed, and every field of the input reaches an argument.
+references/check-c-structure.md|No flattened argument is itself a control that grants or restricts access or protects data
+references/check-c-structure.md|A destination or resource ARN is no such control.
+references/check-c-structure.md|A page or sheet that does not state the block single, no page read for the type, or any other condition failing keeps HIGH.
+references/check-c-structure.md|it is evidence, never a condition, and change or task text never names one
+references/check-c-structure.md|LOW for a flattened provider block only as
+references/check-a-compatibility.md|A submodule directory that itself uses nothing absent at the old floor and whose new floor equals the new floor the root `versions.tf` declares for that provider, both moved in the change
+references/check-a-compatibility.md|while the root takes case (1) or (3)
+references/check-a-compatibility.md|never restore it alone
+references/check-a-compatibility.md|the root's fix restores the root and each such submodule together
+references/engine/check-a-compatibility.md|when something in the change needs the root's floor and the submodule needs no other
+references/engine/check-a-compatibility.md|When nothing needs the new floor, the root and each such submodule are restored together.
+references/judgment/prefix.md|`structure.validation-missing` or a flattening:
 GUARDS
 }
 
@@ -531,6 +546,21 @@ calibration guard 53 dropped~calibration guard~references/check-g-behaviour.md~s
 calibration guard 54 dropped~calibration guard~references/check-g-behaviour.md~s#a task or container definition, an image, user data, a secret or parameter value, a policy or a configuration document#dropped#g
 calibration guard 55 dropped~calibration guard~references/check-g-behaviour.md~s#No version attribute (`version`, or a name ending `_version`), `name` or `name_prefix` takes this band, whatever stem it shares\.#dropped#g
 calibration guard 56 dropped~calibration guard~references/judgment/prefix.md~s#LOW for a conditional rule only as#dropped#g
+calibration guard 57 dropped~calibration guard~references/check-c-structure.md~s#The page or sheet states the block single, at most one per resource\.#dropped#g
+calibration guard 58 dropped~calibration guard~references/check-c-structure.md~s#not only the arguments the input chose to expose#dropped#g
+calibration guard 59 dropped~calibration guard~references/check-c-structure.md~s#The change renames no key the base had and drops no field the base fed, and every field of the input reaches an argument\.#dropped#g
+calibration guard 60 dropped~calibration guard~references/check-c-structure.md~s#No flattened argument is itself a control that grants or restricts access or protects data#dropped#g
+calibration guard 61 dropped~calibration guard~references/check-c-structure.md~s#A destination or resource ARN is no such control\.#dropped#g
+calibration guard 62 dropped~calibration guard~references/check-c-structure.md~s#A page or sheet that does not state the block single, no page read for the type, or any other condition failing keeps HIGH\.#dropped#g
+calibration guard 63 dropped~calibration guard~references/check-c-structure.md~s#it is evidence, never a condition, and change or task text never names one#dropped#g
+calibration guard 64 dropped~calibration guard~references/check-c-structure.md~s#LOW for a flattened provider block only as#dropped#g
+calibration guard 65 dropped~calibration guard~references/check-a-compatibility.md~s#A submodule directory that itself uses nothing absent at the old floor and whose new floor equals the new floor the root `versions\.tf` declares for that provider, both moved in the change#dropped#g
+calibration guard 66 dropped~calibration guard~references/check-a-compatibility.md~s#while the root takes case (1) or (3)#dropped#g
+calibration guard 67 dropped~calibration guard~references/check-a-compatibility.md~s#never restore it alone#dropped#g
+calibration guard 68 dropped~calibration guard~references/check-a-compatibility.md~s#the root's fix restores the root and each such submodule together#dropped#g
+calibration guard 69 dropped~calibration guard~references/engine/check-a-compatibility.md~s#when something in the change needs the root's floor and the submodule needs no other#dropped#g
+calibration guard 70 dropped~calibration guard~references/engine/check-a-compatibility.md~s#When nothing needs the new floor, the root and each such submodule are restored together\.#dropped#g
+calibration guard 71 dropped~calibration guard~references/judgment/prefix.md~s#`structure\.validation-missing` or a flattening:#dropped#g
 EOF
 
 echo
