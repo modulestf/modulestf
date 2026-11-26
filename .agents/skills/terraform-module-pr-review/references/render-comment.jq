@@ -580,6 +580,12 @@ def proposed_event($state; $own; $replace):
   elif $own then (if $replace then "APPROVE" else "COMMENT" end)
   elif . == "approve" then "APPROVE" else "COMMENT" end;
 
+# A merge conflict alone (verdict.md, Clamps): rule 3 blocks on mergeability, and the same ladder
+# read with mergeability as pass would not block. The verdict stays block; the event is COMMENT.
+# Input: the ledger the ladder reads.
+def conflict_only: .signals.mergeability == "fail" and ladder.rule == 3
+  and ((.signals.mergeability = "pass" | ladder).verdict != "block");
+
 def count_word: if . == 1 then "A"
   else (["Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"][. - 2] // tostring) end;
 def and_join: if length <= 1 then .[0] else (.[:-1] | join(", ")) + " and " + .[-1] end;
@@ -595,6 +601,9 @@ def texts: {
   "rationale-2-refuted": "The behaviour evidence refutes a change or a claim of the description. Refuted behaviour blocks merge (ladder rule 2).",
   "rationale-3-one": "Failing host signal: {signals}. A failing host signal blocks merge (ladder rule 3).",
   "rationale-3-many": "Failing host signals: {signals}. A failing host signal blocks merge (ladder rule 3).",
+  "rationale-3-conflict": "The branch has a merge conflict, and no finding or other host signal blocks merge, so this review is a comment and requests no changes (ladder rule 3).",
+  "rationale-3-conflict-unknown": "Some checks could not run, so the review is also inconclusive.",
+  "verdict-conflict": "Rebase needed before merge.",
   "rationale-4-triage": "A triage run leaves its deferred checks unknown. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-checks": "The check results could not be read, so a failing check may exist. Any unknown makes the review inconclusive (ladder rule 4).",
   "rationale-4-checks-jobless": "A workflow ended without starting a job, so the repository's CI did not run. Any unknown makes the review inconclusive (ladder rule 4).",
@@ -693,6 +702,7 @@ def texts: {
   "todo-lead-0": "This change is breaking. Merge it in the next major release. To merge it sooner, restore compatibility with the fixes named below. Any checklist items below also block merge.",
   "todo-checks": "Fix the failing checks.",
   "todo-mergeability": "Resolve the merge conflict.",
+  "todo-rebase": "Rebase the branch on its base branch to resolve the merge conflict.",
   "todo-review-decision": "Address the requested changes.",
   "todo-threads-one": "Resolve the open review thread.",
   "todo-threads-many": "Resolve the {count} open review threads.",
@@ -825,9 +835,13 @@ def rationale($in):
     elif $r == 1 then open("CRITICAL")
     elif $r == 2 then (if any($f[]; .severity == "HIGH") then open("HIGH") else tx("rationale-2-refuted") end) elif $r == 6 then open("MEDIUM")
     elif $r == 3 then
+      if ($in | conflict_only) then tx("rationale-3-conflict")
+        + (if ($in | .signals.mergeability = "pass" | ladder).verdict == "inconclusive" then " " + tx("rationale-3-conflict-unknown") else "" end)
+      else
       [("checks", "review-decision", "mergeability") as $s
        | select($g[$s | gsub("-"; "_")] == "fail") | tx("signal-name-" + $s)] as $n
-      | tx(if ($n | length) > 1 then "rationale-3-many" else "rationale-3-one" end; {signals: ($n | and_join)})
+        | tx(if ($n | length) > 1 then "rationale-3-many" else "rationale-3-one" end; {signals: ($n | and_join)})
+      end
     elif $r == 4 then
       tx(if $in.triage then "rationale-4-triage"
          elif $g.checks == "unknown" and $in.jobless != [] then "rationale-4-checks-jobless"
@@ -957,7 +971,7 @@ def todo_items($l; $rule; $p; $gaps):
    | . + {sev: $s}] as $gs
   | ($gaps + ($f | map(select(.rule_id | startswith("review."))) | length)) as $gaps
   | ([ ("checks", "mergeability", "review-decision") as $s
-       | select($g[$s | gsub("-"; "_")] == "fail") | {box: true, t: tx("todo-" + $s)} ]
+       | select($g[$s | gsub("-"; "_")] == "fail") | {box: true, t: tx(if $s == "mergeability" and ($l | conflict_only) then "todo-rebase" else "todo-" + $s end)} ]
      + ($l.jobless | if . == [] then [] else
           [{box: true, jobless: true, t: tx(if length == 1 then "todo-checks-jobless-one" else "todo-checks-jobless-many" end;
              {workflows: (map(workflow_name) | join(", "))})}] end)
@@ -1486,7 +1500,8 @@ def render($in):
   # explained. A covered skip, a jobless Checks signal or any other rule 7 cause proposes COMMENT.
   | (earlier_cleared($e) and ($v.verdict == "approve"
        or ($v.verdict == "approve with nits" and (($l | .findings = [] | ladder).rule == 8)))) as $replace
-  | ($v.verdict | proposed_event($h.state; own_block($h); $replace)) as $proposed
+  | ($l | conflict_only) as $conflict
+  | (if $conflict then "COMMENT" else $v.verdict | proposed_event($h.state; own_block($h); $replace) end) as $proposed
   # The body follows the event the user confirmed when they confirmed another: section 6 and the
   # Earlier review section say whether it replaces our earlier review (comment-format.md, section 6).
   | ($in.confirmed // $proposed) as $event
@@ -1499,7 +1514,7 @@ def render($in):
        + $l.unplanned_open + ($b | behaviour_gaps) + ($unreg | length) + $l.skipped) end) as $items
   # At rule 4 a list of quiet items alone, which section 5 already holds, gives way to the action line.
   | ($v.rule == 4 and all($items[]; .quiet)) as $quiet
-  | ([$in.assessment, "**\($v.verdict | verdict_line)**"]
+  | ([$in.assessment, "**" + (if $conflict then tx("verdict-conflict") else $v.verdict | verdict_line end) + "**"]
      + (if is_closed($h) then [tx("clamp-closed")] else [] end)
      + reopen_line($h)
      + (if $in.run.triage then ["Triage only: the full review of this change has not run yet."] else [] end)

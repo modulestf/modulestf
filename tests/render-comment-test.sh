@@ -228,8 +228,8 @@ ladder "a CRITICAL non-compat finding" "block REQUEST_CHANGES" 1 "$(one structur
 ladder "a HIGH finding and a failing check" "block REQUEST_CHANGES" 2 "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")" "" "$(checks fail fail)"
 ladder "a failing check" "block REQUEST_CHANGES" 3 "$NONE" "" "$(checks fail fail)"
 grep -qxF 'Failing host signal: checks. A failing host signal blocks merge (ladder rule 3).' "$O/comment.md"; check "ladder: rule 3 names the signal" $?
-ladder "a conflict with a queued check" "block REQUEST_CHANGES" 3 "$NONE" "$(host conflict '.signals.mergeability = "fail"')" "$(checks unknown unknown)"
-grep -qxF 'Failing host signal: mergeability. A failing host signal blocks merge (ladder rule 3).' "$O/comment.md"; check "ladder: the conflict is named, not the queued check" $?
+ladder "a conflict with a queued check" "block COMMENT" 3 "$NONE" "$(host conflict '.signals.mergeability = "fail"')" "$(checks unknown unknown)"
+grep -qxF 'The branch has a merge conflict, and no finding or other host signal blocks merge, so this review is a comment and requests no changes (ladder rule 3). Some checks could not run, so the review is also inconclusive.' "$O/comment.md"; check "ladder: the conflict is named and the queued check is an unknown beside it" $?
 ladder "changes requested by a reviewer" "block REQUEST_CHANGES" 3 "$NONE" "$(host cr '.signals.review_decision = "fail"')"
 ladder "a queued check" "inconclusive COMMENT" 4 "$NONE" "" "$(checks unknown unknown)"
 ladder "thread resolution unread and no finding" "inconclusive COMMENT" 4 "$NONE" "$(host tu '.signals.threads = "unknown"')"
@@ -527,15 +527,15 @@ t_sections() {
   cat > "$TMP/s56.md" <<'EOF'
 The change looks right.
 
-**Changes requested before merge.**
+**Rebase needed before merge.**
 
-Failing host signal: mergeability. A failing host signal blocks merge (ladder rule 3).
+The branch has a merge conflict, and no finding or other host signal blocks merge, so this review is a comment and requests no changes (ladder rule 3). Some checks could not run, so the review is also inconclusive.
 
 ### What to do
 
 To make this mergeable, resolve each checklist item below and push.
 
-- [ ] Resolve the merge conflict.
+- [ ] Rebase the branch on its base branch to resolve the merge conflict.
 
 ### Checks that could not run
 
@@ -3520,6 +3520,44 @@ t_own_broken_identical() { render "$NONE" "$HOWN" "" "$(RID ownbr '.earlier = {r
   [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md" && grep -qF 'Same plan:' "$O/comment.md"; }
 t_own_broken_identical; check "earlier review: identical triggers beside a broken chain propose COMMENT and say the block stands" $?
 mutate "the stands line dropped beside a broken chain and identical triggers" 's/\[tx\("earlier-stands"\)\]/[]/' t_own_broken_identical
+
+# --- A merge conflict alone (verdict.md, Clamps): rule 3 still blocks, and when the ladder read
+# with mergeability as pass would not block, the event is COMMENT with the rebase item. A known
+# MEDIUM blocker, a failing check or a reviewer's request for changes beside it keeps REQUEST_CHANGES.
+MC='.signals.mergeability = "fail"'
+REBASE='- [ ] Rebase the branch on its base branch to resolve the merge conflict.'
+MCWHY='The branch has a merge conflict, and no finding or other host signal blocks merge, so this review is a comment and requests no changes (ladder rule 3).'
+mc_body() { grep -qxF '**Rebase needed before merge.**' "$O/comment.md" && grep -qxF -- "$REBASE" "$O/comment.md" &&
+  ! grep -qxF -- '- [ ] Resolve the merge conflict.' "$O/comment.md"; }
+t_mc_alone() { render "$NONE" "$(host mc1 "$MC")"; [ "$ST" = 0 ] && [ "$(rule)" = 3 ] && [ "$(verdict)" = "block COMMENT" ] &&
+  mc_body && grep -qxF "$MCWHY" "$O/comment.md" && invariant; }
+t_mc_alone; check "merge conflict: alone, block at rule 3 proposes COMMENT with the rebase item" $?
+t_mc_low() { render "$(one structure.wrong-file LOW a.tf 1 "S." "F.")" "$(host mc2 "$MC")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 3 ] && [ "$(verdict)" = "block COMMENT" ] && mc_body && grep -qxF "$MCWHY" "$O/comment.md"; }
+t_mc_low; check "merge conflict: beside a LOW finding, block proposes COMMENT" $?
+t_mc_medium() { render "$(one structure.wrong-file MEDIUM a.tf 1 "S." "F.")" "$(host mc3 "$MC")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 3 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ] &&
+  grep -qxF '**Changes requested before merge.**' "$O/comment.md" && grep -qxF -- '- [ ] Resolve the merge conflict.' "$O/comment.md" &&
+  grep -qxF 'Failing host signal: mergeability. A failing host signal blocks merge (ladder rule 3).' "$O/comment.md"; }
+t_mc_medium; check "merge conflict: beside a known MEDIUM blocker, block still proposes REQUEST_CHANGES" $?
+t_mc_unknown() { render "$NONE" "$(host mc4 "$MC"' | .signals.threads = "unknown"')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 3 ] && [ "$(verdict)" = "block COMMENT" ] && mc_body &&
+  grep -qxF "$MCWHY Some checks could not run, so the review is also inconclusive." "$O/comment.md"; }
+t_mc_unknown; check "merge conflict: beside an unknown, block proposes COMMENT and names the unknown" $?
+t_mc_checks() { render "$NONE" "$(host mc5 "$MC")" "$(checks mc5 fail)"
+  [ "$ST" = 0 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ] && grep -qxF -- '- [ ] Resolve the merge conflict.' "$O/comment.md"; }
+t_mc_checks; check "merge conflict: beside a failing check, block still proposes REQUEST_CHANGES" $?
+t_mc_own() { render "$NONE" "$(host mc6 "$MC | .own_review = $OWNC")" "" "$EPART"
+  [ "$ST" = 0 ] && [ "$(verdict)" = "block COMMENT" ] && grep -qxF "$STANDS" "$O/comment.md"; }
+t_mc_own; check "merge conflict: over our earlier block, proposes COMMENT and the block stands" $?
+mutate "a conflict alone proposing REQUEST_CHANGES" 's/\(if \$conflict then "COMMENT" else/(if false then "COMMENT" else/' t_mc_alone
+mutate "a conflict beside a LOW finding held as more than a conflict" 's/def conflict_only: \.signals\.mergeability == "fail"/def conflict_only: .findings == [] and .signals.mergeability == "fail"/' t_mc_low
+mutate "a conflict beside a MEDIUM read as a conflict alone" 's/\n  and \(\(\.signals\.mergeability = "pass" \| ladder\)\.verdict != "block"\)//' t_mc_medium
+mutate "a conflict beside an unknown held as more than a conflict" 's/\(\(\.signals\.mergeability = "pass" \| ladder\)\.verdict != "block"\)/((.signals.mergeability = "pass" | ladder).verdict | IN("block", "inconclusive") | not)/' t_mc_unknown
+mutate "the unknown left out of the conflict rationale" 's/ \+ \(if \(\$in \| \.signals\.mergeability = "pass" \| ladder\)\.verdict == "inconclusive" then " " \+ tx\("rationale-3-conflict-unknown"\) else "" end\)//' t_mc_unknown
+mutate "a conflict beside a failing check read as a conflict alone" 's/def conflict_only: \.signals\.mergeability == "fail" and ladder\.rule == 3\n  and \(\(\.signals\.mergeability = "pass" \| ladder\)\.verdict != "block"\)/def conflict_only: .signals.mergeability == "fail" and ladder.rule == 3 and (.findings | known_medium | not)/' t_mc_checks
+mutate "the rebase item dropped" 's/then "todo-rebase" else/then "todo-mergeability" else/' t_mc_alone
+mutate "the conflict verdict line dropped" 's/if \$conflict then tx\("verdict-conflict"\) else //; s/ \| verdict_line end\) \+ "\*\*"\]/ | verdict_line) + "**"]/' t_mc_alone
 
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi
