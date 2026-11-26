@@ -31,6 +31,9 @@
 #       Laptop mode needs --role-arn: the plan credentials are a session on that review role,
 #       downscoped by plan-session-policy.json and issued by plan-session.sh, never the
 #       profile's own (plan-pass.md, Credentials). Runner mode gets its session from the runner.
+#       Laptop mode keeps each head plan's result in the plan cache across runs, PLAN_CACHE or
+#       the user's cache directory, and reads it back on a later run with the same inputs
+#       (plan-pass.md, Plan cache).
 #   <bash|zsh> /abs/path/plan-pass.sh gates <run-dir> <laptop|runner> <clone|downloaded> [<example-dir>]
 #       The per-file gates alone, over the absolute .tf paths on standard input. Read only,
 #       for the fixtures and skip-coverage.sh. <example-dir>, absolute, is the example root
@@ -1122,6 +1125,141 @@ pe_show() { # key: the saved plan as JSON, reduced to its addresses on standard 
   : > "$PLAN/out/$1-show.ok"
   jq -c --arg h "$PHEAD" --arg e "$PEX" "$ADDR_JQ" "$PLAN/out/$1-show.json" 2> /dev/null
 }
+# The plan cache across runs (plan-pass.md, Plan cache), laptop mode only: a head plan's class,
+# kept line and addresses file, under the hash of every input that can change them. Nothing in
+# an entry is trusted: an entry that fails any check is a miss and is removed when it is ours.
+PCACHE=; PCTF=; PCKEY=
+PC_TTL_MIN=1440 # an entry older than a day is not used: the account the plan reads can change
+PC_MAX_ENTRIES=256 # the least recently used removed first
+PC_CAP_ADDR=4194304 # the largest addresses file stored or read
+# A directory or file owned by the user, no symbolic link, writable by neither group nor others,
+# read as a positive answer, so a find that fails refuses it.
+private_dir() { [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -n "$(find -H "$1" -maxdepth 0 -type d ! -perm -0020 ! -perm -0002 2> /dev/null)" ]; }
+private_file() { [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -n "$(find -H "$1" -maxdepth 0 -type f ! -perm -0020 ! -perm -0002 2> /dev/null)" ]; }
+# A path that is its own physical path: no symbolic link in any component, no . or .., no
+# trailing or doubled slash.
+physical() { [ "$(CDPATH= cd -P -- "$1" 2> /dev/null && pwd -P)" = "$1" ]; }
+fsize() { wc -c < "$1" | tr -d ' '; }
+# The key: t: a text, f: a file's bytes, d: a tree, m: a tree less its top modules.json (Terraform
+# writes local paths there). A tree is every name under it, sorted, with each file's bytes and
+# each link's target, each file by its own digest so no file's bytes can read as the next name;
+# .git and .terraform directories and lock files are left out, the lock file
+# of the example being an input of its own.
+PC_KEY_PL='
+use strict; use warnings; use Digest::SHA; use File::Find;
+my $d = Digest::SHA->new(256); $d->add("modulestf plan cache 1\0");
+for my $arg (@ARGV) {
+  my ($t, $v) = split /:/, $arg, 2;
+  if ($t eq "t") { $d->add("t\0$v\0"); next }
+  if ($t eq "f") { exit 1 unless -f $v && !-l $v; $d->add("f\0", Digest::SHA->new(256)->addfile($v, "b")->hexdigest, "\0"); next }
+  exit 1 unless ($t eq "d" || $t eq "m") && -d $v && !-l $v;
+  my @e;
+  find({no_chdir => 1, wanted => sub {
+    my $r = substr($File::Find::name, length $v);
+    if (-d $_ && !-l $_) { if (m{/\.(?:git|terraform)\z}) { $File::Find::prune = 1; return } push @e, ["D", $r]; return }
+    return if ($t eq "m" && $r eq "/modules.json") || $r =~ m{/\.terraform\.lock\.hcl\z};
+    push @e, [(-l $_ ? "L" : -f _ ? "F" : "O"), $r];
+  }}, $v);
+  $d->add("$t\0");
+  for my $x (sort { $a->[1] cmp $b->[1] } @e) {
+    my ($k, $r) = @$x; $d->add("$k\0$r\0");
+    if ($k eq "L") { $d->add(readlink("$v$r") // "", "\0") }
+    elsif ($k eq "F") { open(my $h, "<", "$v$r") or exit 1; binmode $h; $d->add(Digest::SHA->new(256)->addfile($h)->hexdigest, "\0") }
+  }
+}
+print $d->hexdigest, "\n";
+'
+pc_key() { # key: the hex key of the head plan of the example in the current directory
+  [ -n "$PCACHE" ] && [ -n "$PCTF" ] || return 1
+  printf '%s\n' "$PHEAD" | grep -Eqx '[0-9a-f]{40}' || return 1
+  PCA=("t:mode $GMODE" "t:profile $PROFILE" "t:role $ROLE_ARN" "t:commit $PHEAD" "t:example $PEX"
+    "t:terraform $PCTF" "t:modules $VERSIONS" "f:$HERE/plan-pass.sh" "f:$HERE/plan-session.sh"
+    "f:$HERE/plan-session-policy.json" "f:$PWD/.terraform.lock.hcl")
+  while IFS= read -r d; do PCA+=("d:$d"); done <<EOF
+$(scope "$PWD" | grep '^/' | sed 's|/[^/]*$||' | sort -u)
+EOF
+  [ ! -d "$PLAN/data/$1/modules" ] || PCA+=("m:$PLAN/data/$1/modules")
+  perl -e "$PC_KEY_PL" "${PCA[@]}" 2> /dev/null | grep -Ex '[0-9a-f]{64}'
+}
+pc_ok() { # entry: every check of a usable entry for PCKEY, PHEAD and PEX
+  private_dir "$1" || return 1
+  for f in key class kept; do private_file "$1/$f" || return 1; done
+  [ "$(fsize "$1/key")" -le 65 ] && [ "$(fsize "$1/class")" -le 32 ] && [ "$(fsize "$1/kept")" -le 4096 ] || return 1
+  [ -n "$(find "$1/key" -mmin -"$PC_TTL_MIN" 2> /dev/null)" ] || return 1
+  [ "$(cat "$1/key")" = "$PCKEY" ] && [ "$(grep -c '' "$1/kept")" = 1 ] || return 1
+  case "$(cat "$1/class")" in
+    planned|planned-no-changes)
+      private_file "$1/addresses.json" && [ "$(fsize "$1/addresses.json")" -le "$PC_CAP_ADDR" ] &&
+        jq -s -e --arg h "$PHEAD" --arg x "$PEX" 'length == 1 and (.[0] | type == "object" and .head_sha == $h
+          and .example == $x and (.addresses | type == "array"))' "$1/addresses.json" > /dev/null 2>&1 ;;
+    code-error) [ ! -e "$1/addresses.json" ] && [ ! -L "$1/addresses.json" ] ;;
+    *) return 1 ;;
+  esac
+}
+pc_hit() { # key: true when a usable entry set CLASS, KEPT and the addresses file
+  PCKEY="$(pc_key "$1")" || { PCKEY=; return 1; }
+  pce="$PCACHE/$PCKEY"
+  [ -e "$pce" ] || [ -L "$pce" ] || return 1
+  if ! pc_ok "$pce"; then
+    if [ -L "$pce" ]; then rm -f "$pce"; elif [ -d "$pce" ] && [ -O "$pce" ]; then rm -rf "$pce"; fi
+    return 1
+  fi
+  # The entry checked, then copied into the pass's own directory and checked again there: what is
+  # read is the copy, so a run trimming the cache meanwhile can only make this a miss.
+  pce="$(mktemp -d "$PLAN/tmp/pc.XXXXXX" 2> /dev/null)" || return 1
+  for f in key class kept addresses.json; do
+    [ ! -e "$PCACHE/$PCKEY/$f" ] || cp -p "$PCACHE/$PCKEY/$f" "$pce/" 2> /dev/null || return 1
+  done
+  pc_ok "$pce" || return 1
+  pcc="$(cat "$pce/class")"
+  # A plan diff needs the plan itself, so an example that reaches a plan diff directory plans
+  if [ "$pcc" != code-error ] && [ -n "$DIFFDIRS" ] && reaches "$PEX" "$pce/addresses.json"; then return 1; fi
+  CLASS=$pcc; KEPT="$(cat "$pce/kept")"
+  [ "$CLASS" = code-error ] || cat "$pce/addresses.json" > "$SHOWTO"
+  touch -c "$PCACHE/$PCKEY" 2> /dev/null; PCKEY=
+  echo "plan pass: plan cache hit $PEX" >&2
+}
+pc_put() { # key: the head plan just run, stored as an entry, whole or not at all
+  [ -n "$PCKEY" ] || return 0
+  case "$CLASS" in
+    planned|planned-no-changes) [ -s "$SHOWTO" ] && [ "$(fsize "$SHOWTO")" -le "$PC_CAP_ADDR" ] || return 0 ;;
+    code-error) ;;
+    *) return 0 ;;
+  esac
+  t="$(mktemp -d "$PCACHE/.put.XXXXXX" 2> /dev/null)" || return 0
+  # One rename of the whole entry, only when none exists: an entry another run stored meanwhile
+  # is kept, and a rename that landed inside it is removed.
+  if printf '%s\n' "$PCKEY" > "$t/key" && printf '%s\n' "$CLASS" > "$t/class" && printf '%s\n' "$KEPT" > "$t/kept" &&
+      case "$CLASS" in planned|planned-no-changes) cp "$SHOWTO" "$t/addresses.json" ;; esac && chmod 600 "$t"/* &&
+      [ ! -e "$PCACHE/$PCKEY" ] && mv "$t" "$PCACHE/$PCKEY" 2> /dev/null; then
+    [ ! -e "$PCACHE/$PCKEY/${t##*/}" ] || rm -rf "$PCACHE/$PCKEY/${t##*/}"
+    # At most PC_MAX_ENTRIES entries, and the temporary directory of a run killed part-way
+    # removed after an hour
+    find "$PCACHE" -mindepth 1 -maxdepth 1 -type d -name '.put.*' -mmin +60 -exec rm -rf {} + 2> /dev/null
+    ls -1t "$PCACHE" 2> /dev/null | grep -Ex '[0-9a-f]{64}' | tail -n +$((PC_MAX_ENTRIES + 1)) |
+      while IFS= read -r x; do rm -rf "$PCACHE/$x"; done
+    return 0
+  fi
+  rm -rf "$t"
+}
+if [ "$GMODE" = laptop ] && [ -z "$PHASE" ]; then
+  if [ -n "${PLAN_CACHE+x}" ]; then pcd=$PLAN_CACHE
+  elif [ -n "${XDG_CACHE_HOME:-}" ]; then pcd="$XDG_CACHE_HOME/modulestf/plan-cache"
+  elif [ -n "${HOME:-}" ]; then pcd="$HOME/.cache/modulestf/plan-cache"
+  else pcd=; fi
+  if [ -n "$pcd" ]; then
+    case "$pcd" in /?*) (umask 077 && mkdir -p "$pcd") 2> /dev/null ;; esac
+    PCTF="$(env -i PATH="/usr/bin:/bin:$TFDIR" HOME="$PLAN/home" TMPDIR="$PTMP" TF_CLI_CONFIG_FILE="$PLAN/cli.tfrc" \
+      CHECKPOINT_DISABLE=1 terraform version -json < /dev/null 2> /dev/null | jq -r '"\(.terraform_version) \(.platform)"' 2> /dev/null |
+      grep -Ex '[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]* [a-z0-9_]+')"
+    # The parent the user owns, or one with the sticky bit, so no other user can rename the
+    # directory away and put another in its place
+    pcp="${pcd%/*}"; [ -n "$pcp" ] || pcp=/
+    case "$pcd" in /?*) physical "$pcd" && private_dir "$pcd" && { [ -O "$pcp" ] || [ -k "$pcp" ]; } &&
+      [ -n "$PCTF" ] && PCACHE=$pcd ;; esac
+    [ -n "$PCACHE" ] || echo "plan pass: plan cache not used" >&2
+  fi
+fi
 pe_init() { # absolute example directory, key, root (the clone or the base worktree), saved g0 file
   # Everything before the credentials: gates, init, post_init. CLASS "ready" means plan next.
   CROOT=$3; CLASS=; KEPT=; VERSIONS=; SCOPE=; out=; INCD=
@@ -1148,7 +1286,10 @@ pe_init() { # absolute example directory, key, root (the clone or the base workt
   fi
 }
 pe_plan() { # key: the credentials and the plan, then the kept line and the denial evidence
-  DENIED=
+  DENIED=; PCKEY=
+  # Laptop mode, a head plan: a plan cache entry stands in for the credentials, the plan and the
+  # show (plan-pass.md, Plan cache)
+  [ "$CLASS" = ready ] && [ -n "$SHOWTO" ] && pc_hit "$1" && return 0
   if [ "$CLASS" = ready ]; then
     if ! get_creds; then CLASS='plan pass ended: credentials'
     else
@@ -1168,6 +1309,7 @@ pe_plan() { # key: the credentials and the plan, then the kept line and the deni
   # sets out, so this comes after the kept line.
   if [ -n "$SHOWTO" ]; then
     case "$CLASS" in planned|planned-no-changes) pe_show "$1" > "$SHOWTO"; [ -z "$DIFFDIRS" ] || pd_schema "$1" ;; esac
+    pc_put "$1"
   fi
 }
 plan_example() { # absolute example directory, key, root (the clone or the base worktree), saved g0 file

@@ -9,6 +9,9 @@ PP="$SRC/.agents/skills/terraform-module-pr-review/references/plan-pass.sh"
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/plan-pass-test.XXXXXX")" && pwd -P)" && [ -n "$TMP" ] || { echo "FAIL no temporary directory"; exit 1; }
 trap 'rm -rf "$TMP"' EXIT
 fails=0
+# The plan cache is off but where a case turns it on: a case that plans one example twice must
+# see the plan run twice.
+export PLAN_CACHE=
 
 check() { # name, command status (0 = holds)
   if [ "$2" = 0 ]; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
@@ -81,15 +84,18 @@ case "\$1" in
 show)
   # The saved plan is read with no credentials, from the file the plan wrote
   [ -z "\$AWS_ACCESS_KEY_ID" ] || echo "show with credentials" >> "$TMP/tf.log"
+  [ ! -f "$TMP/showfail" ] || exit 1 # a plan cache case: a show that prints nothing
   for a; do f="\$a"; done; [ -f "\$f" ] || { echo "Error: no saved plan"; exit 1; }
   cat "$TMP/show.json" ;;
 init)
-  printf 'provider "registry.terraform.io/hashicorp/aws" {\n}\n' >> .terraform.lock.hcl
+  # The plan cache cases change the provider version and the downloaded module through files
+  if [ -f "$TMP/lockver" ]; then printf 'provider "registry.terraform.io/hashicorp/aws" {\n  version = "%s"\n}\n' "\$(cat "$TMP/lockver")" >> .terraform.lock.hcl
+  else printf 'provider "registry.terraform.io/hashicorp/aws" {\n}\n' >> .terraform.lock.hcl; fi
   if [ "\${PWD##*/}" = ok ]; then
     mkdir -p "\$TF_DATA_DIR/modules/s3"
-    echo 'resource "aws_s3_bucket" "this" {}' > "\$TF_DATA_DIR/modules/s3/main.tf"
-    printf '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"s3","Source":"registry.terraform.io/terraform-aws-modules/s3-bucket/aws","Version":"4.1.0","Dir":"%s"}]}\n' \\
-      "\$TF_DATA_DIR/modules/s3" > "\$TF_DATA_DIR/modules/modules.json"
+    if [ -f "$TMP/modsrc" ]; then cat "$TMP/modsrc"; else echo 'resource "aws_s3_bucket" "this" {}'; fi > "\$TF_DATA_DIR/modules/s3/main.tf"
+    printf '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"s3","Source":"registry.terraform.io/terraform-aws-modules/s3-bucket/aws","Version":"%s","Dir":"%s"}]}\n' \\
+      "\$(cat "$TMP/modver" 2> /dev/null || echo 4.1.0)" "\$TF_DATA_DIR/modules/s3" > "\$TF_DATA_DIR/modules/modules.json"
   fi ;;
 plan)
   [ -n "\$AWS_ACCESS_KEY_ID" ] || { echo "Error: no valid credential sources"; exit 1; }
@@ -103,6 +109,8 @@ plan)
   deniedx) printf 'Error: reading SSM Parameter (/app/db): operation error SSM: GetParameter, https response error StatusCode: 400, RequestID: 0f3e-1a, api error AccessDeniedException: User is not authorized\n\n  with data.aws_ssm_parameter.p,\n\nError: Invalid index\n\n  with aws_s3_bucket.this,\n\n'; exit 1 ;;
   split) printf 'Error: invalid key s3cr3t-val\nue-xyz\n\n'; exit 1 ;;
   esac ;;
+version)
+  printf '{"terraform_version":"%s","platform":"linux_amd64"}\n' "\$(cat "$TMP/tfver" 2> /dev/null || echo 1.9.0)" ;;
 validate)
   [ -z "\$AWS_ACCESS_KEY_ID" ] || echo "validate with credentials" >> "$TMP/tf.log"
   [ "\${PWD##*/}" != err ] || { printf 'Error: Unsupported argument\n\n'; exit 1; } ;;
@@ -2771,6 +2779,272 @@ o="$(ca "$(jq -n -c '{addresses: ["aws_a.b","aws_c.d","aws_e.f","aws_g.h","aws_i
   sensitive: {"aws_a.b": "x", "aws_c.d": ["x","Bad"], "aws_e.f": [1], "aws_g.h": [range(501) | "a\(.)"], "aws_i.j": [range(500) | "a\(.)"]}}')")"
 check "clean_addresses: a malformed sensitive entry is dropped, never emptied; 500 names pass, 501 do not" \
   "$(jq -e '.sensitive | keys == ["aws_i.j"] and (.["aws_i.j"] | length) == 500' <<< "$o" > /dev/null 2>&1; echo $?)"
+
+# The plan cache (plan-pass.md, Plan cache), laptop mode, under bash and zsh: a warm run gives
+# the cold run's record and addresses files byte for byte with no session and no plan; a change
+# to any key input is a miss; a bad entry or cache directory is never used.
+PCREFS="${PP%/*}"
+pc_plan() { # shell, plan-pass.sh, cache directory, run directory, then plan arguments: stdout, stderr in pc.err
+  local s=$1 p=$2 c=$3 r=$4; shift 4
+  PATH="$TMP/bin:/usr/bin:/bin" "$s" "$p" g0 "$r" > /dev/null 2>&1
+  PLAN_CACHE="$c" PATH="$TMP/bin:/usr/bin:/bin" "$s" "$p" plan "$r" "$@" 2> "$TMP/pc.err"
+}
+pc_cold() { # shell, plan-pass.sh, cache, examples: a cold run into PCOLD and PCOLDA (the addresses files)
+  local s=$1 p=$2 c=$3; shift 3
+  [ -n "${PC_KEEP:-}" ] || rm -rf "$c"; R="$(newrun)"
+  PCOLD="$(pc_plan "$s" "$p" "$c" "$R" demo --role-arn "$ROLE" "$@")"
+  PCOLDA="$(cat "$R"/plan-addresses/addresses-*.json 2> /dev/null)"
+}
+pc_entry() { # cache, class: the one entry of that class
+  local x; for x in "$1"/*; do [ "$(cat "$x/class" 2> /dev/null)" = "$2" ] && { echo "$x"; return; }; done
+}
+planned_in() { grep -qx "$1 plan" "$TMP/tf.log"; } # the example ran terraform plan in the last run
+for sh in bash zsh; do
+  command -v "$sh" > /dev/null 2>&1 || continue
+  C="$TMP/pc-$sh"
+  pc_cold "$sh" "$PP" "$C" examples/ok examples/err
+  check "$sh: plan cache: a cold run stores one entry per cacheable example" \
+    "$([ -n "$(pc_entry "$C" planned)" ] && [ -n "$(pc_entry "$C" code-error)" ] && [ "$(ls "$C" | grep -c .)" = 2 ]; echo $?)"
+  check "$sh: plan cache: the cache and its entries are private" \
+    "$([ -z "$(find "$C" -perm -0020 -o -perm -0002 -o -perm -0040 -o -perm -0004)" ]; echo $?)"
+  R="$(newrun)"; : > "$TMP/tf.log"; : > "$TMP/aws.log"
+  o="$(pc_plan "$sh" "$PP" "$C" "$R" demo --role-arn "$ROLE" examples/ok examples/err)"
+  check "$sh: plan cache: a warm run prints the cold run's record byte for byte" "$([ "$o" = "$PCOLD" ]; echo $?)"
+  check "$sh: plan cache: a warm run writes the cold run's addresses files byte for byte" \
+    "$([ "$(cat "$R"/plan-addresses/addresses-*.json)" = "$PCOLDA" ] && [ -n "$PCOLDA" ]; echo $?)"
+  check "$sh: plan cache: a warm run plans nothing, shows nothing and asks for no session" \
+    "$(! planned_in ok && ! planned_in err && ! grep -q ' show$' "$TMP/tf.log" && grep -qx 'ok init' "$TMP/tf.log" && ! grep -q assume-role "$TMP/aws.log"; echo $?)"
+  check "$sh: plan cache: each hit is named on standard error only" \
+    "$(grep -qx 'plan pass: plan cache hit examples/ok' "$TMP/pc.err" && grep -qx 'plan pass: plan cache hit examples/err' "$TMP/pc.err"; echo $?)"
+  R="$(newrun)"; PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" g0 "$R" > /dev/null
+  o="$(PLAN_CACHE= PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$PP" plan "$R" demo --role-arn "$ROLE" examples/ok examples/err 2> /dev/null)"
+  check "$sh: plan cache: a run with the cache off prints the same record" "$([ "$o" = "$PCOLD" ]; echo $?)"
+
+  # Each key input changed: a miss, the plan run again and the same record
+  pc_miss() { # name, example, then plan arguments after the run directory; R is prepared by the caller
+    local n=$1 ex=$2; shift 2; : > "$TMP/tf.log"
+    o="$(pc_plan "$sh" "${PCP:-$PP}" "$C" "$R" "$@")"
+    check "$sh: plan cache: $n is a miss" "$(planned_in "$ex"; echo $?)"
+  }
+  R="$(newrun)"; git -C "$R/clone" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m next
+  pc_miss "another commit" ok demo --role-arn "$ROLE" examples/ok
+  R="$(newrun)"; echo '# edit' >> "$R/clone/examples/ok/main.tf"
+  pc_miss "an example tree that differs" ok demo --role-arn "$ROLE" examples/ok
+  R="$(newrun)"; echo '# edit' >> "$R/clone/main.tf"
+  pc_miss "a local module tree that differs" err demo --role-arn "$ROLE" examples/err
+  R="$(newrun)"; echo 'resource "aws_s3_bucket" "other" {}' > "$TMP/modsrc"
+  pc_miss "a downloaded module tree that differs" ok demo --role-arn "$ROLE" examples/ok; rm -f "$TMP/modsrc"
+  R="$(newrun)"; echo 6.1.0 > "$TMP/lockver"
+  pc_miss "another provider version in the lock file" ok demo --role-arn "$ROLE" examples/ok; rm -f "$TMP/lockver"
+  R="$(newrun)"; echo 1.9.1 > "$TMP/tfver"
+  pc_miss "another Terraform version" ok demo --role-arn "$ROLE" examples/ok; rm -f "$TMP/tfver"
+  R="$(newrun)"
+  pc_miss "another profile" ok demo2 --role-arn "$ROLE" examples/ok
+  R="$(newrun)"
+  pc_miss "another review role" ok demo --role-arn "${ROLE}2" examples/ok
+  rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"; echo '# edit' >> "$TMP/pcm/plan-pass.sh"
+  R="$(newrun)"; PCP="$TMP/pcm/plan-pass.sh" pc_miss "another plan-pass.sh" ok demo --role-arn "$ROLE" examples/ok
+  rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"; echo ' ' >> "$TMP/pcm/plan-session-policy.json"
+  R="$(newrun)"; PCP="$TMP/pcm/plan-pass.sh" pc_miss "another session policy" ok demo --role-arn "$ROLE" examples/ok
+  rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"; echo '# edit' >> "$TMP/pcm/plan-session.sh"
+  R="$(newrun)"; PCP="$TMP/pcm/plan-pass.sh" pc_miss "another plan-session.sh" ok demo --role-arn "$ROLE" examples/ok
+  R="$(newrun)"; echo 4.2.0 > "$TMP/modver"
+  pc_miss "another registry module version" ok demo --role-arn "$ROLE" examples/ok; rm -f "$TMP/modver"
+  for x in "$C"/*; do touch -t 200001010000 "$x/key"; done
+  R="$(newrun)"; pc_miss "an entry older than a day" ok demo --role-arn "$ROLE" examples/ok
+  : > "$TMP/tf.log"; pc_plan "$sh" "$PP" "$C" "$(newrun)" demo --role-arn "$ROLE" examples/ok > /dev/null
+  check "$sh: plan cache: the stale entry is stored again, and the next run hits" "$(! planned_in ok; echo $?)"
+  R="$(newrun)"; pc_miss "an example that reaches a plan diff directory" ok demo --role-arn "$ROLE" --diff-dir . examples/ok
+done
+
+# A bad entry is a miss with the cold record, never a hit; the bad entry is not left in use.
+pc_bad() { # name, class, command on $E, example: in a fresh cache
+  local n=$1 cl=$2 cmd=$3 ex=$4 C="$TMP/pc-bad" o
+  pc_cold bash "${PCP:-$PP}" "$C" "examples/$ex"
+  E="$(pc_entry "$C" "$cl")"; eval "$cmd"
+  : > "$TMP/tf.log"; o="$(pc_plan bash "${PCP:-$PP}" "$C" "$(newrun)" demo --role-arn "$ROLE" "examples/$ex")"
+  [ -n "${PCP:-}" ] && { planned_in "$ex"; return; }
+  check "plan cache: $n is not used" "$(planned_in "$ex" && [ "$o" = "$PCOLD" ]; echo $?)"
+}
+pc_bad "an entry of another class" planned 'echo bogus > "$E/class"' ok
+pc_bad "an entry whose key file differs" planned 'echo 00 > "$E/key"' ok
+pc_bad "an addresses file that is not JSON" planned 'echo "{" > "$E/addresses.json"' ok
+pc_bad "an addresses file of two JSON documents" planned 'cat "$E/addresses.json" "$E/addresses.json" > "$E/a" && mv "$E/a" "$E/addresses.json"' ok
+pc_bad "an addresses file of another head" planned 'jq -c ".head_sha = \"$(printf "%040d" 0)\"" "$E/addresses.json" > "$E/a" && mv "$E/a" "$E/addresses.json"' ok
+pc_bad "a linked entry" planned 'mv "$E" "$TMP/pc-real" && ln -s "$TMP/pc-real" "$E"' ok
+check "plan cache: the link is replaced by an entry" "$([ ! -L "$E" ] && [ -d "$E" ]; echo $?)"; rm -rf "$TMP/pc-real"
+pc_bad "a linked file in an entry" planned 'mv "$E/class" "$E/class.real" && ln -s class.real "$E/class"' ok
+pc_bad "a group-writable entry" planned 'chmod g+w "$E"' ok
+pc_bad "an others-writable file" planned 'chmod o+w "$E/kept"' ok
+pc_bad "an addresses file over 4 MiB" planned 'head -c 4194400 /dev/zero | tr "\0" " " >> "$E/addresses.json"' ok
+pc_bad "a kept file over 4096 bytes" planned '{ head -c 5000 /dev/zero | tr "\0" x; echo; } > "$E/kept"' ok
+pc_bad "a kept file of two lines" planned 'echo more >> "$E/kept"' ok
+pc_bad "a code-error entry with an addresses file" code-error ': > "$E/addresses.json"' err
+# A class that can change from one run to the next is never stored
+rm -rf "$TMP/pc-env"; o="$(AWSSTS=fail pc_plan bash "$PP" "$TMP/pc-env" "$(newrun)" demo --role-arn "$ROLE" examples/ok)"
+check "plan cache: a run ended at credentials stores nothing" "$([ "$(has "$o" 'plan: plan pass ended: credentials')" = 0 ] && [ -z "$(ls "$TMP/pc-env")" ]; echo $?)"
+# A cache directory that fails a check is not used, and says so
+pc_dir() { # name, cache directory
+  rm -f "$TMP/tf.log"; o="$(pc_plan bash "${PCP:-$PP}" "$2" "$(newrun)" demo --role-arn "$ROLE" examples/ok)"
+  [ -n "${PCP:-}" ] && { grep -qx 'plan pass: plan cache not used' "$TMP/pc.err"; return; }
+  check "plan cache: $1 is not used" "$(grep -qx 'plan pass: plan cache not used' "$TMP/pc.err" && [ "$o" = "$PCOLD" ]; echo $?)"
+}
+pc_cold bash "$PP" "$TMP/pc-ref" examples/ok
+[ "$(id -u)" = 0 ] || pc_dir "a cache directory of another owner" /usr/bin
+pc_dir "a relative cache directory" pc-relative
+mkdir -p "$TMP/pc-gw" && chmod 770 "$TMP/pc-gw"; pc_dir "a group-writable cache directory" "$TMP/pc-gw"
+ln -s "$TMP/pc-ref" "$TMP/pc-link"; pc_dir "a linked cache directory" "$TMP/pc-link"
+pc_dir "a cache directory with a trailing slash" "$TMP/pc-ref/"
+echo nonsense > "$TMP/tfver"; pc_dir "a Terraform version it cannot read" "$TMP/pc-ref"; rm -f "$TMP/tfver"
+check "plan cache: a relative cache directory is never made" "$([ ! -e pc-relative ]; echo $?)"
+
+# Case functions: status 0 when the rule held. They plan with ${PCP:-$PP}, so the self-check
+# below runs them on a mutated copy, where a status other than 0 means the mutation was caught.
+pc_withother() { # a run directory whose clone also holds other/err, a copy of examples/err that reaches the same root module
+  R="$(newrun)"; mkdir -p "$R/clone/other"; cp -R "$R/clone/examples/err" "$R/clone/other/err"
+}
+pc_case_example() { # shell: the same tree under another example path is a miss
+  local s=${1:-bash} C="$TMP/pc-ex"; rm -rf "$C"
+  pc_withother; pc_plan "$s" "${PCP:-$PP}" "$C" "$R" demo --role-arn "$ROLE" examples/err > /dev/null
+  pc_withother; : > "$TMP/tf.log"; pc_plan "$s" "${PCP:-$PP}" "$C" "$R" demo --role-arn "$ROLE" other/err > /dev/null
+  planned_in err
+}
+pc_case_session() { # an edited plan-session.sh is a miss (the copy is $TMP/pcm, or one made here)
+  local C="$TMP/pc-se" p="${PCP:-}"
+  if [ -z "$p" ]; then rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"; p="$TMP/pcm/plan-pass.sh"; fi
+  pc_cold bash "$p" "$C" examples/ok; echo '# edit' >> "${p%/*}/plan-session.sh"
+  : > "$TMP/tf.log"; pc_plan bash "$p" "$C" "$(newrun)" demo --role-arn "$ROLE" examples/ok > /dev/null; planned_in ok
+}
+pc_case_modules() { # another registry module version, the module files the same, is a miss
+  local C="$TMP/pc-mv"; pc_cold bash "${PCP:-$PP}" "$C" examples/ok; echo 4.2.0 > "$TMP/modver"
+  : > "$TMP/tf.log"; pc_plan bash "${PCP:-$PP}" "$C" "$(newrun)" demo --role-arn "$ROLE" examples/ok > /dev/null
+  planned_in ok; local r=$?; rm -f "$TMP/modver"; return "$r"
+}
+pc_case_trim() { # 256 entries and a store: the least recently used goes, the new entry stays
+  local C="$TMP/pc-trim" i; rm -rf "$C"; mkdir -m 700 "$C"
+  for i in $(seq 1 256); do mkdir "$C/$(printf '%064x' "$i")"; done
+  touch -t 200001010000 "$C"/0*; mkdir "$C/not-an-entry"; touch -t 199901010000 "$C/not-an-entry"
+  PC_KEEP=1 pc_cold bash "${PCP:-$PP}" "$C" examples/ok
+  [ "$(ls "$C" | grep -Ec '^[0-9a-f]{64}$')" = 256 ] && [ -n "$(pc_entry "$C" planned)" ] && [ -d "$C/not-an-entry" ]
+}
+pc_case_mark() { # a hit marks its entry used
+  local C="$TMP/pc-mark" E; pc_cold bash "${PCP:-$PP}" "$C" examples/ok; E="$(pc_entry "$C" planned)"
+  touch -t 200001010000 "$E"; touch -t 200101010000 "$TMP/mark"
+  : > "$TMP/tf.log"; pc_plan bash "${PCP:-$PP}" "$C" "$(newrun)" demo --role-arn "$ROLE" examples/ok > /dev/null
+  ! planned_in ok && [ -n "$(find "$E" -maxdepth 0 -newer "$TMP/mark")" ]
+}
+pc_case_sweep() { # a store removes a temporary directory over an hour old and keeps a younger one
+  local C="$TMP/pc-sw"; rm -rf "$C"; mkdir -m 700 "$C" "$C/.put.old" "$C/.put.new"; touch -t 200001010000 "$C/.put.old"
+  PC_KEEP=1 pc_cold bash "${PCP:-$PP}" "$C" examples/ok
+  [ ! -e "$C/.put.old" ] && [ -d "$C/.put.new" ] && [ -n "$(pc_entry "$C" planned)" ]
+}
+pc_case_exists() { # a store over an entry another run stored leaves it as it is and does nothing else
+  local C="$TMP/pc-ex2" E; pc_cold bash "${PCP:-$PP}" "$C" examples/ok; E="$(pc_entry "$C" planned)"
+  : > "$E/other-run"; mkdir "$C/.put.old"; touch -t 200001010000 "$C/.put.old"
+  : > "$TMP/tf.log"; pc_plan bash "${PCP:-$PP}" "$C" "$(newrun)" demo --role-arn "$ROLE" --diff-dir . examples/ok > /dev/null
+  planned_in ok && [ -e "$E/other-run" ] && [ -d "$C/.put.old" ] && [ -z "$(find "$E" -name '.put.*')" ]
+}
+pc_case_noshow() { # a planned result whose show printed nothing is not stored
+  local C="$TMP/pc-ns"; : > "$TMP/showfail"; pc_cold bash "${PCP:-$PP}" "$C" examples/ok; rm -f "$TMP/showfail"
+  [ -z "$(ls "$C")" ]
+}
+pc_case_sticky() { # a cache directory under a sticky parent the user does not own is used
+  [ -n "$PCSTICKY" ] || return 0
+  pc_cold bash "${PCP:-$PP}" "$PCSTICKY" examples/ok
+  ! grep -qx 'plan pass: plan cache not used' "$TMP/pc.err" && [ -n "$(pc_entry "$PCSTICKY" planned)" ]
+}
+pc_case_ownerfn() { # private_dir, taken from the script, refuses a directory of another owner
+  [ "$(id -u)" != 0 ] || return 0
+  ( eval "$(grep '^private_dir() ' "${PCP:-$PP}")"; ! private_dir /usr/bin && private_dir "$TMP" )
+}
+pc_case_frame() { # two trees whose file bytes would frame the same with no digest per file get different keys
+  local k pl; pl="$(sed -n "/^PC_KEY_PL='/,/^'\$/p" "${PCP:-$PP}")"; pl="${pl#PC_KEY_PL=\'}"; pl="${pl%\'}"
+  rm -rf "$TMP/fr"; mkdir -p "$TMP/fr/a" "$TMP/fr/b"
+  printf X > "$TMP/fr/a/a"; printf Y > "$TMP/fr/a/b"; printf 'X\0F\0/b\0Y' > "$TMP/fr/b/a"
+  k="$(perl -e "$pl" "d:$TMP/fr/a")$(perl -e "$pl" "d:$TMP/fr/b")"
+  [ "${#k}" = 128 ] && [ "${k:0:64}" != "${k:64}" ]
+}
+pc_case_owned() { # a cache directory whose parent the user owns is used
+  pc_cold bash "${PCP:-$PP}" "$TMP/pc-own" examples/ok
+  ! grep -qx 'plan pass: plan cache not used' "$TMP/pc.err" && [ -n "$(pc_entry "$TMP/pc-own" planned)" ]
+}
+PT="$(cd /tmp && pwd -P)"; PCSTICKY=
+if [ -k "$PT" ] && [ ! -O "$PT" ]; then PCSTICKY="$(mktemp -d "$PT/plan-pass-sticky.XXXXXX")"; else echo "note plan cache: no sticky /tmp of another owner, the sticky parent case is skipped"; fi
+for sh in bash zsh; do
+  command -v "$sh" > /dev/null 2>&1 || continue
+  pc_case_example "$sh"; check "$sh: plan cache: the same tree under another example path is a miss" $?
+done
+for c in session modules trim mark sweep exists noshow sticky owned ownerfn frame; do
+  "pc_case_$c"; check "plan cache: case $c holds" $?
+done
+
+# Negative self-check: a copy without one rule lets its bad case through
+pc_mut() { # name, perl substitution, then the case: miss <setup> <example> [plan args...] | bad <class> <cmd> <example> | dir <path>
+  local n=$1 sub=$2 kind=$3 r; shift 3
+  rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"
+  perl -0pe "$sub" "$PCREFS/plan-pass.sh" > "$TMP/pcm/plan-pass.sh"
+  if cmp -s "$PCREFS/plan-pass.sh" "$TMP/pcm/plan-pass.sh"; then check "plan cache mutation $n: applies" 1; return; fi
+  case "$kind" in
+    miss) C="$TMP/pc-mut"; pc_cold bash "$TMP/pcm/plan-pass.sh" "$C" "examples/$2"; R="$(newrun)"; eval "$1"
+      : > "$TMP/tf.log"; pc_plan bash "$TMP/pcm/plan-pass.sh" "$C" "$R" "${@:3}" > /dev/null; planned_in "$2"; r=$? ;;
+    bad) PCP="$TMP/pcm/plan-pass.sh" pc_bad "$n" "$@"; r=$? ;;
+    dir) PCP="$TMP/pcm/plan-pass.sh" pc_dir "$n" "$1"; r=$? ;;
+  esac
+  rm -f "$TMP/lockver" "$TMP/tfver" "$TMP/modsrc"
+  check "plan cache mutation $n: caught" "$([ "$r" != 0 ]; echo $?)"
+}
+pc_mut commit 's/ "t:commit \$PHEAD"//' miss 'git -C "$R/clone" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m next' err demo --role-arn "$ROLE" examples/err
+pc_mut example-tree 's/PCA\+=\("d:\$d"\)/:/' miss 'echo "# edit" >> "$R/clone/examples/ok/main.tf"' ok demo --role-arn "$ROLE" examples/ok
+pc_mut module-tree 's/\|\| PCA\+=\("m:[^)]*"\)/|| :/' miss 'echo "resource \"aws_s3_bucket\" \"o\" {}" > "$TMP/modsrc"' ok demo --role-arn "$ROLE" examples/ok
+pc_mut lock 's/ "f:\$PWD\/\.terraform\.lock\.hcl"//' miss 'echo 6.1.0 > "$TMP/lockver"' ok demo --role-arn "$ROLE" examples/ok
+pc_mut terraform 's/ "t:terraform \$PCTF"//' miss 'echo 1.9.1 > "$TMP/tfver"' ok demo --role-arn "$ROLE" examples/ok
+pc_mut profile 's/"t:profile \$PROFILE" //' miss : ok demo2 --role-arn "$ROLE" examples/ok
+pc_mut role 's/ "t:role \$ROLE_ARN"//' miss : ok demo --role-arn "${ROLE}2" examples/ok
+pc_mut script 's/ "f:\$HERE\/plan-pass\.sh"//' miss 'echo "# edit" >> "$TMP/pcm/plan-pass.sh"' ok demo --role-arn "$ROLE" examples/ok
+pc_mut policy 's/\n    "f:\$HERE\/plan-session-policy\.json"/\n   /' miss 'echo " " >> "$TMP/pcm/plan-session-policy.json"' ok demo --role-arn "$ROLE" examples/ok
+pc_mut age 's/-mmin -"\$PC_TTL_MIN"/-mmin -99999999/' miss 'for x in "$C"/*; do touch -t 200001010000 "$x/key"; done' ok demo --role-arn "$ROLE" examples/ok
+pc_mut plan-diff 's/ && \[ -n "\$DIFFDIRS" \] && reaches "\$PEX" "\$pce\/addresses\.json"/ \&\& false/' miss : ok demo --role-arn "$ROLE" --diff-dir . examples/ok
+pc_mut class 's/    \*\) return 1 ;;\n  esac\n\}\npc_hit/    *) ;;\n  esac\n}\npc_hit/' bad planned 'echo bogus > "$E/class"' ok
+pc_mut key-file 's/\[ "\$\(cat "\$1\/key"\)" = "\$PCKEY" \] && //' bad planned 'echo 00 > "$E/key"' ok
+pc_mut head 's/\.head_sha == \$h\n/true\n/' bad planned 'jq -c ".head_sha = \"$(printf "%040d" 0)\"" "$E/addresses.json" > "$E/a" && mv "$E/a" "$E/addresses.json"' ok
+pc_mut one-document 's/length == 1 and \(\.\[0\]/(.[0]/' bad planned 'cat "$E/addresses.json" "$E/addresses.json" > "$E/a" && mv "$E/a" "$E/addresses.json"' ok
+pc_mut linked-entry 's/(private_dir\(\) \{ \[ -d "\$1" \] && )\[ ! -L "\$1" \] && /$1/' bad planned 'mv "$E" "$TMP/pc-real" && ln -s "$TMP/pc-real" "$E"' ok
+pc_mut linked-file 's/(private_file\(\) \{ \[ -f "\$1" \] && )\[ ! -L "\$1" \] && /$1/' bad planned 'mv "$E/class" "$E/class.real" && ln -s class.real "$E/class"' ok
+pc_mut writable-dir 's/(private_dir\(\) .*?-type d) ! -perm -0020 ! -perm -0002/$1/' bad planned 'chmod g+w "$E"' ok
+pc_mut writable-file 's/(private_file\(\) .*?-type f) ! -perm -0020 ! -perm -0002/$1/' bad planned 'chmod o+w "$E/kept"' ok
+pc_mut addresses-cap 's/\[ "\$\(fsize "\$1\/addresses\.json"\)" -le "\$PC_CAP_ADDR" \] &&//' bad planned 'head -c 4194400 /dev/zero | tr "\0" " " >> "$E/addresses.json"' ok
+pc_mut kept-cap 's/-le 4096 \]/-le 99999999 ]/' bad planned '{ head -c 5000 /dev/zero | tr "\0" x; echo; } > "$E/kept"' ok
+pc_mut kept-line 's/ && \[ "\$\(grep -c .. "\$1\/kept"\)" = 1 \]//' bad planned 'echo more >> "$E/kept"' ok
+pc_mut code-error 's/code-error\) \[ ! -e "\$1\/addresses\.json" \] && \[ ! -L "\$1\/addresses\.json" \] ;;/code-error) ;;/' bad code-error ': > "$E/addresses.json"' err
+pc_mut physical 's/physical "\$pcd" && //' dir "$TMP/pc-ref/"
+pc_fmut() { # name, perl substitution, case function
+  rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"
+  perl -0pe "$2" "$PCREFS/plan-pass.sh" > "$TMP/pcm/plan-pass.sh"
+  if cmp -s "$PCREFS/plan-pass.sh" "$TMP/pcm/plan-pass.sh"; then check "plan cache mutation $1: applies" 1; return; fi
+  PCP="$TMP/pcm/plan-pass.sh" "$3"; local r=$?
+  rm -f "$TMP/lockver" "$TMP/tfver" "$TMP/modsrc" "$TMP/modver" "$TMP/showfail"
+  check "plan cache mutation $1: caught" "$([ "$r" != 0 ]; echo $?)"
+}
+pc_fmut example 's/ "t:example \$PEX"//' pc_case_example
+pc_fmut session 's/ "f:\$HERE\/plan-session\.sh"//' pc_case_session
+pc_fmut modules 's/ "t:modules \$VERSIONS"//' pc_case_modules
+pc_fmut trim 's/PC_MAX_ENTRIES=256/PC_MAX_ENTRIES=9999/' pc_case_trim
+pc_fmut trim-names "s/grep -Ex '\[0-9a-f\]\{64\}' \| tail/cat | tail/" pc_case_trim
+pc_fmut mark 's/  touch -c "\$PCACHE\/\$PCKEY" 2> \/dev\/null; PCKEY=/  PCKEY=/' pc_case_mark
+pc_fmut sweep-age 's/ -mmin \+60//' pc_case_sweep
+pc_fmut exists 's/\[ ! -e "\$PCACHE\/\$PCKEY" \] && mv/mv/' pc_case_exists
+pc_fmut noshow 's/\[ -s "\$SHOWTO" \] && //' pc_case_noshow
+[ -z "$PCSTICKY" ] || pc_fmut sticky 's/ \|\| \[ -k "\$pcp" \]//' pc_case_sticky
+pc_fmut owner 's/(private_dir\(\) \{ \[ -d "\$1" \] && \[ ! -L "\$1" \] && )\[ -O "\$1" \] && /$1/' pc_case_ownerfn
+pc_fmut frame 's/\$d->add\(Digest::SHA->new\(256\)->addfile\(\$h\)->hexdigest, "\\0"\)/\$d->addfile(\$h); \$d->add("\\0")/' pc_case_frame
+pc_fmut owned 's/\[ -O "\$pcp" \] \|\| //' pc_case_owned
+[ -z "$PCSTICKY" ] || rm -rf "$PCSTICKY"
+# The store rule: a copy that stores any class stores the credentials end
+rm -rf "$TMP/pcm"; cp -R "$PCREFS" "$TMP/pcm"
+perl -0pe 's/    code-error\) ;;\n    \*\) return 0 ;;/    *) ;;/' "$PCREFS/plan-pass.sh" > "$TMP/pcm/plan-pass.sh"
+rm -rf "$TMP/pc-env"; AWSSTS=fail pc_plan bash "$TMP/pcm/plan-pass.sh" "$TMP/pc-env" "$(newrun)" demo --role-arn "$ROLE" examples/ok > /dev/null
+check "plan cache mutation store: caught" "$(! cmp -s "$PCREFS/plan-pass.sh" "$TMP/pcm/plan-pass.sh" && [ -n "$(ls "$TMP/pc-env")" ]; echo $?)"
+rm -rf "$TMP/pcm"
 
 [ "$fails" -eq 0 ] && echo "all passed" || echo "$fails failed"
 [ "$fails" -eq 0 ]
