@@ -1,7 +1,7 @@
 # shellcheck shell=sh
 # facts-resolve.sh: the one way the pull request review scripts find mtf-facts and read what it
 # can do. Sourced, never run, by review-run.sh (bash) and verify-pass.sh (bash or zsh), so it
-# keeps to shell both read the same way. Rules: facts-resolve.md.
+# keeps to shell both read the same way. Rules: review-run-details.md, section "The mtf-facts line".
 #
 #   facts_resolve [<refused dir>...]
 #       Finds mtf-facts from /, canonical, a regular executable file outside every refused
@@ -85,6 +85,9 @@ facts_resolve() {
 }
 
 facts_has() {
+  # Only a name the version report may hold: an empty one or one with a line break matches nothing.
+  case "$1" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9:._-]*) return 1 ;; esac
+  [ "${#1}" -le 128 ] || return 1
   case "
 $FACTS_FEATURES
 " in *"

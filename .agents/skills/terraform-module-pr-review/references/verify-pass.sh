@@ -433,8 +433,9 @@ print $env ? "environment" : "code", "\n", $line, "\n";
 # facts-resolve.sh, outside the workspace as the reviewer's facts-engine.md resolves it, and a
 # path inside the clone or the run directory counts as no binary. Writes $W/sel.tsv,
 # "<affected><TAB><dir>" per selected example in order, and $W/selection.json.
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
 # shellcheck source=facts-resolve.sh
-. "${0%/*}/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
+. "$HERE/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
 # shellcheck disable=SC2016 # a jq program
 AFFECTED_JQ='
 def name_ok: type == "string" and test("^examples/[A-Za-z0-9._-]+$") and (test("^examples/[.][.]?$") | not);
@@ -482,8 +483,10 @@ select_examples() {
       # One run on the repository root reads the module root's examples and the root examples
       # that call it (verify-pass.md, Example selection).
       mroot=true
+      # The engine runs from /, so the files list goes in as an absolute path.
+      cp -- "$FILES" "$W/affected-files.json"
       if CAP_QUIET_ERR=1 run_capped 70 "$W/affected.json" / "$FACTS_BIN" affected "$CROOT" --module-root "${PREFIX%/}" \
-          --diff "$FILES" --json && jq -e . "$W/affected.json" > /dev/null 2>&1; then
+          --diff "$W/affected-files.json" --json && jq -e . "$W/affected.json" > /dev/null 2>&1; then
         tool=invalid
         jq -e --slurpfile all "$W/all.json" --arg pre "$PREFIX" '. as $in | $all[0] as $all | '"$AFFECTED_ROOT_JQ" \
           "$W/affected.json" > /dev/null 2>&1 && tool=mtf-facts
@@ -508,13 +511,15 @@ select_examples() {
     # The module root's own examples in the tool's order, then any linked one it left out, then
     # the repository-root examples as the scan lists them: touched, then the ones that call the
     # module root, then any the tool could not resolve, reason all; each group in byte order.
+    # Under a fallback the tool lists every root example with reason all, not as a caller.
     jq -r --slurpfile all "$W/all.json" --arg pre "$PREFIX" '
-      [.examples[] | select(.dir | startswith($pre))] as $own | [.examples[] | select(.dir | startswith($pre) | not)] as $root
+      (if .fallback == null then "caller" else "all" end) as $cl
+      | [.examples[] | select(.dir | startswith($pre))] as $own | [.examples[] | select(.dir | startswith($pre) | not)] as $root
       | [$own[].dir] as $t
       | ($own[] | "\(.reason)\t\(.dir)"),
         ($all[0][] | select(.kind == "link") | .dir as $d | select(($t | index($d)) == null) | "all\t\($d)"),
         ($root | map(select(.reason == "touched")) | sort_by(.dir)[] | "touched\t\(.dir)"),
-        ($root | map(select(.reason != "touched" and .unresolved != true)) | sort_by(.dir)[] | "caller\t\(.dir)"),
+        ($root | map(select(.reason != "touched" and .unresolved != true)) | sort_by(.dir)[] | "\($cl)\t\(.dir)"),
         ($root | map(select(.reason != "touched" and .unresolved == true)) | sort_by(.dir)[] | "all\t\(.dir)")
       ' "$W/affected.json" > "$W/sel.tsv"
     jq -c '{tool: "mtf-facts", fallback, inert}' "$W/affected.json" > "$W/selection.json"
