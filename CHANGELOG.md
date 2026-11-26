@@ -1,3 +1,12 @@
+# [0.16.0](https://github.com/modulestf/modulestf/compare/v0.15.0...v0.16.0) (2026-11-26)
+
+
+### Features
+
+* **pr-review:** Accept the split trigger cap and read variable facts from the behaviour report ([#238](https://github.com/modulestf/modulestf/issues/238)) ([45efeff](https://github.com/modulestf/modulestf/commit/45efeff0e39dae1141fe899f1246a4a77740c2b7)), closes [modulestf/facts#70](https://github.com/modulestf/facts/issues/70) [terraform-aws-rds#634](https://github.com/terraform-aws-rds/issues/634) [terraform-aws-rds#634](https://github.com/terraform-aws-rds/issues/634) [facts#70](https://github.com/facts/issues/70) [facts#70](https://github.com/facts/issues/70) [modulestf/facts#70](https://github.com/modulestf/facts/issues/70)
+
+
+
 # [0.15.0](https://github.com/modulestf/modulestf/compare/v0.14.0...v0.15.0) (2026-11-26)
 
 
