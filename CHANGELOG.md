@@ -1,3 +1,12 @@
+## [0.16.8](https://github.com/modulestf/modulestf/compare/v0.16.7...v0.16.8) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Drop the caller code inert reading under a module root prefix ([#258](https://github.com/modulestf/modulestf/issues/258)) ([f4750d5](https://github.com/modulestf/modulestf/commit/f4750d5733f117cf8ce84b0916b6fbceb96b0cd0))
+
+
+
 ## [0.16.7](https://github.com/modulestf/modulestf/compare/v0.16.6...v0.16.7) (2026-11-26)
 
 
