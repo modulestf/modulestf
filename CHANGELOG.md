@@ -1,3 +1,12 @@
+## [0.16.4](https://github.com/modulestf/modulestf/compare/v0.16.3...v0.16.4) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Fall back when the module root report is refused and harden script lookups ([#252](https://github.com/modulestf/modulestf/issues/252)) ([44f029a](https://github.com/modulestf/modulestf/commit/44f029a2b7e8347bbef291db097951bb685707d5))
+
+
+
 ## [0.16.3](https://github.com/modulestf/modulestf/compare/v0.16.2...v0.16.3) (2026-11-26)
 
 
