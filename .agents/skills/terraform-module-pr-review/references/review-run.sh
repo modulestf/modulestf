@@ -588,7 +588,7 @@ summary_lines() {
 need_full() { [ "$TRIAGE" = false ] || fail "a triage run has no $1 step"; }
 
 # The schema handoff's inputs, as schema-pass.md, Schema Handoff, gives them: one
-# <commit>:<SHA-256>:<path> per regular .tf blob of at most 1 MiB in each commit's tree,
+# <commit>:<SHA-256>:<path> per regular .tf blob of at most 2 MiB in each commit's tree,
 # with a module root prefix only the blobs under it, the path relative to it, as the facts
 # engine hashes the workspace it lints. Status 1, so no inputs and no handoff, when a tree
 # or blob cannot be read, a path is outside the token charset, or the tokens pass 600 or
@@ -599,7 +599,7 @@ schema_inputs() {
     clone_git ls-tree -r -l -z "$c" > "$RUN/state/schema-tree" 2> /dev/null || return 1
     while IFS= read -r -d '' l; do
       read -r m _ o s <<< "${l%%$'\t'*}"; p="${l#*$'\t'}"
-      [[ "$m" =~ ^100(644|755)$ && "$p" == *.tf && "$s" =~ ^[0-9]+$ ]] && [ "$s" -le 1048576 ] || continue
+      [[ "$m" =~ ^100(644|755)$ && "$p" == *.tf && "$s" =~ ^[0-9]+$ ]] && [ "$s" -le 2097152 ] || continue
       if [ -n "$r" ]; then [[ "$p" == "$r"* ]] || continue; p="${p#"$r"}"; fi
       [[ "$p" =~ ^[A-Za-z0-9._/-]+$ && "$o" =~ ^[0-9a-f]{40}$ ]] || return 1
       h="$(clone_git cat-file blob "$o" | sha256)" || return 1
