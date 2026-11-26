@@ -875,6 +875,16 @@ t_engine_inrun() { mkdir -p "$RUN/bin"; cp "$MF" "$RUN/bin/mtf-facts"; engine_ca
 t_engine_inrun; check "an mtf-facts inside the run directory is not run: change-not-allowed" $?
 t_h_partial() { h_reset; HEX=examples/h8; HLINES="${HDEF//$HOSTS/sso.eu-west-1.amazonaws.com:443}"; h_why denial-unproven; }
 t_h_partial; check "refused-host: a mapped type beside a .tf.json file the engine does not read: denial-unproven" $?
+t_tofu() { fresh; reset_knobs; plain_change; printf 'locals {\n  x = aws_lb.this.security_groups\n}\n' > "$C/extra.tofu"; run_case && all_why change-not-allowed; }
+t_tofu; check "a .tofu file added beside a plain change: change-not-allowed" $?
+t_tofu_read() { # an unchanged .tofu file beside the changed one: its reads are unknown, so a design skip is not covered
+  reset_knobs; fresh; printf 'locals {\n  x = 1\n}\n' > "$C/extra.tofu"; G add -A; G commit -qm tofu; local keep="$BASE"; BASE="$(G rev-parse HEAD)"
+  G -C "$RUN/base" checkout -q --detach "$BASE"; plain_change
+  local k2="$EX"; EX="$EXV"; COVJQ="$VCOV"; run_case; local s=$?; EX="$k2"
+  BASE="$keep"; G -C "$RUN/base" checkout -q --detach "$BASE"
+  [ "$s" = 0 ] && [ "$(why examples/v1)" = attribute-referenced ]
+}
+t_tofu_read; check "design skip: a .tofu file in the changed module makes its reads unknown: attribute-referenced" $?
 
 # --- Refused inputs: exit 2, nothing printed
 fresh; reset_knobs; plain_change; run_case > /dev/null 2>&1
@@ -969,10 +979,8 @@ mutate "an unresolved merge base ignored for a design skip" 's/(dir_changed\(\$x
 mutate "the merge base denial not required" 's/     elif \$k == "access-denied" and \(\$x\.blk\.base != \["environment \(access-denied\)"\] or \$x\.blk\.base_denied != \$x\.blk\.denied\) then "base-not-denied"\n//' t_v_basenew
 mutate "a missing head gate record taken for a design skip" 's/elif \$x\.h == null or \$x\.h\.done != true or /elif /' t_v_nohead
 t_module_arg() { na module main.tf 's/port   = 80/port   = 81/'; }
-t_meta() { na meta meta.tf 's/count = var.n/count = var.m/'; }
 mutate "a value not plain at head allowed" 's/\.plain\.head == true and //' t_merge
 mutate "a value not plain at base allowed" 's/ and \.plain\.base == true//' t_base_plain
-mutate "the meta-arguments allowed" 's/\["count", "for_each", "provider", "depends_on"\] as \$meta/[] as \$meta/' t_meta
 mutate "a structural edit allowed" 's/ and \.structural == false//' t_struct
 mutate "a change outside attribute values allowed" 's/ and \$e\.outside == false//' t_between
 mutate "a block of another kind allowed" 's/\(\(\.kind == "resource" and/((true or/' t_module_arg

@@ -184,8 +184,8 @@ fi
 # attribute; a modified .tf at the module root or under modules/ is allowed when the report gives
 # it parsed and modified with no change outside attribute values, and every block it changed is
 # an edited resource or data block with two labels, no structural edit and only changed attributes
-# that are plain at both sides and no meta-argument (skip-coverage.md, The allow-list); anything
-# else is not allowed.
+# that are plain at both sides (skip-coverage.md, The allow-list); the report gives a change of
+# count, for_each, provider or depends_on as a structural edit. Anything else is not allowed.
 : > "$W/classes.jsonl"
 jq -c --arg pre "$PREFIX" '.[] | {f: .filename, s: .status, prev: (.previous_filename // null),
     kind: (if .filename | test("\\.md$") then "md"
@@ -202,14 +202,13 @@ while IFS= read -r row; do
       grep -rqF --include='*.tf' --exclude-dir=.git -- "${f##*/}" "$CLONE" 2> /dev/null; [ $? = 1 ] && ok=true ;;
   esac
   jq -c --arg f "$f" --arg kind "$kind" --argjson mdok "$ok" '
-    ["count", "for_each", "provider", "depends_on"] as $meta
-    | (if $kind == "tf" then first(.files[]? | select(.path == $f)) // null else null end) as $e
+    (if $kind == "tf" then first(.files[]? | select(.path == $f)) // null else null end) as $e
     | (if $kind == "md" then {ok: $mdok, attrs: []}
        elif $e != null and $e.status == "modified" and $e.parsed == true and $e.outside == false and ($e.blocks | length) > 0
          and all($e.blocks[]; .status == "edited" and .structural == false and (.attributes | length) > 0
            and ((.kind == "resource" and (.address | test("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$")))
              or (.kind == "data" and (.address | test("^data\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"))))
-           and all(.attributes[]; .plain.head == true and .plain.base == true and (.name as $n | $meta | index($n) | not)))
+           and all(.attributes[]; .plain.head == true and .plain.base == true))
        then {ok: true, attrs: [$e.blocks[] | .address as $a | .attributes[] | {address: $a, attribute: .name}]}
        else {ok: false, attrs: []} end)
     | {file: $f, dir: ($f | if test("/") then sub("/[^/]*$"; "") else "." end)} + .' "$W/changes.json" >> "$W/classes.jsonl"
