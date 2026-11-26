@@ -43,7 +43,7 @@ The runner's network check runs on a laptop too. On a Linux host with a service 
 
 The choice is recorded as one line of the verification record: `plan pass runner: available`, or `plan pass runner: not available (<reason>)` with the check that failed. Nothing from the head enters it. Once the runner is chosen there is no fallback: a runner that stops, because the profile's credentials carry no session token, on a Docker error, or for any other reason `run-pass.sh` gives, is the note `plan pass ended: runner: <reason>`, and the laptop pass is not tried. A second pass with credentials under another isolation model, started because the first failed, would let the head's failure mode pick the review's.
 
-**The snapshot.** In runner mode the runner gets a copy of the Step 3 clone taken right after G0 and before the default pass writes `.terraform/` and lock files into it: `cp -PR "$DIR" "$RUN/runner-clone"`, with `-P` so a symbolic link is copied as a link, never followed; G0 inside the runner checks where it points. The copy keeps `.git` and its `origin` remote, which the runner needs to fetch the merge base. G0 itself is unchanged: files the default pass writes are never excused, because G0 cannot tell them from the same names committed by the head.
+**The snapshot.** In runner mode the runner gets a copy of the Step 3 clone taken right after G0 before any pass runs terraform in it: `cp -PR "$DIR" "$RUN/runner-clone"`, with `-P` so a symbolic link is copied as a link, never followed; G0 inside the runner checks where it points. The copy keeps `.git` and its `origin` remote, which the runner needs to fetch the merge base. G0 itself is unchanged: files the default pass writes are never excused, because G0 cannot tell them from the same names committed by the head.
 
 **The invocation**, by its literal absolute path, from the skill as installed, like `plan-pass.sh`:
 
@@ -285,7 +285,7 @@ In runner mode the kept line still leaves the run, for the record, but it is nev
 
 ## Per example
 
-`plan_example` in the script runs, for one example directory under one root, the gates, `init`, the gates after `init`, the credentials and `plan`, and sets the example's class, kept line, scope and module versions. Before the plan pass's own `init`, it removes the `.terraform.lock.hcl` and `.terraform/` the default pass left in the example directory, unless the head committed the lock file: the plan pass resolves providers for itself and never reads the default pass's choices, and `.terraform/` would not be read anyway, since `TF_DATA_DIR` points elsewhere. A lock file the plan pass's `init` wrote is removed again after the example.
+`plan_example` in the script runs, for one example directory under one root, the gates, `init`, the gates after `init`, the credentials and `plan`, and sets the example's class, kept line, scope and module versions. Before the plan pass's own `init`, it removes any `.terraform/` and any `.terraform.lock.hcl` the head did not commit from the example directory, such as one an earlier run left there: the plan pass resolves providers for itself and never reads another run's choices, and `.terraform/` would not be read anyway, since `TF_DATA_DIR` points elsewhere. A lock file the plan pass's `init` wrote is removed again after the example. A lock file is removed only when `git ls-files` answers and does not list it, so a git error keeps the file.
 
 The record lines per example are:
 

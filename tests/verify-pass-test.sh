@@ -33,6 +33,7 @@ env | grep '^TF_TOKEN_' > /dev/null && echo tf-token >> "$TMP/leak.log"
 [ "\$HOME" = "\${EXPECT_CACHE%/plugin-cache}/verify/home" ] || echo "home \$HOME" >> "$TMP/leak.log"
 h="\$(git config --get credential.helper)"; [ -z "\$h" ] || echo "credential helper \$h" >> "$TMP/leak.log"
 echo "\${TMPDIR:-}" >> "$TMP/tmpdir.log"
+echo "\$PWD \$1 \${TF_DATA_DIR:-none}" >> "$TMP/dd.log"
 case "\$1" in
 version) echo '{"terraform_version":"1.9.8","platform":"darwin_arm64"}' ;;
 init)
@@ -254,7 +255,7 @@ for sh in bash zsh; do
   run() { PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$VP" "$@" 2>&1; }
 
   R="$(newrun)"; O="$R/verify.json"
-  : > "$TMP/tf.log"; : > "$TMP/leak.log"
+  : > "$TMP/tf.log"; : > "$TMP/leak.log"; : > "$TMP/dd.log"
   out="$(EXPECT_CACHE="$R/plugin-cache" AWS_PROFILE=demo AWS_ACCESS_KEY_ID=AKIAFIXTURE GITHUB_TOKEN=x \
     TF_CLI_ARGS_init=-backend=true SSH_AUTH_SOCK=/nonexistent TF_TOKEN_app_terraform_io=fixture \
     TF_CLI_CONFIG_FILE=/nonexistent NETRC=/nonexistent \
@@ -301,15 +302,45 @@ for sh in bash zsh; do
   check "$sh: the clone and the merge base worktree have no untracked file and no .terraform" "$(clean_trees "$R"; echo $?)"
   check "$sh: a committed lock file is kept at the head and the base" \
     "$([ "$(cat "$R/clone/examples/regress/.terraform.lock.hcl")" = '# committed' ] && [ "$(cat "$R/verify-base/examples/regress/.terraform.lock.hcl")" = '# committed' ]; echo $?)"
-  # The negative self-check: a copy with no data directory, and one that removes a tracked lock file.
+  dirs_per_side() { # run directory: init and validate of one directory share a data directory of
+    # the run's own, and no two directories share one
+    awk -v w="$1/verify/data/" '$2 == "init" || $2 == "validate" {
+        if (index($3, w) != 1) bad = 1
+        if (($1 in by) && by[$1] != $3) bad = 1
+        by[$1] = $3; if (!($3 in seen)) { seen[$3] = 1; nd++ } }
+      END { for (p in by) np++; exit (bad || np < 2 || np != nd) }' "$TMP/dd.log"
+  }
+  check "$sh: each example side has its own data directory in the run, shared by its init and validate" \
+    "$(dirs_per_side "$R"; echo $?)"
+  # A git that cannot answer: the lock file is kept, a committed one included.
+  REALGIT="$(command -v git)"; mkdir -p "$TMP/badgit"
+  printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = ls-files ] && exit 128; done\nexec "%s" "$@"\n' "$REALGIT" > "$TMP/badgit/git"
+  chmod +x "$TMP/badgit/git"
+  Rg="$(newrun)"
+  EXPECT_CACHE="$Rg/plugin-cache" PATH="$TMP/badgit:$TMP/bin:/usr/bin:/bin" "$sh" "$VP" run "$Rg" --files "$TMP/files.json" --base "$BASE" --out "$Rg/v.json" --dir examples/regress > /dev/null 2>&1
+  lock_kept() { [ "$(cat "$1/clone/examples/regress/.terraform.lock.hcl" 2> /dev/null)" = '# committed' ] \
+    && [ "$(cat "$1/verify-base/examples/regress/.terraform.lock.hcl" 2> /dev/null)" = '# committed' ]; }
+  check "$sh: a git that fails keeps the committed lock file at the head and the base" \
+    "$([ "$(q "$Rg/v.json" "$(d regress '.base.validate == 0')")" = 0 ] && lock_kept "$Rg"; echo $?)"
+  # The negative self-check: no data directory, one data directory for every run, a tracked lock
+  # file removed, no removal at all, and removal on any git error. Each: mutation, example, PATH
+  # head, and the check it must break.
   perl -pe 's/ TF_DATA_DIR="\$TFD"//' "$VP" > "$TMP/vp-dd.sh"
-  perl -0pe 's/\(cd "\$1\/\$3" && git[^\n]*\n\s*\|\| rm/rm/' "$VP" > "$TMP/vp-lock.sh"
-  for m in dd lock; do
-    Rm="$(newrun)"
-    EXPECT_CACHE="$Rm/plugin-cache" PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/vp-$m.sh" run "$Rm" --files "$TMP/files.json" --base "$BASE" --out "$Rm/v.json" --dir examples/regress > /dev/null 2>&1
-    check "$sh: the mutation vp-$m is caught" \
-      "$( ! cmp -s "$VP" "$TMP/vp-$m.sh" && [ "$(q "$Rm/v.json" "$(d regress '.base.validate == 0')")" = 0 ] && ! clean_trees "$Rm"; echo $?)"
+  perl -pe 's/TFD="\$W\/data\/\$TFN"/TFD="\$W\/data\/1"/' "$VP" > "$TMP/vp-one.sh"
+  perl -0pe 's/vl="\$\(cd[^\n]*\n\s*&& \[ -z "\$vl" \] && rm/rm/' "$VP" > "$TMP/vp-lock.sh"
+  perl -0pe 's/  vl="\$\(cd[^\n]*\n[^\n]*\n//' "$VP" > "$TMP/vp-norm.sh"
+  perl -0pe 's/vl="\$\(cd[^\n]*\n\s*&& \[ -z "\$vl" \] && rm/(cd "\$1\/\$3" && git ls-files --error-unmatch .terraform.lock.hcl > \/dev\/null 2>&1) || rm/' "$VP" > "$TMP/vp-err.sh"
+  for mc in "dd regress bin clean_trees" "one regress bin dirs_per_side" "lock regress bin clean_trees" \
+    "norm brokenbase bin clean_trees" "err regress badgit lock_kept"; do
+    set -- $mc
+    case "$3" in badgit) mp="$TMP/badgit:$TMP/bin:/usr/bin:/bin" ;; *) mp="$TMP/bin:/usr/bin:/bin" ;; esac
+    case "$2" in regress) bv=0 ;; *) bv=1 ;; esac
+    Rm="$(newrun)"; : > "$TMP/dd.log"
+    EXPECT_CACHE="$Rm/plugin-cache" PATH="$mp" "$sh" "$TMP/vp-$1.sh" run "$Rm" --files "$TMP/files.json" --base "$BASE" --out "$Rm/v.json" --dir "examples/$2" > /dev/null 2>&1
+    check "$sh: the mutation vp-$1 is caught" \
+      "$( ! cmp -s "$VP" "$TMP/vp-$1.sh" && [ "$(q "$Rm/v.json" "$(d "$2" ".base.validate == $bv")")" = 0 ] && ! "$4" "$Rm"; echo $?)"
   done
+  set --
 
   # A host's results: accepted as produced, rejected on any change of binding or shape.
   chk() { run check "$R" --files "$TMP/files.json" --base "$BASE" --head "${2:-$HEAD}" --results "$1"; }

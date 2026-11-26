@@ -877,8 +877,10 @@ TFN=0
 verify() { # tree root, module root, example directory: sets SIDEJ, then drops an untracked lock file
   TFN=$((TFN + 1)); TFD="$W/data/$TFN"
   verify_side "$@"
-  (cd "$1/$3" && git -c core.fsmonitor=false ls-files --error-unmatch .terraform.lock.hcl > /dev/null 2>&1) \
-    || rm -f -- "$1/$3/.terraform.lock.hcl"
+  # removed only when git answers and does not track it: a git error keeps the file
+  vl="$(cd "$1/$3" && git -c core.fsmonitor=false ls-files -- .terraform.lock.hcl 2> /dev/null)" \
+    && [ -z "$vl" ] && rm -f -- "$1/$3/.terraform.lock.hcl"
+  return 0
 }
 verify_side() { # tree root, module root, example directory: sets SIDEJ to one side object
   INIT=; VALID=; LINE=
