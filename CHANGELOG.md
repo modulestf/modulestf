@@ -1,3 +1,12 @@
+## [0.16.2](https://github.com/modulestf/modulestf/compare/v0.16.1...v0.16.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Mark a carried chain broken when the earlier record does not match ([#241](https://github.com/modulestf/modulestf/issues/241)) ([4b6bd22](https://github.com/modulestf/modulestf/commit/4b6bd22fcce6ee06005813af2622a535508084aa))
+
+
+
 ## [0.16.1](https://github.com/modulestf/modulestf/compare/v0.16.0...v0.16.1) (2026-11-26)
 
 
