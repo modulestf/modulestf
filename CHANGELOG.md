@@ -1,3 +1,12 @@
+# [0.15.0](https://github.com/modulestf/modulestf/compare/v0.14.0...v0.15.0) (2026-11-26)
+
+
+### Features
+
+* **pr-review:** Read mtf-facts features from its version report ([#237](https://github.com/modulestf/modulestf/issues/237)) ([9336a86](https://github.com/modulestf/modulestf/commit/9336a860716fedb0ff18c40c550de060612d07f9))
+
+
+
 # [0.14.0](https://github.com/modulestf/modulestf/compare/v0.13.2...v0.14.0) (2026-11-26)
 
 
