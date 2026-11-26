@@ -19,6 +19,16 @@ check() { # name, command status (0 = holds)
   if [ "$2" = 0 ]; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
 }
 
+# The script reads the changed attributes from the facts engine (skip-coverage.md, The facts
+# engine): an mtf-facts on PATH whose version --json lists cmd:changes. Without one the suite is
+# skipped, and with MTF_FACTS_REQUIRED=1 the skip fails. The parsing cases the Perl readers had
+# are the facts engine's own fixtures now (testdata/changes in the facts repository).
+MF="$(cd / && command -v mtf-facts)"
+if [ -z "$MF" ] || ! "$MF" version --json 2> /dev/null | jq -e '(.features | index("cmd:changes")) != null' > /dev/null 2>&1; then
+  if [ "${MTF_FACTS_REQUIRED:-}" = 1 ]; then echo "FAIL no mtf-facts with the changes command on PATH, and MTF_FACTS_REQUIRED=1"; exit 1; fi
+  echo "skip skip coverage: no mtf-facts with the changes command on PATH (MTF_FACTS_REQUIRED=1 makes this fail)"; exit 0
+fi
+
 # --- The synthetic module: a root module, one submodule, a wrapper, six examples that plan and
 # three that a G3 hit (a data source outside the gate list) keeps from planning.
 RUN="$(mktemp -d "$TMP/pr-review.XXXXXX")"
@@ -111,6 +121,7 @@ EOT
   acl    = var.acl
 }
 EOF
+printf 'resource "aws_sns_topic" "meta" {\n  count = var.n\n  name  = var.topic\n}\n' > "$C/meta.tf"
 printf '# Module\n\nText.\n' > "$C/README.md"
 mkdir -p "$C/modules/other"
 printf 'resource "aws_sns_topic" "this" {\n  name = var.name\n}\n\nresource "aws_iam_policy" "this" {\n  policy = file("${path.module}/policy.md")\n}\n' > "$C/modules/other/main.tf"
@@ -165,6 +176,10 @@ mkdir -p "$C/examples/h5" "$C/examples/h6" "$C/examples/h7"
 printf '/*\ndata "aws_ssoadmin_instances" "this" {}\n*/\n\nmodule "lb" {\n  source = "../../"\n}\n' > "$C/examples/h5/main.tf"
 printf 'locals {\n  doc = <<EOT\ndata "aws_identitystore_group" "g" {\nEOT\n}\n\nmodule "lb" {\n  source = "../../"\n}\n' > "$C/examples/h6/main.tf"
 printf 'module "lb" {\n  source = "../../"\n}\n/*\ndata "aws_ssoadmin_instances" "this" {}\n' > "$C/examples/h7/main.tf"
+# h8 declares a mapped type beside a .tf.json file the engine does not read: its types are incomplete
+mkdir -p "$C/examples/h8"
+printf 'data "aws_ssoadmin_instances" "this" {}\n\nmodule "lb" {\n  source = "../../"\n}\n' > "$C/examples/h8/main.tf"
+printf '{"locals": {"x": "1"}}\n' > "$C/examples/h8/extra.tf.json"
 G init -q && G add -A && G commit -qm base
 BASE="$(G rev-parse HEAD)"
 G worktree add -q --detach "$RUN/base" "$BASE"
@@ -402,6 +417,7 @@ a count. reference|main.tf|s/name            = var.name\n  security/name        
 an each. reference|main.tf|s/name            = var.name\n  security/name            = each.key\n  security/
 an operator|main.tf|s/subnets         = var.subnets/subnets         = var.subnets + 1/
 a comment line changed|main.tf|s/(  subnets         = var.subnets\n)/$1  # note\n/
+a count from one variable to another|meta.tf|s/count = var.n/count = var.m/
 EOF
 
 t_md_only() { fresh; reset_knobs; printf 'More.\n' >> "$C/README.md"; run_case && all_why change-not-allowed; }
@@ -509,11 +525,11 @@ t_md_read() { # a document a .tf file reads with file(), reached only by a skipp
   run_case && all_why change-not-allowed
 }
 t_md_read; check "a changed document a .tf file names: change-not-allowed" $?
-t_heredoc_open() { # a heredoc interpolation left open past a marker-only line, a following line changed
+t_heredoc_open() { # an interpolation left open past a marker-only line: HCL reads on, and so does the parser
   fresh; reset_knobs; plain_change; ed odd.tf 's/acl    = var\.acl/acl    = var.bucket_acl/'
-  run_case && all_why change-not-allowed
+  run_case && all_why no-witness
 }
-t_heredoc_open; check "a heredoc with an open interpolation in the changed file: change-not-allowed" $?
+t_heredoc_open; check "a heredoc with an interpolation open past its marker line, a later attribute changed: no-witness for it" $?
 t_heredoc_ok() { # the same kind of file with a closed interpolation: the following line is allowed
   fresh; reset_knobs; ed bucket.tf 's/acl    = var\.acl/acl    = var.bucket_acl/'
   ADDRJQ='.addresses += ["module.lb.aws_s3_bucket_policy.this"] | .attributes["module.lb.aws_s3_bucket_policy.this"] = ["acl"]
@@ -531,13 +547,20 @@ t_base_plain() { # the head expression is plain, the base one is a conditional
   run_case && all_why change-not-allowed
 }
 t_base_plain; check "a base expression that is not plain: change-not-allowed" $?
-t_two_attrs() { fresh; reset_knobs; plain_change; ed main.tf 's/(  name            = )var\.name/${1}var.lb_name/'; run_case && all_why change-not-allowed; }
-t_two_attrs; check "a change group spanning two attributes: change-not-allowed" $?
+t_two_attrs() { # two attributes on adjacent lines are two changed attributes, each with a witness
+  fresh; reset_knobs; plain_change; ed main.tf 's/(  name            = )var\.name/${1}var.lb_name/'; run_case && all_why covered \
+    && jq -e 'all(.covered[]; [.witnesses[].attribute] == ["name", "security_groups"])' "$TMP/out.json" > /dev/null
+}
+t_two_attrs; check "two changed attributes on adjacent lines: covered, a witness each" $?
+t_between() { fresh; reset_knobs; plain_change; ed main.tf 's/(\nlocals \{)/\n# note\n$1/'; run_case && all_why change-not-allowed; }
+t_between; check "a comment between blocks beside a plain change: change-not-allowed" $?
+t_struct() { fresh; reset_knobs; plain_change; ed main.tf 's/(  subnets         = var\.subnets\n)/$1  idle_timeout    = 60\n/'; run_case && all_why change-not-allowed; }
+t_struct; check "an attribute added beside a plain change: change-not-allowed" $?
 t_non_ascii() {
   fresh; reset_knobs; ed main.tf 's/(  name            = )var\.name/${1}"caf\x{c3}\x{a9}"/'
-  run_case && all_why change-not-allowed
+  run_case && all_why covered
 }
-t_non_ascii; check "a non-ASCII byte in a changed string: change-not-allowed" $?
+t_non_ascii; check "a non-ASCII byte in a changed string: a plain change, covered" $?
 t_cr() { fresh; reset_knobs; ed main.tf 's/(  subnets         = var\.subnets)\n/$1\r\n/'; run_case && all_why change-not-allowed; }
 t_cr; check "a carriage return in a changed line: change-not-allowed" $?
 t_forged() { # the patch claims another expression than the head file holds
@@ -703,7 +726,7 @@ t_v_gated() { # a record that says a gated example was denied a read: its head g
 t_v_gated; check "design skip: a gate hit in the example's scope at head: hit-set-differs" $?
 t_v_nohead() { # no head gate record (plan-pass.sh fails at head): hit-set-differs, never covered
   reset_knobs; v_case : covered || return 1
-  local d="$TMP/nohead-$RANDOM"; mkdir -p "$d"; cp "${SC%/*}/skip-coverage.sh" "${SC%/*}/skip-coverage.jq" "$d/"
+  local d="$TMP/nohead-$RANDOM"; mkdir -p "$d"; cp "${SC%/*}/skip-coverage.sh" "${SC%/*}/skip-coverage.jq" "${SC%/*}/facts-resolve.sh" "$d/"
   printf 'exit 1\n' > "$d/plan-pass.sh"
   "$SH" "$d/skip-coverage.sh" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
     --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" --changed-files "$(jq length "$TMP/files.json")" > "$TMP/out.json" \
@@ -830,28 +853,130 @@ t_h_open; check "refused-host: a file with a block comment that never closes dec
 t_h_nowit() { h_reset; ADDRJQ='.module_calls = {}'; h_why no-witness; }
 t_h_nowit; check "refused-host: no planned example witnesses the change: no-witness" $?
 
-# The attribute scan itself, REFS_PL taken from the script under test: a negated read, tags_all
-# for tags, a .tf file that is a link, and a line of unclosed indexes that must stay linear.
-refs() { # pairs file -> the pairs the scan finds read in $TMP/refs, under a time limit of 5 seconds
-  local p; p="$(sed -n "/^REFS_PL='\$/,/^'\$/p" "$SC" | sed '1d;$d')"
-  perl -e 'alarm 5; exec @ARGV' perl -e "$p" "$TMP/refs" "$1"
+# The facts engine: missing, too old, failing, or inside the run directory, no .tf change is allowed.
+NOFACTS="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$(dirname "$MF")" | paste -sd: -)"
+mkdir -p "$TMP/bin-old" "$TMP/bin-fail"
+{ printf '#!/bin/bash\n# an mtf-facts that runs changes but does not list it\n'
+  printf 'if [ "$1" = version ]; then echo %s; exit 0; fi\n' "'{\"schema_version\": 1, \"version\": \"v9.9.9\", \"features\": [\"cmd:affected\"], \"reports\": {\"changes\": 1}}'"
+  printf 'exec %q "$@"\n' "$MF"; } > "$TMP/bin-old/mtf-facts"
+printf '#!/bin/bash\nif [ "$1" = version ]; then exec %q "$@"; fi\nexit 1\n' "$MF" > "$TMP/bin-fail/mtf-facts"
+chmod +x "$TMP/bin-old/mtf-facts" "$TMP/bin-fail/mtf-facts"
+engine_case() { # PATH
+  fresh; reset_knobs; plain_change; local keep="$PATH"; PATH="$1"; run_case; local s=$?; PATH="$keep"
+  [ "$s" = 0 ] && all_why change-not-allowed
 }
-refs_dir() { rm -rf "$TMP/refs"; mkdir -p "$TMP/refs"; printf 'aws_lb.this %s\n' "$1" > "$TMP/refs.pairs"; }
-t_refs_minus() { refs_dir name; printf 'locals {\n  n = -aws_lb.this.name\n}\n' > "$TMP/refs/a.tf"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this name' ]; }
-t_refs_minus; check "attribute scan: a negated read counts" $?
-t_refs_tags() { refs_dir tags; printf 'locals {\n  t = aws_lb.this.tags_all\n}\n' > "$TMP/refs/a.tf"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this tags' ]; }
-t_refs_tags; check "attribute scan: tags_all counts as a read of tags" $?
-t_refs_other() { refs_dir name; printf 'locals {\n  t = aws_lb.this.tags_all\n  a = aws_lb.this[0].arn\n}\n' > "$TMP/refs/a.tf"; [ -z "$(refs "$TMP/refs.pairs")" ]; }
-t_refs_other; check "attribute scan: other attributes are no read" $?
-t_refs_link() { refs_dir subnets; printf 'nothing\n' > "$TMP/refs/notes.txt"; ln -s notes.txt "$TMP/refs/l.tf"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this subnets' ]; }
-t_refs_link; check "attribute scan: a .tf file that is a link counts as a read of every pair" $?
-t_refs_json() { refs_dir subnets; printf '{"locals": {"x": "1"}}\n' > "$TMP/refs/extra.tf.json"; [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this subnets' ]; }
-t_refs_json; check "attribute scan: any .tf.json file counts as a read of every pair" $?
-t_refs_big() { # 40,000 unclosed indexes on one line: seconds when bounded, minutes when not
-  refs_dir name; perl -e 'print "locals {\n  x = \"", "aws_lb.this[" x 40000, "\"\n}\n"' > "$TMP/refs/big.tf"
-  [ "$(refs "$TMP/refs.pairs")" = 'aws_lb.this name' ]
+t_engine_missing() { engine_case "$NOFACTS"; }
+t_engine_missing; check "no mtf-facts on PATH: change-not-allowed" $?
+t_engine_old() { engine_case "$TMP/bin-old:$PATH"; }
+t_engine_old; check "an mtf-facts whose version --json lacks cmd:changes: change-not-allowed" $?
+t_engine_fail() { engine_case "$TMP/bin-fail:$PATH"; }
+t_engine_fail; check "an mtf-facts whose changes fails: change-not-allowed" $?
+t_engine_inrun() { mkdir -p "$RUN/bin"; cp "$MF" "$RUN/bin/mtf-facts"; engine_case "$RUN/bin:$PATH"; }
+t_engine_inrun; check "an mtf-facts inside the run directory is not run: change-not-allowed" $?
+
+# A report that breaks one guard of the engine's contract is no report: each case tampers one
+# thing in the real engine's answer through a stub (the version report with STUB_VJQ, the changes
+# report with STUB_JQ) and expects no .tf change allowed, while the untouched answer is allowed.
+mkdir -p "$TMP/bin-tamper"
+{ printf '#!/bin/bash\n'
+  printf '[ "$1" = version ] && { %q "$@" | jq -c "${STUB_VJQ:-.}"; exit 0; }\n' "$MF"
+  printf '[ "$1" = changes ] || exec %q "$@"\n' "$MF"
+  printf '[ -z "${STUB_SLEEP:-}" ] || sleep "$STUB_SLEEP"\n'
+  printf '%q "$@" | jq -c "${STUB_JQ:-.}"\n' "$MF"; } > "$TMP/bin-tamper/mtf-facts"
+chmod +x "$TMP/bin-tamper/mtf-facts"
+tamper() { # changes filter, version filter, expected reason, shell commands after the plain change
+  fresh; reset_knobs; plain_change; eval "${4:-:}"; local keep="$PATH"; PATH="$TMP/bin-tamper:$PATH"
+  export STUB_JQ="$1" STUB_VJQ="${2:-.}"; run_case; local s=$?; unset STUB_JQ STUB_VJQ; PATH="$keep"
+  [ "$s" = 0 ] && all_why "${3:-covered}"
 }
-t_refs_big; check "attribute scan: a line of 40,000 unclosed indexes finishes within 5 seconds, counted as a read" $?
+t_tamper_none() { tamper . . covered; }
+t_tamper_none; check "an engine answer left as it came is allowed: covered" $?
+t_tm_status() { tamper '.files |= map(.status = "added")' . change-not-allowed; }
+t_tm_status; check "a file entry that is not modified: change-not-allowed" $?
+t_tm_parsed() { tamper '.files |= map(.parsed = false)' . change-not-allowed; }
+t_tm_parsed; check "a file entry that did not parse: change-not-allowed" $?
+t_tm_noblocks() { # a second changed file, so that the first one still gives a changed attribute
+  tamper '.files |= map(if .path == "bucket.tf" then .blocks = [] else . end)' . change-not-allowed "ed bucket.tf 's/acl    = var\\.acl/acl    = var.bucket_acl/'"; }
+t_tm_noblocks; check "a modified file entry with no block: change-not-allowed" $?
+t_tm_bstatus() { tamper '.files |= map(.blocks |= map(.status = "added"))' . change-not-allowed; }
+t_tm_bstatus; check "a block that is not edited: change-not-allowed" $?
+t_tm_noattr() { # an edited block with no changed attribute beside the real one
+  tamper '.files |= map(if .path == "main.tf" then .blocks += [{address: "aws_x.y", kind: "resource", status: "edited", structural: false, attributes: []}] else . end)' . change-not-allowed; }
+t_tm_noattr; check "an edited block with no changed attribute: change-not-allowed" $?
+t_tm_dataaddr() { tamper '.files |= map(.blocks |= map(.kind = "data"))' . change-not-allowed; }
+t_tm_dataaddr; check "a data block whose address has no data. prefix: change-not-allowed" $?
+t_tm_schema() { tamper '.schema_version = 2' . change-not-allowed; }
+t_tm_schema; check "a changes report of another schema version: change-not-allowed" $?
+t_tm_reports() { tamper . '.reports.changes = 2' change-not-allowed; }
+t_tm_reports; check "a version report that gives changes report version 2: change-not-allowed" $?
+t_tm_featstr() { tamper . '.features = "cmd:changes"' change-not-allowed; }
+t_tm_featstr; check "a features string holding cmd:changes is no feature list: change-not-allowed" $?
+t_tm_twodocs() { tamper '., .' . change-not-allowed; }
+t_tm_twodocs; check "an engine that prints the report twice: change-not-allowed" $?
+t_tm_late() { export SKIP_COVERAGE_FACTS_TIMEOUT=1 STUB_SLEEP=4; tamper . . change-not-allowed; local s=$?; unset SKIP_COVERAGE_FACTS_TIMEOUT STUB_SLEEP; return $s; }
+t_tm_late; check "an engine past its deadline: change-not-allowed" $?
+t_tm_big() { tamper '. + {pad: ("x" * 17000000)}' . change-not-allowed; }
+t_tm_big; check "a report over the 16 MiB cap: change-not-allowed" $?
+# The design skip: a bad entry before the real one must not hide a read attribute (the pairs
+# were once listed by a jq whose error left an empty list, and the attribute then looked unread).
+t_tm_refs() { # a file entry, first, whose block has attributes as a string: the whole report is refused
+  reset_knobs; fresh; ed main.tf 's/subnets         = var\.subnets/subnets         = var.subnet_ids/'
+  local keep="$EX" kp="$PATH"; EX="$EXV"; COVJQ="$VCOV"; PATH="$TMP/bin-tamper:$PATH"
+  export STUB_JQ='.files = [{path: "zz.tf", status: "modified", parsed: true, outside: false, blocks: [{address: "aws_x.y", kind: "resource", status: "edited", structural: false, attributes: "x"}]}] + .files' STUB_VJQ=.
+  run_case; local s=$?; unset STUB_JQ STUB_VJQ; EX="$keep"; PATH="$kp"
+  [ "$s" = 0 ] && [ "$(why examples/v1)" = change-not-allowed ]
+}
+t_tm_refs; check "design skip: a malformed block entry before a read attribute: the report is refused, change-not-allowed" $?
+t_tm_read() { # a read state outside read, unread and unknown
+  reset_knobs; fresh; ed main.tf 's/subnets         = var\.subnets/subnets         = var.subnet_ids/'
+  local keep="$EX" kp="$PATH"; EX="$EXV"; COVJQ="$VCOV"; PATH="$TMP/bin-tamper:$PATH"
+  export STUB_JQ='.files |= map(.blocks |= map(.attributes |= map(.read = "maybe")))' STUB_VJQ=.
+  run_case; local s=$?; unset STUB_JQ STUB_VJQ; EX="$keep"; PATH="$kp"
+  [ "$s" = 0 ] && [ "$(why examples/v1)" = change-not-allowed ]
+}
+t_tm_read; check "design skip: a read state outside the enum: the report is refused, change-not-allowed" $?
+t_tm_dupfile() { # a second entry for main.tf with a structural block, after the real one
+  tamper '.files += [(.files[] | select(.path == "main.tf") | .blocks |= map(.structural = true))]' . change-not-allowed; }
+t_tm_dupfile; check "a report that lists a file twice: change-not-allowed" $?
+t_tm_dupdir() { # a forged complete entry for examples/h8 (a directory the engine could not read whole), first
+  h_reset; HEX=examples/h8; HLINES="${HDEF//$HOSTS/sso.eu-west-1.amazonaws.com:443}"
+  local kp="$PATH"; PATH="$TMP/bin-tamper:$PATH"
+  export STUB_JQ='(.data_sources | map(select(.dir == "examples/h1")) | .[0]) as $g | .data_sources = [$g + {dir: "examples/h8"}] + .data_sources' STUB_VJQ=.
+  h_why denial-unproven; local s=$?; unset STUB_JQ STUB_VJQ; PATH="$kp"; return $s
+}
+t_tm_dupdir; check "refused-host: a report that lists a directory twice: denial-unproven" $?
+t_relfiles() { # a relative --files reaches the engine, which runs from another directory
+  fresh; reset_knobs; plain_change; commit; filesjson; records; coverage
+  rm -f "$TMP/base-gates.txt"
+  "$SH" "$SC" gates "$RUN" --tree "$RUN/base" --base "$BASE" --coverage "$TMP/coverage.json" --out "$TMP/base-gates.txt" || return 1
+  (cd "$TMP" && "$SH" "$SC" check "$RUN" --files files.json --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
+    --addresses "$TMP/addr" --base-gates "$TMP/base-gates.txt" --head "$HEAD" --base "$BASE" --changed-files "$(jq length "$TMP/files.json")" > "$TMP/out.json") || return 1
+  all_why covered
+}
+t_relfiles; check "a relative --files is read by the engine: covered" $?
+# The deadline variable is a whole number of seconds, 1 or more: anything else is refused up front.
+t_timeout_var() {
+  local v s=0
+  for v in abc 0 05 -1 '1;sleep 9'; do
+    fresh; reset_knobs; plain_change; commit; filesjson; records; coverage
+    SKIP_COVERAGE_FACTS_TIMEOUT="$v" "$SH" "$SC" check "$RUN" --files "$TMP/files.json" --coverage "$TMP/coverage.json" --plan "$TMP/record.txt" \
+      --head "$HEAD" --base "$BASE" --changed-files 1 > /dev/null 2>&1; [ "$?" = 2 ] || s=1
+  done
+  return $s
+}
+t_timeout_var; check "SKIP_COVERAGE_FACTS_TIMEOUT that is no whole number of seconds from 1: refused, exit 2" $?
+t_h_partial() { h_reset; HEX=examples/h8; HLINES="${HDEF//$HOSTS/sso.eu-west-1.amazonaws.com:443}"; h_why denial-unproven; }
+t_h_partial; check "refused-host: a mapped type beside a .tf.json file the engine does not read: denial-unproven" $?
+t_tofu() { fresh; reset_knobs; plain_change; printf 'locals {\n  x = aws_lb.this.security_groups\n}\n' > "$C/extra.tofu"; run_case && all_why change-not-allowed; }
+t_tofu; check "a .tofu file added beside a plain change: change-not-allowed" $?
+t_tofu_read() { # an unchanged .tofu file beside the changed one: its reads are unknown, so a design skip is not covered
+  reset_knobs; fresh; printf 'locals {\n  x = 1\n}\n' > "$C/extra.tofu"; G add -A; G commit -qm tofu; local keep="$BASE"; BASE="$(G rev-parse HEAD)"
+  G -C "$RUN/base" checkout -q --detach "$BASE"; plain_change
+  local k2="$EX"; EX="$EXV"; COVJQ="$VCOV"; run_case; local s=$?; EX="$k2"
+  BASE="$keep"; G -C "$RUN/base" checkout -q --detach "$BASE"
+  [ "$s" = 0 ] && [ "$(why examples/v1)" = attribute-referenced ]
+}
+t_tofu_read; check "design skip: a .tofu file in the changed module makes its reads unknown: attribute-referenced" $?
 
 # --- Refused inputs: exit 2, nothing printed
 fresh; reset_knobs; plain_change; run_case > /dev/null 2>&1
@@ -893,7 +1018,7 @@ check "safe_address refuses a malformed data address, a key and a quote" \
 
 # --- Negative self-check: each mutation of a temp copy must make its named case fail.
 mutate() { # name, perl substitution, case function
-  local d="$TMP/mut-$RANDOM"; mkdir -p "$d"; cp "$REF/skip-coverage.sh" "$REF/skip-coverage.jq" "$REF/plan-pass.sh" "$d/"
+  local d="$TMP/mut-$RANDOM"; mkdir -p "$d"; cp "$REF/skip-coverage.sh" "$REF/skip-coverage.jq" "$REF/plan-pass.sh" "$REF/facts-resolve.sh" "$d/"
   perl -0pi -e "$2" "$d/skip-coverage.sh" "$d/skip-coverage.jq"
   if cmp -s "$d/skip-coverage.sh" "$REF/skip-coverage.sh" && cmp -s "$d/skip-coverage.jq" "$REF/skip-coverage.jq"; then
     check "self-check: $1 (the mutation changed nothing)" 1; return
@@ -904,14 +1029,10 @@ mutate() { # name, perl substitution, case function
   check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
 t_merge() { na merge main.tf 's/tags            = var.tags/tags            = merge(var.tags, {})/'; }
-t_count_ref() { na count main.tf 's/name            = var.name\n  security/name            = "x-\${count.index}"\n  security/'; }
 t_added_attr() { na added main.tf 's/(  security_groups = [^\n]*\n)/$1  idle_timeout    = 60\n/'; }
 t_sens() { witness sensitive '.sensitive["module.lb.aws_lb.this"] = ["security_groups"]' witness-sensitive; }
 t_otherhead() { witness otherhead '.head_sha = "0000000000000000000000000000000000000000"' no-witness; }
 t_otherdir() { witness otherdir '.module_calls.lb = "../../modules/sub"' no-witness; }
-mutate "merge allowed" 's/qw\(concat /qw(merge concat /' t_merge
-mutate "count. references allowed" 's/each\|count\|self\|//' t_count_ref
-mutate "the structure and name checks dropped" 's/\$hs eq \$bs && \@\$ha == \@\$ba/1/; s/ && \$h->\{name\} eq \$b->\{name\}//' t_added_attr
 mutate "the hit sets not compared" 's/ or \(\$h\.lines \| sort\) != \(\$b\.lines \| sort\)//' t_relabel
 mutate "changes under the directory ignored" 's/elif dir_changed\(\$paths; \$d; \$h; \$b\) then "dir-changed"/elif false then "dir-changed"/' t_dir_md
 mutate "the sensitive bit ignored" 's/and \(index\(\$c\.attribute\) == null\)//' t_sens
@@ -920,10 +1041,7 @@ mutate "the module call directory ignored" 's/\n            and \(\.value \| res
 mutate "an added file allowed" 's/if \.s != "modified" or \.prev != null then "other" else \.kind end/.kind/' t_md_added
 mutate "a stale base record accepted" 's/\.\[0\] == \$header and //' t_base_stale
 mutate "the merge base not required" 's/elif \(\$base \| sha \| not\) then "merge-base-unresolved"\n//' t_unresolved
-mutate "a document a .tf file names allowed" 's/\[ \$\? = 1 \] && out=ok/out=ok/' t_md_read
-mutate "the base expression not checked" 's/ && plain\(\$b->\{toks\}\)//' t_base_plain
-mutate "patch lines not checked against the head file" 's/ && \$head\[\$hi\] eq \$t//g' t_forged
-mutate "non-ASCII accepted" 's/out\("reject non-ascii or carriage return"\) if [^;]*;//' t_non_ascii
+mutate "a document a .tf file names allowed" 's/\[ \$\? = 1 \] && ok=true/ok=true/' t_md_read
 mutate "the record gate not matched to the reason" 's/ or \$blk\.hit\.gate != \$g\.g//' t_gate_mismatch
 mutate "a head G0 hit ignored" 's/         elif any\(\$h\.lines\[\]; startswith\("hit G0 "\)\) then "wrong-gate-class"\n//' t_head_g0
 mutate "the real directory of a link ignored" 's/ \+ \[\(\$h\.lines\?, \$b\.lines\?\) \| \.\[\]\? \| select\(startswith\("real "\)\) \| \.\[5:\]\]//' t_link_dir
@@ -949,16 +1067,36 @@ mutate "the denial evidence not required" 's/     elif \$k == "access-denied" an
 mutate "a second denied line ignored" 's/\(\$x\.blk\.denied \| length\) != 1 or //' t_v_twodenied
 mutate "a denial on a managed resource accepted" 's/safe_address and test\("[^"]*data[^"]*"\)\)/safe_address)/' t_v_baddenied
 mutate "a changed attribute a data source reads ignored" 's/     elif any\(\$x\.cls\[\]\.attrs\[\]; "\\\(\.address\) \\\(\.attribute\)" \| IN\(\$x\.refs\[\]\)\) then "attribute-referenced"\n//' t_v_ref
-mutate "the attribute scan finds no read" 's/\$hit\{"\$a \$at"\} = 1 if !defined \$3/\$hit{"\$a \$at"} = 1 if 0 and !defined \$3/' t_v_ref
-mutate "a whole-object read not counted" 's/ if !defined \$3 \|\| / if (defined \$3 \&\& 0) || /' t_v_whole
 mutate "an unresolved merge base ignored for a design skip" 's/(dir_changed\(\$x\.paths; \$x\.d; \$x\.h; null\) then "dir-changed"\n)     elif \(\$x\.base \| sha \| not\) then "merge-base-unresolved"\n/$1/' t_v_unres
 mutate "the merge base denial not required" 's/     elif \$k == "access-denied" and \(\$x\.blk\.base != \["environment \(access-denied\)"\] or \$x\.blk\.base_denied != \$x\.blk\.denied\) then "base-not-denied"\n//' t_v_basenew
 mutate "a missing head gate record taken for a design skip" 's/elif \$x\.h == null or \$x\.h\.done != true or /elif /' t_v_nohead
-mutate "a negated read missed" 's/\(\?<!\[A-Za-z0-9_\.\]\)/(?<![A-Za-z0-9_.-])/' t_refs_minus
-mutate "tags_all not read as tags" 's/ \|\| \(\$at eq "tags" && \$3 eq "tags_all"\)//' t_refs_tags
-mutate "a linked .tf file skipped" 's/\{ \$link = 1; return \}/{ return }/' t_refs_link
-mutate "a .tf.json file not counted" 's/tf\\\.json/tf\\.nothing/' t_refs_json
-mutate "the index group unbounded" 's/\{0,255\}/*/' t_refs_big
+t_module_arg() { na module main.tf 's/port   = 80/port   = 81/'; }
+mutate "a value not plain at head allowed" 's/\.plain\.head == true and //' t_merge
+mutate "a value not plain at base allowed" 's/ and \.plain\.base == true//' t_base_plain
+mutate "a structural edit allowed" 's/ and \.structural == false//' t_struct
+mutate "a change outside attribute values allowed" 's/ and \$e\.outside == false//' t_between
+mutate "a block of another kind allowed" 's/\(\(\.kind == "resource" and/((true or/' t_module_arg
+mutate "a read attribute taken as unread" 's/select\(\.read != "unread"\)/select(false)/' t_v_ref
+mutate "the types of an incomplete directory taken" 's/ and \.complete == true//' t_h_partial
+mutate "the changes feature not checked" 's/ && facts_has cmd:changes//' t_engine_old
+mutate "a binary in the run directory run" 's/facts_resolve "\$RUN" "\$CLONE"/facts_resolve/' t_engine_inrun
+mutate "the file status not required" 's/ and \$e\.status == "modified"//' t_tm_status
+mutate "the parsed flag not required" 's/ and \$e\.parsed == true//' t_tm_parsed
+mutate "a file with no block allowed" 's/ and \(\$e\.blocks \| length\) > 0//' t_tm_noblocks
+mutate "the block status not required" 's/all\(\$e\.blocks\[\]; \.status == "edited" and /all($e.blocks[]; /' t_tm_bstatus
+mutate "a block with no changed attribute allowed" 's/ and \(\.attributes \| length\) > 0//' t_tm_noattr
+mutate "the data. prefix of a data address not required" 's/\(\.kind == "data" and \(\.address \| test\("\^data\\\\\.\[A-Za-z0-9_-\]\+/(.kind == "data" and (.address | test("^[A-Za-z0-9_-]+/' t_tm_dataaddr
+mutate "the changes report schema version not checked" 's/\(\.\[0\] \| type == "object" and \.schema_version == 1/(.[0] | type == "object"/' t_tm_schema
+mutate "the changes report version not checked" 's/ and \.changes == 1//' t_tm_reports
+mutate "one report document not required" 's/CHANGES_SHAPE_JQ=.length == 1 and /CHANGES_SHAPE_JQ='"'"'/' t_tm_twodocs
+mutate "the engine deadline replaced by an hour" 's/facts_run "\$FACTS_TIMEOUT" "\$FACTS_CAP"/facts_run 3600 "\$FACTS_CAP"/' t_tm_late
+mutate "the engine output cap raised" 's/FACTS_CAP=16777216/FACTS_CAP=99999999/' t_tm_big
+mutate "the read state not limited to its enum" 's/\n        and \(\.read == "read" or \.read == "unread" or \.read == "unknown"\)//' t_tm_read
+mutate "the report shape and the pairs' status not checked" 's/  && jq -e -s "\$CHANGES_SHAPE_JQ" [^\n]*\n//; s/(> "\$W\/refs\.tmp") \\\n  && LC_ALL=C sort -u "\$W\/refs\.tmp" > "\$W\/refs\.new"; then/$1 || :; LC_ALL=C sort -u "\$W\/refs.tmp" > "\$W\/refs.new"; then/' t_tm_refs
+mutate "a file listed twice allowed" 's/\(\.files \| type == "array" and \(map\(\.path\) \| unique \| length\) == length and /(.files | type == "array" and /' t_tm_dupfile
+mutate "a data source directory listed twice allowed" 's/\(\.data_sources \| type == "array" and \(map\(\.dir\) \| unique \| length\) == length and /(.data_sources | type == "array" and /' t_tm_dupdir
+mutate "a relative --files passed to the engine as given" 's/\ncase "\$FILES" in [^\n]*\n/\n/' t_relfiles
+mutate "the deadline variable not checked" 's/\ncase "\$FACTS_TIMEOUT" in [^\n]*\n/\n/' t_timeout_var
 mutate "the base denied set not compared" 's/ or \$x\.blk\.base_denied != \$x\.blk\.denied//' t_v_baseother
 
 t_h_link() { h_reset; HEX=examples/hl/h1; h_why denial-unproven; }
@@ -972,12 +1110,6 @@ mutate "the refused evidence not required" 's/\(\(\$x\.blk\.refused \| length\) 
 mutate "validate not required" 's/     elif \$k == "refused-host" and \$x\.blk\.validate != \["passed"\] then "not-validated"\n//' t_h_novalid
 mutate "the merge base refusal not compared" 's/ or \$x\.blk\.base_refused != \$x\.blk\.refused//' t_h_basehosts
 mutate "the merge base class of a refused-host skip not compared" 's/\$k == "refused-host" and \(\$x\.blk\.base != \["environment \(refused-host\)"\] or /\$k == "refused-host" and ((/' t_h_baseplanned
-mutate "block comments read by the type scan" 's/^s\{\/\\\*\.\*\?\\\*\/\}\{\}gs;\n//m; s/^next if m\{\/\\\*\|<<\};\n//m' t_h_comment
-mutate "heredocs read by the type scan" 's/^s\{<<-\?\(\[A-Za-z_\][^\n]*\n//m; s/^next if m\{\/\\\*\|<<\};\n//m' t_h_heredoc
-mutate "the block comment strip dropped" 's/^s\{\/\\\*\.\*\?\\\*\/\}\{\}gs;\n//m' t_h
-mutate "the heredoc strip dropped" 's/^s\{<<-\?\(\[A-Za-z_\][^\n]*\n//m' t_h
-mutate "an open block comment read by the type scan" 's/^next if m\{\/\\\*\|<<\};\n//m' t_h_open
-mutate "the types read through a linked directory" 's/if \[ "\$r" = "\$CLONE\/\$d" \]; then/if [ -n "\$r" ]; then/' t_h_link
 
 # --- Recorded exceptions (skip-coverage.md, Recorded exceptions): a runner-mode record, its
 # blocks under the host's own lines, examples/r1 an exception for a role in another account, the

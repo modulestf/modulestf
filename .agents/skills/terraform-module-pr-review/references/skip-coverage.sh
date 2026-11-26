@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016 # the perl and jq programs below are single-quoted on purpose
+# shellcheck disable=SC2016 # the jq programs below are single-quoted on purpose
 # The covered skip of terraform-module-pr-review: which examples skipped by a plan gate, kept
 # by a recorded exception, or denied a data source read under the review role or refused a host
 # by the runner's plan proxy by design (a design skip) are covered by the plan of other examples,
@@ -35,7 +35,9 @@ case "$ROOT" in /?*) ;; *) die "the run directory must be absolute" ;; esac
 case "$RUN" in "$ROOT"/pr-review.??????) ;; *) die "not a run directory: $RUN" ;; esac
 [ -d "$RUN/clone" ] || die "no clone in $RUN"
 shift 2
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+# shellcheck source=facts-resolve.sh
+. "$HERE/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
 PP="$HERE/plan-pass.sh"
 [ -f "$PP" ] || die "no plan-pass.sh beside this script"
 
@@ -75,6 +77,8 @@ W="$(mktemp -d "${TMPDIR:-/tmp}/pr-review.XXXXXX")" || die "no temporary directo
 trap 'rm -rf -- "$W"' EXIT
 trap 'rm -rf -- "$W"; exit 130' INT TERM
 
+# The engine runs from the temporary directory, so a relative --files is made absolute first
+case "$FILES" in ''|/*) ;; *) FILES="$PWD/$FILES" ;; esac
 regular --coverage "$COV"
 # The unplanned example directories, once each, in order: data only
 jq -r 'if type == "object" and (.unplanned | type == "array") then
@@ -146,297 +150,91 @@ CLONE="$(cd "$RUN/clone" && pwd -P)"
 HEADOK=false
 [ "$(git -C "$CLONE" rev-parse --verify 'HEAD^{commit}' 2> /dev/null)" = "$HEADSHA" ] && HEADOK=true
 
-# The allow-list, per changed .tf file a candidate: the patch, then the head file from the clone.
-# CLASSIFY_PL rebuilds the base text from the head text and the patch, parses both, and prints
-# one "attr <address> <name>" line per changed attribute and "ok", or one "reject <why>" line
-# (skip-coverage.md, The allow-list).
-CLASSIFY_PL='
-use strict; use warnings;
-my ($headf, $patchf) = @ARGV;
-sub out { print "$_[0]\n"; exit 0 }
-sub slurp { open(my $h, "<", $_[0]) or return undef; local $/; my $t = <$h>; close $h; $t }
-my $ht = slurp($headf); my $pt = slurp($patchf);
-out("reject unreadable") unless defined $ht && defined $pt;
-out("reject non-ascii or carriage return") if "$ht$pt" =~ /[^\x09\x0a\x20-\x7e]/;
-my @head = split /\n/, $ht, -1; pop @head if @head && $head[-1] eq "";
-my @p = split /\n/, $pt, -1; pop @p if @p && $p[-1] eq "";
-# Rebuild the base: hunks in order, every context and added line checked against the head.
-# A change group is a run of removed and added lines; it records its base and head lines.
-my (@base, @groups); my $hi = 0; my $i = 0;
-out("reject no hunk") unless @p;
-while ($i < @p) {
-  $p[$i] =~ /\A@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/ or out("reject patch");
-  my ($os, $oc, $ns, $nc) = ($1, $2 // 1, $3, $4 // 1);
-  my $start = $nc == 0 ? $ns : $ns - 1;
-  out("reject patch") if $start < $hi || $start > @head;
-  push @base, $head[$hi++] while $hi < $start;
-  out("reject patch") unless @base == ($oc == 0 ? $os : $os - 1);
-  $i++; my ($co, $cn, $g) = (0, 0, undef);
-  while ($i < @p && $p[$i] !~ /\A@@ /) {
-    my $x = $p[$i++];
-    next if $x =~ /\A\\/;
-    my ($c, $t) = (substr($x, 0, 1), substr($x, 1));
-    if ($c eq " ") { out("reject patch") unless $hi < @head && $head[$hi] eq $t; push @base, $t; $hi++; $co++; $cn++; $g = undef }
-    elsif ($c eq "+") { out("reject patch") unless $hi < @head && $head[$hi] eq $t; $hi++; $cn++;
-      push @groups, ($g = {b => [], h => []}) unless $g; push @{$g->{h}}, $hi }
-    elsif ($c eq "-") { push @base, $t; $co++;
-      push @groups, ($g = {b => [], h => []}) unless $g; push @{$g->{b}}, scalar @base }
-    else { out("reject patch") }
-  }
-  out("reject patch") unless $co == $oc && $cn == $nc;
-}
-push @base, @head[$hi .. $#head];
-
-# Lexer: tokens [type, value, line, end line, extra]. Strings keep their interpolations as
-# token lists; a template directive, a block comment or anything unknown fails the file.
-our ($T, $line);
-sub fail { die "parse\n" }
-sub lex_string {
-  my ($l, $s0, @in) = ($line, pos($T)); my $dir = 0;
-  pos($T)++;
-  while (1) {
-    if ($T =~ /\G\\[^\n]/gc) { next }
-    if ($T =~ /\G(?:\$\$\{|%%\{)/gc) { next }
-    if ($T =~ /\G\$\{/gc) { push @in, lex(1); next }
-    if ($T =~ /\G%\{/gc) { $dir = 1; lex(1); next }
-    if ($T =~ /\G"/gc) { return ["S", substr($T, $s0, pos($T) - $s0), $l, $l, {in => \@in, dir => $dir}] }
-    if ($T =~ /\G[^"\\\$%\n]+/gc || $T =~ /\G[\$%]/gc) { next }
-    fail();
-  }
-}
-sub lex { # until the end, or with $interp until the "}" that closes the interpolation
-  my ($interp) = @_; my (@t, $d); $d = 0;
-  while (1) {
-    if (pos($T) >= length $T) { fail() if $interp; return \@t }
-    if ($T =~ /\G\n/gc) { push @t, ["NL", "", $line, $line]; $line++; next }
-    if ($T =~ /\G[ \t]+/gc || $T =~ /\G(?:#|\/\/)[^\n]*/gc) { next }
-    fail() if $T =~ /\G\/\*/gc;
-    if ($T =~ /\G(?=")/gc) { push @t, lex_string(); next }
-    if ($T =~ /\G<<-?([A-Za-z_][A-Za-z0-9_-]*)[ \t]*\n/gc) {
-      my ($id, $l) = ($1, $line); $line++;
-      while (1) { fail() unless $T =~ /\G([^\n]*)\n/gc; $line++; last if $1 =~ /\A\s*\Q$id\E\s*\z/; fail() unless closed($1) }
-      push @t, ["HD", $id, $l, $line - 1]; $line--; pos($T)--; next;
-    }
-    if ($T =~ /\G([A-Za-z_][A-Za-z0-9_-]*)/gc) { push @t, ["ID", $1, $line, $line]; next }
-    if ($T =~ /\G([0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/gc) { push @t, ["NUM", $1, $line, $line]; next }
-    if ($T =~ /\G(==|!=|<=|>=|&&|\|\||=>|\.\.\.|::|[{}\[\]()=,.:?!+\-*\/%<>])/gc) {
-      my $q = $1;
-      if ($interp && $q eq "{") { $d++ }
-      if ($interp && $q eq "}") { return \@t if $d == 0; $d-- }
-      push @t, ["P", $q, $line, $line]; next;
-    }
-    fail();
-  }
-}
-# A heredoc body line whose template interpolation or directive does not close on the same
-# line fails the file: HCL reads on as an expression there, past a marker-only line.
-sub closed {
-  my @c = split //, $_[0]; my ($d, $q, $i) = (0, 0, 0);
-  while ($i < @c) {
-    my ($c, $n, $nn) = ($c[$i], $c[$i + 1] // "", $c[$i + 2] // "");
-    if ($q) { if ($c eq "\\") { $i += 2; next } $q = 0 if $c eq "\""; $i++; next }
-    if (($c eq "\$" || $c eq "%") && $n eq $c && $nn eq "{") { $i += 3; next }
-    if (($c eq "\$" || $c eq "%") && $n eq "{") { $d++; $i += 2; next }
-    if ($d) { if ($c eq "\"") { $q = 1 } elsif ($c eq "{") { $d++ } elsif ($c eq "}") { $d-- } }
-    $i++;
-  }
-  return $d == 0 && !$q;
-}
-# Parser: the body of a file, its blocks and attributes. Returns the skeleton, block headers and
-# attribute names without any expression, and the attributes with their line spans.
-our (@k, $j, @attrs);
-sub isp { my $u = $k[$j]; defined $u && $u->[0] eq "P" && $u->[1] eq $_[0] }
-sub body {
-  my ($nested, $ctx, $addr) = @_; my @items;
-  while (1) {
-    $j++ while $j < @k && $k[$j][0] eq "NL";
-    if ($j >= @k) { fail() if $nested; return join(";", @items) }
-    if (isp("}")) { fail() unless $nested; $j++; return join(";", @items) }
-    fail() unless $k[$j][0] eq "ID";
-    my ($name, $sl) = ($k[$j][1], $k[$j][2]); $j++;
-    if (isp("=")) {
-      $j++; my ($s, $d, $el) = ($j, 0, $sl);
-      while ($j < @k) {
-        my $u = $k[$j];
-        if ($u->[0] eq "NL") { last if $d == 0 }
-        elsif ($u->[0] eq "P" && $u->[1] =~ /\A[(\[{]\z/) { $d++ }
-        elsif ($u->[0] eq "P" && $u->[1] =~ /\A[)\]}]\z/) { last if $d == 0; $d-- }
-        $el = $u->[3]; $j++;
-      }
-      my @e = grep { $_->[0] ne "NL" } @k[$s .. $j - 1];
-      fail() unless @e;
-      push @attrs, {name => $name, start => $sl, end => $el, toks => \@e, rd => $ctx eq "rd", addr => $addr};
-      push @items, "A $name";
-    } else {
-      my @l;
-      while ($j < @k && ($k[$j][0] eq "S" || $k[$j][0] eq "ID")) {
-        my $v = $k[$j][1]; $v =~ s/\A"(.*)"\z/$1/s; fail() unless $v =~ /\A[A-Za-z0-9_-]+\z/; push @l, $v; $j++;
-      }
-      fail() unless isp("{");
-      $j++;
-      my $rd = !$nested && ($name eq "resource" || $name eq "data") && @l == 2;
-      my $sub = body(1, $rd ? "rd" : "other", $rd ? ($name eq "data" ? "data." : "") . "$l[0].$l[1]" : "");
-      push @items, "B $name @l {$sub}";
-    }
-  }
-}
-sub parse {
-  local $T = join("\n", @{$_[0]}) . "\n"; local $line = 1; pos($T) = 0;
-  local @k = @{lex(0)}; local $j = 0; local @attrs;
-  my $sk = body(0, "top", "");
-  return ($sk, [@attrs]);
-}
-my ($hs, $ha, $bs, $ba);
-eval { ($hs, $ha) = parse(\@head); ($bs, $ba) = parse(\@base); 1 } or out("reject unparsed");
-out("reject structure changed") unless $hs eq $bs && @$ha == @$ba;
-sub at { my ($a, $n) = @_; for my $x (0 .. $#$a) { return $x if $a->[$x]{start} <= $n && $n <= $a->[$x]{end} } -1 }
-
-# A plain expression: references, literals, splats, lists, objects and the allowed functions.
-my %fn = map { ($_ => 1) } qw(concat compact flatten distinct join format length toset tolist tomap element keys values);
-our @x; our $q;
-sub xp { my $u = $x[$q]; defined $u && $u->[0] eq "P" && $u->[1] eq $_[0] }
-sub want { fail() unless xp($_[0]); $q++ }
-sub list { my ($close) = @_; until (xp($close)) { pexpr(); last unless xp(","); $q++ } want($close) }
-sub pexpr {
-  my $u = $x[$q] // fail();
-  if ($u->[0] eq "NUM") { $q++ }
-  elsif (xp("-") && ($x[$q + 1][0] // "") eq "NUM") { $q += 2 }
-  elsif ($u->[0] eq "S") {
-    fail() if $u->[4]{dir};
-    for my $in (@{$u->[4]{in}}) { local @x = grep { $_->[0] ne "NL" } @$in; local $q = 0; pexpr(); fail() if $q < @x }
-    $q++;
-  } elsif ($u->[0] eq "ID" && defined $x[$q + 1] && $x[$q + 1][0] eq "P" && $x[$q + 1][1] eq "(") {
-    fail() unless $fn{$u->[1]}; $q += 2; list(")");
-  } elsif ($u->[0] eq "ID") {
-    fail() if $u->[1] =~ /\A(?:each|count|self|for|if|in)\z/; $q++;
-  } elsif (xp("[")) { $q++; list("]") }
-  elsif (xp("{")) {
-    $q++;
-    until (xp("}")) {
-      my $key = $x[$q] // fail();
-      fail() unless $key->[0] eq "ID" || ($key->[0] eq "S" && !@{$key->[4]{in}} && !$key->[4]{dir});
-      $q++; fail() unless xp("=") || xp(":"); $q++; pexpr(); $q++ if xp(",");
-    }
-    $q++;
-  } else { fail() }
-  while (1) {
-    if (xp(".")) { $q++; my $v = $x[$q] // fail(); fail() unless $v->[0] eq "ID" || $v->[0] eq "NUM" || xp("*"); $q++ }
-    elsif (xp("[")) { $q++; if (xp("*")) { $q++ } else { pexpr() } want("]") }
-    else { last }
-  }
-}
-sub plain { local @x = @{$_[0]}; local $q = 0; eval { pexpr(); fail() if $q < @x; 1 } }
-
-my %meta = map { ($_ => 1) } qw(count for_each provider depends_on);
-my %seen;
-for my $g (@groups) {
-  my %ids;
-  for my $n (@{$g->{b}}) { $ids{at($ba, $n)}++ }
-  for my $n (@{$g->{h}}) { $ids{at($ha, $n)}++ }
-  my @ids = keys %ids;
-  out("reject change outside one attribute") unless @ids == 1 && $ids[0] >= 0;
-  my ($h, $b) = ($ha->[$ids[0]], $ba->[$ids[0]]);
-  out("reject not a resource or data attribute") unless $h->{rd} && $b->{rd} && $h->{addr} eq $b->{addr} && $h->{name} eq $b->{name};
-  out("reject meta-argument") if $meta{$h->{name}};
-  out("reject expression not plain") unless plain($h->{toks}) && plain($b->{toks});
-  print "attr $h->{addr} $h->{name}\n" unless $seen{"$h->{addr} $h->{name}"}++;
-}
-out("ok");
-'
+# The facts engine's changes report (skip-coverage.md, The facts engine). mtf-facts is found by
+# facts-resolve.sh: from /, canonical, outside the run directory and the clone, its version
+# report read once under its limits. The engine runs only when that report lists the feature
+# cmd:changes and changes report version 1, under a deadline of SKIP_COVERAGE_FACTS_TIMEOUT
+# seconds and an output cap, and its whole report must have the shape below before any of it
+# is read: one document, every file path and data source directory once. It rebuilds the base from --files and reads both sides with the HCL parser. A
+# missing, old, failing, late, oversized or malformed engine leaves the report null: no .tf file
+# is then allowed and no directory declares a data source type.
+FACTS_TIMEOUT=${SKIP_COVERAGE_FACTS_TIMEOUT:-120}
+case "$FACTS_TIMEOUT" in ''|*[!0-9]*|0*) die "SKIP_COVERAGE_FACTS_TIMEOUT must be a whole number of seconds, 1 or more" ;; esac
+FACTS_CAP=16777216
+# shellcheck disable=SC2016 # a jq program
+CHANGES_SHAPE_JQ='length == 1 and (.[0] | type == "object" and .schema_version == 1
+  and (.files | type == "array" and (map(.path) | unique | length) == length and all(.[]; type == "object" and (.path | type == "string") and (.status | type == "string")
+    and (.parsed | type == "boolean") and (.outside | type == "boolean")
+    and (.blocks | type == "array" and all(.[]; type == "object" and (.address | type == "string" and test("^[!-~]{1,300}\\z"))
+      and (.kind | type == "string") and (.status | type == "string") and (.structural | type == "boolean")
+      and (.attributes | type == "array" and all(.[]; type == "object"
+        and (.name | type == "string" and test("^[A-Za-z0-9_-]{1,255}\\z"))
+        and (.read == "read" or .read == "unread" or .read == "unknown")
+        and (.plain | type == "object" and (.head | type == "boolean") and (.base | type == "boolean"))))))))
+  and (.data_sources | type == "array" and (map(.dir) | unique | length) == length and all(.[]; type == "object" and (.dir | type == "string") and (.complete | type == "boolean")
+    and (.types | type == "array" and all(.[]; type == "string")))))'
+facts_resolve "$RUN" "$CLONE"
+FACTS=$FACTS_BIN
+echo null > "$W/changes.json"
+: > "$W/refs.txt"
+# The changed attributes some expression of the module reads (skip-coverage.md, Design skips):
+# each "<address> <attribute>" pair the report does not give as unread. A report whose pairs
+# cannot be listed is no report.
+if [ "$FACTS_STATE" = ok ] && facts_has cmd:changes \
+  && printf '%s\n' "$FACTS_REPORT" | jq -e '.reports | type == "object" and .changes == 1' > /dev/null 2>&1 \
+  && (cd "$W" && facts_run "$FACTS_TIMEOUT" "$FACTS_CAP" "$FACTS" changes "$CLONE" --diff "$FILES" --json --timeout "${FACTS_TIMEOUT}s") > "$W/changes.out" \
+  && jq -e -s "$CHANGES_SHAPE_JQ" "$W/changes.out" > /dev/null 2>&1 \
+  && jq -r '.files[]?.blocks[]? | .address as $a | .attributes[] | select(.read != "unread") | "\($a) \(.name)"' \
+       "$W/changes.out" > "$W/refs.tmp" \
+  && LC_ALL=C sort -u "$W/refs.tmp" > "$W/refs.new"; then
+  mv -- "$W/changes.out" "$W/changes.json"
+  mv -- "$W/refs.new" "$W/refs.txt"
+fi
 
 # Per changed file one JSON line {file, dir, ok, attrs}: a modified *.md is allowed with no
-# attribute; a modified .tf at the module root or under modules/ goes through CLASSIFY_PL;
-# anything else is not allowed.
+# attribute; a modified .tf at the module root or under modules/ is allowed when the report gives
+# it parsed and modified with no change outside attribute values, and every block it changed is
+# an edited resource or data block with two labels, no structural edit and only changed attributes
+# that are plain at both sides (skip-coverage.md, The allow-list); the report gives a change of
+# count, for_each, provider or depends_on as a structural edit. Anything else is not allowed.
 : > "$W/classes.jsonl"
-n=0
 jq -c --arg pre "$PREFIX" '.[] | {f: .filename, s: .status, prev: (.previous_filename // null),
-    patch: (.patch // null),
     kind: (if .filename | test("\\.md$") then "md"
            elif (.filename | startswith($pre)) and (.filename[($pre | length):] | test("^([^/]+|modules/.+)\\.tf$"))
              and (.filename[($pre | length):] | test("(^|/)(examples|wrappers)/") | not) then "tf"
            else "other" end)}' "$FILES" > "$W/files.jsonl" || die "--files cannot be read"
 while IFS= read -r row; do
-  n=$((n + 1))
   f="$(printf '%s\n' "$row" | jq -r .f)"
   kind="$(printf '%s\n' "$row" | jq -r 'if .s != "modified" or .prev != null then "other" else .kind end')"
-  out=
+  ok=false
   case "$kind" in
     md)
       # A document a .tf file names, by its file name, may be read by Terraform: not allowed
-      grep -rqF --include='*.tf' --exclude-dir=.git -- "${f##*/}" "$CLONE" 2> /dev/null; [ $? = 1 ] && out=ok ;;
-    tf)
-      if printf '%s\n' "$row" | jq -e '.patch | type == "string"' > /dev/null; then
-        printf '%s\n' "$row" | jq -j .patch > "$W/patch-$n"
-        hf="$CLONE/$f"
-        if [ -f "$hf" ] && [ ! -L "$hf" ]; then out="$(perl -e "$CLASSIFY_PL" "$hf" "$W/patch-$n")"; fi
-      fi ;;
+      grep -rqF --include='*.tf' --exclude-dir=.git -- "${f##*/}" "$CLONE" 2> /dev/null; [ $? = 1 ] && ok=true ;;
   esac
-  printf '%s\n' "$out" | jq -R -s -c --arg f "$f" '
-    split("\n") | map(select(length > 0)) as $l
-    | {file: $f, dir: ($f | if test("/") then sub("/[^/]*$"; "") else "." end),
-       ok: ($l[-1:] == ["ok"]),
-       attrs: [$l[] | select(startswith("attr ")) | split(" ") | {address: .[1], attribute: .[2]}]}' >> "$W/classes.jsonl"
+  jq -c --arg f "$f" --arg kind "$kind" --argjson mdok "$ok" '
+    (if $kind == "tf" then first(.files[]? | select(.path == $f)) // null else null end) as $e
+    | (if $kind == "md" then {ok: $mdok, attrs: []}
+       elif $e != null and $e.status == "modified" and $e.parsed == true and $e.outside == false and ($e.blocks | length) > 0
+         and all($e.blocks[]; .status == "edited" and .structural == false and (.attributes | length) > 0
+           and ((.kind == "resource" and (.address | test("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z")))
+             or (.kind == "data" and (.address | test("^data\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\z"))))
+           and all(.attributes[]; .plain.head == true and .plain.base == true))
+       then {ok: true, attrs: [$e.blocks[] | .address as $a | .attributes[] | {address: $a, attribute: .name}]}
+       else {ok: false, attrs: []} end)
+    | {file: $f, dir: ($f | if test("/") then sub("/[^/]*$"; "") else "." end)} + .' "$W/changes.json" >> "$W/classes.jsonl"
 done < "$W/files.jsonl"
 
-# The changed attributes some .tf file of the clone reads (skip-coverage.md, Design skips): per
-# "<address> <attribute>" pair, the pair once when any mention of the resource, outside a .git or
-# .terraform directory, is not followed by an index or splat and then another attribute's name.
-# Conservative: a comment, the whole object, the changed attribute itself, tags_all for tags, an
-# index of over 255 characters, a .tf file that is a link and any .tf.json file count as a read. The bound keeps a
-# line of unclosed indexes linear.
-REFS_PL='
-use strict; use warnings; use File::Find;
-open(my $pf, "<", $ARGV[1]) or die; chomp(my @pl = <$pf>); close $pf;
-my @pairs = map { [split / /] } grep { /\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+ [a-z0-9_]+\z/ } @pl;
-my (%hit, $link, @files);
-find({no_chdir => 1, wanted => sub {
-  if (-d $_ && /\/(?:\.git|\.terraform)\z/) { $File::Find::prune = 1; return }
-  if ((/\.tf\z/ && -l $_) || /\.tf\.json\z/) { $link = 1; return }
-  push @files, $_ if /\.tf\z/ && -f $_ }}, $ARGV[0]);
-if ($link) { $hit{"$_->[0] $_->[1]"} = 1 for @pairs }
-for my $f (@files) {
-  open(my $h, "<", $f) or next; local $/; my $t = <$h>; close $h;
-  for my $p (@pairs) {
-    my ($a, $at) = @$p;
-    while ($t =~ /(?<![A-Za-z0-9_.])\Q$a\E(?![A-Za-z0-9_-])((?:\[[^\]\n]{0,255}\]|\.\*)*)(\.([A-Za-z0-9_-]+))?/g) {
-      $hit{"$a $at"} = 1 if !defined $3 || $3 eq $at || ($at eq "tags" && $3 eq "tags_all");
-    }
-  }
-}
-print "$_\n" for sort keys %hit;
-'
-: > "$W/refs.txt"
-jq -r '.attrs[] | "\(.address) \(.attribute)"' "$W/classes.jsonl" | sort -u > "$W/pairs.txt"
-if [ -s "$W/pairs.txt" ]; then
-  # a scan that fails names every pair, so no design skip is covered
-  perl -e "$REFS_PL" "$CLONE" "$W/pairs.txt" > "$W/refs.txt" 2> /dev/null || cp "$W/pairs.txt" "$W/refs.txt"
-fi
-
-# The data source types the .tf files directly in each refused-host example directory declare
-# (skip-coverage.md, Design skips): one {dir: [type]} line per directory, from regular files only,
-# none for a directory reached through a link or one that climbs out. Heredoc bodies, block
-# comments and line comments are removed first; a file left with an open heredoc or block
-# comment declares none.
-TYPES_PL='
-s{<<-?([A-Za-z_][A-Za-z0-9_-]*)[^\n]*\n.*?^[ \t]*\1[ \t]*$}{}gms;
-s{/\*.*?\*/}{}gs;
-next if m{/\*|<<};
-s{(?:#|//)[^\n]*}{}g;
-print "$1\n" while /^[ \t]*data[ \t]+"([A-Za-z0-9_-]+)"[ \t]+"/mg;
-'
+# The data source types of each refused-host example directory (skip-coverage.md, Design skips):
+# one {dir: [type]} line per directory, the report's types when it read every file there, none
+# otherwise; the report lists no directory reached through a link.
 : > "$W/types.jsonl"
-# a file, not an -e argument: GNU find refuses a second {} in the -exec arguments
-printf '%s' "$TYPES_PL" > "$W/types.pl"
 if [ "$MODE" = runner ]; then
   jq -r '.unplanned[] | select(.reason == "environment (refused-host)") | .dir
     | select(type == "string" and test("^[A-Za-z0-9._/-]{1,300}$") and (split("/") | index("..") == null))' "$COV" | sort -u |
   while IFS= read -r d; do
-    t=
-    r="$(cd "$CLONE/$d" 2> /dev/null && pwd -P)" || r=
-    if [ "$r" = "$CLONE/$d" ]; then
-      t="$(find "$CLONE/$d" -maxdepth 1 -type f -name '*.tf' -exec perl -0777 -n "$W/types.pl" {} + 2> /dev/null | sort -u)"
-    fi
-    printf '%s\n' "$t" | jq -R -s -c --arg d "$d" '{($d): (split("\n") | map(select(length > 0)))}' >> "$W/types.jsonl"
+    jq -c --arg d "$d" '{($d): (first(.data_sources[]? | select(.dir == $d and .complete == true) | .types) // [])}' \
+      "$W/changes.json" >> "$W/types.jsonl"
   done
 fi
 
