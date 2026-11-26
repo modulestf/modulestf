@@ -22,7 +22,8 @@
 # in example order, whatever order the plans end in. What a verdict reads is the same as with
 # --jobs 1: plan-pass.txt, addresses-<n>.json and plan-diff-<n>.json come from the blocks and
 # saved plans of each example alone, and plan-refused-hosts.txt from the whole log of every plan
-# proxy, before any cap. The evidence files are not: proxy-plan.log holds each slot's log one
+# proxy, before any cap, though an example that ran beside one that ended at credentials, and
+# whose block is dropped, still adds its refusals there. The evidence files are not: proxy-plan.log holds each slot's log one
 # after another, so its line order differs and its 5 MiB cap may keep other lines; runner.log
 # takes each plan job's standard error in example order; and each slot from 2 on adds its own
 # network-check-plan-<slot>.txt. An example's validate container runs in its slot after its
@@ -385,9 +386,11 @@ refused_targets() { # tinyproxy log on stdin -> one line per refused CONNECT tar
 }
 # The refused targets of a plan proxy, read from its whole log before save_proxy_log caps it
 # into proxy-plan.log, so plan-refused-hosts.txt is every plan proxy's refusals however many
-# slots ran and however long the logs are.
+# slots ran and however long the logs are. Each proxy's targets are deduplicated first and then
+# cut at whole lines to max_bytes; only a proxy with over 5 MiB of distinct targets loses any.
+uniq_capped() { awk -v m="$max_bytes" '!s[$0]++ { n += length($0) + 1; if (n > m) exit; print }'; }
 plan_refusals() { # container
-  docker logs "$1" 2>&1 | refused_targets | head -c "$max_bytes" >> "$TMPRUN/plan-refused" || true
+  docker logs "$1" 2>&1 | refused_targets | uniq_capped >> "$TMPRUN/plan-refused" || true
 }
 # A host the plan proxy refuses by design (README.md, Refused hosts): the Identity Center and
 # public registry token endpoints, each a whole AWS name in a region of a known partition, on
@@ -757,7 +760,7 @@ check_record_size "$TMPRUN/assembled.txt"
 out="$record/plan-pass.txt"
 mv "$TMPRUN/assembled.txt" "$out"
 
-sort -u "$TMPRUN/plan-refused" | head -c "$max_bytes" > "$record/plan-refused-hosts.txt" || true
+sort -u "$TMPRUN/plan-refused" | uniq_capped > "$record/plan-refused-hosts.txt" || true
 
 for record_file in "$record"/*; do
   check_record_size "$record_file"

@@ -253,7 +253,10 @@ the skill's plan pass whenever a container runtime is available.
   What a verdict reads is the same as with one slot: `plan-pass.txt`, `addresses-<n>.json`
   and `plan-diff-<n>.json` come from each example's own block and saved plan, and
   `plan-refused-hosts.txt` from the whole log of every plan proxy, read before any cap, so
-  neither the number of slots nor the 5 MiB cap of `proxy-plan.log` changes it. The evidence
+  neither the number of slots nor the 5 MiB cap of `proxy-plan.log` changes it. Each proxy's
+  targets are deduplicated and cut at whole lines, so only a proxy with over 5 MiB of distinct
+  targets loses any. An example that ran beside one that ended at credentials, and whose block
+  is dropped, still adds its refusals to it, where a run of one slot would never have run it. The evidence
   files differ: `proxy-plan.log` holds each slot's log one after another, so its line order is
   not the one-slot order and its cap may keep other lines; `runner.log` takes each plan job's
   standard error in example order; and each slot from 2 on adds `network-check-plan-<slot>.txt`.

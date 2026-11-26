@@ -1903,7 +1903,7 @@ check "stall watch: the program is taken from run-pass.sh" "$([ -n "$(swpl "$RP"
 check "stall watch: the refused targets are the filtered hosts and the CONNECT to another port, each once, in tinyproxy's own lines only" \
   "$([ "$(printf '%s\n' "$(swpl "$RP")" 'refused_targets < "$1"' | bash -s "$SW/proxy.log" | tr '\n' ' ')" = 'es.eu-west-1.amazonaws.com:443 ec2.us-east-1.amazonaws.com:80 portless.example ' ] && echo 0 || echo 1)"
 check "stall watch: the record's refused hosts come from the same function" \
-  "$(grep -qx '  docker logs "$1" 2>&1 | refused_targets | head -c "$max_bytes" >> "$TMPRUN/plan-refused" || true' "$RP" && grep -qx 'sort -u "$TMPRUN/plan-refused" | head -c "$max_bytes" > "$record/plan-refused-hosts.txt" || true' "$RP"; echo $?)"
+  "$(grep -qx '  docker logs "$1" 2>&1 | refused_targets | uniq_capped >> "$TMPRUN/plan-refused" || true' "$RP" && grep -qx 'sort -u "$TMPRUN/plan-refused" | uniq_capped > "$record/plan-refused-hosts.txt" || true' "$RP"; echo $?)"
 { for i in 1 2 3; do refused es.eu-west-1.amazonaws.com:443 "$i"; done; } > "$SW/three.log"
 { for i in 1 2; do refused es.eu-west-1.amazonaws.com:443 "$i"; done; refused sso.us-east-1.amazonaws.com:443 3; } > "$SW/mixed.log"
 swrun "$RP" "$SW/three.log" 0 1 4
@@ -2260,7 +2260,8 @@ prf() { # script, mode (serial or slots) -> the refused hosts file, space separa
     if [ "$2" = serial ]; then echo 'plan_refusals p; save_proxy_log p proxy-plan.log'
     else echo 'for c in p p-2; do plan_refusals "$c"; save_proxy_log "$c" proxy-plan.log; done'; fi
     grep -E '^(sort -u "\$TMPRUN/plan-refused"|refused_targets < "\$record/proxy-plan.log")' "$1"; } > "$d/run.sh"
-  refused es.eu-west-1.amazonaws.com:443 1 > "$d/log.p"; printf '%400s\n' pad >> "$d/log.p"
+  # 12 refusals of one host, over max_bytes of targets, then a second host
+  : > "$d/log.p"; for i in $(seq 1 12); do refused es.eu-west-1.amazonaws.com:443 "$i" >> "$d/log.p"; done
   if [ "$2" = serial ]; then refused sso.us-east-1.amazonaws.com:443 2 >> "$d/log.p"; else refused sso.us-east-1.amazonaws.com:443 2 > "$d/log.p-2"; fi
   bash "$d/run.sh" 2> "$d/err"; tr '\n' ' ' < "$d/record/plan-refused-hosts.txt" 2> /dev/null
 }
@@ -2268,9 +2269,15 @@ check "parallel plans: plan-refused-hosts.txt is the same for one proxy and one 
   "$([ "$(prf "$RP" serial)" = 'es.eu-west-1.amazonaws.com:443 sso.us-east-1.amazonaws.com:443 ' ] && [ "$(prf "$RP" slots)" = "$(prf "$RP" serial)" ] && echo 0 || echo 1)"
 check "parallel plans: proxy-plan.log, the evidence, is capped and keeps other lines" \
   "$([ "$(wc -c < "$PJ/prf-serial/record/proxy-plan.log")" -le 300 ] && ! grep -q sso "$PJ/prf-serial/record/proxy-plan.log" && grep -q sso "$PJ/prf-serial/record/plan-refused-hosts.txt" && echo 0 || echo 1)"
-perl -pe 's/^sort -u "\$TMPRUN\/plan-refused" \| head -c "\$max_bytes" > "\$record\/plan-refused-hosts.txt" \|\| true$/refused_targets < "\$record\/proxy-plan.log" | sort -u > "\$record\/plan-refused-hosts.txt" || true/' "$RP" > "$PJ/refused-from-capped-log.sh"
+perl -pe 's/^sort -u "\$TMPRUN\/plan-refused" \| uniq_capped > "\$record\/plan-refused-hosts.txt" \|\| true$/refused_targets < "\$record\/proxy-plan.log" | sort -u > "\$record\/plan-refused-hosts.txt" || true/' "$RP" > "$PJ/refused-from-capped-log.sh"
 check "mutation refused-from-capped-log changes the script" "$(cmp -s "$RP" "$PJ/refused-from-capped-log.sh"; test $? -eq 1; echo $?)"
 check "mutation refused-from-capped-log is caught" "$([ "$(prf "$PJ/refused-from-capped-log.sh" serial)" = 'es.eu-west-1.amazonaws.com:443 sso.us-east-1.amazonaws.com:443 ' ] && echo 1 || echo 0)"
+perl -pe 's/\| refused_targets \| uniq_capped >>/| refused_targets | head -c "\$max_bytes" | uniq_capped >>/' "$RP" > "$PJ/refused-cap-before-dedupe.sh"
+check "mutation refused-cap-before-dedupe changes the script" "$(cmp -s "$RP" "$PJ/refused-cap-before-dedupe.sh"; test $? -eq 1; echo $?)"
+check "mutation refused-cap-before-dedupe is caught" "$([ "$(prf "$PJ/refused-cap-before-dedupe.sh" serial)" = "$(prf "$RP" slots)" ] && echo 1 || echo 0)"
+perl -pe 's/^sort -u "\$TMPRUN\/plan-refused" \| uniq_capped >/sort -u "\$TMPRUN\/plan-refused" | head -c 40 >/' "$RP" > "$PJ/refused-cut-mid-line.sh"
+check "mutation refused-cut-mid-line changes the script" "$(cmp -s "$RP" "$PJ/refused-cut-mid-line.sh"; test $? -eq 1; echo $?)"
+check "mutation refused-cut-mid-line is caught" "$(prf "$PJ/refused-cut-mid-line.sh" serial | grep -qE '(^| )[^ ]*[^0-9 ]$' && echo 0 || echo 1)"
 # A stored pid that is no running job of this shell, as after its job ended and the pid was
 # reused, is never killed.
 pjstale() { # script -> 0 when the unrelated process survives
