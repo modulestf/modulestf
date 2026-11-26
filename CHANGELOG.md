@@ -1,3 +1,12 @@
+# [0.14.0](https://github.com/modulestf/modulestf/compare/v0.13.2...v0.14.0) (2026-11-26)
+
+
+### Features
+
+* **pr-review:** Clear an additive change whose merge base examples plan the same ([#222](https://github.com/modulestf/modulestf/issues/222)) ([4efe233](https://github.com/modulestf/modulestf/commit/4efe2334d2079f3261c174f9d27810fcef0722f8))
+
+
+
 ## [0.13.2](https://github.com/modulestf/modulestf/compare/v0.13.1...v0.13.2) (2026-11-26)
 
 
