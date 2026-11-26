@@ -1,3 +1,12 @@
+## [0.16.6](https://github.com/modulestf/modulestf/compare/v0.16.5...v0.16.6) (2026-11-26)
+
+
+### Bug Fixes
+
+* **pr-review:** Find the installer's own directory without CDPATH ([#253](https://github.com/modulestf/modulestf/issues/253)) ([0932b07](https://github.com/modulestf/modulestf/commit/0932b078145c56e11a8071bfc4f6b8961ba9d929)), closes [#252](https://github.com/modulestf/modulestf/issues/252)
+
+
+
 ## [0.16.5](https://github.com/modulestf/modulestf/compare/v0.16.4...v0.16.5) (2026-11-26)
 
 
