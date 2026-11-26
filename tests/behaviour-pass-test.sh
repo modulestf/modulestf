@@ -1492,5 +1492,33 @@ wmutate "declarations: unknown read as not required" 's/ and \.schema_required !
 wmutate "declarations: the report path not taken" 's/if \[ "\$decl" = true \]; then decl_vars; else null_vars; fi/null_vars/' t_decl_notok
 wmutate "declarations: one feature enough" 's/ && facts_has behaviour\.schema-required && decl=true/ \&\& decl=true/' t_decl_one
 
+# --- Where the script runs from and where --out is.
+# A colon in --out would split the PATH entry facts_features builds under it and could put another
+# mtf-facts first: refused before anything runs.
+t_colon() {
+  local o="$TMP/colon:x"; rm -rf "$TMP/colon" "$o" "$TMP/decoy-ran"; mkdir -p "$TMP/colon" "$o"
+  printf '#!/bin/sh\n: > "%s/decoy-ran"\nexit 2\n' "$TMP" > "$TMP/colon/mtf-facts"; chmod +x "$TMP/colon/mtf-facts"
+  setup
+  bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --out "$o" > "$TMP/colon.txt" 2>&1; local st=$?
+  [ "$st" = 2 ] && grep -q 'must not contain a colon' "$TMP/colon.txt" && [ ! -e "$TMP/decoy-ran" ]
+}
+t_colon; check "an --out path holding a colon is refused and no other mtf-facts runs" $?
+wmutate "the colon in --out accepted" 's/case "\$out" in \*:\*\) die "--out must not contain a colon" ;; esac\n//' t_colon
+# Started by a bare name, or with CDPATH naming a directory that holds a same-named subdirectory,
+# the script reads facts-resolve.sh from its own directory.
+bnsetup() { local d="$TMP/bn"; rm -rf "$d" "$TMP/cdp-decoy"; mkdir -p "$d" "$TMP/cdp-decoy/bn"; cp "$BP" "${BP%/*}/facts-resolve.sh" "${BP%/*}/wrapper-derive.pl" "$d/"; setup; }
+t_bare() {
+  bnsetup
+  (cd "$TMP/bn" && bash behaviour-pass.sh classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --out "$O" 2>&1) | grep -qxF 'behaviour: ran, 2 triggers, 0 over the cap'
+}
+t_cdpath() {
+  bnsetup
+  (cd "$TMP" && CDPATH="$TMP/cdp-decoy" bash bn/behaviour-pass.sh classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --out "$O" 2>&1) | grep -qxF 'behaviour: ran, 2 triggers, 0 over the cap'
+}
+t_bare; check "started by a bare name the script reads facts-resolve.sh from its own directory" $?
+t_cdpath; check "with CDPATH set the script reads facts-resolve.sh from its own directory" $?
+wmutate "the script directory read through the script name" 's/HERE="\$\(CDPATH= cd -- "\$\(dirname -- "\$0"\)" && pwd -P\)"/HERE="\${0%\/*}"/' t_bare
+wmutate "the script directory looked up through CDPATH" 's/CDPATH= cd -- /cd /' t_cdpath
+
 echo
 if [ "$fails" -eq 0 ]; then echo "behaviour pass: all checks hold"; else echo "behaviour pass: $fails failed"; exit 1; fi

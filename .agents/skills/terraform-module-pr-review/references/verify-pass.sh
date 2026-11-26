@@ -433,7 +433,7 @@ print $env ? "environment" : "code", "\n", $line, "\n";
 # facts-resolve.sh, outside the workspace as the reviewer's facts-engine.md resolves it, and a
 # path inside the clone or the run directory counts as no binary. Writes $W/sel.tsv,
 # "<affected><TAB><dir>" per selected example in order, and $W/selection.json.
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 # shellcheck source=facts-resolve.sh
 . "$HERE/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
 # shellcheck disable=SC2016 # a jq program

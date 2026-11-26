@@ -40,7 +40,8 @@ deadline="${BEHAVIOUR_PASS_TIMEOUT:-120}"
 [[ "$deadline" =~ ^[1-9][0-9]{0,3}$ ]] || { echo "behaviour-pass.sh: BEHAVIOUR_PASS_TIMEOUT must be 1 to 9999 seconds" >&2; exit 2; }
 die() { echo "behaviour-pass.sh: $1" >&2; exit 2; }
 # shellcheck source=facts-resolve.sh
-. "${0%/*}/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+. "$HERE/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
 
 cmd="${1-}"; shift 2> /dev/null
 facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder="" wrappers="" clone="" pdiff=""
@@ -55,7 +56,10 @@ while [ $# -gt 0 ]; do
   [ $# -ge 2 ] || die "$1 needs a value"; shift 2
 done
 abs() { case "$1" in /?*) ;; *) die "$2 must be an absolute path" ;; esac; }
-abs "$out" --out; [ -d "$out" ] && [ ! -L "$out" ] || die "--out is not a directory"
+abs "$out" --out
+# facts_features puts a directory under --out at the front of PATH; a colon would split that entry.
+case "$out" in *:*) die "--out must not contain a colon" ;; esac
+[ -d "$out" ] && [ ! -L "$out" ] || die "--out is not a directory"
 case "$cmd" in wrappers | diff-dirs) ;; *) abs "$facts" --facts ;; esac
 
 # Shared checks, in jq: a clean module-relative path, and the classifier output of contract 2.
@@ -547,7 +551,7 @@ evaluate() {
 WRAP_RE='^wrappers/([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/)?versions\.tf$'
 WRAP_LINE_RE='^wrappers/([A-Za-z0-9_][A-Za-z0-9._-]{0,63}/)?versions\.tf (derived|copied|differs|unknown [a-z0-9 .-]{1,60})$'
 WRAP_CAP=65536
-DERIVE="$(cd "$(dirname "$0")" && pwd -P)/wrapper-derive.pl"
+DERIVE="$HERE/wrapper-derive.pl"
 # The environment and -c options of the form in the reviewer's git-safety.md, in the clone. Its
 # table lists no ls-tree or cat-file: only those two run here, on the head, and like facts-engine.md's
 # base extraction they read objects only, run no driver, filter or textconv and need no history, so

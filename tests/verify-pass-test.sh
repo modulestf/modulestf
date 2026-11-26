@@ -487,11 +487,24 @@ $BASE" --out "$R3/x.json")"
     "$( ! cmp -s "$VP" "$TMP/vp-rel.sh" && grep -q -- '--diff files9.json ' "$TMP/facts.log"; echo $?)"
   # Started by a bare relative name, the script still finds facts-resolve.sh beside it.
   cp "$VP" "$TMP/vp-bare.sh"
-  sed 's|^HERE="$(cd "$(dirname "$0")" && pwd -P)"$|HERE="${0%/*}"|' "$VP" > "$TMP/vp-bare-mut.sh"
+  sed 's|^HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"$|HERE="${0%/*}"|' "$VP" > "$TMP/vp-bare-mut.sh"
   bare() { (cd "$TMP" && PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$1" select "$R9" --files files9.json --prefix modules/a 2> /dev/null | jq -e '.selection.tool == "mtf-facts"' > /dev/null 2>&1); }
   check "$sh: started by a bare relative name the script reads facts-resolve.sh from its own directory" "$(bare vp-bare.sh; echo $?)"
   check "$sh: the mutation that reads the resolver through the script name is caught" \
     "$( ! cmp -s "$VP" "$TMP/vp-bare-mut.sh" && ! bare vp-bare-mut.sh; echo $?)"
+  # An exported CDPATH naming a directory with a subdirectory of the script's own directory name
+  # must not redirect the lookup (cd would use that subdirectory and print its path).
+  mkdir -p "$TMP/vpd" "$TMP/decoy/vpd"
+  cp "$VP" "$TMP/vpd/verify-pass.sh"; cp "$TMP/facts-resolve.sh" "$TMP/vpd/facts-resolve.sh"
+  sed 's|^HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"$|HERE="$(cd "$(dirname "$0")" \&\& pwd -P)"|' "$VP" > "$TMP/vpd/vp-cdpath-mut.sh"
+  cdp() { (cd "$TMP" && CDPATH="$TMP/decoy" PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "vpd/$1" select "$R9" --files files9.json --prefix modules/a 2> /dev/null | jq -e '.selection.tool == "mtf-facts"' > /dev/null 2>&1); }
+  check "$sh: with CDPATH set to a directory holding a same-named subdirectory the script reads facts-resolve.sh from its own directory" \
+    "$(cdp verify-pass.sh; echo $?)"
+  # zsh tries the current directory before cdpath, so only bash is misled by the unguarded cd.
+  if [ "$sh" = bash ]; then
+    check "$sh: the mutation that lets CDPATH redirect the directory lookup is caught" \
+      "$( ! cmp -s "$VP" "$TMP/vpd/vp-cdpath-mut.sh" && ! cdp vp-cdpath-mut.sh; echo $?)"
+  fi
   rm -f "$TMP/facts.version"; : > "$TMP/facts.log"
   # Live, with MTF_FACTS_BIN naming an mtf-facts that has the feature: the module root path and
   # the scan, the same binary with its version report hidden, give the same selection.
@@ -507,7 +520,14 @@ $BASE" --out "$R3/x.json")"
           <(jq -c .dirs "$TMP/live-old.json") && [ "$(q "$TMP/live-new.json" '.dirs[-1] == {dir:"examples/tflink", reason:"verified", affected:"all"}')" = 0 ]; echo $?)"
     done
   else
-    echo "skip $sh: live module root comparison (MTF_FACTS_BIN with affected --module-root not set)"
+    if [ -z "${MTF_FACTS_BIN:-}" ]; then why="MTF_FACTS_BIN is not set"
+    elif [ ! -x "$MTF_FACTS_BIN" ]; then why="MTF_FACTS_BIN is not an executable file"
+    else why="MTF_FACTS_BIN has no version --json listing flag:affected:module-root"; fi
+    if [ "${MTF_FACTS_REQUIRED:-}" = 1 ]; then
+      check "$sh: live module root comparison ($why, and MTF_FACTS_REQUIRED=1)" 1
+    else
+      echo "skip $sh: live module root comparison ($why)"
+    fi
   fi
   EXPECT_CACHE="$R9/plugin-cache" run run "$R9" --files "$TMP/files9.json" --base "$BASE" --out "$R9/v.json" --prefix modules/b > /dev/null
   check "$sh: the pass verifies a root example that calls the submodule" \
