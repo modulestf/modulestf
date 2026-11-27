@@ -312,6 +312,29 @@ check "handover: the mtf-facts line follows the base repository line, the task o
      grep -v '^mtf-facts: ' "$FM/handover/task.md" | sed -e "s#$FM/#RUN/#g" | cmp -s - "$FX/expected/task.md"; echo $?)"
 printf 'mtf-facts: \001bad\n' > "$FM/state/facts"; run_rr handover "$FM" > /dev/null 2>&1
 check "handover: an mtf-facts line outside its grammar is left out" "$(! grep -q '^mtf-facts:' "$FM/handover/task.md"; echo $?)"
+# The binary prepare resolved reaches the task as its own line after the mtf-facts line, so the
+# reviewer runs that binary; a path that is gone, relative, climbs, is a link or not executable
+# gives no line.
+echo 'mtf-facts: v0.21.4' > "$FM/state/facts"
+mkdir -p "$TMP/fbin"; printf '#!/bin/sh\nexit 0\n' > "$TMP/fbin/mtf-facts"; chmod 755 "$TMP/fbin/mtf-facts"
+printf 'x\n' > "$TMP/fbin/noexec"; ln -sf "$TMP/fbin/mtf-facts" "$TMP/fbin/link"
+fbin_task() { printf '%s\n' "$1" > "$FM/state/facts-bin"; run_rr handover "$FM" > /dev/null 2>&1; }
+fbin_task "$TMP/fbin/mtf-facts"
+check "handover: the resolved mtf-facts binary is a line right after the mtf-facts line" \
+  "$(grep -A1 '^mtf-facts: v0.21.4$' "$FM/handover/task.md" | tail -n 1 | grep -qxF "mtf-facts binary: $TMP/fbin/mtf-facts"; echo $?)"
+check "handover: the binary line is outside the untrusted block" \
+  "$(awk '/^mtf-facts binary: /{w=NR} /^UNTRUSTED-[0-9a-f]{12} BEGIN$/{b=NR} END{exit !(w && w < b)}' "$FM/handover/task.md"; echo $?)"
+for bad in "$TMP/fbin/gone" fbin/mtf-facts "$TMP/fbin/../fbin/mtf-facts" "$TMP/fbin/link" "$TMP/fbin/noexec" "$TMP/fbin/a b"; do
+  fbin_task "$bad"
+  check "handover: no binary line for $(basename -- "$bad")" "$(! grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
+done
+rm -f "$FM/state/facts-bin"; run_rr handover "$FM" > /dev/null 2>&1
+check "handover: no facts-bin file, no binary line" "$(! grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
+cp "$RR" "$TMP/rr-fbin-keep"; perl -0pi -e 's/  \[ -f "\$b" \] && \[ -x "\$b" \] && \[ ! -L "\$b" \] \|\| return 0\n//' "$RR"
+fbin_task "$TMP/fbin/gone"
+check "self-check: a handover that names a binary that is gone is caught" \
+  "$(! cmp -s "$RR" "$TMP/rr-fbin-keep" && grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
+cp "$TMP/rr-fbin-keep" "$RR"; rm -f "$FM/state/facts-bin"
 check "acceptance: handover reproduces the hand-assembled verification record" "$(cmp -s "$FR/handover/record.txt" "$FX/expected/record.txt"; echo $?)"
 check "acceptance: handover prints at most 30 lines" "$(lines_ok "$TMP/h.out")"
 B="$FR/handover/reviewer-references.md"
@@ -1297,6 +1320,8 @@ check "prepare: with affected --module-root, one affected run for the depth on t
      grep -q "^depth .* --affected $RUN/affected.json" "$TMP/mr.log"; echo $?)"
 check "prepare: the mtf-facts line is in the summary and its version report in the run" \
   "$(grep -qx 'mtf-facts: v0.13.0' "$TMP/mr.out" && cmp -s <(jq -c . "$TMP/fv.json") <(jq -c . "$RUN/state/facts-version.json"); echo $?)"
+check "prepare: the resolved binary's canonical path is in the run for the handover" \
+  "$([ "$(cat "$RUN/state/facts-bin")" = "$(perl -MCwd=realpath -e 'print realpath($ARGV[0])' "$TMP/bin/mtf-facts")" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null 2>&1
 mrprep "$RR" ""
 check "prepare: a binary with no version report runs affected on the module root and again on the clone root" \

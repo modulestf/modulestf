@@ -273,6 +273,8 @@ references/check-g-behaviour.md|Each added name shares its stem with a name the 
 references/check-g-behaviour.md|A payload the resource deploys never takes this band
 references/check-g-behaviour.md|none of the ignored-input, documented-intent and ignore-list bands below holds
 references/check-g-behaviour.md|except the ignore-list band below, which reads the type's page
+references/check-g-behaviour.md|Neither is a changed file with no `trigger` line when the `behaviour:` line counts one or more changes over the cap
+references/check-g-behaviour.md|For the maintainers, not the author
 references/check-b-coverage.md|takes the caller's value unchanged, with no default but null and no fallback
 references/check-b-coverage.md|and none grants or restricts access or is a security control
 references/check-b-coverage.md|or one argument required or not allowed when another is set or unset
@@ -476,6 +478,8 @@ an other section unlinked~unlinked section~references/run/check-f.md~/^| \[Decis
 a rule named in a check file with no row~missing row~references/check-g-behaviour.md~s/^`rule_id` prefixes: /`claim.new-rule`; &/
 a summary the workflow does not link~skill links~references/workflow.md~s/(run\/check-e\.md)/(run\/check-e.md#rules)/
 the ignored-input band without its null default~sentences~references/check-g-behaviour.md~s/, and its default is `null`\.$/./
+the classifier cap read as a missing trigger line~calibration guard~references/check-g-behaviour.md~s/ Neither is a changed file with no `trigger` line when the `behaviour:` line counts one or more changes over the cap: [^.]*\.//
+the verification gap handed to the author~calibration guard~references/check-g-behaviour.md~s/For the maintainers, not the author: review this head again once/Rerun the caller's behaviour step so/
 a sentence of the spec rewritten~sentences~references/check-g-behaviour.md~s/^- `claim.refuted`: a `claim` line has state `refuted`/- `claim.refuted`: a `claim` line says `refuted`/
 a sentence of an engine file rewritten~sentences~references/engine/check-d-examples.md~s/^- A submodule added by the change has no example of its own\./- A submodule added by the change has no example./
 a sentence moved out of SKILL.md rewritten~sentences~references/inputs.md~s/^- The workspace is the only source of file content\./- The workspace is the sole source of file content./

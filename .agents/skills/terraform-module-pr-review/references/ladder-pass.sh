@@ -986,6 +986,16 @@ fixbuild() {
   printf '%s\n' "$out"
 }
 
+# fb_reason meta: the builder's refusal reason for the level that runs ($LV). The checks the
+# levels share word a refusal for L1, in FIX_PL and in the engine's fixture-build at every
+# level, so "unverifiable at L1" and "L1 cannot model" name the level of the run instead.
+fb_reason() {
+  local r
+  r="$(printf '%s' "$1" | jq -r '.reason // "fixture builder failed"')"
+  r="${r//unverifiable at L1/unverifiable at ${LV:-L1}}"
+  printf '%s' "${r//L1 cannot model/${LV:-L1} cannot model}"
+}
+
 # Projects one plan shown as JSON into an observation, and checks the canaries. At L3
 # ($wrap "l3") the subject is the target attribute of the resource under test, with its
 # planned action and whether it equals the prior state, and "control" says whether the rest
@@ -1072,7 +1082,7 @@ l1() { # trigger file, id: one run record
   mkdir -m 700 "$F" || { record "$id" unverifiable "fixture directory" "" "" "$nob"; return; }
   meta="$(fixbuild "$tf" "$TPL/l1.tf.tmpl" "$F" 2> /dev/null)" || meta='{"ok":false,"reason":"fixture builder failed"}'
   if [ "$(printf '%s' "$meta" | jq -r '.ok')" != true ]; then
-    record "$id" unverifiable "$(printf '%s' "$meta" | jq -r '.reason // "fixture builder failed"')" "" "" "$nob"; return
+    record "$id" unverifiable "$(fb_reason "$meta")" "" "" "$nob"; return
   fi
   wrap="$(printf '%s' "$meta" | jq -r .wrap)"
   find "$F" -type f -exec chmod 444 {} + ; find "$F" -type d -exec chmod 555 {} +
@@ -1189,7 +1199,7 @@ l2() { # trigger file, id
   mkdir -m 700 "$F" || { record "$id" unverifiable "fixture directory" "" "" "$nob"; return; }
   meta="$(fixbuild "$tf" "$TPL/l1.tf.tmpl" "$F" - "$attr" L2 2> /dev/null)" || meta='{"ok":false,"reason":"fixture builder failed"}'
   if [ "$(printf '%s' "$meta" | jq -r '.ok')" != true ]; then
-    record "$id" unverifiable "$(printf '%s' "$meta" | jq -r '.reason // "fixture builder failed"')" "" "" "$nob"; return
+    record "$id" unverifiable "$(fb_reason "$meta")" "" "" "$nob"; return
   fi
   find "$F" -type f -exec chmod 444 {} + ; find "$F" -type d -exec chmod 555 {} +
   fixj='{}'
@@ -1320,7 +1330,7 @@ l3() { # trigger file, id
   mkdir -m 700 "$F" || { r3 "fixture directory"; return; }
   meta="$(fixbuild "$L/etc/trigger-l3.json" "$TPL/l1.tf.tmpl" "$F" "$lib/template.tf.tmpl" "$attr" "$typ" 2> /dev/null)" \
     || meta='{"ok":false,"reason":"fixture builder failed"}'
-  if [ "$(printf '%s' "$meta" | jq -r '.ok')" != true ]; then r3 "$(printf '%s' "$meta" | jq -r '.reason // "fixture builder failed"')"; return; fi
+  if [ "$(printf '%s' "$meta" | jq -r '.ok')" != true ]; then r3 "$(fb_reason "$meta")"; return; fi
   [ "$(printf '%s' "$meta" | jq -r '.sides | join(",")')" = base,head ] || { r3 "an added attribute has no control"; return; }
   find "$F" -type f -exec chmod 444 {} + ; find "$F" -type d -exec chmod 555 {} +
   [ -n "$FACTS" ] || { r3 "mtf-facts is not installed"; return; }

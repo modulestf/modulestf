@@ -803,6 +803,7 @@ def texts: {
   "tests-failed": "Unit tests of {dir} in the isolated runner: failed {count}; changes outside Terraform they refute: {changes}.",
   "own-review-replaced": "Earlier review from this account: {state} on {sha}; this review replaces it.",
   "own-review-stays": "Earlier review from this account: {state} on {sha}; it stays in effect until this account replaces it or it is dismissed.",
+  "own-review-kept": "Earlier review from this account: {state} on {sha}; it could not be checked, so this review keeps its block.",
   "earlier-intro": "This account requested changes on `{sha}`. Its blocking findings, judged at this head:",
   "earlier-unchecked": "This account requested changes on `{sha}`, and that review cannot be checked against this head: {reason}.",
   "earlier-reason-missing": "no record of it was kept where it was posted",
@@ -816,7 +817,8 @@ def texts: {
   "earlier-not-resolved": "not resolved",
   "earlier-not-judged": "not judged",
   "earlier-all-resolved": "Every blocking finding of that review is resolved at this head.",
-  "earlier-stands": "That request for changes stands until this account replaces it or it is dismissed."
+  "earlier-stands": "That request for changes stands until this account replaces it or it is dismissed.",
+  "earlier-kept": "That request for changes stands: this review keeps the block, and a later run reads its requests as never judged."
 };
 
 def tx($k; $v): texts[$k] | gsub("\\{(?<n>[a-z_]+)\\}"; $v[.n] | tostring);
@@ -1185,15 +1187,18 @@ def safe_loc($p): (.file | repo_path($p)) as $f
   | if $f | allowed then loc_at($f) else tx("name-withheld") end;
 # The posting login's earlier review that is still in effect, named by its state and commit, and
 # whether the proposed event replaces it: a COMMENT never does.
-def own_lines($h; $event):
+# A fresh block over our block whose record did not check out keeps that block (verdict.md, Our
+# Earlier Block): its requests were never judged, so neither section says this review replaces it.
+def earlier_kept($e; $event): $event == "REQUEST_CHANGES" and $e != null and $e.record != "ok";
+def own_lines($h; $event; $e):
   if ($h.own_review // {}).state | IN("CHANGES_REQUESTED", "APPROVED") then
-    [tx(if $event == "COMMENT" then "own-review-stays" else "own-review-replaced" end;
+    [tx(if $event == "COMMENT" then "own-review-stays" elif earlier_kept($e; $event) then "own-review-kept" else "own-review-replaced" end;
         {state: ({"CHANGES_REQUESTED": "changes requested", "APPROVED": "approved"}[$h.own_review.state]),
          sha: $h.own_review.commit_id[:7]})]
   else [] end;
 
-def state_lines($h; $c; $event):
-  own_lines($h; $event) +
+def state_lines($h; $c; $event; $e):
+  own_lines($h; $event; $e) +
   ((signals_of($h) + {checks: checks_signal($c)}) as $g
   | (if any($g[]; . == "fail" or . == "unknown" or . == "not-applicable" or . == "jobless") then
       # A job-less run makes the signal unknown; the phrase says so, as the job-less lines below detail it.
@@ -1233,7 +1238,7 @@ def earlier_lines($h; $e; $event; $p):
                   else tx("earlier-" + .judgment) end) + " |"] | join("\n")))]
          + (if earlier_cleared($e) then [tx("earlier-all-resolved")] else [] end)
        else [tx("earlier-unchecked"; {sha: $sha, reason: tx("earlier-reason-" + $e.record)})] end)
-    + (if $event == "COMMENT" then [tx("earlier-stands")] else [] end)
+    + (if $event == "COMMENT" then [tx("earlier-stands")] elif earlier_kept($e; $event) then [tx("earlier-kept")] else [] end)
   end;
 
 # A thread's path comes from the host already repository-relative (GitHub's own path), so only
@@ -1399,7 +1404,7 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
          ($b.claims | length | select(. > 0) | if . == 1 then tx("evidence-claims-one") else tx("evidence-claims-many"; {count: .}) end)]
         | if . == [] then [] else ["- " + join(" ")] end)
      + [$o[] | select(routed) | tx("evidence-predates"; {rule_id, location: safe_loc($p), summary})]
-     + [(depth_lines($run)[], profile_lines($run)[], state_lines($h; $in.checks; $in.event)[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
+     + [(depth_lines($run)[], profile_lines($run)[], state_lines($h; $in.checks; $in.event; earlier_of($in))[], conversation_lines($h.conversation; $run.counts)[]) | "- " + .]) as $notes
   | {body: ([$in.assessment, $verdict] + (if is_closed($h) then [tx("clamp-closed")] else [] end) + reopen_line($h) + $action + (if $bullets == [] then [] else [$bullets | join("\n")] end)
             + (if $notes == [] then [] else ["<details><summary>\(tx("evidence-summary"))</summary>\n\n" + ($notes | join("\n")) + "\n</details>"] end)
             | join("\n\n") + "\n"),
@@ -1541,7 +1546,7 @@ def render($in):
      + section("Review depth"; depth_lines($in.run); "\n\n")
      + section("Profile"; profile_lines($in.run); "\n\n")
      + section("Earlier review"; earlier_lines($h; $e; $event; $p); "\n\n")
-     + section("Pull request state"; state_lines($h; $in.checks; $event); "\n\n")
+     + section("Pull request state"; state_lines($h; $in.checks; $event; $e); "\n\n")
      + section("Existing threads"; thread_lines($h; $in.findings; $p); "\n")
      + section("Conversation comments"; conversation_lines($h.conversation; $in.run.counts); "\n\n")
      | join("\n\n") + "\n") as $standard
