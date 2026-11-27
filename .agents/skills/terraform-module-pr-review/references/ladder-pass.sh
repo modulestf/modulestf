@@ -25,9 +25,10 @@
 #       Writes the record and exits 0; exit 2 is a usage error or a refused input.
 #   bash /abs/path/ladder-pass.sh tree <run-dir> --out <cli.tfrc>
 #       After an acquisition: checks the provider tree against its manifest and writes a
-#       terraform CLI configuration that installs each pinned provider from the tree and every
-#       other provider as terraform does by default, so a later pass of the same run links the
-#       acquired provider instead of unpacking it again. Writes nothing else and takes no lease.
+#       terraform CLI configuration that offers the tree beside the registry for every provider,
+#       so terraform selects the version it would select with no tree, and a later pass of the
+#       same run links the acquired provider from the tree when it selects that version instead
+#       of unpacking it again. Writes nothing else and takes no lease.
 #       Exit 0 with the file written, 1 with "tree unusable: <reason>", 2 a usage error.
 #
 # <run-dir> is the absolute run directory "<root>/pr-review.XXXXXX". Everything this script

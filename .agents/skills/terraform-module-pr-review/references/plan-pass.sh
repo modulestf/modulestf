@@ -1306,11 +1306,13 @@ pe_init() { # absolute example directory, key, root (the clone or the base workt
   rm -rf .terraform
   AK=; SK=; ST=; set_env "$2"
   # The acquired tree only for an example with no lock file of its own, which terraform could not
-  # check against an unpacked tree; a failed init runs again as the pass always ran it.
+  # check against an unpacked tree; a failed init runs again as the pass always ran it, but not one a
+  # limit stopped, and the budget spent by then is the class budget.
   tcfg="$PLAN/cli.tfrc"; [ -z "$PTREE" ] || [ -e .terraform.lock.hcl ] || [ -L .terraform.lock.hcl ] || tcfg=$PTREE
   run_capped "$(left 180)" "$PLAN/out/$2-init.txt" "${TFENV[@]}" TF_CLI_CONFIG_FILE="$tcfg" terraform init -backend=false -input=false -no-color
   rc=$?
-  if [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ] && [ "$tcfg" != "$PLAN/cli.tfrc" ] && [ "$(left 180)" -gt 0 ]; then
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ] && [ "$tcfg" != "$PLAN/cli.tfrc" ]; then
+    [ "$(left 1)" -gt 0 ] || { CLASS=budget; return; }
     run_capped "$(left 180)" "$PLAN/out/$2-init.txt" "${TFENV[@]}" terraform init -backend=false -input=false -no-color
     rc=$?
   fi

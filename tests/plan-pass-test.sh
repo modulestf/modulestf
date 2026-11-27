@@ -82,6 +82,8 @@ if [ "\$1" = init ]; then
   if [ -f "$TMP/mirror.absent" ] && [ "\${TF_CLI_CONFIG_FILE##*/}" = tree.tfrc ]; then
     printf 'Error: Failed to query available provider packages\n\nhashicorp/aws: no available releases match the given constraints >= 6.80.0\n'; exit 1
   fi
+  # with the file mirror.big, init with that tree prints past the 1 MiB output cap
+  if [ -f "$TMP/mirror.big" ] && [ "\${TF_CLI_CONFIG_FILE##*/}" = tree.tfrc ]; then head -c 1100000 /dev/zero | tr '\\0' x; exit 1; fi
 fi
 # With the file short-tmp, a provider plugin socket at \$TMPDIR/plugin<10 digits> over macOS's
 # 103 bytes fails as terraform 1.17 fails it
@@ -934,6 +936,33 @@ for sh in bash zsh; do
   rm -rf "$TMP/ppt"
   RT="$(newrun)"; out="$(treeplan "$PP" "$RT")"
   check "$sh: tree: a run with no tree keeps the pass's own configuration" "$([ "$(cat "$TMP/cfg.log")" = "ok cli.tfrc" ]; echo $?)"
+  # An init with the tree that a limit stopped, here the output cap, runs no second init.
+  rm -rf "$TMP/ppt"; cp -R "${PP%/*}" "$TMP/ppt"
+  perl -pe 's/ && \[ "\$rc" -ne 124 \] && \[ "\$tcfg" != "\$PLAN\/cli.tfrc" \]/ \&\& [ "\$tcfg" != "\$PLAN\/cli.tfrc" ]/' "$PP" > "$TMP/ppt/plan-pass.sh"
+  : > "$TMP/mirror.big"
+  RT="$(newrun)"; mktree "$RT"; out="$(treeplan "$PP" "$RT")"
+  check "$sh: tree: an init with the tree that the output cap stopped runs no second init" \
+    "$([ "$(cat "$TMP/cfg.log")" = "ok tree.tfrc" ] && [ "$(has "$out" 'plan: environment (output-cap)')" = 0 ]; echo $?)"
+  RT="$(newrun)"; mktree "$RT"; out="$(treeplan "$TMP/ppt/plan-pass.sh" "$RT")"
+  check "$sh: tree: the mutation that runs init again after a limit is caught" \
+    "$( ! cmp -s "$PP" "$TMP/ppt/plan-pass.sh" && [ "$(cat "$TMP/cfg.log")" != "ok tree.tfrc" ]; echo $?)"
+  rm -f "$TMP/mirror.big"; rm -rf "$TMP/ppt"
+  # The budget spent when an init with the tree fails: the class budget, no second init. pe_init
+  # taken from the script, with the gates passed and init failing as it spends the budget.
+  peinit() { # plan-pass.sh copy: the class and the number of init runs
+    fn="$(perl -0ne 'print $1 if /\n(pe_init\(\) \{.*?\n\})\n/s' "$1")"; rm -rf "$TMP/pe"; mkdir -p "$TMP/pe/ex"; : > "$TMP/pe/g0"
+    W="$TMP/pe" FN="$fn" bash -c '
+      PLAN="$W"; PTREE="$W/tree.tfrc"; GATES_PL=; GMODE=laptop; TFENV=(env)
+      left() { if [ -e "$W/spent" ]; then echo 0; else echo "$1"; fi; }
+      run_capped() { : > "$W/spent"; echo run >> "$W/runs.log"; return 1; }
+      class_of() { echo code-error; }; scope() { :; }; committed_locks() { :; }; rel() { cat; }
+      drop_lock() { :; }; set_env() { :; }; post_init() { :; }
+      eval "$FN"; pe_init "$W/ex" ex "$W" "$W/g0"; printf "%s %s\n" "$CLASS" "$(wc -l < "$W/runs.log" | tr -d " ")"'
+  }
+  perl -pe '$_ = "" if /^    \[ "\$\(left 1\)" -gt 0 \] \|\| \{ CLASS=budget; return; \}$/' "$PP" > "$TMP/pp-nobudget.sh"
+  check "$sh: tree: the budget spent as an init with the tree fails is the class budget" "$([ "$(peinit "$PP")" = "budget 1" ]; echo $?)"
+  check "$sh: tree: the mutation that grades the failed init instead is caught" \
+    "$( ! cmp -s "$PP" "$TMP/pp-nobudget.sh" && [ "$(peinit "$TMP/pp-nobudget.sh")" != "budget 1" ]; echo $?)"
 
   # The default pass's init left a lock file naming a provider outside the allowlist.
   printf 'provider "registry.terraform.io/hashicorp/null" {\n}\n' > "$R/clone/examples/ok/.terraform.lock.hcl"
