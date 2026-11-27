@@ -150,11 +150,11 @@ def valid_eval($b; $c):
   and (.discarded_claims | type == "array" and all(.[]; type == "object"))
   and (((.claims + .discarded_claims) | map(.claim_id) | sort) == ($c.claims | map(.claim_id) | sort));
 # A files list, module-relative: every changed path, a rename at its old path too, has an entry.
-# A GitHub "unchanged" status and paths under .git or .terraform take none.
+# A GitHub "unchanged" status takes none. A committed .terraform file is a change like any other, so a
+# report that leaves one out is refused: a binary that reads no .terraform file fails closed here.
 def covers($files):
   . as $o
-  | ([$files[] | select(.status != "unchanged") | .filename, (.previous_filename // empty)
-      | select(test("(^|/)\\.(git|terraform)(/|$)") | not)]
+  | ([$files[] | select(.status != "unchanged") | .filename, (.previous_filename // empty)]
      - [$o.entries[] | .path, (.previous_path // empty)]) == [];
 # The closed list of the plan diff (behaviour-pass.md, The Run Object): an added change whose claim is
 # that existing callers are unaffected. An added variable with no level, so no validation block;

@@ -808,9 +808,11 @@ setup; : > "$TMP/eval.sleep"; classify; BEHAVIOUR_PASS_TIMEOUT=1 evalp --claims 
 notrun "claims-eval over the deadline" "mtf-facts timed out"
 
 # --- The files list: the module root prefix is stripped, files outside it are left out, a
-# rename is checked at its old path too, and unchanged or tool-owned paths need no entry.
+# rename is checked at its old path too, and an unchanged path needs no entry, while a committed
+# .terraform file needs one like any other change.
 setup
 jq '[.[0] + {filename: "mod/main.tf"}, {filename: "other/x.tf", status: "modified"}, {filename: "mod/.terraform/x", status: "added"}, {filename: "mod/README.md", status: "unchanged"}]' "$TMP/files.json" > "$TMP/files-pfx.json"
+jq '.entries += [{path: ".terraform/x", change_kind: "added", inert: true, trigger_ids: []}]' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
 DIFF="$TMP/files-pfx.json" PFX=mod classify
 check "prefix: classify accepts" "$([ -f "$O/behaviour.json" ]; echo $?)"
 jq -e '[.[].filename] == ["main.tf", ".terraform/x", "README.md"]' "$TMP/diff-seen.json" > /dev/null; check "prefix: mtf-facts gets the module-relative list" $?
@@ -1663,6 +1665,15 @@ t_eval_stats; check "stats: eval passes --stats-file to claims-eval when the bin
 t_eval_nofeat; check "stats: eval passes no --stats-file without the flag" $?
 setup; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --stats st.json --out "$O" > /dev/null 2>&1
 check "stats: a relative --stats is a usage error" "$([ $? = 2 ] && [ ! -e "$O/input" ]; echo $?)"
+# A committed .terraform file is a change: a report that leaves it out is refused, one that lists it kept.
+jq '. + [{filename: ".terraform/modules/m/main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"}]' "$TMP/files.json" > "$TMP/files-tf.json"
+t_tf_cover() {
+  setup; DIFF="$TMP/files-tf.json" classify; [ "$(cat "$O/status" 2> /dev/null)" = "output refused" ] || return 1
+  setup; jq '.entries += [{path: ".terraform/modules/m/main.tf", change_kind: "modified", inert: true, trigger_ids: []}]' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
+  DIFF="$TMP/files-tf.json" classify; [ -f "$O/behaviour.json" ]
+}
+t_tf_cover; check "covers: a committed .terraform file left out of the report is refused, and kept when listed" $?
+wmutate "covers: the skip of .git and .terraform paths restored" 's/\| \.filename, \(\.previous_filename \/\/ empty\)\]\n     - \[\$o\.entries/| .filename, (.previous_filename \/\/ empty) | select(test("(^|\/)\\\\.(git|terraform)(\/|\$)") | not)]\n     - [\$o.entries/' t_tf_cover
 wmutate "base tree: the base never run" 's/    if \[ -n "\$base" \]; then\n      why=/    if false; then\n      why=/' t_base_ok
 wmutate "base tree: no fallback after a failed base run" 's/if \[ -n "\$diff" \] && \[ "\$why" != ok \]; then/if [ -n "\$diff" ] && [ -z "\$base" ]; then/' t_base_fail
 wmutate "base tree: the base report not checked" 's/ok\) if jq -e --slurpfile d "\$cover"/ok) if true || jq -e --slurpfile d "\$cover"/' t_base_refused

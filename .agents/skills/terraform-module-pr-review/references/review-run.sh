@@ -184,9 +184,9 @@ stats_for() { # command, name
 # A report of affected --base counts only when its changed list holds every path of the files list,
 # relative to the same root, a rename at both paths, as behaviour-pass.sh's covers holds a classifier
 # report: a change the tree comparison does not see, such as a gitlink, is no report of the change.
+# Only a GitHub "unchanged" entry takes no path: a committed .terraform file is a change too.
 AFF_COVERS='type == "object" and (.changed | type == "array" and all(.[]; type == "string"))
-  and (([$f[0][] | select(.status != "unchanged") | .filename, (.previous_filename // empty)
-        | select(test("(^|/)\\.(git|terraform)(/|$)") | not)] - .changed) == [])'
+  and (([$f[0][] | select(.status != "unchanged") | .filename, (.previous_filename // empty)] - .changed) == [])'
 
 # mtf-facts affected (verify-pass.md, Example selection): no file when it gave nothing. With a merge
 # base tree, that tree first; the files list only when that run gave no report that covers it, as it

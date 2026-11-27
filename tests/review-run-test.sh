@@ -2616,7 +2616,7 @@ t_noprev() { # review-run.sh copy -> 0 when the report without the old path was 
   run_rr cleanup "$RUN" > /dev/null 2>&1; mbt_setup; return "$s"
 }
 t_noprev "$RR"; check "prepare: a base report that leaves out the old path of a rename falls back to the files list" $?
-rmut "the old path of a rename not held" 's/\.filename, \(\.previous_filename \/\/ empty\)\n        \| select\(test\("\(\^\|\/\)\\\\\.\(git\|terraform\)/.filename\n        | select(test("(^|\/)\\\\.(git|terraform)/' t_noprev
+rmut "the old path of a rename not held" 's/\.filename, \(\.previous_filename \/\/ empty\)\] - \.changed/.filename] - .changed/' t_noprev
 # A module root under a link inside the merge base worktree gets no --base in prepare.
 t_swap() { # review-run.sh copy -> 0 when no module root call took the tree
   : > "$STUB_LOG"; export BASE_SWAP=1; mrprep "$1" ""; unset BASE_SWAP; local s=1
@@ -2632,20 +2632,20 @@ acv() { # script, files list JSON, changed JSON -> 0 when the report counts
   printf '%s\n' "$2" > "$TMP/ac-files.json"; jq -n --argjson c "$3" '{schema_version: 1, changed: $c}' > "$TMP/ac-rep.json"
   bash -c "$(AC_SRC "$1")"'; jq -e --slurpfile f "$0" "$AFF_COVERS" "$1"' "$TMP/ac-files.json" "$TMP/ac-rep.json" > /dev/null 2>&1
 }
-t_ac_tfdir() { acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".terraform/x", "status": "added"}, {"filename": "m/.git/y", "status": "added"}]' '["a.tf"]'; }
+t_ac_tfdir() { ! acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".terraform/modules/m/main.tf", "status": "modified"}]' '["a.tf"]' &&
+  acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".terraform/modules/m/main.tf", "status": "modified"}]' '[".terraform/modules/m/main.tf", "a.tf"]'; }
 t_ac_unch() { acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": "b.tf", "status": "unchanged"}]' '["a.tf"]'; }
 t_ac_dot() { ! acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".gitignore", "status": "modified"}]' '["a.tf"]' &&
   ! acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".terraform.lock.hcl", "status": "modified"}]' '["a.tf"]'; }
 t_ac_rename() { ! acv "$1" '[{"filename": "new.tf", "previous_filename": "old.tf", "status": "renamed"}]' '["new.tf"]' &&
   acv "$1" '[{"filename": "new.tf", "previous_filename": "old.tf", "status": "renamed"}]' '["new.tf", "old.tf"]'; }
-t_ac_tfdir "$RR"; check "affected covers: a .terraform or .git path left out keeps the base report" $?
+t_ac_tfdir "$RR"; check "affected covers: a committed .terraform file left out drops the base report" $?
 t_ac_unch "$RR"; check "affected covers: an unchanged entry left out keeps the base report" $?
 t_ac_dot "$RR"; check "affected covers: a left out .gitignore or .terraform.lock.hcl drops the base report" $?
 t_ac_rename "$RR"; check "affected covers: a rename needs both paths" $?
-rmut "the covers skip of .git and .terraform paths dropped" 's/\n        \| select\(test\("\(\^\|\/\)\\\\\.\(git\|terraform\)\(\/\|\$\)"\) \| not\)\]/]/' t_ac_tfdir
+rmut "the covers skip of .git and .terraform paths restored" 's/\.filename, \(\.previous_filename \/\/ empty\)\] - \.changed/.filename, (.previous_filename \/\/ empty) | select(test("(^|\/)\\\\.(git|terraform)(\/|\$)") | not)] - .changed/' t_ac_tfdir
 rmut "the covers skip of unchanged entries dropped" 's/\$f\[0\]\[\] \| select\(\.status != "unchanged"\) \| \.filename/\$f[0][] | .filename/' t_ac_unch
-rmut "the covers skip matching a name prefix" 's/\(git\|terraform\)\(\/\|\$\)"\) \| not\)/(git|terraform)") | not)/' t_ac_dot
-rmut "the covers rename paths dropped in the filter" 's/\.filename, \(\.previous_filename \/\/ empty\)\n/.filename\n/' t_ac_rename
+rmut "the covers rename paths dropped in the filter" 's/\.filename, \(\.previous_filename \/\/ empty\)\] - \.changed/.filename] - .changed/' t_ac_rename
 rmut "the module root fallback after the base run dropped" 's/      if \[ "\$mrok" = false \]; then/      if false; then/' t_mrfb_fail
 rmut "the module root base report not held to the files list" 's/"\$AFF_COVERS"'"'"' and \.module_root == \$p'"'"'/'"'"'type == "object" and .module_root == \$p'"'"'/' t_mrfb_short
 # examples_all counts the selected examples whose affected reason is all: with no affected
