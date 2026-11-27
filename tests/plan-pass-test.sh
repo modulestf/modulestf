@@ -930,11 +930,11 @@ for sh in bash zsh; do
   for pv in "$PP" "$TMP/ppl/plan-pass.sh"; do
     Rg="$(newrun)"; run g0 "$Rg" > /dev/null
     echo '# kept' > "$Rg/clone/examples/ok/.terraform.lock.hcl"
-    out="$(PATH="$TMP/badgit:$TMP/bin:/usr/bin:/bin" "$sh" "$pv" plan "$Rg" demo --role-arn "$ROLE" examples/ok 2>&1)"
-    kept="$([ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$(head -n 1 "$Rg/clone/examples/ok/.terraform.lock.hcl" 2> /dev/null)" = '# kept' ]; echo $?)"
+    outg="$(PATH="$TMP/badgit:$TMP/bin:/usr/bin:/bin" "$sh" "$pv" plan "$Rg" demo --role-arn "$ROLE" examples/ok 2>&1)"
+    kept="$([ "$(has "$outg" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$(head -n 1 "$Rg/clone/examples/ok/.terraform.lock.hcl" 2> /dev/null)" = '# kept' ]; echo $?)"
     if [ "$pv" = "$PP" ]; then check "$sh: a git that fails keeps the lock file" "$kept"
     else check "$sh: the mutation that removes the lock file on a git error is caught" \
-      "$( ! cmp -s "$PP" "$pv" && [ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$kept" != 0 ]; echo $?)"; fi
+      "$( ! cmp -s "$PP" "$pv" && [ "$(has "$outg" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$kept" != 0 ]; echo $?)"; fi
   done
   rm -rf "$TMP/ppl"
   # The mutation without pe_init's drop_lock: init reads the lock file left before the pass.
@@ -942,9 +942,9 @@ for sh in bash zsh; do
   perl -0pe 's/(  # A lock file the clone does not track[^\n]*\n)  drop_lock\n/$1/' "$PP" > "$TMP/ppi/plan-pass.sh"
   Ri="$(newrun)"; run g0 "$Ri" > /dev/null
   printf 'provider "registry.terraform.io/hashicorp/null" {\n}\n' > "$Ri/clone/examples/ok/.terraform.lock.hcl"
-  out="$(PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/ppi/plan-pass.sh" plan "$Ri" demo --role-arn "$ROLE" examples/ok 2>&1)"
+  outi="$(PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/ppi/plan-pass.sh" plan "$Ri" demo --role-arn "$ROLE" examples/ok 2>&1)"
   check "$sh: the mutation without the lock file removal before init is caught" \
-    "$( ! cmp -s "$PP" "$TMP/ppi/plan-pass.sh" && [ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" != 0 ]; echo $?)"
+    "$( ! cmp -s "$PP" "$TMP/ppi/plan-pass.sh" && [ "$(has "$outi" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" != 0 ]; echo $?)"
   rm -rf "$TMP/ppi"
 
   # The review role: no role, no pass; a session on it or nothing, then the write probe.
@@ -1342,7 +1342,9 @@ pdrun() { # shell, script, arguments... -> the record; R set
 pd_clean() { # run directory: no untracked lock file in the clone, the base or the mixed worktree
   for t in clone base mixed; do
     [ -d "$1/$t" ] || return 1
-    git -C "$1/$t" status --porcelain --untracked-files=all | grep -q 'terraform\.lock\.hcl' && return 1
+    # no global or system excludes, so an ignore list outside the test hides no leftover
+    st="$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$1/$t" status --porcelain --untracked-files=all)" || return 1
+    case "$st" in *terraform.lock.hcl*) return 1 ;; esac
   done
   return 0
 }
