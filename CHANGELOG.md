@@ -1,3 +1,12 @@
+## [0.19.2](https://github.com/modulestf/modulestf/compare/v0.19.1...v0.19.2) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Test the ladder's cannot-model wording and refuse a binary in the run directory ([#296](https://github.com/modulestf/modulestf/issues/296)) ([27ae5a4](https://github.com/modulestf/modulestf/commit/27ae5a42d689be8924af42dee154c847b4481e13)), closes [#292](https://github.com/modulestf/modulestf/issues/292)
+
+
+
 ## [0.19.1](https://github.com/modulestf/modulestf/compare/v0.19.0...v0.19.1) (2026-11-27)
 
 
