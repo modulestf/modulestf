@@ -8,11 +8,13 @@ set -uo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd -P)"
 VP="$SRC/.agents/skills/terraform-module-pr-review/references/verify-pass.sh"
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/verify-pass-test.XXXXXX")" && pwd -P)" && [ -n "$TMP" ] || { echo "FAIL no temporary directory"; exit 1; }
-trap 'rm -rf "$TMP"' EXIT
+trap 'chmod -R u+w "$TMP" 2> /dev/null; rm -rf "$TMP"' EXIT
 fails=0
 # The mutated copies of the script below source the resolver from their own directory.
 cp "${VP%/*}/facts-resolve.sh" "$TMP/facts-resolve.sh"
 cp "${VP%/*}/module-files.jq" "$TMP/module-files.jq"
+LP="${VP%/*}/ladder-pass.sh"
+cp "$LP" "$TMP/ladder-pass.sh"
 
 check() { # name, command status (0 = holds)
   if [ "$2" = 0 ]; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
@@ -29,7 +31,12 @@ env | grep -E '^(AWS_PROFILE|AWS_ACCESS_KEY_ID|GITHUB_TOKEN|GH_TOKEN|TF_CLI_ARGS
 [ "\$TF_PLUGIN_CACHE_DIR" = "\$EXPECT_CACHE" ] || echo "cache \$TF_PLUGIN_CACHE_DIR" >> "$TMP/leak.log"
 [ -z "\${SSH_AUTH_SOCK:-}" ] || echo ssh-agent >> "$TMP/leak.log"
 env | grep '^TF_TOKEN_' > /dev/null && echo tf-token >> "$TMP/leak.log"
-[ "\$TF_CLI_CONFIG_FILE" = /dev/null ] || echo "cli config \$TF_CLI_CONFIG_FILE" >> "$TMP/leak.log"
+[ "\$TF_CLI_CONFIG_FILE" = /dev/null ] || [ "\$TF_CLI_CONFIG_FILE" = "\${EXPECT_CACHE%/plugin-cache}/verify/mirror.tfrc" ] \\
+  || echo "cli config \$TF_CLI_CONFIG_FILE" >> "$TMP/leak.log"
+# the acquired provider tree's configuration: logged with its command, and kept for the test
+if [ "\$TF_CLI_CONFIG_FILE" != /dev/null ]; then
+  echo "\${PWD##*/} \$1" >> "$TMP/mirror.log"; cp "\$TF_CLI_CONFIG_FILE" "$TMP/mirror.seen"
+fi
 [ "\$NETRC" = /dev/null ] || echo "netrc \$NETRC" >> "$TMP/leak.log"
 [ "\$HOME" = "\${EXPECT_CACHE%/plugin-cache}/verify/home" ] || echo "home \$HOME" >> "$TMP/leak.log"
 h="\$(git config --get credential.helper)"; [ -z "\$h" ] || echo "credential helper \$h" >> "$TMP/leak.log"
@@ -38,6 +45,10 @@ echo "\$PWD \$1 \${TF_DATA_DIR:-none}" >> "$TMP/dd.log"
 case "\$1" in
 version) echo '{"terraform_version":"1.9.8","platform":"darwin_arm64"}' ;;
 init)
+  # the version the example asks for is not in the acquired tree
+  if [ "\$TF_CLI_CONFIG_FILE" != /dev/null ] && [ -f "$TMP/mirror.absent" ]; then
+    printf 'Error: Failed to query available provider packages\n\nhashicorp/aws: no available releases match the given constraints >= 6.80.0\n'; exit 1
+  fi
   # as terraform does: the data directory, and a lock file in the working directory
   mkdir -p "\${TF_DATA_DIR:-.terraform}/modules"
   [ -e .terraform.lock.hcl ] || echo '# generated' > .terraform.lock.hcl
@@ -342,6 +353,58 @@ for sh in bash zsh; do
       "$( ! cmp -s "$VP" "$TMP/vp-$1.sh" && [ "$(q "$Rm/v.json" "$(d "$2" ".base.validate == $bv")")" = 0 ] && ! "$4" "$Rm"; echo $?)"
   done
   set --
+
+  # The acquired provider tree (ladder-pass.sh tree): init links each pinned provider from it,
+  # never unpacking a second copy, an example with a lock file of its own keeps the download, a
+  # version the tree lacks downloads as before, and a tree that differs from its manifest is
+  # not used.
+  MPL="$(perl -0ne 'print $1 if /\nMANIFEST_PL=\x27(.*?)\n\x27\n/s' "$LP")"
+  mktree() { # run directory: the tree, manifest and pins acquisition leaves
+    pd="$1/ladder/providers/registry.terraform.io/hashicorp/aws/6.70.0/darwin_arm64"
+    mkdir -m 700 "$1/ladder" && mkdir -p "$pd" && printf 'provider\n' > "$pd/terraform-provider-aws_v6.70.0_x5"
+    chmod 755 "$pd/terraform-provider-aws_v6.70.0_x5"; printf 'sentinel\n' > "$1/ladder/providers/.ladder-sentinel"
+    chmod -R a-w "$1/ladder/providers"
+    perl -e "$MPL" "$1/ladder/providers" > "$1/ladder/providers.manifest"
+    printf '{"source":"registry.terraform.io/hashicorp/aws","version":"6.70.0","sha256":"%064d"}\n' 0 > "$1/ladder/pins.jsonl"
+  }
+  treerun() { # verify-pass.sh copy, example, run directory: the pass on one example with a tree
+    : > "$TMP/tf.log"; : > "$TMP/leak.log"; : > "$TMP/mirror.log"; rm -f "$TMP/mirror.seen"
+    EXPECT_CACHE="$3/plugin-cache" PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$1" run "$3" --files "$TMP/files.json" --base "$BASE" --out "$3/v.json" --dir "examples/$2" > /dev/null 2>&1
+  }
+  Rt="$(newrun)"; mktree "$Rt"; treerun "$VP" codeok "$Rt"
+  check "$sh: tree: init takes the acquired tree, validate the default configuration" \
+    "$([ "$(cat "$TMP/mirror.log")" = "codeok init" ] && [ ! -s "$TMP/leak.log" ] && [ "$(q "$Rt/v.json" "$(d codeok '.head.record == "code-result" and .head.init == 0')")" = 0 ]; echo $?)"
+  check "$sh: tree: the configuration names the tree for the pinned provider alone" \
+    "$(grep -qxF "    path    = \"$Rt/ladder/providers\"" "$TMP/mirror.seen" && [ "$(grep -c '"registry.terraform.io/hashicorp/aws"' "$TMP/mirror.seen")" = 2 ] \
+      && grep -q 'exclude = \["registry.terraform.io/hashicorp/aws"\]' "$TMP/mirror.seen"; echo $?)"
+  check "$sh: tree: the tree is left as acquisition wrote it" \
+    "$(perl -e "$MPL" "$Rt/ladder/providers" | cmp -s - "$Rt/ladder/providers.manifest"; echo $?)"
+  Rt="$(newrun)"; mktree "$Rt"; treerun "$VP" regress "$Rt"
+  check "$sh: tree: an example with a committed lock file downloads at the head and the base" \
+    "$([ ! -s "$TMP/mirror.log" ] && [ "$(q "$Rt/v.json" "$(d regress '.head.validate == 1 and .base.validate == 0')")" = 0 ]; echo $?)"
+  Rt="$(newrun)"; mktree "$Rt"; : > "$TMP/mirror.absent"; treerun "$VP" codeok "$Rt"; rm -f "$TMP/mirror.absent"
+  check "$sh: tree: a version the tree lacks runs init again with the default configuration" \
+    "$([ "$(grep -c '^codeok init' "$TMP/tf.log")" = 2 ] && [ "$(q "$Rt/v.json" "$(d codeok '.head == {init:0, validate:0, record:"code-result", line:null}')")" = 0 ]; echo $?)"
+  Rt="$(newrun)"; mktree "$Rt"; echo 'file 00 extra' >> "$Rt/ladder/providers.manifest"; treerun "$VP" codeok "$Rt"
+  check "$sh: tree: a tree that differs from its manifest is not used" \
+    "$([ ! -s "$TMP/mirror.log" ] && [ "$(q "$Rt/v.json" "$(d codeok '.head.record == "code-result"')")" = 0 ]; echo $?)"
+  check "$sh: tree: ladder-pass.sh tree refuses that tree" \
+    "$([ "$(bash "$LP" tree "$Rt" --out "$TMP/t.tfrc")" = "tree unusable: the tree differs from its manifest" ]; echo $?)"
+  # The negative self-check: no second init, the tree for an example with a lock file, and a tree
+  # check without the manifest comparison.
+  perl -0pe 's/  if \[ "\$INIT" -ne 0 \] && \[ "\$TFCFG" != \/dev\/null \].*?\n  fi\n//s' "$VP" > "$TMP/vp-noretry.sh"
+  perl -pe 's/ \|\| \[ -e "\$1\/\$3\/.terraform.lock.hcl" \] \|\| \[ -L "\$1\/\$3\/.terraform.lock.hcl" \]//' "$VP" > "$TMP/vp-nolock.sh"
+  mkdir -p "$TMP/lpm"; cp "$VP" "$TMP/facts-resolve.sh" "$TMP/module-files.jq" "$TMP/lpm/"
+  perl -pe 's/ \| cmp -s - "\$L\/providers.manifest"/ > \/dev\/null/' "$LP" > "$TMP/lpm/ladder-pass.sh"
+  Rt="$(newrun)"; mktree "$Rt"; : > "$TMP/mirror.absent"; treerun "$TMP/vp-noretry.sh" codeok "$Rt"; rm -f "$TMP/mirror.absent"
+  check "$sh: tree: the mutation without the second init is caught" \
+    "$( ! cmp -s "$VP" "$TMP/vp-noretry.sh" && [ "$(q "$Rt/v.json" "$(d codeok '.head.init == 0')")" != 0 ]; echo $?)"
+  Rt="$(newrun)"; mktree "$Rt"; treerun "$TMP/vp-nolock.sh" regress "$Rt"
+  check "$sh: tree: the mutation that gives an example with a lock file the tree is caught" \
+    "$( ! cmp -s "$VP" "$TMP/vp-nolock.sh" && [ -s "$TMP/mirror.log" ]; echo $?)"
+  Rt="$(newrun)"; mktree "$Rt"; echo 'file 00 extra' >> "$Rt/ladder/providers.manifest"; treerun "$TMP/lpm/verify-pass.sh" codeok "$Rt"
+  check "$sh: tree: the mutation without the manifest comparison is caught" \
+    "$( ! cmp -s "$LP" "$TMP/lpm/ladder-pass.sh" && [ -s "$TMP/mirror.log" ]; echo $?)"
 
   # A host's results: accepted as produced, rejected on any change of binding or shape.
   chk() { run check "$R" --files "$TMP/files.json" --base "$BASE" --head "${2:-$HEAD}" --results "$1"; }

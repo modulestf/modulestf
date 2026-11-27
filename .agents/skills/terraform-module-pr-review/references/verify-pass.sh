@@ -817,6 +817,12 @@ perl -e "$HOSTS_PL" "$FILES" > "$W/hosts.txt" || die "--files is not a JSON arra
 mkdir -p "$RUN/plugin-cache"
 
 mkdir "$W/home"
+# The provider tree this run's acquisition unpacked (ladder-pass.md, Acquisition), checked against
+# its manifest: init links each pinned provider from it instead of unpacking a second copy into
+# the plugin cache. No tree, or one that fails the check, leaves init as it always ran.
+MIRROR=
+bash "$HERE/ladder-pass.sh" tree "$RUN" --out "$W/mirror.tfrc" > /dev/null 2>&1 && MIRROR="$W/mirror.tfrc"
+TFCFG=/dev/null
 # terraform starts each provider on a unix socket at $TMPDIR/plugin<digits>, and a socket
 # path has at most 103 bytes on macOS and 107 on Linux, so a long caller TMPDIR fails every
 # provider schema load: terraform gets a short directory of this run instead.
@@ -852,7 +858,7 @@ tf() { # seconds, directory, arguments: one terraform command into $W/out.txt, u
   bl=$(left); LIMBUDGET=0
   if [ "$bl" -lt "$tl" ]; then tl=$bl; LIMBUDGET=1; fi
   [ "$tl" -ge 1 ] || tl=1 # alarm 0 would mean no limit at all
-  run_capped "$tl" "$W/out.txt" "$td" "${TFENV[@]}" TF_DATA_DIR="$TFD" terraform "$@"
+  run_capped "$tl" "$W/out.txt" "$td" "${TFENV[@]}" TF_DATA_DIR="$TFD" TF_CLI_CONFIG_FILE="$TFCFG" terraform "$@"
 }
 side() { # init validate record line: one JSON object
   jq -cn --argjson init "${1:-null}" --argjson validate "${2:-null}" --arg record "$3" --arg line "$4" \
@@ -885,8 +891,18 @@ verify() { # tree root, module root, example directory: sets SIDEJ, then drops a
 verify_side() { # tree root, module root, example directory: sets SIDEJ to one side object
   INIT=; VALID=; LINE=
   if [ "$(left)" -le 0 ]; then SIDEJ="$(side "" "" not-run-budget "")"; return; fi
+  # The acquired tree only for an example with no lock file: terraform cannot check a lock
+  # file's zip hashes against an unpacked tree, while a download checks them.
+  [ -z "$MIRROR" ] || [ -e "$1/$3/.terraform.lock.hcl" ] || [ -L "$1/$3/.terraform.lock.hcl" ] || TFCFG=$MIRROR
   tf 180 "$1/$3" init -backend=false -input=false -no-color
   INIT=$?
+  if [ "$INIT" -ne 0 ] && [ "$TFCFG" != /dev/null ] && [ ! -e "$W/out.txt.cap" ] && [ "$(left)" -gt 0 ]; then
+    # a version the tree lacks, or any other failure: init again as the pass always ran it
+    TFCFG=/dev/null
+    tf 180 "$1/$3" init -backend=false -input=false -no-color
+    INIT=$?
+  fi
+  TFCFG=/dev/null
   if [ "$INIT" -eq 124 ] && [ -e "$W/out.txt.cap" ]; then SIDEJ="$(side "$INIT" "" "$(limited)" "")"; return; fi
   if [ "$INIT" -ne 0 ]; then
     classify "$W/out.txt" "$2"
