@@ -86,7 +86,7 @@ Engine: `candidate`
 
 **Fails when:**
 - A default value of an existing input changes in a way that changes the resources a user gets without them editing anything.
-- A new input's default makes the module send a value it did not send at the base. A new input whose default leaves everything the module sends as it was is no finding.
+- A new input's default makes the module send a value it did not send at the base. The engine candidate covers reads by configuration the base already had, also through a new resource, data source, module call, provider or ephemeral block that configuration reads, and any new input with a validation block; a new argument, block or resource on an existing block that reads the input (for example `skip_destroy = var.x`) gives no candidate, so read the diff for it. A new input whose default leaves everything the module sends as it was is no finding.
 - A `data` block carries no address a `moved` block can name, so its removal is never `compat.resource-address-changed`: judge it by what it fed - `compat.generated-policy-narrowed` when a document the module produces changed, `compat.default-changed` when a value the caller sees changed, nothing when neither did.
 
 **Severity:**
