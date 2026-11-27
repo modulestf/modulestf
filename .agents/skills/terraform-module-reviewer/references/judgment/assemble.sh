@@ -104,6 +104,9 @@ copy() {
 # on-demand reads workflow.md names, and so is Check A's Reverts paragraph with its list;
 # Check B's Fails when sits in its Rules section. The
 # heading that opens that text is an anchor for the run summaries, so it is unwrapped.
+# Check A's Host Vendored Policy Evidence is left out for the size cap, as Check E's Host README
+# Evidence is. The pull request review's handover states no Vendored policy line when the host
+# selects the judgment variant, so its Confirm when line rejects the claim with no host reference.
 # Check E's Host Wrapper Evidence is left out for the size cap; its pointer line, kept, carries
 # the rule a judgment run needs: a derived or copied wrapper has no finding.
 # Its new-module owner identifier bullet and MEDIUM band are the A new module on-demand read, and
@@ -113,7 +116,7 @@ copy() {
 # read before a finding of that rule takes LOW, and so is Check C's flat single block.
 drops_of() {
   case "$1" in
-    a-compatibility) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:No base|l:^[*][*]Reverts:[*][*] |l:^1[.] A commit in the change carries git.s own revert line|l:^2[.] .git merge-base --is-ancestor|l:^3[.] .git describe --tags|l:^4[.] Each line the finding would rest on|l:^Condition 3 reads tags|l:^If any of the four cannot be established" ;;
+    a-compatibility) echo "u:Reads, Fails When and Severity|h:Suggested Fixes|h:No base|h:Host Vendored Policy Evidence|l:^[*][*]Reverts:[*][*] |l:^1[.] A commit in the change carries git.s own revert line|l:^2[.] .git merge-base --is-ancestor|l:^3[.] .git describe --tags|l:^4[.] Each line the finding would rest on|l:^Condition 3 reads tags|l:^If any of the four cannot be established" ;;
     b-coverage) echo "u:Reads|h:Which blocks|h:Documented omissions|h:Suggested Fixes|l:^In this file the schema is what Rule 2|h:Conflicting pairs and conditional rules" ;;
     c-structure) echo "u:Reads, Fails When and Severity|h:Branch values a provider checks|h:Flat single block|l:^- LOW for a flattened provider block only as|h:Embedded Code|h:Suggested Fixes" ;;
     e-profile) echo "u:Reads, Fails When and Severity|h:Host Wrapper Evidence|h:Suggested Fixes|l:^- In a new-module review, the task shape|l:^  - a .user_agent. entry of a .provider_meta. block in any|l:^  - the .source. of a .module. block inside a fenced code block|l:^  - a value in a .tags. map in an .examples.|l:^  - a .--module-repo-org=|l:^  One finding per file, .line. the first occurrence, the .summary. naming every line|l:^- MEDIUM when a new module names an owner other than the family.s organization|l:^  - .<name>. is the repository name after .terraform-aws-.|l:^  - The .suggested_fix. is exact" ;;

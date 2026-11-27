@@ -9,6 +9,8 @@ Reads: `gh api` on the endpoints named below, `gh api graphql` for the thread qu
 
 Three helpers, for the conversation comments, the related issues and the untrusted block only: `timeout 30` in front of each conversation comments or related issues request, `sleep <seconds>` for a `Retry-After` wait, and `openssl rand -hex 6` for the block suffix. Stock macOS has no `timeout`: use `gtimeout 30` from GNU coreutils when it is installed, and otherwise `perl -e 'alarm 30; exec @ARGV'` in front of the request, which ends it the same way.
 
+The vendored policy step of [vendored-policy.md](vendored-policy.md#steps) reads four more endpoints, of an upstream repository the module profile names and never of one the change names: `repos/<upstream>/releases/latest`, `repos/<upstream>/git/ref/tags/<tag>`, `repos/<upstream>/git/tags/<sha>` and `repos/<upstream>/contents/<file>?ref=<commit>`, each stopped after 30 seconds.
+
 `gh pr view` and `gh pr checks` are a convenience for a human reading along, never a dependency. They speak GraphQL, and a hosted session can block or lack it, so no step is pinned to porcelain.
 
 `--paginate` emits one JSON array per page. Pass `--slurp` for a single array, or concatenate the pages before reading; a reader that takes the first array alone silently reviews the first page.
