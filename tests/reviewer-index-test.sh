@@ -320,6 +320,30 @@ references/judgment/prefix.md|`structure.validation-missing` or a flattening:
 references/check-c-structure.md|a nested block left out of the input that is an access or data protection control keeps HIGH
 references/check-c-structure.md|Every argument and nested block the block has at that version
 references/check-a-compatibility.md|(b) restore the root and each such submodule together, each named
+references/check-c-structure.md|a `before` or `after` token of its name says it is not to wait for the target
+references/check-c-structure.md|A target that exists on some paths only still fires for the paths where both exist
+references/check-c-structure.md|A sibling's `depends_on` alone is no need.
+references/check-c-structure.md|a `concat` of candidates one of which an input feeds
+references/check-c-structure.md|and `""` or `null` is no such fallback
+references/check-c-structure.md|an index error is no such check
+references/check-c-structure.md|when the index is the position in the list the `count` or `for_each` itself enumerates
+references/check-c-structure.md|when the module builds the list with a count that bounds the index on every path
+references/check-c-structure.md|when the index is a value the caller gives per element
+references/check-c-structure.md|for `element()`, whose wrap is the family idiom
+references/check-c-structure.md|the direct read is the value the block needs
+references/check-c-structure.md|A comment about other blocks keeps LOW:
+references/check-c-structure.md|the direct read fails or gives another value, and the local does not
+references/check-c-structure.md|without which the resource still does its job, on the target the module intends
+references/check-c-structure.md|makes the provider pick a default target
+references/check-c-structure.md|on every supported path where the new block exists and the two differ
+references/check-c-structure.md|or a page this review read shows the block uses it
+references/check-c-structure.md|a fallback the comment states is taken
+references/check-c-structure.md|and so is a new gateway there when neither its code nor a page read shows it uses that range
+references/check-c-structure.md|whenever the need rests only on the siblings' `depends_on` and a page that names the block; never LOW
+references/check-c-structure.md|A page that only recommends it, or shows it in an example, keeps MEDIUM.
+references/check-c-structure.md|gated on the branch that reads the caller's list
+references/judgment/prefix.md|- A new block beside its siblings, or a new list index:
+references/run/check-c.md|`structure.prerequisite-condition-unmet` | The change adds a resource block. |
 GUARDS
 }
 
@@ -584,6 +608,30 @@ calibration guard 81 dropped~calibration guard~references/check-c-structure.md~s
 calibration guard 82 dropped~calibration guard~references/check-c-structure.md~s# or access point##g
 calibration guard 83 dropped~calibration guard~references/check-c-structure.md~s#role, policy, ##g
 calibration guard 84 dropped~calibration guard~references/check-c-structure.md~s# When the page does not settle it, HIGH\.##g
+calibration guard 85 dropped~calibration guard~references/check-c-structure.md~s#a `before` or `after` token of its name says it is not to wait for the target#dropped#g
+calibration guard 86 dropped~calibration guard~references/check-c-structure.md~s#A target that exists on some paths only still fires for the paths where both exist#dropped#g
+calibration guard 87 dropped~calibration guard~references/check-c-structure.md~s#A sibling's `depends_on` alone is no need\.#dropped#g
+calibration guard 88 dropped~calibration guard~references/check-c-structure.md~s#a `concat` of candidates one of which an input feeds#dropped#g
+calibration guard 89 dropped~calibration guard~references/check-c-structure.md~s#and `""` or `null` is no such fallback#dropped#g
+calibration guard 90 dropped~calibration guard~references/check-c-structure.md~s#an index error is no such check#dropped#g
+calibration guard 91 dropped~calibration guard~references/check-c-structure.md~s#when the index is the position in the list the `count` or `for_each` itself enumerates#dropped#g
+calibration guard 92 dropped~calibration guard~references/check-c-structure.md~s#when the module builds the list with a count that bounds the index on every path#dropped#g
+calibration guard 93 dropped~calibration guard~references/check-c-structure.md~s#when the index is a value the caller gives per element#dropped#g
+calibration guard 94 dropped~calibration guard~references/check-c-structure.md~s#for `element()`, whose wrap is the family idiom#dropped#g
+calibration guard 95 dropped~calibration guard~references/check-c-structure.md~s#the direct read is the value the block needs#dropped#g
+calibration guard 96 dropped~calibration guard~references/check-c-structure.md~s#whenever the need rests only on the siblings' `depends_on` and a page that names the block; never LOW#dropped#g
+calibration guard 97 dropped~calibration guard~references/check-c-structure.md~s#A page that only recommends it, or shows it in an example, keeps MEDIUM\.#dropped#g
+calibration guard 98 dropped~calibration guard~references/check-c-structure.md~s#gated on the branch that reads the caller's list#dropped#g
+calibration guard 99 dropped~calibration guard~references/judgment/prefix.md~s#- A new block beside its siblings, or a new list index:#dropped#g
+calibration guard 100 dropped~calibration guard~references/check-c-structure.md~s#A comment about other blocks keeps LOW:#dropped#g
+calibration guard 101 dropped~calibration guard~references/check-c-structure.md~s#the direct read fails or gives another value, and the local does not#dropped#g
+calibration guard 102 dropped~calibration guard~references/check-c-structure.md~s#without which the resource still does its job, on the target the module intends#dropped#g
+calibration guard 103 dropped~calibration guard~references/check-c-structure.md~s#makes the provider pick a default target#dropped#g
+calibration guard 104 dropped~calibration guard~references/check-c-structure.md~s#on every supported path where the new block exists and the two differ#dropped#g
+calibration guard 105 dropped~calibration guard~references/check-c-structure.md~s#or a page this review read shows the block uses it#dropped#g
+calibration guard 106 dropped~calibration guard~references/check-c-structure.md~s#a fallback the comment states is taken#dropped#g
+calibration guard 107 dropped~calibration guard~references/check-c-structure.md~s#and so is a new gateway there when neither its code nor a page read shows it uses that range#dropped#g
+calibration guard 108 dropped~calibration guard~references/run/check-c.md~s#`structure\.prerequisite-condition-unmet` | The change adds a resource block\. |#`structure.prerequisite-condition-unmet` | The change adds a resource block with a `count` or `for_each`. |#g
 EOF
 
 echo

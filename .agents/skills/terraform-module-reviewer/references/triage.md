@@ -18,14 +18,15 @@ A run is a triage run only when the caller's own task text asks for one. The can
 | `rule_id` | Deferred case |
 |-----------|---------------|
 | `structure.schema-shape-flattened` | Every case: it compares an input with the provider's block and argument names. |
-| `structure.sibling-argument-omitted` | Every case: it needs whether the resource's schema carries the routing argument. |
+| `structure.sibling-argument-omitted` | Every routing argument case: it needs whether the resource's schema carries the argument. A `depends_on` entry runs, at MEDIUM. |
+| `structure.prerequisite-condition-unmet` | A need only a page shows, and the HIGH band. A need the resource's own reads show runs, at MEDIUM. |
 | `structure.sibling-block-asymmetry` | A dynamic block compared against the schema. A comparison with its sibling blocks runs. |
 | `structure.docs-contradict-code` | A promise whose truth depends on what a resource or data source does with its arguments. A promise the module's code alone settles runs. |
 | `structure.validation-missing` | An input the module branches on whose value set is closed only by a provider's documented value set. A set the module's code closes, by a lookup, a condition or a list it declares, runs, and so does a value the module only passes to a provider argument, which is no finding. |
 | `structure.insecure-default` | A weakened default that rests on the provider's own default for an argument the module leaves unset or stops setting, such as a dropped encryption flag or a public-access input defaulting to null. A case where the module's own code sets an insecure literal or default runs. |
 | Tag propagation (no registry name) | A resource whose tag support the module's code does not show. It runs where another block of the same type in the module sets `tags` or `labels`. |
 
-The first four are the rules Check C's **Provider facts** paragraph names. The last three decide from a provider fact in some cases that paragraph does not name, so triage defers those cases instead of reading the fact from memory (Rule 2).
+The first five are the rules Check C's **Provider facts** paragraph names. The last three decide from a provider fact in some cases that paragraph does not name, so triage defers those cases instead of reading the fact from memory (Rule 2).
 
 - **Check E**, every rule except `profile.commit-type-mismatch`. None reads a provider page. That one is deferred in every case because it rests on Check A's conclusion about whether the change breaks, adds or only fixes anything, and Check A does not run.
 
