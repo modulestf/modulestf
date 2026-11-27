@@ -43,6 +43,8 @@ jobs:
           terraform_wrapper: false
       - name: Install bubblewrap and mtf-facts
         run: |
+          # The runner image's packages.microsoft.com source can fail apt-get update; no test needs it.
+          grep -rlZF packages.microsoft.com /etc/apt/sources.list.d | xargs -0r sudo rm -f
           sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
           # The pinned release, its hash checked. It has L2 selection and evaluation,
           # fixture-check --level L2, the curated aws_db_instance and the null base of an
