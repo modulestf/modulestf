@@ -343,6 +343,7 @@ references/check-c-structure.md|whenever the need rests only on the siblings' `d
 references/check-c-structure.md|A page that only recommends it, or shows it in an example, keeps MEDIUM.
 references/check-c-structure.md|gated on the branch that reads the caller's list
 references/judgment/prefix.md|- A new block beside its siblings, or a new list index:
+references/run/check-c.md|`structure.prerequisite-condition-unmet` | The change adds a resource block. |
 GUARDS
 }
 
@@ -630,6 +631,7 @@ calibration guard 104 dropped~calibration guard~references/check-c-structure.md~
 calibration guard 105 dropped~calibration guard~references/check-c-structure.md~s#or a page this review read shows the block uses it#dropped#g
 calibration guard 106 dropped~calibration guard~references/check-c-structure.md~s#a fallback the comment states is taken#dropped#g
 calibration guard 107 dropped~calibration guard~references/check-c-structure.md~s#and so is a new gateway there when neither its code nor a page read shows it uses that range#dropped#g
+calibration guard 108 dropped~calibration guard~references/run/check-c.md~s#`structure\.prerequisite-condition-unmet` | The change adds a resource block\. |#`structure.prerequisite-condition-unmet` | The change adds a resource block with a `count` or `for_each`. |#g
 EOF
 
 echo
