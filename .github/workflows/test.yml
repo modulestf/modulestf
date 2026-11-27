@@ -43,7 +43,7 @@ jobs:
       - name: Install test tools
         run: |
           # The runner image's packages.microsoft.com source can fail apt-get update; no test needs it.
-          grep -rlF packages.microsoft.com /etc/apt/sources.list.d | xargs -r sudo rm -f
+          grep -rlZF packages.microsoft.com /etc/apt/sources.list.d | xargs -0r sudo rm -f
           sudo apt-get update -q && sudo apt-get install -y -q ripgrep zsh
       # The suites that run the real mtf-facts get the pinned release, its hash checked;
       # a wrong hash fails the job. No other suite sees it.
