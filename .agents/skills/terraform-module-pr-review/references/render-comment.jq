@@ -92,18 +92,23 @@ def gap_reasons: ["terraform was not installed", "init failed", "not run: enviro
 def env_classes: ["credentials", "access-denied", "throttling", "registry", "plugin", "sandbox", "network",
   "timeout", "output-cap", "refused-host"] | map("environment (\(.))");
 
+# The tokens of review-run.sh plan --not-run and ladder --not-run: the environment reason a step
+# could not run for (review-run-details.md, Steps Not Run).
+def not_run_tokens: ["disk", "memory", "network", "sandbox", "terraform", "time"];
+def plan_not_run_reasons: not_run_tokens | map("plan pass not run: " + .);
+
 # The fixed reasons verify-pass.sh coverage gives an example that was not planned.
 # "plan pass did not run: refused" and "...: failed" are the host's, for a profile named and a plan
 # pass that gave no record (it refused its input, or failed); "no AWS profile named" means none was.
 def unplanned_reasons: ["no example directory", "no AWS profile named", "plan pass did not run: refused",
-  "plan pass did not run: failed", "plan pass skipped at light depth", "not reached by the plan pass",
+  "plan pass did not run: failed"] + plan_not_run_reasons + ["plan pass skipped at light depth", "not reached by the plan pass",
   "code-error, merge base not planned"] + env_classes + ["needs input", "output unrecognised", "budget",
   "plan pass ended: credentials", "plan gate G0", "plan gate G1", "plan gate G2", "plan gate G3",
   "exception: example assumes a role in another account", "exception: needs a Docker daemon"];
 
 # The behaviour object behaviour-pass.sh eval writes (behaviour-pass.md, The run object).
 def behaviour_reasons: ["mtf-facts not installed", "mtf-facts failed", "mtf-facts timed out", "output refused",
-  "claims refused", "ladder refused"];
+  "claims refused", "ladder refused"] + (not_run_tokens | map("ladder not run: " + .));
 def behaviour_categories: ["wrapper-change", "default-change", "count-for_each-conditional-change",
   "type-validation-change", "dynamic-block-change", "locals-outputs-change", "moved-or-renamed-address",
   "provider-version-floor-change", "unknown-propagation-candidate", "literal-argument-change",
@@ -535,6 +540,9 @@ def trigger_at($p): {category, location: loc_at(.file | repo_path($p))};
 def gap_rules: ["review.check-not-run", "review.no-change-identified", "review.verification-incomplete"];
 # Changed files over the review budget were not reviewed: one gap of rule 4, however many.
 def skipped_gap: if (.skipped_files // []) == [] then 0 else 1 end;
+# A plan step the host recorded as not run (review-run.sh plan --not-run): one gap of rule 4,
+# however many examples it left unplanned, and one even for an inert change.
+def plan_not_run_gap: if any(.coverage.unplanned[]; .reason | IN(plan_not_run_reasons[])) then 1 else 0 end;
 # A known MEDIUM blocker: a MEDIUM finding outside review.*, which says how far the review reached
 # and is no defect of the change. It outranks every unknown, so rules 4 and 5 apply only without
 # one and rule 6 blocks on it (verdict.md, The Ladder). The ladder reads registry rules only, so an
@@ -1104,7 +1112,7 @@ def gap_lines($h; $run; $b; $p; $cov):
   + [ $run.verify_gaps[:100][]
       | tx("verification"; {dir, reason: (if .reason == "init failed" then "`init` failed" else .reason end)}) ]
   + ($run.verify_gaps | length - 100 | if . > 0 then [tx("verification-more"; {count: .})] else [] end)
-  + (if $run.coverage.inert and any($run.coverage.unplanned[]; .reason != "no example directory") then [tx(if $run.coverage.by_triggers then "unplanned-triggers-inert" else "unplanned-inert" end)] else [] end)
+  + (if $run.coverage.inert and ($run | plan_not_run_gap) == 0 and any($run.coverage.unplanned[]; .reason != "no example directory") then [tx(if $run.coverage.by_triggers then "unplanned-triggers-inert" else "unplanned-inert" end)] else [] end)
   # Covered skips, information and no gap, take the place of the reason clauses.
   + (if $cov != [] then covered_lines("unplanned-covered"; $cov; $run) else
   # One clause per reason, in the reason list's order, with its full count; under it the names of
@@ -1338,7 +1346,7 @@ def causes($l; $h; $run; $b):
        or $run.verify_gaps != [] or any($u[]; (.reason | plan_class) == null)
        # A gate hit is advice only after a laptop-mode plan pass: runner mode refuses what is left.
        or ($run.plan_mode != "laptop" and any($u[]; .reason | plan_class | IN("safety-gate", "file-gate")))
-       or ($b | behaviour_gaps) > 0 or $l.unregistered_all != [] or $l.skipped > 0)};
+       or ($b | behaviour_gaps) > 0 or $l.unregistered_all != [] or $l.skipped > 0 or ($run | plan_not_run_gap) > 0)};
 
 def compact_ok($l; $v; $c; $run; $b):
   ($l.findings | map(select(routed | not))) as $counted
@@ -1486,7 +1494,7 @@ def render($in):
      refuted_todo: (if any($known[]; (.rule_id | startswith("claim.")) and (.severity | IN("CRITICAL", "HIGH"))) then []
                     else [($b // {triggers: []}).triggers[] | select(.state == "refuted")] end),
      skipped: ($in.run | skipped_gap),
-     gaps: (($in.run | skipped_gap) + ($h.could_not_run | cnr_count) + ($unreg | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
+     gaps: (($in.run | skipped_gap) + ($in.run | plan_not_run_gap) + ($h.could_not_run | cnr_count) + ($unreg | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
      unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end),
      undemonstrated: ($b | demo_count), identical: ($b | same_count), own_block: own_block($h)};
   # Triggers that are all inert make the change inert for plan coverage (triggers_inert), unless
@@ -1517,7 +1525,7 @@ def render($in):
   | causes($l; $h; $in.run; $b) as $c
   | (if $v.rule == 8 then [] else todo_items($l; $v.rule; $p;
        ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | cnr_count) + ($in.run.verify_gaps | length)
-       + $l.unplanned_open + ($b | behaviour_gaps) + ($unreg | length) + $l.skipped) end) as $items
+       + $l.unplanned_open + ($b | behaviour_gaps) + ($unreg | length) + $l.skipped + ($in.run | plan_not_run_gap)) end) as $items
   # At rule 4 a list of quiet items alone, which section 5 already holds, gives way to the action line.
   | ($v.rule == 4 and all($items[]; .quiet)) as $quiet
   | ([$in.assessment, "**" + (if $conflict then tx("verdict-conflict") else $v.verdict | verdict_line end) + "**"]

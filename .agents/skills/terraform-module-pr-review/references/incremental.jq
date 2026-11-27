@@ -87,6 +87,15 @@ def host_verdict($model; $reg):
   | if length == ($k | length) then host_verdict_known($model)
     else $k | host_verdict_known(if $model == "block" then "block" else "inconclusive" end) end;
 
+# A plan or ladder step the host recorded as not run for an environment reason (review-run.sh
+# plan --not-run and ladder --not-run), read from the render's run file: a rule 4 unknown, as an
+# unregistered finding is, so only rules 0 to 3 and a registered known MEDIUM blocker stand above it.
+def step_not_run:
+  any((.coverage.unplanned // [])[]; .reason | type == "string" and startswith("plan pass not run: "))
+  or ((.behaviour.reason? // "") | type == "string" and startswith("ladder not run: "));
+def host_verdict_run($model; $reg; $not_run):
+  host_verdict(if $not_run and $model != "block" then "inconclusive" else $model end; $reg);
+
 # Paths relative to the module root, for the reviewer; null for a path outside it.
 def rel($prefix):
   if $prefix == "" then . elif . == $prefix then "." elif startswith($prefix + "/") then .[($prefix | length) + 1:] else null end;
