@@ -242,7 +242,9 @@ grep -q '^note F-001 severity: LOW is outside' <<< "$(said "$(listf low-vr '.[0]
 # field with a working default is LOW, and no MEDIUM band is left between it and HIGH. A default
 # change and a docs finding keep their LOW band, and a check that did not run stays MEDIUM only.
 # A caller-only conditional rule, a branch value the provider checks, a region in an example and
-# a new example's input take LOW, with no MEDIUM band added between.
+# a new example's input take LOW, with no MEDIUM band added between. A `depends_on` a new block
+# omits is MEDIUM at least, an unmet prerequisite never LOW, a bypassed local or an unchecked
+# index LOW at least.
 band_note() { # rule, severity: 0 when the checker notes the severity as outside the rule's row
   grep -q '^note F-001 severity: ' <<< "$(said "$(listf "cb-$1-$2" ".[0].rule_id = \"$1\" | .[0].severity = \"$2\"")")"
 }
@@ -254,7 +256,10 @@ for c in structure.schema-shape-flattened/LOW/no structure.schema-shape-flattene
   compat.default-changed/LOW/no structure.docs-contradict-code/LOW/no review.check-not-run/LOW/yes \
   coverage.mutual-exclusion-unguarded/LOW/no structure.validation-missing/LOW/no \
   profile.region-not-allowed/LOW/no examples.custom-input-required/LOW/no \
-  coverage.mutual-exclusion-unguarded/MEDIUM/yes structure.validation-missing/HIGH/yes; do
+  coverage.mutual-exclusion-unguarded/MEDIUM/yes structure.validation-missing/HIGH/yes \
+  structure.sibling-argument-omitted/MEDIUM/no structure.sibling-argument-omitted/LOW/yes \
+  structure.prerequisite-condition-unmet/MEDIUM/no structure.prerequisite-condition-unmet/LOW/yes \
+  structure.local-bypassed/LOW/no structure.index-length-unchecked/LOW/no; do
   IFS=/ read -r r s want <<< "$c"
   band_note "$r" "$s"; got=$([ $? = 0 ] && echo yes || echo no)
   [ "$got" = "$want" ]; check "$r at $s: note $want" $?
