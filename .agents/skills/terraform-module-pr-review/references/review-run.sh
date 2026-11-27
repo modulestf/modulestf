@@ -1015,7 +1015,7 @@ cmd_tests() {
 # The evidence commands of the depth, each a review-run.sh process of its own whose output goes to
 # state/evidence-<step>.out; every step writes only its own state and output files. At deep, where
 # no step escalates, schema, verify and the chain plan, skip-coverage, ladder run side by side; in
-# laptop mode verify heads the chain, since the plan pass removes the .terraform/ and lock files
+# laptop mode verify heads the chain, since the plan pass removes an untracked lock file
 # verify leaves in the same clone. At light and focused one at a time, the depth read again after
 # each step, since an escalation adds the deep steps not yet run.
 EV_STEPS="schema verify plan skip-coverage ladder tests"
