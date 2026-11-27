@@ -1621,7 +1621,8 @@ if { [ -n "${MTF_FACTS_BIN:-}" ] && [ -x "$MTF_FACTS_BIN" ] && cp "$MTF_FACTS_BI
     if [ -f "$MV/out/behaviour.json" ]; then jq -r 'if .inert then "inert" else "classified" end' "$MV/out/behaviour.json"; else echo not-run; fi
   }
   check "e2e: a variables file moved out of the module root never classifies inert" "$([ "$(mvc "$SK2/behaviour-pass.sh")" != inert ]; echo $?)"
-  perl -0pe 's/\(\$in != "diff" or \$d == \[\] or \.inert != true or/(true or/' "$SK2/behaviour-pass.sh" > "$SK2/behaviour-pass-noguard.sh"
+  perl -0pe 's/\(\$in != "diff" or \$d == \[\] or \(\[/(true or ([/' "$SK2/behaviour-pass.sh" > "$SK2/behaviour-pass-noguard.sh"
+  check "e2e: the copy without the guard differs from the script" "$( ! cmp -s "$SK2/behaviour-pass.sh" "$SK2/behaviour-pass-noguard.sh"; echo $?)"
   if [ "$(mvc "$SK2/behaviour-pass-noguard.sh")" = inert ]; then echo "ok   e2e: this mtf-facts reads the move as inert, so the host guard is what refuses it"
   else echo "note e2e: this mtf-facts does not read the move as inert; the host guard is not exercised live"; fi
   rm -f "$SK2/behaviour-pass-noguard.sh"

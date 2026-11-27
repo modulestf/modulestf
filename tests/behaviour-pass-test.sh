@@ -1749,8 +1749,29 @@ t_rm_empty() {
 }
 t_rm_sib; check "prefix: a removed file with no patch whose own entry is inert is refused beside a sibling trigger" $?
 t_rm_empty; check "prefix: an empty patch on a removed file is no patch" $?
-wmutate "prefix: the guard back to the top-level inert only" 's/\| \[\.entries\[\] \| select\(\.path as \$q \| \$rm \| index\(\$q\)\) \| select\(\.inert == true or \(\.trigger_ids \| length\) == 0\)\] == \[\]\)\)/| (.inert != true or \$rm == [])))/' t_rm_sib
-wmutate "prefix: an empty patch read as a patch" 's/\(\(\.patch \/\/ ""\) == ""\)/((.patch \/\/ null) == null)/' t_rm_empty
+wmutate "prefix: the guard back to the top-level inert only" 's/\| \[\.entries\[\] \| select\(\[\.path, \(\.previous_path \/\/ empty\)\] - \$rm != \[\.path, \(\.previous_path \/\/ empty\)\]\) \| select\(\.inert == true or \(\.trigger_ids \| length\) == 0\)\] == \[\]\)\)/| (.inert != true or \$rm == [])))/' t_rm_sib
+# The guard also finds the removed file by an entry's previous_path, reads a patch that is no string
+# as no patch, and a prefix with an empty segment or a second trailing slash is refused.
+t_rm_prev() {
+  setup; cross_report '[{path: "kept.tf", previous_path: "vars.tf", change_kind: "renamed", inert: true, trigger_ids: []}]'
+  DIFF="$TMP/files-cross.json" PFX=mod classify; [ "$(cat "$O/status" 2> /dev/null)" = "output refused" ]
+}
+t_rm_nonstr() {
+  jq 'map(if .filename == "other/vars.tf" then {filename: "mod/vars.tf", status: "removed", additions: 0, deletions: 0, patch: {}} else . end)' \
+    "$TMP/files-cross.json" > "$TMP/files-cross-n.json"
+  setup; cross_report '[{path: "vars.tf", change_kind: "removed", inert: true, trigger_ids: []}]'
+  DIFF="$TMP/files-cross-n.json" PFX=mod classify; [ "$(cat "$O/status" 2> /dev/null)" = "output refused" ]
+}
+t_pfx_dslash() { local p; for p in mod// a//b; do setup; DIFF="$TMP/files-cross.json" PFX="$p" classify
+  [ $? = 2 ] && [ ! -e "$O/input" ] || return 1; done; }
+t_rm_prev; check "prefix: the guard finds a removed file by an entry's previous_path" $?
+t_rm_nonstr; check "prefix: a patch that is no string is no patch" $?
+t_pfx_dslash; check "prefix: a prefix with an empty segment or two trailing slashes is a usage error" $?
+wmutate "prefix: the guard reads only an entry's path" 's/select\(\[\.path, \(\.previous_path \/\/ empty\)\] - \$rm != \[\.path, \(\.previous_path \/\/ empty\)\]\)/select([.path] - \$rm != [.path])/' t_rm_prev
+wmutate "prefix: a patch that is no string read as a patch" 's/\(\(\.patch \/\/ ""\) \| type != "string" or \. == ""\)/((.patch \/\/ "") == "")/' t_rm_nonstr
+wmutate "prefix: an empty prefix segment taken" 's/ \| \*\/\/\* \| \*\/\) die "--prefix/) die "--prefix/' t_pfx_dslash
+
+wmutate "prefix: an empty patch read as a patch" 's/\(\(\.patch \/\/ ""\) \| type != "string" or \. == ""\)/((.patch \/\/ "") | type != "string")/' t_rm_empty
 # A trailing slash on the prefix is the same module root; an empty or a non-rename previous_filename
 # is no rename.
 t_pfx_slash() { setup; cross_report '[{path: "vars.tf", change_kind: "removed", inert: false, trigger_ids: ["T-002"]}]'
