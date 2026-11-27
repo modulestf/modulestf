@@ -157,6 +157,7 @@ if [ "\$1" = fixture-build ]; then
   [ -f "$ST/fb.shape1" ] && { echo '{"ok":false,"reason":"stub refusal","schema_version":1}' | jq -c "\$(cat "$ST/fb.shape1")"; exit 1; }
   [ -f "$ST/fb.refuse2" ] && { for i in 1 2; do echo '{"ok":false,"reason":"stub refusal","schema_version":1}'; done; exit 1; }
   [ -f "$ST/fb.refuse" ] && { echo '{"ok":false,"reason":"stub refusal","schema_version":1}'; exit 1; }
+  [ -f "$ST/fb.refusel1" ] && { echo '{"ok":false,"reason":"local, module, self and other references are unverifiable at L1","schema_version":1}'; exit 1; }
   [ -n "${LADDER_TEST_FIXTURE_BUILD:-}" ] && exec "${LADDER_TEST_FIXTURE_BUILD:-}" "\$@"
   exit 2
 fi
@@ -191,7 +192,7 @@ good_canary() {
     echo "end canary"
   } > "$ST/canary.txt"
 }
-reset() { rm -f "$ST"/{fb.on,fb.refuse,fb.error,fb.exit1ok,fb.exit1none,fb.exit2ok,fb.shape,fb.shape1,fb.valid,fb.canlist,fb.canhead,fb.stderr,fb.refuse2,fb.nofeat,fb.featstr,log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan,test.unknownvalue}; good_canary; }
+reset() { rm -f "$ST"/{fb.on,fb.refuse,fb.refusel1,fb.error,fb.exit1ok,fb.exit1none,fb.exit2ok,fb.shape,fb.shape1,fb.valid,fb.canlist,fb.canhead,fb.stderr,fb.refuse2,fb.nofeat,fb.featstr,log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan,test.unknownvalue}; good_canary; }
 BASE=d72cba285514b5e2e83bea7dd1272c1c206a4f64
 HEAD=3b19adcd09b08528221d3286b30338b1e0cf6f16
 RUND="$TMP/runs/pr-review.abcdef"; mkdir -p "$RUND/clone"
@@ -963,12 +964,24 @@ t_sc "a valid version report without cmd:fixture-build runs the Perl builder" sc
 t_sc "a features string that contains the name is no feature" sc_featstr
 t_sc "the version report is read once per run" sc_once
 t_sc "an mtf-facts inside the run directory is not the engine: the Perl builder runs" sc_inrun
+# A refusal the levels share names the level that ran: the reason of the Perl builder and of
+# the engine, worded for L1 at every level, is recorded for the level.
+sc_l2word() { reset; trig 'toset(var.vpc_security_group_ids)' 'local.a' '[{"text":"local.a","kind":"local","type":null,"multi":null}]' \
+    count-for_each-conditional-change '["L1","L2"]' "$CASES2"
+  jq '.triggers[0].address = "aws_security_group_rule.this" | .triggers[0].attribute = "for_each"' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"
+  fbrun "$1"; [ "$(r0 reason)" = "$LOCALREF" ] && [ "$(r2 reason)" = 'local, module, self and other references are unverifiable at L2' ]; }
+sc_l2engine() { reset; touch "$ST/fb.on" "$ST/fb.refusel1"; trig2; fbrun "$1"
+  [ "$(r0 reason)" = "$LOCALREF" ] && [ "$(r2 reason)" = 'local, module, self and other references are unverifiable at L2' ]; }
+t_sc "an L2 refusal of the Perl builder names L2, the L1 one L1" sc_l2word
+t_sc "an engine refusal worded for L1 is recorded at L2 for the L2 run" sc_l2engine
 fbmut() { # label, perl -0 substitution, the scenario that must now fail
   rm -rf "${TMP:?}/fbmut"; mkdir -p "$TMP/fbmut"; cp -R "$REF"/. "$TMP/fbmut/"; perl -0pi -e "$2" "$TMP/fbmut/ladder-pass.sh"
   if cmp -s "$LP" "$TMP/fbmut/ladder-pass.sh"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
   "$3" "$TMP/fbmut/ladder-pass.sh" > /dev/null 2>&1; st=$?
   check "self-check: $1 is caught" "$([ "$st" != 0 ]; echo $?)"
 }
+fbmut "the Perl builder's L1 wording kept at L2" 's/r="\$\{r\/\/unverifiable at L1\/unverifiable at \$\{LV:-L1\}\}"//' sc_l2word
+fbmut "the engine's L1 wording kept at L2" 's/r="\$\{r\/\/unverifiable at L1\/unverifiable at \$\{LV:-L1\}\}"//' sc_l2engine
 fbmut "the feature check dropped" 's/ && facts_has cmd:fixture-build//' sc_nofeat
 fbmut "the version report read without the resolver" 's/if \[ "\$FACTS_STATE" = ok \].*; then FB_GO=1; fi/if "\$FACTS" version --json 2> \/dev\/null | grep -q cmd:fixture-build; then FB_GO=1; fi/' sc_featstr
 fbmut "exit 2 taken as success" 's/    \*\) return 1 ;;\n  esac/    *) ;;\n  esac/' sc_exit2ok

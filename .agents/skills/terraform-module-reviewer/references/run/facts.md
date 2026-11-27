@@ -5,7 +5,7 @@
 
 ## mtf-facts
 
-1. Find the binary outside the workspace, or do nothing and write nothing about it: [When to run](../facts-engine.md#when-to-run). Take the profile snapshot first, or refuse: [The snapshot](../profile-selection.md#the-snapshot).
+1. Find the binary outside the workspace, the task's `mtf-facts binary: <path>` line first, or do nothing and write nothing about it: [When to run](../facts-engine.md#when-to-run). Take the profile snapshot first, or refuse: [The snapshot](../profile-selection.md#the-snapshot).
 2. Pick the base input, the first that applies ([The base tree](../facts-engine.md#the-base-tree)):
    - the task's `Base tree: <dir>` line: pass the directory to `--base` as given, read in place, never copied or written; on exit 2 run once more with the next bullet's `--diff`, else with neither;
    - the task's `Diff: <path>` line: pass the path to `--diff` as given, read in place, never copied or written;
