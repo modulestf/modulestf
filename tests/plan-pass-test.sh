@@ -930,13 +930,22 @@ for sh in bash zsh; do
   for pv in "$PP" "$TMP/ppl/plan-pass.sh"; do
     Rg="$(newrun)"; run g0 "$Rg" > /dev/null
     echo '# kept' > "$Rg/clone/examples/ok/.terraform.lock.hcl"
-    out="$(PATH="$TMP/badgit:$TMP/bin:/usr/bin:/bin" "$sh" "$pv" plan "$Rg" demo --role-arn "$ROLE" examples/ok 2>&1)"
-    kept="$([ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$(head -n 1 "$Rg/clone/examples/ok/.terraform.lock.hcl" 2> /dev/null)" = '# kept' ]; echo $?)"
+    outg="$(PATH="$TMP/badgit:$TMP/bin:/usr/bin:/bin" "$sh" "$pv" plan "$Rg" demo --role-arn "$ROLE" examples/ok 2>&1)"
+    kept="$([ "$(has "$outg" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$(head -n 1 "$Rg/clone/examples/ok/.terraform.lock.hcl" 2> /dev/null)" = '# kept' ]; echo $?)"
     if [ "$pv" = "$PP" ]; then check "$sh: a git that fails keeps the lock file" "$kept"
     else check "$sh: the mutation that removes the lock file on a git error is caught" \
-      "$( ! cmp -s "$PP" "$pv" && [ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$kept" != 0 ]; echo $?)"; fi
+      "$( ! cmp -s "$PP" "$pv" && [ "$(has "$outg" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$kept" != 0 ]; echo $?)"; fi
   done
   rm -rf "$TMP/ppl"
+  # The mutation without pe_init's drop_lock: init reads the lock file left before the pass.
+  rm -rf "$TMP/ppi"; cp -R "${PP%/*}" "$TMP/ppi"
+  perl -0pe 's/(  # A lock file the clone does not track[^\n]*\n)  drop_lock\n/$1/' "$PP" > "$TMP/ppi/plan-pass.sh"
+  Ri="$(newrun)"; run g0 "$Ri" > /dev/null
+  printf 'provider "registry.terraform.io/hashicorp/null" {\n}\n' > "$Ri/clone/examples/ok/.terraform.lock.hcl"
+  outi="$(PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$TMP/ppi/plan-pass.sh" plan "$Ri" demo --role-arn "$ROLE" examples/ok 2>&1)"
+  check "$sh: the mutation without the lock file removal before init is caught" \
+    "$( ! cmp -s "$PP" "$TMP/ppi/plan-pass.sh" && [ "$(has "$outi" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" != 0 ]; echo $?)"
+  rm -rf "$TMP/ppi"
 
   # The review role: no role, no pass; a session on it or nothing, then the write probe.
   log="$(cat "$TMP/aws.log" 2>/dev/null)"
@@ -1330,6 +1339,15 @@ pdrun() { # shell, script, arguments... -> the record; R set
   PATH="$TMP/pdbin:/usr/bin:/bin" "$1" "$PP" g0 "$R" > /dev/null
   PATH="$TMP/pdbin:/usr/bin:/bin" "$1" "$2" plan "$R" demo --role-arn "$ROLE" "${@:3}" 2>&1
 }
+pd_clean() { # run directory: no untracked lock file in the clone, the base or the mixed worktree
+  for t in clone base mixed; do
+    [ -d "$1/$t" ] || return 1
+    # no global or system excludes, so an ignore list outside the test hides no leftover
+    st="$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$1/$t" status --porcelain --untracked-files=all)" || return 1
+    case "$st" in *terraform.lock.hcl*) return 1 ;; esac
+  done
+  return 0
+}
 blk() { printf '%s\n' "$1" | awk -v e="example: ${2//\\/}" '/^(example: |plan summary)/ { on = ($0 == e) } on && /^plan-diff/'; }
 for sh in bash zsh; do
   command -v "$sh" > /dev/null 2>&1 || continue
@@ -1346,6 +1364,15 @@ for sh in bash zsh; do
   check "$sh: plan diff: the schema is read with no credentials" "$(grep -q 'schema with credentials' "$TMP/pd.log" && echo 1 || echo 0)"
   check "$sh: plan diff: shows run with no credentials" "$(grep -q 'show with credentials' "$TMP/pd.log" && echo 1 || echo 0)"
   check "$sh: plan diff: the head's class and summary stay" "$(has "$out" 'plan summary: 3 examples, 3 planned, 0 exceptions, 0 other')"
+  check "$sh: plan diff: no untracked lock file is left in the clone, the base or the mixed worktree" \
+    "$(pd_clean "$(cat "$TMP/pd-last")"; echo $?)"
+  # The mutation without pd_side's drop_lock: the base and mixed plans leave their lock files.
+  rm -rf "$TMP/ppd"; cp -R "${PP%/*}" "$TMP/ppd"
+  perl -0pe 's/(budget\) rc=3 ;; esac\n)  \[ -z "\$INCD" \] \|\| drop_lock\n/$1/' "$PP" > "$TMP/ppd/plan-pass.sh"
+  o="$(pdrun "$sh" "$TMP/ppd/plan-pass.sh" --base "$PDBASE" --diff-dir . examples/same examples/edited)"
+  check "$sh: plan diff: the mutation without the lock file removal after a plan diff side is caught" \
+    "$( ! cmp -s "$PP" "$TMP/ppd/plan-pass.sh" && [ "$(blk "$o" examples\\/same)" = 'plan-diff: equal' ] && ! pd_clean "$(cat "$TMP/pd-last")"; echo $?)"
+  rm -rf "$TMP/ppd"
   # The frozen caller: the edited head example plans otherwise, the merge base example does not
   pdset '{"bucket":"x"}' '{"bucket":"x"}' '{"bucket":"y"}'
   out="$(pdrun "$sh" "$PP" --base "$PDBASE" --diff-dir . examples/same examples/edited)"
