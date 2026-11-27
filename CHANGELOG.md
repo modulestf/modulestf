@@ -1,3 +1,12 @@
+## [0.18.6](https://github.com/modulestf/modulestf/compare/v0.18.5...v0.18.6) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Pin mtf-facts v0.21.4 ([#289](https://github.com/modulestf/modulestf/issues/289)) ([2ef2ace](https://github.com/modulestf/modulestf/commit/2ef2ace7389cf8e77ff9d61fbde51649a634df4a))
+
+
+
 ## [0.18.5](https://github.com/modulestf/modulestf/compare/v0.18.4...v0.18.5) (2026-11-27)
 
 
