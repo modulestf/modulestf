@@ -1,3 +1,12 @@
+## [0.19.4](https://github.com/modulestf/modulestf/compare/v0.19.3...v0.19.4) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Unpack each provider once per review run ([#297](https://github.com/modulestf/modulestf/issues/297)) ([f5fdf8d](https://github.com/modulestf/modulestf/commit/f5fdf8d6ac61bef3199ea7c135a772586a68a1bc)), closes [#295](https://github.com/modulestf/modulestf/issues/295)
+
+
+
 ## [0.19.3](https://github.com/modulestf/modulestf/compare/v0.19.2...v0.19.3) (2026-11-27)
 
 
