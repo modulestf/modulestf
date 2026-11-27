@@ -1,3 +1,12 @@
+## [0.20.1](https://github.com/modulestf/modulestf/compare/v0.20.0...v0.20.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **reviewer:** Judge a new block against its siblings, its prerequisites and its list lengths ([#314](https://github.com/modulestf/modulestf/issues/314)) ([7eb3ad9](https://github.com/modulestf/modulestf/commit/7eb3ad917893d6aa06b448a87830b14b98c63769))
+
+
+
 # [0.20.0](https://github.com/modulestf/modulestf/compare/v0.19.8...v0.20.0) (2026-11-27)
 
 
