@@ -921,6 +921,22 @@ for sh in bash zsh; do
   check "$sh: the clone stays" "$(test -d "$R/clone/examples"; echo $?)"
   check "$sh: an uncommitted lock file is removed" \
     "$(test ! -e "$R/clone/examples/ok/.terraform.lock.hcl"; echo $?)"
+  # A git that cannot answer keeps the lock file, so a git error never deletes a tracked one.
+  REALGIT="$(command -v git)"; mkdir -p "$TMP/badgit"
+  printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = ls-files ] && exit 128; done\nexec "%s" "$@"\n' "$REALGIT" > "$TMP/badgit/git"
+  chmod +x "$TMP/badgit/git"
+  rm -rf "$TMP/ppl"; cp -R "${PP%/*}" "$TMP/ppl"
+  perl -0pe 's/dl="\$\(git ls-files[^\n]*\n/git ls-files --error-unmatch .terraform.lock.hcl > \/dev\/null 2>&1 || rm -f .terraform.lock.hcl\n/' "$PP" > "$TMP/ppl/plan-pass.sh"
+  for pv in "$PP" "$TMP/ppl/plan-pass.sh"; do
+    Rg="$(newrun)"; run g0 "$Rg" > /dev/null
+    echo '# kept' > "$Rg/clone/examples/ok/.terraform.lock.hcl"
+    out="$(PATH="$TMP/badgit:$TMP/bin:/usr/bin:/bin" "$sh" "$pv" plan "$Rg" demo --role-arn "$ROLE" examples/ok 2>&1)"
+    kept="$([ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$(head -n 1 "$Rg/clone/examples/ok/.terraform.lock.hcl" 2> /dev/null)" = '# kept' ]; echo $?)"
+    if [ "$pv" = "$PP" ]; then check "$sh: a git that fails keeps the lock file" "$kept"
+    else check "$sh: the mutation that removes the lock file on a git error is caught" \
+      "$( ! cmp -s "$PP" "$pv" && [ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] && [ "$kept" != 0 ]; echo $?)"; fi
+  done
+  rm -rf "$TMP/ppl"
 
   # The review role: no role, no pass; a session on it or nothing, then the write probe.
   log="$(cat "$TMP/aws.log" 2>/dev/null)"

@@ -1294,8 +1294,8 @@ pe_init() { # absolute example directory, key, root (the clone or the base workt
   [ -n "$h" ] && { exc_or_gate "$h"; return; }
   cd "$1" || { CLASS='plan gate G0 unreadable'; return; }
   INCD=1
-  # The default pass's init left its own lock file and .terraform/ here; the plan pass reads neither
-  git ls-files --error-unmatch .terraform.lock.hcl > /dev/null 2>&1 || rm -f .terraform.lock.hcl
+  # A lock file the clone does not track, or a .terraform/, from an earlier run: the plan pass reads neither
+  drop_lock
   rm -rf .terraform
   AK=; SK=; ST=; set_env "$2"
   run_capped "$(left 180)" "$PLAN/out/$2-init.txt" "${TFENV[@]}" terraform init -backend=false -input=false -no-color
@@ -1335,10 +1335,14 @@ pe_plan() { # key: the credentials and the plan, then the kept line and the deni
     pc_put "$1"
   fi
 }
+drop_lock() { # the lock file of the working directory, removed only when git answers and does not track it
+  dl="$(git ls-files -- .terraform.lock.hcl 2> /dev/null)" && [ -z "$dl" ] && rm -f .terraform.lock.hcl
+  return 0
+}
 plan_example() { # absolute example directory, key, root (the clone or the base worktree), saved g0 file
   pe_init "$@"
   pe_plan "$2"
-  [ -z "$INCD" ] || git ls-files --error-unmatch .terraform.lock.hcl > /dev/null 2>&1 || rm -f .terraform.lock.hcl
+  [ -z "$INCD" ] || drop_lock
 }
 init_state() { # absolute example directory, key, root, saved g0 file: pe_init, saved for the plan phase
   pe_init "$@" > "$PLAN/state/$2.lines"
@@ -1371,7 +1375,7 @@ pd_side() { # absolute example directory, key, root, saved g0 file: one plan of 
   # its show, before the lock file this pass wrote is removed. Status 2: no plan; 1: no show.
   pe_init "$@"; pe_plan "$2"; rc=2
   case "$CLASS" in planned|planned-no-changes) pd_show "$2" && rc=0 || rc=1; pd_schema "$2" ;; budget) rc=3 ;; esac
-  [ -z "$INCD" ] || git ls-files --error-unmatch .terraform.lock.hcl > /dev/null 2>&1 || rm -f .terraform.lock.hcl
+  [ -z "$INCD" ] || drop_lock
   return "$rc"
 }
 pd_laptop() { # repository-relative example, key, place: the plan diff of an example whose head planned
