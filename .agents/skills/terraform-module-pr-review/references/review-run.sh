@@ -168,11 +168,100 @@ clone_git() {
     -c filter.lfs.required=false "$@"
 }
 
-affected_to() { # mtf-facts, root, files list, out: the affected report, or no file when it gave none
-  if ! (cd "$RUN/state" && limit 70 "$1" affected "$2" --diff "$3" --json) > "$4" 2> /dev/null ||
+# The stats record of one mtf-facts call (review-run-details.md, Facts Stats): sets STATS to
+# --stats-file <run>/state/stats/<name>.json, and SPASS to behaviour-pass.sh's --stats with that file,
+# when the binary lists the flag for the command; else both to nothing. The record is a measurement
+# only: no step reads it but facts_totals.
+STATS=() SPASS=()
+stats_for() { # command, name
+  STATS=() SPASS=()
+  facts_has "flag:$1:stats-file" && [[ "$2" =~ ^[a-z][a-z0-9.-]{0,63}$ ]] || return 0
+  { [ -d "$RUN/state/stats" ] || mkdir "$RUN/state/stats"; } 2> /dev/null || return 0
+  [ ! -L "$RUN/state/stats" ] && [ ! -e "$RUN/state/stats/$2.json" ] || return 0
+  STATS=(--stats-file "$RUN/state/stats/$2.json") SPASS=(--stats "$RUN/state/stats/$2.json")
+}
+
+# A report of affected --base counts only when its changed list holds every path of the files list,
+# relative to the same root, a rename at both paths, as behaviour-pass.sh's covers holds a classifier
+# report: a change the tree comparison does not see, such as a gitlink, is no report of the change.
+# Only a GitHub "unchanged" entry takes no path: a committed .terraform file is a change too.
+AFF_COVERS='type == "object" and (.changed | type == "array" and all(.[]; type == "string"))
+  and (([$f[0][] | select(.status != "unchanged") | .filename, (.previous_filename // empty)] - .changed) == [])'
+
+# mtf-facts affected (verify-pass.md, Example selection): no file when it gave nothing. With a merge
+# base tree, that tree first; the files list only when that run gave no report that covers it, as it
+# would alone.
+affected_to() { # mtf-facts, root, files list, out, name[, base tree]
+  if [ -n "${6-}" ]; then
+    stats_for affected "$5"
+    (cd "$RUN/state" && limit 70 "$1" affected "$2" --base "$6" --json ${STATS[@]+"${STATS[@]}"}) > "$4" 2> /dev/null &&
+      jq -e --slurpfile f "$3" "$AFF_COVERS" "$4" > /dev/null 2>&1 && return 0
+    note "fallback-$5" "affected: diff after the merge base tree gave no report"
+  fi
+  stats_for affected "$5${6:+.diff}"
+  if ! (cd "$RUN/state" && limit 70 "$1" affected "$2" --diff "$3" --json ${STATS[@]+"${STATS[@]}"}) > "$4" 2> /dev/null ||
       ! jq -e 'type == "object"' "$4" > /dev/null 2>&1; then
     rm -f "$4"
   fi
+}
+
+# The module root of the merge base worktree is a real directory at its own path: no link at it or
+# at any directory above it inside <run>/base.
+base_root_ok() { # prefix
+  local d="$RUN/base${1:+/$1}" r
+  [ -d "$d" ] && r="$(cd "$d" 2> /dev/null && pwd -P)" && [ "$r" = "$(cd "$RUN/base" && pwd -P)${1:+/$1}" ]
+}
+
+# The handover's Base tree: line, the merge base worktree at the module root for the reviewer's
+# mtf-facts lint --base, with Diff: as its fallback (review-run-details.md, The Merge Base Tree):
+# only a checkout of that merge base, not a link, holding the module root, never for a new module.
+base_tree_line() { # new module, merge base
+  [ "$1" = true ] || [ -z "$2" ] || [ ! -d "$RUN/base/.git" ] || [ -L "$RUN/base" ] ||
+    ! base_root_ok "$PREFIX" || [ "$(git -C "$RUN/base" rev-parse HEAD 2> /dev/null)" != "$2" ] ||
+    printf 'Base tree: %s\n' "$RUN/base${PREFIX:+/$PREFIX}"
+}
+
+# <run>/facts-stats.json: the totals of the stats records of this run's mtf-facts calls and the
+# fallbacks its steps took (review-run-details.md, Facts Stats). Data for measurement only: no
+# verdict input reads it, and a record that is missing, a link, over 1 MiB or outside its shape
+# is counted as refused and adds nothing. Written again after each command that calls mtf-facts.
+facts_totals() {
+  local d="$RUN/state/stats" f recs=()
+  if [ -d "$d" ] && [ ! -L "$d" ]; then
+    while IFS= read -r f; do
+      [ -f "$f" ] && [ ! -L "$f" ] && [ "$(wc -c < "$f")" -le 1048576 ] || { recs+=('null'); continue; }
+      recs+=("$(jq -c -s 'if length == 1 and (.[0] | type == "object" and .schema_version == 1
+          and (.command | type == "string" and test("^[a-z][a-z-]{0,31}$"))
+          and (.outcome | IN("completed", "error", "timeout"))
+          and (.wall_ns | type == "number" and . >= 0 and . == floor)
+          and (.max_rss_bytes == null or (.max_rss_bytes | type == "number" and . >= 0)))
+        then .[0] | {command, outcome, wall_ns, max_rss_bytes} else null end' "$f" 2> /dev/null || echo null)")
+    done < <(find "$d" -mindepth 1 -maxdepth 1 -name '*.json' 2> /dev/null | LC_ALL=C sort)
+  fi
+  local fb=()
+  while IFS= read -r f; do fb+=("${f##*/fallback-}"); done < <(find "$RUN/state" -mindepth 1 -maxdepth 1 -type f -name 'fallback-*' 2> /dev/null | LC_ALL=C sort)
+  [ ! -f "$RUN/behaviour/input" ] || ! grep -q '^diff (base ' "$RUN/behaviour/input" || fb+=(behaviour)
+  [ ! -f "$RUN/state/depth-behaviour/input" ] || ! grep -q '^diff (base ' "$RUN/state/depth-behaviour/input" || fb+=(depth-behaviour)
+  printf '%s\n' ${recs[@]+"${recs[@]}"} | jq -s --args '
+    ($ARGS.positional) as $fb
+    | [.[] | select(. != null)] as $ok
+    | {format: 1, records: ($ok | length), records_refused: (length - ($ok | length)),
+       facts_seconds: (($ok | map(.wall_ns) | add // 0) / 1e9),
+       max_rss_bytes: ([$ok[].max_rss_bytes | numbers] | max),
+       by_command: ($ok | group_by(.command) | map({key: .[0].command, value: {calls: length,
+         wall_ns: (map(.wall_ns) | add), errors: (map(select(.outcome == "error")) | length),
+         timeouts: (map(select(.outcome == "timeout")) | length)}}) | from_entries),
+       fallbacks: {base_to_diff: ($fb | unique)}}' ${fb[@]+"${fb[@]}"} > "$RUN/facts-stats.raw" 2> /dev/null || return 0
+  # The fallback tokens the run's own outputs carry, read only from files in their checked shape.
+  jq --slurpfile d "$( [ -f "$RUN/depth.json" ] && echo "$RUN/depth.json" || echo /dev/null)" \
+    --slurpfile s "$( [ -f "$RUN/selection.json" ] && echo "$RUN/selection.json" || echo /dev/null)" \
+    --slurpfile b "$( [ -f "$RUN/behaviour/run-behaviour.json" ] && echo "$RUN/behaviour/run-behaviour.json" || echo /dev/null)" \
+    --arg cl "$(cat "$RUN/behaviour/status" 2> /dev/null)" '
+    .fallbacks += {depth: [($d[0].reasons // [])[] | strings | select(IN("deep-classifier-unavailable", "deep-affected-fallback"))],
+      examples_all: ([($s[0].dirs // [])[] | objects | select(.affected == "all")] | length),
+      behaviour_not_run: ($cl != "" or ($b[0].status? == "not-run"))}' "$RUN/facts-stats.raw" > "$RUN/facts-stats.json" 2> /dev/null ||
+    rm -f "$RUN/facts-stats.json"
+  rm -f "$RUN/facts-stats.raw"
 }
 
 # --- the post record (github-io.md, The Post Record) ---------------------------------------
@@ -467,8 +556,17 @@ cmd_prepare() {
       --schema-out "$RUN/behaviour-schema.json" ${own[@]+"${own[@]}"} > "$RUN/state/acquire.out" 2>&1 ||
       rm -f "$RUN/behaviour-schema.json"
     local sch=(); [ ! -f "$RUN/behaviour-schema.json" ] || sch=(--schema "$RUN/behaviour-schema.json")
+    # The merge base worktree, checked out above, for every mtf-facts call that takes --base; the
+    # files list stays each call's fallback (review-run-details.md, The Merge Base Tree).
+    local bt=() bmod=() broot=""
+    if [ "$base_tree" = true ] && [ -d "$RUN/base/.git" ] && [ ! -L "$RUN/base" ]; then
+      broot="$RUN/base"; bt=(--base "$RUN/base")
+      [ "$new_module" = true ] || ! base_root_ok "$prefix" || bmod=(--base "$RUN/base${prefix:+/$prefix}")
+    fi
+    stats_for behaviour classify
     bash "$HERE/behaviour-pass.sh" classify --facts "$facts" --dir "$mroot" --diff "$RUN/host/files.json" \
-      --prefix "$prefix" ${sch[@]+"${sch[@]}"} --out "$RUN/behaviour" > "$RUN/state/classify.out" 2>&1
+      --prefix "$prefix" ${bmod[@]+"${bmod[@]}"} ${sch[@]+"${sch[@]}"} ${SPASS[@]+"${SPASS[@]}"} \
+      --out "$RUN/behaviour" > "$RUN/state/classify.out" 2>&1
     if [ -f "$RUN/behaviour/behaviour.json" ]; then behaviour=classified
     else behaviour="not-run: $(head -c 64 "$RUN/behaviour/status" 2> /dev/null | tr -cd 'a-z -')"; fi
     # mtf-facts affected, as verify-pass.md Example selection runs it; no file when it gave nothing.
@@ -482,13 +580,24 @@ cmd_prepare() {
       | if .previous_filename then .previous_filename |= (if $p == "" then . else ltrimstr($p + "/") end) else . end]' \
       "$RUN/host/files.json" > "$RUN/state/files-module.json"
     if [ "$mraff" = true ]; then
-      if ! (cd "$RUN/state" && limit 70 "$facts" affected "$RUN/clone" --module-root "$prefix" --diff "$RUN/host/files.json" --json) \
-          > "$RUN/affected.json" 2> /dev/null || ! jq -e --arg p "$prefix" 'type == "object" and .module_root == $p' "$RUN/affected.json" > /dev/null 2>&1; then
-        # The engine refused the prefix or its report did not validate: the older path below.
-        rm -f "$RUN/affected.json"; mraff=false
+      local mrin=(--diff "$RUN/host/files.json") mrok=false
+      if [ -n "$broot" ]; then
+        stats_for affected affected-module-root
+        (cd "$RUN/state" && limit 70 "$facts" affected "$RUN/clone" --module-root "$prefix" --base "$broot" --json ${STATS[@]+"${STATS[@]}"}) \
+          > "$RUN/affected.json" 2> /dev/null && jq -e --arg p "$prefix" --slurpfile f "$RUN/host/files.json" \
+          "$AFF_COVERS"' and .module_root == $p' "$RUN/affected.json" > /dev/null 2>&1 && mrok=true
+        [ "$mrok" = true ] || note fallback-affected-module-root "affected: diff after the merge base tree gave no report"
+      fi
+      if [ "$mrok" = false ]; then
+        stats_for affected "affected-module-root${broot:+.diff}"
+        if ! (cd "$RUN/state" && limit 70 "$facts" affected "$RUN/clone" --module-root "$prefix" "${mrin[@]}" --json ${STATS[@]+"${STATS[@]}"}) \
+            > "$RUN/affected.json" 2> /dev/null || ! jq -e --arg p "$prefix" 'type == "object" and .module_root == $p' "$RUN/affected.json" > /dev/null 2>&1; then
+          # The engine refused the prefix or its report did not validate: the older path below.
+          rm -f "$RUN/affected.json"; mraff=false
+        fi
       fi
     fi
-    [ "$mraff" = true ] || affected_to "$facts" "$mroot" "$RUN/state/files-module.json" "$RUN/affected.json"
+    [ "$mraff" = true ] || affected_to "$facts" "$mroot" "$RUN/state/files-module.json" "$RUN/affected.json" affected ${bmod[@]+"${bmod[1]}"}
     local od=(); [ -z "$owner_depth" ] || od=(--owner-depth deep)
     [ "$base_tree" = true ] || refuse merge-base-unavailable "the merge base could not be checked out for the depth binding"
     # mtf-facts depth reads the trees from the repository root, so its classifier and affected
@@ -498,11 +607,13 @@ cmd_prepare() {
     local dcl="$RUN/behaviour/behaviour.json" daf="$RUN/affected.json"
     if [ -n "$prefix" ]; then
       mkdir "$RUN/state/depth-behaviour"
+      stats_for behaviour classify-depth
       bash "$HERE/behaviour-pass.sh" classify --facts "$facts" --dir "$RUN/clone" --diff "$RUN/host/files.json" \
-        ${sch[@]+"${sch[@]}"} --out "$RUN/state/depth-behaviour" > "$RUN/state/depth-classify.out" 2>&1
+        ${bt[@]+"${bt[@]}"} ${sch[@]+"${sch[@]}"} ${SPASS[@]+"${SPASS[@]}"} \
+        --out "$RUN/state/depth-behaviour" > "$RUN/state/depth-classify.out" 2>&1
       dcl="$RUN/state/depth-behaviour/behaviour.json"
       if [ "$mraff" = false ]; then
-        affected_to "$facts" "$RUN/clone" "$RUN/host/files.json" "$RUN/state/affected-depth.json"
+        affected_to "$facts" "$RUN/clone" "$RUN/host/files.json" "$RUN/state/affected-depth.json" affected-depth ${bt[@]+"${bt[1]}"}
         daf="$RUN/state/affected-depth.json"
       fi
     fi
@@ -537,6 +648,7 @@ cmd_prepare() {
     > "$RUN/selection.json" 2> /dev/null || echo '{"selection": null, "dirs": []}' > "$RUN/selection.json"
 
   write_index "$checks_file" "$changed" "$behaviour" "$mode" "$new_module"
+  [ "$triage" = true ] || facts_totals
   local login_shown="${login:-none}"
   echo "RUN=$RUN"
   echo "identity: $login_shown, posting $posting$( [ "$render_only" = false ] || echo ", render-only")"
@@ -834,9 +946,11 @@ cmd_ladder() {
   [ ! -f "$RUN/behaviour/wrappers.txt" ] || wr=(--wrappers "$RUN/behaviour/wrappers.txt")
   # The plan diff of the coverage, for the identical mark (behaviour-pass.md, The Run Object)
   [ ! -f "$RUN/coverage.json" ] || wr+=(--plan-diff "$RUN/coverage.json")
+  stats_for claims-eval claims-eval
   bash "$HERE/behaviour-pass.sh" eval --facts "$facts" --out "$RUN/behaviour" --head "$HEAD_SHA" \
-    --base-sha "${MB:-$HEAD_SHA}" --prefix "$PREFIX" ${cl[@]+"${cl[@]}"} ${ld[@]+"${ld[@]}"} ${wr[@]+"${wr[@]}"} > /dev/null 2> "$RUN/state/eval.err" ||
+    --base-sha "${MB:-$HEAD_SHA}" --prefix "$PREFIX" ${SPASS[@]+"${SPASS[@]}"} ${cl[@]+"${cl[@]}"} ${ld[@]+"${ld[@]}"} ${wr[@]+"${wr[@]}"} > /dev/null 2> "$RUN/state/eval.err" ||
     fail "behaviour-pass.sh eval failed"
+  facts_totals
   head -n 1 "$RUN/behaviour/record.txt" 2> /dev/null | cut -c1-200
 }
 
@@ -1227,6 +1341,7 @@ cmd_handover() {
       sed 's/^schema pass: latest_not_mirrored /Latest not mirrored: /' "$RUN/state/schema-lnm.txt"
     [ "$nm" = true ] || printf 'Diff: %s\n' "$out/change.diff"
     [ -z "$mbl" ] || printf 'Merge base: %s\n' "$mbl"
+    base_tree_line "$nm" "$mbl"
     # The base repository as its own fact line, from host.json in the grammar valid_host holds it to,
     # with no name of dots: Check E reads the repository's own wrapper address from it.
     jq -r 'select(.repo | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")

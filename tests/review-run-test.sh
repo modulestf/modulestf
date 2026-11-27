@@ -100,6 +100,8 @@ EOF
 cat > "$SK/ladder-pass.sh" <<'EOF'
 #!/bin/bash
 echo "ladder $*" >> "${STUB_LOG:?}"
+# BASE_SWAP=1: the merge base worktree's modules/ becomes a link to a copy, before classify reads it.
+[ "$1" != acquire ] || [ -z "${BASE_SWAP-}" ] || { mv "$2/base/modules" "$2/base/real-modules" && ln -s real-modules "$2/base/modules"; }
 [ "$1" = acquire ] && { echo "acquisition failed: stub"; exit 1; }
 [ "$1" != run ] || [ -z "${EV_MARK:-}" ] || touch "$EV_MARK"
 exit 0
@@ -201,11 +203,23 @@ case "$1" in
       touched_types: (if $d == "focused" then ["aws_s3_bucket"] else [] end), walk: {complete: true, unwalked: 0},
       limits: {tf_files: (if $d == "light" then 0 else 1 end), changed_lines: 3, changed_blocks: 0, selected_examples: 1},
       schema_providers: [], schema_types: [], schema_locks: []}' ;;
-  affected) m=""; for a in "$@"; do [ "$p" != --module-root ] || m="$a"; p="$a"; done
+  affected) m="" b="" sf=""; for a in "$@"; do [ "$p" != --module-root ] || m="$a"; [ "$p" != --stats-file ] || sf="$a"; [ "$a" != --base ] || b=1; p="$a"; done
+    # With --stats-file, a stats record of 1.5 seconds; STATS_BAD=1 makes it one the totals refuse.
+    [ -z "$sf" ] || if [ -n "${STATS_BAD-}" ]; then echo '{"schema_version": 2, "command": "affected", "outcome": "completed", "wall_ns": 1, "max_rss_bytes": 1}' > "$sf"
+      else echo '{"schema_version": 1, "command": "affected", "outcome": "completed", "wall_ns": 1500000000, "max_rss_bytes": 1000}' > "$sf"; fi
+    # AFFECTED_BASE=fail: a run given the merge base tree fails.
+    [ -z "$b" ] || [ "${AFFECTED_BASE-}" != fail ] || exit 2
     # AFFECTED_MR=refuse: the engine refuses a module root prefix; =other: its report names another one.
     [ -z "$m" ] || [ "${AFFECTED_MR-}" != refuse ] || { echo 'mtf-facts: module root refused' >&2; exit 2; }
     [ -z "$m" ] || [ "${AFFECTED_MR-}" != other ] || m=elsewhere
-    jq -nc --arg m "$m" '{schema_version: 1, inert: false, fallback: null, changed: [], examples: []} + (if $m == "" then {} else {module_root: $m} end)' ;;
+    # A run with --base lists the files list's paths under the directory it was given, both of a
+    # rename, as the real tree comparison does; AFFECTED_BASE=short lists none, as for a gitlink.
+    r=""; [ -n "$m" ] || case "$2" in */clone/*) r="${2##*/clone/}/" ;; esac
+    # AFFECTED_BASE=noprev leaves out the old path of a rename.
+    ch='[]'; [ -z "$b" ] || [ "${AFFECTED_BASE-}" = short ] || ch="$(jq -c --arg r "$r" --arg np "${AFFECTED_BASE-}" '[.[]
+      | .filename, (if $np == "noprev" then empty else .previous_filename // empty end)
+      | select(startswith($r)) | .[($r | length):]] | unique' "$GHD/files")"
+    jq -nc --arg m "$m" --argjson ch "$ch" '{schema_version: 1, inert: false, fallback: null, changed: $ch, examples: []} + (if $m == "" then {} else {module_root: $m} end)' ;;
   # With PROFILE_STUB set: a snapshot copy and a valid, relaxing profile-check.
   profile-snapshot) [ -n "${PROFILE_STUB-}" ] || exit 1
     d="$(mktemp -d "${TMPDIR:-/tmp}/snap.XXXXXX")"; cp -R "$3/." "$d/"
@@ -538,6 +552,8 @@ check "handover: the merge base line names the bound merge base, the output line
   "$(grep -qx "Merge base: $(jq -r .binding.merge_base "$RUN/depth.json")" "$T" &&
      grep -qx "Output: write the findings list as JSON to $RUN/review/findings.json, the summary line and the profile lines to $RUN/review/summary.txt and the facts comparison note to $RUN/review/facts-comparison.txt, and nothing else." "$T" &&
      [ -d "$RUN/review" ]; echo $?)"
+check "handover: the base tree line names the merge base worktree after the merge base line" \
+  "$(grep -qx "Base tree: $RUN/base" "$T" && awk '/^Merge base: /{m=NR} /^Base tree: /{t=NR} END{exit !(m && m + 1 == t)}' "$T"; echo $?)"
 check "bundle: a docs-only change at light carries C, E, F and G's summaries and C, E, F's Read First only" \
   "$(grep -qx "References: $RUN/handover/reviewer-references.md" "$T" &&
      [ "$(blist "$RUN/handover/reviewer-references.md")" = "$(printf 'references/%s ' inputs.md#inputs workflow.md#step-1-establish-scope \
@@ -1275,7 +1291,8 @@ mrprep() { # review-run.sh copy, version file or "" -> prepare output in mr.out,
 }
 mrprep "$RR" "$TMP/fv.json"
 check "prepare: with affected --module-root, one affected run for the depth on the clone root and one for the selection" \
-  "$([ "$(grep -c '^affected ' "$TMP/mr.log")" = 2 ] && [ "$(grep -c "^affected $RUN/clone --module-root modules/a --diff " "$TMP/mr.log")" = 2 ] &&
+  "$([ "$(grep -c '^affected ' "$TMP/mr.log")" = 2 ] && [ "$(grep -c "^affected $RUN/clone --module-root modules/a --base $RUN/base --json" "$TMP/mr.log")" = 1 ] &&
+     [ "$(grep -c "^affected $RUN/clone --module-root modules/a --diff " "$TMP/mr.log")" = 1 ] &&
      [ "$(q "$RUN/affected.json" '.module_root == "modules/a"')" = 0 ] && [ ! -e "$RUN/state/affected-depth.json" ] &&
      grep -q "^depth .* --affected $RUN/affected.json" "$TMP/mr.log"; echo $?)"
 check "prepare: the mtf-facts line is in the summary and its version report in the run" \
@@ -1284,7 +1301,7 @@ run_rr cleanup "$RUN" > /dev/null 2>&1
 mrprep "$RR" ""
 check "prepare: a binary with no version report runs affected on the module root and again on the clone root" \
   "$([ "$(grep -c '^affected ' "$TMP/mr.log")" = 3 ] && grep -q "^affected $RUN/clone/modules/a --diff " "$TMP/mr.log" &&
-     grep -q "^affected $RUN/clone --diff " "$TMP/mr.log" && ! grep -q -- '--module-root' "$TMP/mr.log"; echo $?)"
+     grep -qx "affected $RUN/clone --base $RUN/base --json" "$TMP/mr.log" && ! grep -q -- '--module-root' "$TMP/mr.log"; echo $?)"
 check "prepare: a binary with no version report names its version and the release it needs" \
   "$(grep -qx 'mtf-facts: v0.8.0, no feature report (v0.12.0 or later reports every feature this skill reads); every step uses its older path' "$TMP/mr.out" && [ ! -e "$RUN/state/facts-version.json" ]; echo $?)"
 run_rr cleanup "$RUN" > /dev/null 2>&1
@@ -1296,7 +1313,7 @@ for mrmode in refuse other; do
   unset AFFECTED_MR
   check "prepare: a module root run that is $mrmode falls back to the module root run and a clone root run for the depth" \
     "$(grep -q -- '--module-root' "$TMP/mr.log" && grep -q "^affected $RUN/clone/modules/a --diff " "$TMP/mr.log" &&
-       grep -q "^affected $RUN/clone --diff " "$TMP/mr.log" && [ "$(q "$RUN/affected.json" 'has("module_root") | not')" = 0 ] &&
+       grep -q "^affected $RUN/clone --base $RUN/base " "$TMP/mr.log" && [ "$(q "$RUN/affected.json" 'has("module_root") | not')" = 0 ] &&
        grep -q "^depth .* --affected $RUN/state/affected-depth.json" "$TMP/mr.log"; echo $?)"
   run_rr cleanup "$RUN" > /dev/null 2>&1
 done
@@ -1306,6 +1323,51 @@ export AFFECTED_MR=refuse; mrprep "$SK/review-run-nofall.sh" "$TMP/fv.json"; uns
 check "self-check: the mutant that keeps the module root path gives the depth no affected report" \
   "$( ! cmp -s "$RR" "$SK/review-run-nofall.sh" && ! grep -q "^depth .* --affected " "$TMP/mr.log"; echo $?)"
 [ -z "$RUN" ] || run_rr cleanup "$RUN" > /dev/null 2>&1
+# The merge base tree (review-run-details.md, The Merge Base Tree): an affected run given the
+# merge base tree that fails falls back to the files list, as a run given only that list, and the
+# fallback is in facts-stats.json. Here the merge base holds no file under modules/a, so the module
+# root run takes the files list alone and the clone root run for the depth takes the tree.
+t_base_fb() { # review-run.sh copy -> 0 when the fallbacks hold
+  export AFFECTED_BASE=fail; mrprep "$1" ""; unset AFFECTED_BASE
+  local s=1
+  ! grep -q "^affected $RUN/clone/modules/a --base " "$TMP/mr.log" && grep -q "^affected $RUN/clone/modules/a --diff " "$TMP/mr.log" &&
+    grep -q "^affected $RUN/clone --base $RUN/base " "$TMP/mr.log" && grep -q "^affected $RUN/clone --diff " "$TMP/mr.log" &&
+    [ -f "$RUN/affected.json" ] && [ -f "$RUN/state/affected-depth.json" ] &&
+    [ "$(q "$RUN/facts-stats.json" '(.fallbacks.base_to_diff | index("affected-depth")) != null and (.fallbacks.base_to_diff | index("affected")) == null and .records == 0')" = 0 ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_base_fb "$RR"; check "prepare: an affected run on the merge base tree that fails falls back to the files list, recorded in facts-stats.json" $?
+# The stats records: with flag:affected:stats-file each affected call writes one under state/stats
+# and facts-stats.json sums them; without the flag no call gets --stats-file; a record outside its
+# shape is counted refused and adds nothing.
+jq '.features += ["flag:affected:stats-file"]' "$TMP/fv.json" > "$TMP/fv-stats.json"
+t_stats() { # review-run.sh copy -> 0 when the totals hold
+  mrprep "$1" "$TMP/fv-stats.json"; local s=1
+  grep -q -- "--stats-file $RUN/state/stats/affected-module-root.json" "$TMP/mr.log" &&
+    [ "$(q "$RUN/facts-stats.json" '.format == 1 and .records == 1 and .records_refused == 0 and .facts_seconds == 1.5
+      and .by_command.affected.calls == 1 and .max_rss_bytes == 1000 and (.fallbacks.base_to_diff | index("affected-module-root")) == null')" = 0 ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_stats_off() { mrprep "$1" "$TMP/fv.json"; local s=1
+  ! grep -q -- --stats-file "$TMP/mr.log" && [ ! -e "$RUN/state/stats" ] && [ "$(q "$RUN/facts-stats.json" '.records == 0')" = 0 ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_stats_bad() { export STATS_BAD=1; mrprep "$1" "$TMP/fv-stats.json"; unset STATS_BAD; local s=1
+  [ "$(q "$RUN/facts-stats.json" '.records == 0 and .records_refused == 1 and .facts_seconds == 0')" = 0 ] &&
+    [ "$(q "$RUN/affected.json" '.module_root == "modules/a"')" = 0 ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_stats "$RR"; check "prepare: the stats record of each mtf-facts call is summed in facts-stats.json" $?
+t_stats_off "$RR"; check "prepare: a binary without the stats flag gets no --stats-file" $?
+t_stats_bad "$RR"; check "prepare: a stats record outside its shape is counted refused and changes no report" $?
+rmut() { # name, perl substitution, case function
+  perl -0pe "$2" "$RR" > "$SK/review-run-smut.sh"
+  if cmp -s "$RR" "$SK/review-run-smut.sh"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
+  "$3" "$SK/review-run-smut.sh" > /dev/null 2>&1; check "self-check: $1 is caught" "$([ $? != 0 ]; echo $?)"
+}
+rmut "the affected fallback after the base run dropped" 's/(note "fallback-\$5" "[^"]*")\n/$1; rm -f "\$4"; return 0\n/' t_base_fb
+rmut "stats passed without the feature" 's/  facts_has "flag:\$1:stats-file" && \[\[/  [[/' t_stats_off
+rmut "a stats record taken unchecked" 's/if length == 1 and \(\.\[0\] \| type == "object" and \.schema_version == 1/if length == 1 and (.[0] | type == "object"/' t_stats_bad
 rm -f "$SK/review-run-nofall.sh"
 # The negative self-check: a copy that runs the module root report with no feature check.
 sed 's/\[ -z "\$prefix" \] || ! facts_has flag:affected:module-root || mraff=true/[ -z "$prefix" ] || mraff=true/' "$RR" > "$SK/review-run-nogate.sh"
@@ -1621,7 +1683,7 @@ full; run_rr handover "$RUN" > /dev/null
 T="$RUN/handover/task.md"
 check "empty base: the task states the new module shape and names no diff, changed paths or merge base" \
   "$(grep -qx 'New module: the workspace holds a whole module with no base. Its merge base holds no file under the module root, so every file in the workspace, .git/ excluded, is added.' "$T" &&
-     ! grep -q '^Changed paths:$\|^The diff:$\|^```diff$\|^Diff: \|^Merge base: \|^+++ b/' "$T" &&
+     ! grep -q '^Changed paths:$\|^The diff:$\|^```diff$\|^Diff: \|^Merge base: \|^Base tree: \|^+++ b/' "$T" &&
      grep -qx "Head revision: $HEADC" "$T" && grep -q '^Write short: ' "$T" &&
      awk '/^New module: /{m=NR} /^Write short: /{w=NR} /^UNTRUSTED-[0-9a-f]{12} BEGIN$/{b=NR} END{exit !(m && m < w && w < b)}' "$T"; echo $?)"
 printf '[{"id": "F-001", "rule_id": "profile.owner-identifier", "severity": "MEDIUM", "file": "versions.tf", "line": null, "summary": "The owner is not the family organization.", "suggested_fix": "Name terraform-aws-modules as the owner."}]\n' > "$TMP/f9.json"
@@ -2500,6 +2562,136 @@ want=9230a96b9de7
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"
+
+# --- The merge base tree with a module root it holds (review-run-details.md, The Merge Base Tree).
+# The base and the head carry modules/a, so the module root runs get the tree's module root.
+MA="$TMP/ma"; mkdir -p "$MA/modules/a"
+for f in main.tf variables.tf versions.tf; do printf '# a\n' > "$MA/modules/a/$f"; done
+mbt_setup() { # the repository, its GitHub tree without root Terraform files, the files list
+  mkrepo widget "$MA"; ghfiles open false APPROVED
+  jq '.tree |= map(select(.path | IN("main.tf", "variables.tf", "versions.tf") | not))' "$GHD/tree-$HEADC" > "$TMP/mbt.tree" &&
+    cat "$TMP/mbt.tree" > "$GHD/tree-$HEADC"
+  jq -n '[{filename: "modules/a/main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"}]' > "$GHD/files"
+}
+mbt_setup
+t_mbt() { # review-run.sh copy -> 0 when every module root call took the tree
+  : > "$STUB_LOG"; mrprep "$1" ""; local s=1
+  grep -qx "affected $RUN/clone/modules/a --base $RUN/base/modules/a --json" "$TMP/mr.log" &&
+    grep -q "^behaviour classify .*--dir $RUN/clone/modules/a .*--base $RUN/base/modules/a " "$STUB_LOG" &&
+    grep -q "^behaviour classify .*--dir $RUN/clone .*--base $RUN/base " "$STUB_LOG" &&
+    ! grep -q "^affected $RUN/clone/modules/a --diff $RUN/state/files-module.json " "$TMP/mr.log" && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_mbt "$RR"; check "prepare: classify and affected on a module root the merge base holds get the tree's module root" $?
+rmut "classify on the module root not given the tree" 's/--prefix "\$prefix" \$\{bmod\[\@\]\+"\$\{bmod\[\@\]\}"\} /--prefix "\$prefix" /' t_mbt
+rmut "classify for the depth not given the tree" 's/        \$\{bt\[\@\]\+"\$\{bt\[\@\]\}"\} \$\{sch/        \${sch/' t_mbt
+# A base report that leaves a changed path out, as a gitlink bump gives, falls back to the files list.
+t_short() { # review-run.sh copy -> 0 when the uncovered base report was dropped
+  export AFFECTED_BASE=short; mrprep "$1" ""; unset AFFECTED_BASE; local s=1
+  grep -q "^affected $RUN/clone/modules/a --base " "$TMP/mr.log" && grep -q "^affected $RUN/clone/modules/a --diff " "$TMP/mr.log" &&
+    [ -f "$RUN/state/fallback-affected" ] && [ "$(q "$RUN/affected.json" '.changed == []')" = 0 ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_short "$RR"; check "prepare: an affected base report that leaves a changed path out falls back to the files list" $?
+rmut "the affected base report not held to the files list" 's/jq -e --slurpfile f "\$3" "\$AFF_COVERS" "\$4"/jq -e "type == \\"object\\"" "\$4"/' t_short
+# With affected --module-root: a failing or uncovered base run on the repository root of the tree
+# falls back to the module root run with the files list.
+t_mrfb() { # review-run.sh copy, AFFECTED_BASE value -> 0 when the module root run fell back
+  export AFFECTED_BASE="$2"; mrprep "$1" "$TMP/fv.json"; unset AFFECTED_BASE; local s=1
+  grep -qx "affected $RUN/clone --module-root modules/a --base $RUN/base --json" "$TMP/mr.log" &&
+    grep -q "^affected $RUN/clone --module-root modules/a --diff " "$TMP/mr.log" &&
+    [ -f "$RUN/state/fallback-affected-module-root" ] && [ "$(q "$RUN/affected.json" '.module_root == "modules/a"')" = 0 ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_mrfb_fail() { t_mrfb "$1" fail; }
+t_mrfb_short() { t_mrfb "$1" short; }
+t_mrfb_fail "$RR"; check "prepare: a module root base run that fails falls back to the module root run with the files list" $?
+t_mrfb_short "$RR"; check "prepare: a module root base report that leaves a changed path out falls back the same way" $?
+# A rename whose old path the base report leaves out falls back to the files list.
+t_noprev() { # review-run.sh copy -> 0 when the report without the old path was dropped
+  jq -n '[{filename: "modules/a/main.tf", previous_filename: "modules/a/old.tf", status: "renamed", additions: 0, deletions: 0}]' > "$GHD/files"
+  export AFFECTED_BASE=noprev; mrprep "$1" ""; unset AFFECTED_BASE; local s=1
+  grep -q "^affected $RUN/clone/modules/a --base " "$TMP/mr.log" && grep -q "^affected $RUN/clone/modules/a --diff $RUN/state/files-module.json " "$TMP/mr.log" &&
+    [ -f "$RUN/state/fallback-affected" ] && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; mbt_setup; return "$s"
+}
+t_noprev "$RR"; check "prepare: a base report that leaves out the old path of a rename falls back to the files list" $?
+rmut "the old path of a rename not held" 's/\.filename, \(\.previous_filename \/\/ empty\)\] - \.changed/.filename] - .changed/' t_noprev
+# A module root under a link inside the merge base worktree gets no --base in prepare.
+t_swap() { # review-run.sh copy -> 0 when no module root call took the tree
+  : > "$STUB_LOG"; export BASE_SWAP=1; mrprep "$1" ""; unset BASE_SWAP; local s=1
+  ! grep -q -- "--base $RUN/base/modules/a" "$TMP/mr.log" "$STUB_LOG" && grep -q "^affected $RUN/clone/modules/a --diff $RUN/state/files-module.json " "$TMP/mr.log" &&
+    grep -q "^affected $RUN/clone --base $RUN/base " "$TMP/mr.log" && s=0
+  run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"
+}
+t_swap "$RR"; check "prepare: a module root under a link in the merge base worktree takes the files list" $?
+rmut "prepare not checking the module root of the tree" 's/\[ "\$new_module" = true \] \|\| ! base_root_ok "\$prefix" \|\| bmod=/[ "\$new_module" = true ] || bmod=/' t_swap
+# The skip rules of AFF_COVERS, on the filter taken from the script.
+AC_SRC() { awk '/^AFF_COVERS=/ { on = 1 } on { print } on && /'"'"'$/ { exit }' "${1:-$RR}"; }
+acv() { # script, files list JSON, changed JSON -> 0 when the report counts
+  printf '%s\n' "$2" > "$TMP/ac-files.json"; jq -n --argjson c "$3" '{schema_version: 1, changed: $c}' > "$TMP/ac-rep.json"
+  bash -c "$(AC_SRC "$1")"'; jq -e --slurpfile f "$0" "$AFF_COVERS" "$1"' "$TMP/ac-files.json" "$TMP/ac-rep.json" > /dev/null 2>&1
+}
+t_ac_tfdir() { ! acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".terraform/modules/m/main.tf", "status": "modified"}]' '["a.tf"]' &&
+  acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".terraform/modules/m/main.tf", "status": "modified"}]' '[".terraform/modules/m/main.tf", "a.tf"]'; }
+t_ac_unch() { acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": "b.tf", "status": "unchanged"}]' '["a.tf"]'; }
+t_ac_dot() { ! acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".gitignore", "status": "modified"}]' '["a.tf"]' &&
+  ! acv "$1" '[{"filename": "a.tf", "status": "modified"}, {"filename": ".terraform.lock.hcl", "status": "modified"}]' '["a.tf"]'; }
+t_ac_rename() { ! acv "$1" '[{"filename": "new.tf", "previous_filename": "old.tf", "status": "renamed"}]' '["new.tf"]' &&
+  acv "$1" '[{"filename": "new.tf", "previous_filename": "old.tf", "status": "renamed"}]' '["new.tf", "old.tf"]'; }
+t_ac_tfdir "$RR"; check "affected covers: a committed .terraform file left out drops the base report" $?
+t_ac_unch "$RR"; check "affected covers: an unchanged entry left out keeps the base report" $?
+t_ac_dot "$RR"; check "affected covers: a left out .gitignore or .terraform.lock.hcl drops the base report" $?
+t_ac_rename "$RR"; check "affected covers: a rename needs both paths" $?
+rmut "the covers skip of .git and .terraform paths restored" 's/\.filename, \(\.previous_filename \/\/ empty\)\] - \.changed/.filename, (.previous_filename \/\/ empty) | select(test("(^|\/)\\\\.(git|terraform)(\/|\$)") | not)] - .changed/' t_ac_tfdir
+rmut "the covers skip of unchanged entries dropped" 's/\$f\[0\]\[\] \| select\(\.status != "unchanged"\) \| \.filename/\$f[0][] | .filename/' t_ac_unch
+rmut "the covers rename paths dropped in the filter" 's/\.filename, \(\.previous_filename \/\/ empty\)\] - \.changed/.filename] - .changed/' t_ac_rename
+rmut "the module root fallback after the base run dropped" 's/      if \[ "\$mrok" = false \]; then/      if false; then/' t_mrfb_fail
+rmut "the module root base report not held to the files list" 's/"\$AFF_COVERS"'"'"' and \.module_root == \$p'"'"'/'"'"'type == "object" and .module_root == \$p'"'"'/' t_mrfb_short
+# examples_all counts the selected examples whose affected reason is all: with no affected
+# report that verify-pass.sh select accepts, every example of the root module fixture.
+t_all() { mkrepo widget; ghfiles open false APPROVED; mrprep "$1" ""; local s=1
+  [ "$(q "$RUN/facts-stats.json" '.fallbacks.examples_all > 0')" = 0 ] && s=0; run_rr cleanup "$RUN" > /dev/null 2>&1; return "$s"; }
+t_all "$RR"; check "facts-stats: examples_all counts the examples selected with affected all" $?
+rmut "examples_all read from the reason" 's/select\(\.affected == "all"\)/select(.reason == "all")/' t_all
+
+# The Base tree: line and the module root guard, as functions taken from review-run.sh.
+BT_SRC() { awk '/^(base_root_ok|base_tree_line)\(\) \{/ { on = 1 } on { print } on && /^}$/ { on = 0 }' "${1:-$RR}"; }
+BTW="$TMP/btl"
+bt_base() { # a run directory whose base is a checkout of one commit holding modules/a; sets BTC
+  rm -rf "$BTW"; mkdir -p "$BTW/run"; git init -q "$BTW/run/base" && mkdir -p "$BTW/run/base/modules/a" &&
+    printf '# a\n' > "$BTW/run/base/modules/a/main.tf" &&
+    git -C "$BTW/run/base" add -A && git -C "$BTW/run/base" -c user.name=t -c user.email=t@t commit -q -m b
+  BTC="$(git -C "$BTW/run/base" rev-parse HEAD)"
+}
+btl() { # script, new module, merge base, prefix -> the line printed
+  ( export RUN="$BTW/run" PREFIX="$4"; bash -c "$(BT_SRC "$1"); base_tree_line '$2' '$3'" ) 2> /dev/null
+}
+t_bt_ok() { bt_base; [ "$(btl "$1" false "$BTC" modules/a)" = "Base tree: $BTW/run/base/modules/a" ] && [ "$(btl "$1" false "$BTC" "")" = "Base tree: $BTW/run/base" ]; }
+t_bt_nm() { bt_base; [ -z "$(btl "$1" true "$BTC" modules/a)" ]; }
+t_bt_head() { bt_base; [ -z "$(btl "$1" false 0123456789abcdef0123456789abcdef01234567 modules/a)" ]; }
+t_bt_link() { bt_base; mv "$BTW/run/base" "$BTW/real" && ln -s "$BTW/real" "$BTW/run/base"; [ -z "$(btl "$1" false "$BTC" modules/a)" ]; }
+t_bt_missing() { bt_base; [ -z "$(btl "$1" false "$BTC" modules/b)" ]; }
+t_bt_rootlink() { bt_base; mv "$BTW/run/base/modules/a" "$BTW/elsewhere" && ln -s "$BTW/elsewhere" "$BTW/run/base/modules/a"
+  [ -z "$(btl "$1" false "$BTC" modules/a)" ]; }
+t_bt_ok "$RR"; check "base tree line: a checkout of the merge base names its module root" $?
+t_bt_nm "$RR"; check "base tree line: none for a new module" $?
+t_bt_head "$RR"; check "base tree line: none when the checkout is not the merge base" $?
+t_bt_link "$RR"; check "base tree line: none when the base directory is a link" $?
+t_bt_missing "$RR"; check "base tree line: none when the merge base has no module root" $?
+t_bt_rootlink "$RR"; check "base tree line: none when the module root is a link" $?
+rmut "the base tree line with no merge base check" 's/ \|\| \[ "\$\(git -C "\$RUN\/base" rev-parse HEAD 2> \/dev\/null\)" != "\$2" \]//' t_bt_head
+rmut "the base tree line through a linked base" 's/ \|\| \[ -L "\$RUN\/base" \] \|\|\n    ! base_root_ok/ ||\n    ! base_root_ok/' t_bt_link
+rmut "the base tree line with no module root check" 's/\n    ! base_root_ok "\$PREFIX" \|\| \[/\n    [/' t_bt_missing
+t_bt_uplink() { bt_base; mv "$BTW/run/base/modules" "$BTW/up" && ln -s "$BTW/up" "$BTW/run/base/modules"; [ -z "$(btl "$1" false "$BTC" modules/a)" ]; }
+t_bt_nogit() { bt_base; mv "$BTW/run/base/.git" "$BTW/gitdir" && printf 'gitdir: %s\n' "$BTW/gitdir" > "$BTW/run/base/.git"
+  [ "$(git -C "$BTW/run/base" rev-parse HEAD)" = "$BTC" ] && [ -z "$(btl "$1" false "$BTC" modules/a)" ]; }
+t_bt_uplink "$RR"; check "base tree line: none when a directory above the module root is a link" $?
+t_bt_nogit "$RR"; check "base tree line: none when the base has no .git directory, though it reads as the merge base" $?
+rmut "the module root guard testing only its own path" 's/  \[ -d "\$d" \] && r="\$\(cd "\$d" 2> \/dev\/null && pwd -P\)" && \[ "\$r" = [^\n]*\n/  [ -d "\$d" ] \&\& [ ! -L "\$d" ]\n/' t_bt_uplink
+rmut "the base tree line for a new module" 's/  \[ "\$1" = true \] \|\| \[ -z "\$2" \]/  [ -z "\$2" ]/' t_bt_nm
+rmut "the base tree line with no .git directory check" 's/ \[ ! -d "\$RUN\/base\/\.git" \] \|\| \[ -L "\$RUN\/base" \] \|\|\n    ! base_root_ok "\$PREFIX"/ [ -L "\$RUN\/base" ] ||\n    ! base_root_ok "\$PREFIX"/' t_bt_nogit
+rmut "the module root guard following a link" 's/ && r="\$\(cd "\$d" 2> \/dev\/null && pwd -P\)" && \[ "\$r" = [^\n]*\n/\n/' t_bt_rootlink
 
 echo
 [ "$fails" -eq 0 ] && echo "all checks passed" || echo "$fails check(s) failed"

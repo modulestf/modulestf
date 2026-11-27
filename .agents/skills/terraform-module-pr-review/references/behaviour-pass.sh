@@ -4,10 +4,11 @@
 # in this skill's own checkout, never from the clone under review.
 #
 #   behaviour-pass.sh classify --facts <mtf-facts> --dir <module root>
-#       (--diff <files.json> [--prefix <module root prefix>] | --base <dir>) [--schema <schema.json>] --out <dir>
+#       (--diff <files.json> [--prefix <module root prefix>] [--base <dir>] | --base <dir>) [--schema <schema.json>]
+#       [--stats <file>] --out <dir>
 #   behaviour-pass.sh eval --facts <mtf-facts> --out <dir> --head <sha> --base-sha <sha>
 #       [--claims <claims.json>] [--ladder <ladder.json>] [--wrappers <wrappers.txt>] [--prefix <module root prefix>]
-#       [--plan-diff <coverage.json>]
+#       [--plan-diff <coverage.json>] [--stats <file>]
 #   behaviour-pass.sh diff-dirs --out <dir> [--prefix <module root prefix>]
 #   behaviour-pass.sh wrappers --clone <dir> --head <sha> --diff <files.json> [--prefix <p>] --out <dir>
 #
@@ -16,6 +17,13 @@
 # Wrapper Versions). It reads the head tree with the git form of the reviewer's git-safety.md and
 # runs nothing from the clone. eval with --wrappers makes an unverifiable trigger at a derived or
 # copied wrapper inert.
+#
+# classify with both --diff and --base gives mtf-facts the merge base tree first, and the files list
+# only when that run fails, times out, passes the cap or gives output the checks refuse: the run with
+# --diff is then the one of a classify given --diff alone. <out>/input names the run that counted:
+# "base", "diff", or "diff (base <reason>)". --stats names the file mtf-facts writes its stats record
+# to (its --stats-file), passed only when the binary lists the flag for the command; it changes nothing
+# else, and a fallback run writes its record beside it with ".diff" before ".json".
 #
 # diff-dirs prints, one per line and repository-relative, the directory of each trigger in
 # <out>/behaviour.json whose category is on the plan diff's closed list (behaviour-pass.md, The
@@ -45,13 +53,13 @@ HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 . "$HERE/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
 
 cmd="${1-}"; shift 2> /dev/null
-facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder="" wrappers="" clone="" pdiff=""
+facts="" dir="" diff="" prefix="" base="" schema="" out="" head="" bsha="" claims="" ladder="" wrappers="" clone="" pdiff="" stats=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --facts) facts="${2-}" ;; --dir) dir="${2-}" ;; --diff) diff="${2-}" ;; --prefix) prefix="${2-}" ;; --base) base="${2-}" ;; --schema) schema="${2-}" ;;
     --out) out="${2-}" ;; --head) head="${2-}" ;; --base-sha) bsha="${2-}" ;;
     --claims) claims="${2-}" ;; --ladder) ladder="${2-}" ;; --wrappers) wrappers="${2-}" ;; --clone) clone="${2-}" ;;
-    --plan-diff) pdiff="${2-}" ;;
+    --plan-diff) pdiff="${2-}" ;; --stats) stats="${2-}" ;;
     *) die "unexpected argument" ;;
   esac
   [ $# -ge 2 ] || die "$1 needs a value"; shift 2
@@ -62,6 +70,7 @@ abs "$out" --out
 case "$out" in *:*) die "--out must not contain a colon" ;; esac
 [ -d "$out" ] && [ ! -L "$out" ] || die "--out is not a directory"
 case "$cmd" in wrappers | diff-dirs) ;; *) abs "$facts" --facts ;; esac
+[ -z "$stats" ] || { abs "$stats" --stats; case "$stats" in *.json) ;; *) die "--stats must name a .json file" ;; esac; }
 
 # Shared checks, in jq: a clean module-relative path, and the classifier output of contract 2.
 JQ_DEFS='
@@ -141,11 +150,11 @@ def valid_eval($b; $c):
   and (.discarded_claims | type == "array" and all(.[]; type == "object"))
   and (((.claims + .discarded_claims) | map(.claim_id) | sort) == ($c.claims | map(.claim_id) | sort));
 # A files list, module-relative: every changed path, a rename at its old path too, has an entry.
-# A GitHub "unchanged" status and paths under .git or .terraform take none.
+# A GitHub "unchanged" status takes none. A committed .terraform file is a change like any other, so a
+# report that leaves one out is refused: a binary that reads no .terraform file fails closed here.
 def covers($files):
   . as $o
-  | ([$files[] | select(.status != "unchanged") | .filename, (.previous_filename // empty)
-      | select(test("(^|/)\\.(git|terraform)(/|$)") | not)]
+  | ([$files[] | select(.status != "unchanged") | .filename, (.previous_filename // empty)]
      - [$o.entries[] | .path, (.previous_path // empty)]) == [];
 # The closed list of the plan diff (behaviour-pass.md, The Run Object): an added change whose claim is
 # that existing callers are unaffected. An added variable with no level, so no validation block;
@@ -284,11 +293,28 @@ decl_vars() {
   fi
 }
 
+# classify_run <split> <files list or /dev/null> <args...>: one behaviour run. On "ok" behaviour.json
+# holds its checked output; else it prints the reason and nothing is kept.
+classify_run() {
+  local split="$1" cover="$2" why; shift 2
+  case "$(run_facts "$out/behaviour.raw" behaviour "$dir" "$@" --json)" in
+    big) why="output refused" ;;
+    late) why="mtf-facts timed out" ;;
+    fail) why="mtf-facts failed" ;;
+    ok) if jq -e --slurpfile d "$cover" --argjson split "$split" "$JQ_DEFS"' valid_behaviour($split)
+           and ($d == [] or covers($d[0]))' "$out/behaviour.raw" > /dev/null 2>&1; then
+          mv -- "$out/behaviour.raw" "$out/behaviour.json"; why=ok
+        else why="output refused"; fi ;;
+  esac
+  rm -f -- "$out/behaviour.raw"
+  echo "$why"
+}
+
 classify() {
   abs "$dir" --dir; [ -d "$dir" ] || die "--dir is not a directory"
   [ ! -e "$out/behaviour.json" ] && [ ! -e "$out/status" ] || die "--out already holds a classification"
   local cover=/dev/null
-  if [ -n "$diff" ] && [ -z "$base" ]; then
+  if [ -n "$diff" ]; then
     abs "$diff" --diff
     # The GitHub files list, module-relative: the prefix stripped, paths outside it left out.
     jq -e --arg p "$prefix" 'type == "array" and all(.[]; type == "object" and (.filename | type == "string"))' \
@@ -297,10 +323,11 @@ classify() {
       def rel: if $p == "" then . elif startswith($p) then .[($p | length):] else null end;
       [.[] | .filename |= rel | if has("previous_filename") then .previous_filename |= rel else . end
        | select(.filename != null)]' "$diff" > "$out/files-module.json" || die "--diff cannot be read"
-    set -- --diff "$out/files-module.json"
     cover="$out/files-module.json"
-  elif [ -n "$base" ] && [ -z "$diff" ] && [ -z "$prefix" ]; then abs "$base" --base; set -- --base "$base"
-  else die "classify needs one of --diff and --base, and --prefix only with --diff"; fi
+    [ -z "$base" ] || abs "$base" --base
+  elif [ -n "$base" ] && [ -z "$prefix" ]; then abs "$base" --base
+  else die "classify needs --diff or --base, and --prefix only with --diff"; fi
+  set --
   # The provider schema acquisition wrote, when there is one: a regular file, not a link.
   if [ -n "$schema" ]; then
     abs "$schema" --schema; [ -f "$schema" ] && [ ! -L "$schema" ] || die "--schema is not a regular file"
@@ -313,17 +340,21 @@ classify() {
     facts_features
     facts_has behaviour.off-ladder-cap && split=true
     facts_has behaviour.declarations && facts_has behaviour.schema-required && decl=true
-    case "$(run_facts "$out/behaviour.raw" behaviour "$dir" "$@" --json)" in
-      big) echo "output refused" > "$out/status" ;;
-      late) echo "mtf-facts timed out" > "$out/status" ;;
-      fail) echo "mtf-facts failed" > "$out/status" ;;
-      ok) if jq -e --slurpfile d "$cover" --argjson split "$split" "$JQ_DEFS"' valid_behaviour($split)
-             and ($d == [] or covers($d[0]))' "$out/behaviour.raw" > /dev/null 2>&1; then
-            mv -- "$out/behaviour.raw" "$out/behaviour.json"
-            if [ "$decl" = true ]; then decl_vars; else null_vars; fi
-          else echo "output refused" > "$out/status"; fi ;;
-    esac
-    rm -f -- "$out/behaviour.raw"
+    local st=() why="" bwhy=""
+    [ -z "$stats" ] || ! facts_has flag:behaviour:stats-file || st=(--stats-file "$stats")
+    # The merge base tree first when there is one; with a files list too, that list is the fallback.
+    if [ -n "$base" ]; then
+      why="$(classify_run "$split" "$cover" --base "$base" "$@" ${st[@]+"${st[@]}"})"; bwhy="$why"
+      if [ "$why" = ok ]; then echo base > "$out/input"
+      elif [ -z "$diff" ]; then echo "$why" > "$out/status"; echo base > "$out/input"; fi
+    fi
+    if [ -n "$diff" ] && [ "$why" != ok ]; then
+      [ "${#st[@]}" = 0 ] || [ -z "$base" ] || st=(--stats-file "${stats%.json}.diff.json")
+      why="$(classify_run "$split" "$cover" --diff "$out/files-module.json" "$@" ${st[@]+"${st[@]}"})"
+      [ "$why" = ok ] || echo "$why" > "$out/status"
+      if [ -z "$base" ]; then echo diff > "$out/input"; else printf 'diff (base %s)\n' "$bwhy" > "$out/input"; fi
+    fi
+    [ -f "$out/status" ] || { if [ "$decl" = true ]; then decl_vars; else null_vars; fi; }
   fi
   if [ -f "$out/status" ]; then echo "behaviour: not run: $(cat "$out/status")"
   else jq -r '"behaviour: ran, \(.triggers | length) triggers, \(.capped) over the cap"' "$out/behaviour.json"; fi
@@ -401,6 +432,7 @@ evaluate() {
   fi
   set -- claims-eval --behaviour "$out/behaviour.json" --ladder "$ladder" --head-sha "$head" --base-sha "$bsha"
   [ -n "$claims" ] && set -- "$@" --claims "$claims"
+  if [ -n "$stats" ]; then facts_features; ! facts_has flag:claims-eval:stats-file || set -- "$@" --stats-file "$stats"; fi
   case "$(run_facts "$out/eval.raw" "$@" --json)" in
     big) not_run "output refused" ;;
     late) not_run "mtf-facts timed out" ;;
