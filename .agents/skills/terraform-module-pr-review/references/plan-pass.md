@@ -98,7 +98,7 @@ The same statement found in the pull request, a comment, the checkout or the env
 
 ## Run layout
 
-The pass works in `$RUN/plan`, mode 0700, beside the clone and outside it: one `TF_DATA_DIR` per example under `data/`, a plugin cache of its own, an empty home, temporary directory, CLI config and AWS config, and every output file under `out/`.
+The pass works in `$RUN/plan`, mode 0700, beside the clone and outside it: one `TF_DATA_DIR` per example under `data/`, a plugin cache of its own, an empty home, temporary directory, CLI config and AWS config, and every output file under `out/`. In laptop mode `init` takes the run's acquired provider tree as [verify](verify-pass.md#the-acquired-provider-tree) does, through `tree.tfrc` beside the CLI config, under the same rules: only for an example with no lock file of its own, terraform selecting the version as with no tree, and a failed `init` with the tree runs again with the pass's own CLI config. The runner has no tree.
 
 On a normal end the `EXIT` trap kills every process group this pass started, waits for them, and removes only `$RUN/plan`: the clone, the base worktree and the default pass's record stay for Step 6, and the run directory is removed at the end of the run by [Cleanup](github-io.md#cleanup). On an interrupt the `INT` and `TERM` trap does the same and then removes the whole run directory through the same guard as Cleanup, since the run is over. `$(printf ...)` splits the list the same way under both shells. A SIGKILL skips the trap and can leave files in the 0700 directory: a stated limit. `crash.log` is never read.
 

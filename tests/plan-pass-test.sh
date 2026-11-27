@@ -7,7 +7,7 @@ set -uo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd -P)"
 PP="$SRC/.agents/skills/terraform-module-pr-review/references/plan-pass.sh"
 TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/plan-pass-test.XXXXXX")" && pwd -P)" && [ -n "$TMP" ] || { echo "FAIL no temporary directory"; exit 1; }
-trap 'rm -rf "$TMP"' EXIT
+trap 'chmod -R u+w "$TMP" 2> /dev/null; rm -rf "$TMP"' EXIT
 fails=0
 # The plan cache is off but where a case turns it on: a case that plans one example twice must
 # see the plan run twice.
@@ -74,6 +74,17 @@ cat > "$TMP/bin/terraform" <<EOF
 #!/bin/sh
 echo "\${PWD##*/} \$1" >> "$TMP/tf.log"
 echo "\${TMPDIR:-}" >> "$TMP/tmpdir.log"
+# init logs the CLI configuration it got and keeps a copy of the acquired tree's one; with the
+# file mirror.absent, init with that tree fails
+if [ "\$1" = init ]; then
+  echo "\${PWD##*/} \${TF_CLI_CONFIG_FILE##*/}" >> "$TMP/cfg.log"
+  [ "\${TF_CLI_CONFIG_FILE##*/}" != tree.tfrc ] || cp "\$TF_CLI_CONFIG_FILE" "$TMP/tree.seen"
+  if [ -f "$TMP/mirror.absent" ] && [ "\${TF_CLI_CONFIG_FILE##*/}" = tree.tfrc ]; then
+    printf 'Error: Failed to query available provider packages\n\nhashicorp/aws: no available releases match the given constraints >= 6.80.0\n'; exit 1
+  fi
+  # with the file mirror.big, init with that tree prints past the 1 MiB output cap
+  if [ -f "$TMP/mirror.big" ] && [ "\${TF_CLI_CONFIG_FILE##*/}" = tree.tfrc ]; then head -c 1100000 /dev/zero | tr '\\0' x; exit 1; fi
+fi
 # With the file short-tmp, a provider plugin socket at \$TMPDIR/plugin<10 digits> over macOS's
 # 103 bytes fails as terraform 1.17 fails it
 if [ -f "$TMP/short-tmp" ] && [ \${#TMPDIR} -gt 86 ] && { [ "\$1" = validate ] || [ "\$1" = plan ]; }; then
@@ -883,6 +894,75 @@ for sh in bash zsh; do
   check "$sh: the mutation that gives terraform the run directory's tmp is caught" \
     "$( ! cmp -s "$PP" "$TMP/ppt/plan-pass.sh" && [ "$(lacks "$out" 'plan: planned |')" = 0 ]; echo $?)"
   rm -rf "$TMP/ppt" "$TMP/short-tmp"
+
+  # The acquired provider tree (ladder-pass.sh tree): init of an example with no lock file of its
+  # own takes it, one whose init with the tree fails runs init again with the pass's own
+  # configuration, one with a committed lock file and a run with no tree keep that configuration.
+  MPL="$(perl -0ne 'print $1 if /\nMANIFEST_PL=\x27(.*?)\n\x27\n/s' "${PP%/*}/ladder-pass.sh")"
+  mktree() { # run directory: the tree, manifest and pins acquisition leaves
+    pd="$1/ladder/providers/registry.terraform.io/hashicorp/aws/6.70.0/linux_amd64"
+    mkdir -m 700 "$1/ladder" && mkdir -p "$pd" && printf 'provider\n' > "$pd/terraform-provider-aws_v6.70.0_x5"
+    chmod 755 "$pd/terraform-provider-aws_v6.70.0_x5"; chmod -R a-w "$1/ladder/providers"
+    perl -e "$MPL" "$1/ladder/providers" > "$1/ladder/providers.manifest"
+    printf '{"source":"registry.terraform.io/hashicorp/aws","version":"6.70.0","sha256":"%064d"}\n' 0 > "$1/ladder/pins.jsonl"
+  }
+  treeplan() { # plan-pass.sh copy, run directory: the pass on examples/ok
+    run g0 "$2" > /dev/null; : > "$TMP/cfg.log"; rm -f "$TMP/tree.seen"
+    PATH="$TMP/bin:/usr/bin:/bin" "$sh" "$1" plan "$2" demo --role-arn "$ROLE" examples/ok 2>&1
+  }
+  RT="$(newrun)"; mktree "$RT"; out="$(treeplan "$PP" "$RT")"
+  check "$sh: tree: init takes the acquired tree and the example plans" \
+    "$([ "$(cat "$TMP/cfg.log")" = "ok tree.tfrc" ] && [ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] \
+      && grep -qxF "    path    = \"$RT/ladder/providers\"" "$TMP/tree.seen"; echo $?)"
+  RT="$(newrun)"; mktree "$RT"; : > "$TMP/mirror.absent"; out="$(treeplan "$PP" "$RT")"
+  check "$sh: tree: an init with the tree that fails runs init again with the pass's own configuration" \
+    "$([ "$(tr '\n' '|' < "$TMP/cfg.log")" = "ok tree.tfrc|ok cli.tfrc|" ] && [ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ]; echo $?)"
+  rm -rf "$TMP/ppt"; cp -R "${PP%/*}" "$TMP/ppt"
+  perl -0pe 's/  if \[ "\$rc" -ne 0 \] && \[ "\$rc" -ne 124 \] && \[ "\$tcfg" != .*?\n  fi\n//s' "$PP" > "$TMP/ppt/plan-pass.sh"
+  RT="$(newrun)"; mktree "$RT"; out="$(treeplan "$TMP/ppt/plan-pass.sh" "$RT")"
+  check "$sh: tree: the mutation without the second init is caught" \
+    "$( ! cmp -s "$PP" "$TMP/ppt/plan-pass.sh" && [ "$(lacks "$out" 'plan: planned |')" = 0 ]; echo $?)"
+  rm -f "$TMP/mirror.absent"
+  RT="$(newrun)"; mktree "$RT"; printf 'provider "registry.terraform.io/hashicorp/aws" {\n}\n' > "$RT/clone/examples/ok/.terraform.lock.hcl"
+  git -C "$RT/clone" add examples/ok/.terraform.lock.hcl && git -C "$RT/clone" -c user.name=t -c user.email=t@example.invalid commit -qm lock
+  out="$(treeplan "$PP" "$RT")"
+  check "$sh: tree: an example with a committed lock file keeps the pass's own configuration" \
+    "$([ "$(cat "$TMP/cfg.log")" = "ok cli.tfrc" ]; echo $?)"
+  perl -pe 's/ \|\| \[ -e .terraform.lock.hcl \] \|\| \[ -L .terraform.lock.hcl \]//' "$PP" > "$TMP/ppt/plan-pass.sh"
+  git -C "$RT/clone" checkout -q examples/ok/.terraform.lock.hcl 2> /dev/null; rm -rf "$RT/plan"
+  out="$(treeplan "$TMP/ppt/plan-pass.sh" "$RT")"
+  check "$sh: tree: the mutation that gives an example with a lock file the tree is caught" \
+    "$( ! cmp -s "$PP" "$TMP/ppt/plan-pass.sh" && [ "$(cat "$TMP/cfg.log")" = "ok tree.tfrc" ]; echo $?)"
+  rm -rf "$TMP/ppt"
+  RT="$(newrun)"; out="$(treeplan "$PP" "$RT")"
+  check "$sh: tree: a run with no tree keeps the pass's own configuration" "$([ "$(cat "$TMP/cfg.log")" = "ok cli.tfrc" ]; echo $?)"
+  # An init with the tree that a limit stopped, here the output cap, runs no second init.
+  rm -rf "$TMP/ppt"; cp -R "${PP%/*}" "$TMP/ppt"
+  perl -pe 's/ && \[ "\$rc" -ne 124 \] && \[ "\$tcfg" != "\$PLAN\/cli.tfrc" \]/ \&\& [ "\$tcfg" != "\$PLAN\/cli.tfrc" ]/' "$PP" > "$TMP/ppt/plan-pass.sh"
+  : > "$TMP/mirror.big"
+  RT="$(newrun)"; mktree "$RT"; out="$(treeplan "$PP" "$RT")"
+  check "$sh: tree: an init with the tree that the output cap stopped runs no second init" \
+    "$([ "$(cat "$TMP/cfg.log")" = "ok tree.tfrc" ] && [ "$(has "$out" 'plan: environment (output-cap)')" = 0 ]; echo $?)"
+  RT="$(newrun)"; mktree "$RT"; out="$(treeplan "$TMP/ppt/plan-pass.sh" "$RT")"
+  check "$sh: tree: the mutation that runs init again after a limit is caught" \
+    "$( ! cmp -s "$PP" "$TMP/ppt/plan-pass.sh" && [ "$(cat "$TMP/cfg.log")" != "ok tree.tfrc" ]; echo $?)"
+  rm -f "$TMP/mirror.big"; rm -rf "$TMP/ppt"
+  # The budget spent when an init with the tree fails: the class budget, no second init. pe_init
+  # taken from the script, with the gates passed and init failing as it spends the budget.
+  peinit() { # plan-pass.sh copy: the class and the number of init runs
+    fn="$(perl -0ne 'print $1 if /\n(pe_init\(\) \{.*?\n\})\n/s' "$1")"; rm -rf "$TMP/pe"; mkdir -p "$TMP/pe/ex"; : > "$TMP/pe/g0"
+    W="$TMP/pe" FN="$fn" bash -c '
+      PLAN="$W"; PTREE="$W/tree.tfrc"; GATES_PL=; GMODE=laptop; TFENV=(env)
+      left() { if [ -e "$W/spent" ]; then echo 0; else echo "$1"; fi; }
+      run_capped() { : > "$W/spent"; echo run >> "$W/runs.log"; return 1; }
+      class_of() { echo code-error; }; scope() { :; }; committed_locks() { :; }; rel() { cat; }
+      drop_lock() { :; }; set_env() { :; }; post_init() { :; }
+      eval "$FN"; pe_init "$W/ex" ex "$W" "$W/g0"; printf "%s %s\n" "$CLASS" "$(wc -l < "$W/runs.log" | tr -d " ")"'
+  }
+  perl -pe '$_ = "" if /^    \[ "\$\(left 1\)" -gt 0 \] \|\| \{ CLASS=budget; return; \}$/' "$PP" > "$TMP/pp-nobudget.sh"
+  check "$sh: tree: the budget spent as an init with the tree fails is the class budget" "$([ "$(peinit "$PP")" = "budget 1" ]; echo $?)"
+  check "$sh: tree: the mutation that grades the failed init instead is caught" \
+    "$( ! cmp -s "$PP" "$TMP/pp-nobudget.sh" && [ "$(peinit "$TMP/pp-nobudget.sh")" != "budget 1" ]; echo $?)"
 
   # The default pass's init left a lock file naming a provider outside the allowlist.
   printf 'provider "registry.terraform.io/hashicorp/null" {\n}\n' > "$R/clone/examples/ok/.terraform.lock.hcl"

@@ -648,6 +648,13 @@ if [ -z "$PHASE" ] || [ "$PHASE" = init ]; then
   mkdir "$PLAN/data" "$PLAN/cache" "$PLAN/home" "$PLAN/tmp" "$PLAN/out" "$PLAN/state" "$PLAN/saved"
   : > "$PLAN/cli.tfrc"; : > "$PLAN/aws-config"; : > "$PLAN/aws-credentials"
 fi
+# Laptop mode: the provider tree this run's acquisition unpacked, as verify takes it
+# (verify-pass.md, The acquired provider tree): when terraform selects the version the tree holds,
+# init links it from there instead of unpacking it again. The runner has no such tree.
+PTREE=
+if [ "$GMODE" = laptop ] && [ -z "$PHASE" ] && bash "$HERE/ladder-pass.sh" tree "$RUN" --out "$PLAN/tree.tfrc" > /dev/null 2>&1; then
+  PTREE="$PLAN/tree.tfrc"
+fi
 PGIDS=""
 PTMP="$PLAN/tmp" # terraform's TMPDIR; in laptop mode a short directory made below
 plan_stop() { # kill every process group this pass started, then remove the pass's own files
@@ -1298,8 +1305,18 @@ pe_init() { # absolute example directory, key, root (the clone or the base workt
   drop_lock
   rm -rf .terraform
   AK=; SK=; ST=; set_env "$2"
-  run_capped "$(left 180)" "$PLAN/out/$2-init.txt" "${TFENV[@]}" terraform init -backend=false -input=false -no-color
-  rc=$?; CLASS="$(class_of "$rc" "$PLAN/out/$2-init.txt" init)"; out="$PLAN/out/$2-init.txt"
+  # The acquired tree only for an example with no lock file of its own, which terraform could not
+  # check against an unpacked tree; a failed init runs again as the pass always ran it, but not one a
+  # limit stopped, and the budget spent by then is the class budget.
+  tcfg="$PLAN/cli.tfrc"; [ -z "$PTREE" ] || [ -e .terraform.lock.hcl ] || [ -L .terraform.lock.hcl ] || tcfg=$PTREE
+  run_capped "$(left 180)" "$PLAN/out/$2-init.txt" "${TFENV[@]}" TF_CLI_CONFIG_FILE="$tcfg" terraform init -backend=false -input=false -no-color
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ] && [ "$tcfg" != "$PLAN/cli.tfrc" ]; then
+    [ "$(left 1)" -gt 0 ] || { CLASS=budget; return; }
+    run_capped "$(left 180)" "$PLAN/out/$2-init.txt" "${TFENV[@]}" terraform init -backend=false -input=false -no-color
+    rc=$?
+  fi
+  CLASS="$(class_of "$rc" "$PLAN/out/$2-init.txt" init)"; out="$PLAN/out/$2-init.txt"
   if [ "$CLASS" = ok ]; then
     pi="$(post_init "$2" "$1")"
     SCOPE="$SCOPE$(sed -n 's/^dir //p' "$PLAN/out/$2-modules.txt" 2>/dev/null | sort -u | rel | tr '\n' ' ')"

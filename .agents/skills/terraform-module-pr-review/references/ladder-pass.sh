@@ -23,6 +23,13 @@
 #       ladder-fixtures/, the real provider from this run's acquisition, a prior state and
 #       a control run; needs --schema, the schema acquisition wrote.
 #       Writes the record and exits 0; exit 2 is a usage error or a refused input.
+#   bash /abs/path/ladder-pass.sh tree <run-dir> --out <cli.tfrc>
+#       After an acquisition: checks the provider tree against its manifest and writes a
+#       terraform CLI configuration that offers the tree beside the registry for every provider,
+#       so terraform selects the version it would select with no tree, and a later pass of the
+#       same run links the acquired provider from the tree when it selects that version instead
+#       of unpacking it again. Writes nothing else and takes no lease.
+#       Exit 0 with the file written, 1 with "tree unusable: <reason>", 2 a usage error.
 #
 # <run-dir> is the absolute run directory "<root>/pr-review.XXXXXX". Everything this script
 # writes lives in <run-dir>/ladder (mode 0700), outside the clone. Every command takes
@@ -31,7 +38,7 @@
 CMD=${1:-}
 RUN=${2:-}
 die() { echo "ladder-pass.sh: $1" >&2; exit 2; }
-case "$CMD" in probe|acquire|run|_fetch) ;; *) die "usage: ladder-pass.sh probe|acquire|run <run-dir> ..." ;; esac
+case "$CMD" in probe|acquire|run|tree|_fetch) ;; *) die "usage: ladder-pass.sh probe|acquire|run|tree <run-dir> ..." ;; esac
 case "$RUN" in /?*) ;; *) die "the run directory must be absolute" ;; esac
 [ -d "$RUN" ] && [ ! -L "$RUN" ] || die "no run directory: $RUN"
 RUN="$(cd "$RUN" && pwd -P)"
@@ -478,6 +485,36 @@ prov_config() { # pins jsonl, platform: the CLI configuration that runs each pin
     printf '  }\n  filesystem_mirror {\n    path = "%s"\n  }\n}\n' "$L/mirror"
   } > "$L/etc/provider.tfrc"
 }
+
+# --- the tree for the other passes -------------------------------------------------------------
+# Read only: the tree as acquisition left it, every hash checked, and one directory per pin. The
+# configuration offers the tree beside the registry: terraform selects the newest version the
+# constraints allow across both, as with no tree, and takes it from the tree only when the tree
+# holds that version. It links a provider from an unpacked mirror rather than copying it and
+# writes nothing into the tree. The read-only mode stops terraform writing there, not a provider
+# that runs as the same user. No other pass may run while L3 does: its sweep kills every process
+# whose executable lies under the tree.
+if [ "$CMD" = tree ]; then
+  why() { echo "tree unusable: $1"; exit 1; }
+  case "$OUT" in /?*) ;; *) die "--out must be an absolute path" ;; esac
+  [ -d "$L" ] && [ ! -L "$L" ] && [ -O "$L" ] || why "no acquisition"
+  pathok "$P" || why "path"
+  [ -d "$P" ] && [ ! -L "$P" ] && [ -f "$L/providers.manifest" ] && [ ! -L "$L/providers.manifest" ] && [ -s "$L/providers.manifest" ] \
+    && [ -f "$L/pins.jsonl" ] && [ ! -L "$L/pins.jsonl" ] || why "no acquisition"
+  # perl refuses a link, a second name of a file or an odd entry by its exit status
+  m="$(perl -e "$MANIFEST_PL" "$P")" && [ "$m" = "$(cat "$L/providers.manifest")" ] || why "the tree differs from its manifest"
+  srcs="$(jq -r 'select((.source | type == "string" and test("^[a-z0-9.-]+/[a-z0-9-]+/[a-z0-9-]+$"))
+    and (.version | type == "string" and test("^[0-9]+[.][0-9]+[.][0-9]+$"))) | "\(.source)\t\(.version)"' "$L/pins.jsonl" 2> /dev/null)" \
+    && [ -n "$srcs" ] && [ "$(printf '%s\n' "$srcs" | wc -l)" -eq "$(grep -c . "$L/pins.jsonl")" ] || why "pins"
+  inc=
+  while IFS="$(printf '\t')" read -r src ver; do
+    [ -d "$P/$src/$ver" ] && [ ! -L "$P/$src/$ver" ] || why "no directory for $src $ver"
+    inc="$inc${inc:+, }\"$src\""
+  done <<< "$srcs"
+  printf 'provider_installation {\n  filesystem_mirror {\n    path    = "%s"\n    include = [%s]\n  }\n  direct {}\n}\n' \
+    "$P" "$inc" > "$OUT.tmp" && mv -- "$OUT.tmp" "$OUT" || die "cannot write $OUT"
+  exit 0
+fi
 
 # --- probe -----------------------------------------------------------------------------------
 if [ "$CMD" = probe ]; then
