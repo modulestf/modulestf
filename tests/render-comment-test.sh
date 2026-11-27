@@ -2917,6 +2917,27 @@ check "behaviour: a head that validates in one example keeps the plain line" "$(
 t_binv_absent; check "behaviour: examples where terraform was not installed get no validate clause" $?
 t_binv_mb; check "behaviour: merge base re-runs that did not run keep the validate clause" $?
 t_binv_zero; check "behaviour: no example counted gives no validate clause" $?
+# --- A trigger whose only cause is a review tool limit names it; it is still a rule 4 unknown.
+LIM_TR="[$(bt T-001 literal-argument-change unverifiable | jq -c '. + {limit: "module-call-argument"}'), $(bt T-002 wrapper-change unverifiable)]"
+t_blimit() {
+  render "$NONE" "" "" "$(brun limit "$LIM_TR" '[]')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] \
+    && grep -qxF -- '- Behaviour change at `main.tf:2` (literal-argument-change): not verified, a review tool limit: a module call argument, which no plan shows.' "$O/comment.md" \
+    && grep -qxF -- '- Behaviour change at `main.tf:2` (wrapper-change): not verified.' "$O/comment.md"
+}
+t_blimit; check "behaviour: a tool limit is named on its trigger line, and the verdict stays at rule 4" $?
+for tok in file-size:'a file over the size limit the review reads' parser-limit:'a file over the limits of the HCL parser' \
+    no-input-states:'a reference the offline sweep has no states for'; do
+  render "$NONE" "" "" "$(brun "limit-${tok%%:*}" "[$(bt T-001 default-change unverifiable | jq -c --arg t "${tok%%:*}" '. + {limit: $t}')]" '[]')"
+  check "behaviour: the ${tok%%:*} limit text" "$(grep -qxF -- "- Behaviour change at \`main.tf:2\` (default-change): not verified, a review tool limit: ${tok#*:}." "$O/comment.md"; echo $?)"
+done
+t_blimit_bad() { render "$NONE" "" "" "$(brun limit-bad "[$(bt T-001 default-change unverifiable | jq -c '. + {limit: "expression-size"}')]" '[]')"; [ "$ST" != 0 ] && empty_out; }
+t_blimit_state() { render "$NONE" "" "" "$(brun limit-state "[$(bt T-001 default-change covered | jq -c '. + {limit: "file-size"}')]" '[]')"; [ "$ST" != 0 ] && empty_out; }
+t_blimit_bad; check "behaviour: a limit off the closed list is refused" $?
+t_blimit_state; check "behaviour: a limit on a covered trigger is refused" $?
+# With the validate clause, that clause names the cause: no limit row.
+render "$NONE" "" "" "$(binv limit "$LIM_TR" 0)"
+check "behaviour: the validate clause takes the place of the limit text" "$(grep -qxF -- '- Behaviour change at `main.tf:2` (literal-argument-change): not verified (the head does not validate in any example).' "$O/comment.md"; echo $?)"
 # Validate never ran in an example skipped as a version bump only: no clause, though none validated.
 t_binv_vbump() {
   render "$NONE" "" "" "$(binv vbump "$TR6" 0 '[]' 3 3)"
@@ -2933,6 +2954,9 @@ mutate "the validate clause dropped" 's/\(if \$invalid then "-invalid" else "" e
 mutate "the validate clause over head-side gaps" 's/\n      and all\(\$run\.verify_gaps\[\]; \.reason \| startswith\("merge base "\)\)//' t_binv_absent
 mutate "the validate clause with no example counted" 's/\.count > 0 and \.validated == 0/.validated == 0/' t_binv_zero
 mutate "the validate clause over version bump skips" 's/ and \.skipped == 0\)/)/' t_binv_vbump
+mutate "limit: never named" 's/if \$why == "" and \.limit != null/if false/' t_blimit
+mutate "limit: any token taken" 's/\(\(\.limit \| IN\(behaviour_limits\[\]\)\) and \.state == "unverifiable"\)/(.state == "unverifiable")/' t_blimit_bad
+mutate "limit: a token on any state taken" 's/\(\(\.limit \| IN\(behaviour_limits\[\]\)\) and \.state == "unverifiable"\)/(.limit | IN(behaviour_limits[]))/' t_blimit_state
 mutate "skipped examples left out of the example count bound" 's/\.examples\.validated \+ \.examples\.skipped <=/.examples.validated <=/' t_exbad3
 
 # --- A known MEDIUM blocker outranks unknowns (verdict.md, The Ladder, rule 6): block at rule 6,

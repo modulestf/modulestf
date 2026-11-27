@@ -960,6 +960,23 @@ refuse_e "257 outstanding ids" '.triggers[0].outstanding = ([range(257) | "T-001
 refuse_e "a digest that is not 64 hex" '.triggers[0].outstanding = ["T-001|L1|a|value"] | .triggers[0].evidence_digest = "ABC"'
 refuse_e "a digest with no outstanding difference" ".triggers[0].evidence_digest = \"$DG\""
 refuse_e "a verified trigger with outstanding differences" '.triggers[0].state = "verified" | .triggers[0].outstanding = ["T-001|L1|a|value"]'
+# --- Contract 8: claims-eval's limit token crosses to the run object and the record line of an
+# unverifiable trigger; a token off the closed list or on another state is refused.
+t_limit() {
+  setup; jq '.triggers[0].limit = "module-call-argument"' "$TMP/eval-556.json" > "$TMP/eval.out"
+  classify; evalp --claims "$TMP/claims-556.json"
+  [ "$(q '.triggers[0].limit == "module-call-argument" and (.triggers[1] | has("limit") | not)')" = 0 ] &&
+    grep -qxF 'trigger T-001 `main.tf` line 2 wrapper-change: unverifiable, limit module-call-argument' "$O/record.txt"
+}
+t_limit; check "limit: the token crosses to the run trigger and its record line" $?
+for tok in file-size parser-limit no-input-states; do
+  setup; jq --arg t "$tok" '.triggers[0].limit = $t' "$TMP/eval-556.json" > "$TMP/eval.out"
+  classify; evalp --claims "$TMP/claims-556.json"
+  check "limit: $tok crosses" "$(q '.triggers[0].limit == "'"$tok"'"')"
+done
+refuse_e "a limit off the closed list" '.triggers[0].limit = "expression-size"'
+refuse_e "a limit on a covered trigger" '.triggers[0].state = "covered" | .triggers[0].limit = "file-size"'
+refuse_e "a limit that is no string" '.triggers[0].limit = 1'
 setup
 jq '.triggers[0].also_categories = ["default-change", "provider-version-floor-change"]' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
 classify; evalp --claims "$TMP/claims-556.json"
@@ -1296,6 +1313,20 @@ wmutate() { # name, perl substitution, case function [, file mutated, behaviour-
   BP="$keep"; fails="$before"
   check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
+t_limit_refused() { # a token off the list is refused
+  setup; jq '.triggers[0].limit = "expression-size"' "$TMP/eval-556.json" > "$TMP/eval.out"
+  classify; evalp --claims "$TMP/claims-556.json"
+  jq -e '.status == "not-run" and .reason == "output refused"' "$O/run-behaviour.json" > /dev/null
+}
+t_limit_state() { # a token on a covered trigger is refused
+  setup; jq '.triggers[0].state = "covered" | .triggers[0].limit = "file-size"' "$TMP/eval-556.json" > "$TMP/eval.out"
+  classify; evalp --claims "$TMP/claims-556.json"
+  jq -e '.status == "not-run" and .reason == "output refused"' "$O/run-behaviour.json" > /dev/null
+}
+wmutate "limit: any token taken" 's/\(\.limit \| IN\([^)]*\)\)/true/' t_limit_refused
+wmutate "limit: a token on any state taken" 's/ and \.state == "unverifiable"\)\)\n        and \(\.id as/))\n        and (.id as/' t_limit_state
+wmutate "limit: not copied to the run trigger" 's/"evidence_digest", "limit"\)/"evidence_digest")/' t_limit
+wmutate "limit: left out of the record line" 's/ \+ \(if \$et\.limit != null then ", limit \\\(\$et\.limit\)" else "" end\)//' t_limit
 t_untriggered() { # an entry with no trigger and not inert is refused
   setup; jq '.entries += [{path: "x.tf", change_kind: "modified", inert: false, trigger_ids: []}]' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
   classify; evalp --claims "$TMP/claims-556.json"
