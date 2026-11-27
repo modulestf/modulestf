@@ -608,11 +608,11 @@ t_pd_old() { pdx && q '[.triggers[] | select(.id | IN("T-012", "T-009", "T-007",
 t_pd_old; check "identical: an argument from an existing variable, a propagation candidate, a literal and the terraform block are not marked" $?
 t_pd_shape() { pdx && q '.triggers[] | select(.id == "T-010") | has("identical") | not' | grep -qx 0; }
 t_pd_shape; check "identical: an argument from a new variable whose default is not null is not marked" $?
-# A dynamic block whose for_each is exactly a variable the change adds, whatever its default.
+# A dynamic block whose for_each is exactly a variable the change adds with no level.
 DYN='.triggers |= map(if .id == "T-014" then .head_expr = "var.new_on" | .referenced_inputs = [{name: "new_on", type: "map(string)"}] else . end)'
 t_pd_dyn() { pdx . . "$DYN" && q '.triggers[] | select(.id == "T-014") | .identical == ["examples/complete", "examples/minimal"]' | grep -qx 0 \
   && grep -qxF 'trigger T-014 `main.tf` line 13 dynamic-block-change: unverifiable, identical' "$O/record.txt"; }
-t_pd_dyn; check "identical: a dynamic block whose for_each is a new variable with a non-null default is marked" $?
+t_pd_dyn; check "identical: a dynamic block whose for_each is a new variable with no level is marked" $?
 t_pd_dynold() { pdx . . "$DYN"' | .triggers |= map(if .id == "T-014" then .head_expr = "var.old_existing" | .referenced_inputs = [{name: "old_existing", type: "map(string)"}] else . end)' \
   && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
 t_pd_dynold; check "identical: a dynamic block over an existing variable is not marked" $?
@@ -627,6 +627,29 @@ t_pd_dynwrap() { pdx . . "$DYN"' | .triggers |= map(if .id == "T-014" then .head
 t_pd_dynwrap; check "identical: a dynamic block whose for_each wraps the new variable is not marked" $?
 t_pd_dyndiff() { pdx '.plan_diff[1].result = "differs"' . "$DYN" && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
 t_pd_dyndiff; check "identical: a dynamic block whose example plans differ is not marked" $?
+# A static block made dynamic: the engine reads only the for_each, while the content may read an
+# existing input, so a removed or edited block of the same type keeps the new one off the list.
+t_pd_dynstatic() { pdx . . "$DYN"' | .triggers += [{id: "T-021", file: "main.tf", line: 13, category: "unclassified-change", change_kind: "removed",
+    address: "aws_lb_listener.secondary", attribute: "default_action", base_expr: null, head_expr: null, levels: ["L4"],
+    referenced_inputs: [], contextual_refs: [], contextual_ref_details: []}] | .entries[0].trigger_ids += ["T-021"]' \
+    '.triggers += [{id: "T-021", state: "unverifiable", reason: "x"}]' \
+  && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
+t_pd_dynstatic; check "identical: a static block made dynamic is not marked" $?
+t_pd_dynedit() { pdx . . "$DYN"' | .triggers += [{id: "T-021", file: "main.tf", line: 14, category: "unclassified-change", change_kind: "modified",
+    address: "aws_lb_listener.secondary", attribute: "dynamic.default_action.content.type", base_expr: "\"a\"", head_expr: "\"b\"", levels: ["L4"],
+    referenced_inputs: [], contextual_refs: [], contextual_ref_details: []}] | .entries[0].trigger_ids += ["T-021"]' \
+    '.triggers += [{id: "T-021", state: "unverifiable", reason: "x"}]' \
+  && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
+t_pd_dynedit; check "identical: a dynamic block beside an edit inside a block of its type is not marked" $?
+t_pd_dynfull() { pdx . . "$DYN"' | .triggers |= map(if .id == "T-018" then .levels = ["L4"] else . end)' \
+  && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
+t_pd_dynfull; check "identical: a dynamic block over a new variable with a level, a non-empty default or a validation block, is not marked" $?
+t_pd_dyndecl() { pdx . . "$DYN"' | .triggers |= map(if .id == "T-018" then .declaration = {added: true, default: "other", nullable: "unset"} else . end)' \
+  && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
+t_pd_dyndecl; check "identical: a dynamic block over a new variable whose default is not a literal is not marked" $?
+t_pd_dynlit() { pdx . . "$DYN"' | .triggers |= map(if .id == "T-018" then .declaration = {added: true, default: "literal", nullable: "unset"} else . end)' \
+  && q '.triggers[] | select(.id == "T-014") | .identical == ["examples/complete", "examples/minimal"]' | grep -qx 0; }
+t_pd_dynlit; check "identical: a dynamic block over a new variable with a literal default and no level is marked" $?
 t_pd_wrap() { pdx . . '.triggers |= map(if .id == "T-008" then .head_expr = "coalesce(var.new_idle, 60)" else . end)' \
   && q '.triggers[] | select(.id == "T-008") | has("identical") | not' | grep -qx 0; }
 t_pd_wrap; check "identical: a function around the new variable is not marked" $?
@@ -1355,10 +1378,14 @@ wmutate "identical: a trigger in an example directory marked" 's/\n           or
 wmutate "identical: a variable with a level marked" 's/ and \$t\.levels == \[\] then "variable"/ then "variable"/' t_pd_valid
 wmutate "identical: an argument at any level marked" 's/-\]\*\$"\)\) and \$t\.levels == \["L4"\]\n/-]*\$"))\n/' t_pd_l1
 wmutate "identical: coverage with no head calls read" 's/\n           or \(any\(\$l\.coverage\.examples\[\]; \(\.module_calls \| type\) == "object" and \.module_calls != \{\}\) \| not\)//' t_pd_nocalls
-wmutate "identical: a dynamic block over any variable" 's/\n      and any\(\$b\.triggers\[\]; \.address == \("var\." \+ \$n\) and \.change_kind == "added"[^\n]*\)\)/)/' t_pd_dynold
-wmutate "identical: a dynamic block over a variable of another directory" 's/ and \(\.file \| tdir\) == \$d\)\)/))/' t_pd_dyndir
+wmutate "identical: a dynamic block over any variable" 's/any\(\$b\.triggers\[\]; \.address == \("var\." \+ \$n\).*?\(\.file \| tdir\) == \$d\)/true/s' t_pd_dynold
+wmutate "identical: a dynamic block over a variable of another directory" 's/ and \(\.file \| tdir\) == \$d\)/)/' t_pd_dyndir
 wmutate "identical: a nested dynamic block" 's/test\("\^dynamic\\\\\.\[A-Za-z_\]\[A-Za-z0-9_-\]\*\$"\)/true/' t_pd_dynnest
-wmutate "identical: any for_each over the new variable" 's/      \| \$t\.head_expr == \("var\." \+ \$n\)\n      and /      | /' t_pd_dynwrap
+wmutate "identical: any for_each over the new variable" 's/      \| \$t\.head_expr == \("var\." \+ \$n\)\n/      | true\n/' t_pd_dynwrap
+wmutate "identical: a dynamic block beside a removed block of its type" 's/\n      and \(any\(\$b\.triggers\[\]; \.address == \$t\.address and \.change_kind != "added".*?\| not\)\)/)/s' t_pd_dynstatic
+wmutate "identical: a dynamic block beside an edited block of its type" 's/ and \.change_kind != "added"\n/ and .change_kind == "removed"\n/' t_pd_dynedit
+wmutate "identical: a dynamic block over a new variable with a level" 's/ and \.levels == \[\] and \(\.declaration == null/ and (.declaration == null/' t_pd_dynfull
+wmutate "identical: a dynamic block over a default that is not a literal" 's/ and \(\.declaration == null or \.declaration\.default == "literal"\)//' t_pd_dyndecl
 wmutate "identical: the list not sorted" 's/\| unique \| \.\[:20\]/| .[:20]/' t_pd_sort
 wmutate "identical: the list not capped" 's/\| unique \| \.\[:20\]/| unique/' t_pd_cap
 wmutate "identical: beside unexercised" 's/if \$i != \[\] and \(unex\(\$t; \$et\) \| not\) then \{identical/if \$i != [] then {identical/' t_pd_unex
