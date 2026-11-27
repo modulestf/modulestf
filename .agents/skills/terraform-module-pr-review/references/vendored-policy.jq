@@ -35,6 +35,7 @@ def up_statement:
 def upstream:
   if type != "object" or ((keys - ["Version", "Id", "Statement"]) != []) or (.Statement == null)
   then error("upstream unreadable")
+  elif .Version != null and .Version != "2012-10-17" then error("unsupported version")
   else {statements: [.Statement | if type == "array" then .[] else . end | up_statement]} end;
 
 # A value of the report: plain text, or a template whose references are the profile's
@@ -47,7 +48,10 @@ def facts_value($s): if type == "string" then .
 def facts_list($s): if . == null then null else map(facts_value($s)) | sort end;
 def facts_principal($s): if . == null then null
   else [.[] | .type as $t | .identifiers[] | "\($t)=\(facts_value($s))"] | sort end;
-def facts_doc($s): {statements: [.statements[] | {effect,
+# A policy language version other than 2012-10-17 reads policy variables as literal text, so
+# only that version, or none (the provider's default), is compared.
+def facts_doc($s): if (.version // "2012-10-17") != "2012-10-17" then error("unsupported version") else . end
+  | {statements: [.statements[] | {effect,
   action: (.actions | facts_list($s)), not_action: (.not_actions | facts_list($s)),
   resource: (.resources | facts_list($s)), not_resource: (.not_resources | facts_list($s)),
   principal: (.principals | facts_principal($s)), not_principal: (.not_principals | facts_principal($s)),

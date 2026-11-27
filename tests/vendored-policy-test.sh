@@ -641,6 +641,45 @@ t_engine() { # an engine without the command, a report outside its shape: no evi
 }
 t_engine; check "engine: no iam-policy-docs command, another schema, a failed run give no evidence" $?
 
+t_version() { # a policy language version other than 2012-10-17, on any side, gives no evidence
+  local ok=0 b h o
+  o="$(variant ver2008 's/  count = var.create \? 1 : 0\n\n  statement/  count   = var.create ? 1 : 0\n  version = "2008-10-17"\n\n  statement/' | head -n 1)"
+  [ "$o" = "policies.tf widget unknown unsupported version" ] || { echo "  version: head gave $o" >&2; ok=1; }
+  b="$(printf '%s' "$BASE_TF" | perl -0pe 's/  count = var.create \? 1 : 0\n\n  statement/  count   = var.create ? 1 : 0\n  version = "2008-10-17"\n\n  statement/')"
+  read -r c bb hh <<< "$(repo verbase "$b" "$HEAD_TF")"
+  o="$(vp "$c" "$bb" "$hh" | head -n 1)"
+  [ "$o" = "policies.tf widget unknown base unsupported version" ] || { echo "  version: base gave $o" >&2; ok=1; }
+  # the version the provider writes when none is set is no difference
+  o="$(variant ver2012 's/  count = var.create \? 1 : 0\n\n  statement/  count   = var.create ? 1 : 0\n  version = "2012-10-17"\n\n  statement/')"
+  grep -qxF 'policies.tf widget upstream equal' <<< "$o" || { echo "  version: 2012-10-17 not equal" >&2; ok=1; }
+  up_file "$C2" "$(jq -c '.Version = "2008-10-17"' <<< "$UPJ")"
+  o="$(vp "$MAIN" "$MB" "$MH" | head -n 1)"
+  [ "$o" = "policies.tf widget unknown unsupported version" ] || { echo "  version: upstream gave $o" >&2; ok=1; }
+  up_file "$C2" "$UPJ"
+  return "$ok"
+}
+t_version; check "version: 2008-10-17 in the head, the base or upstream gives no evidence; 2012-10-17 written out is equal" $?
+
+t_dupkey() { # an upstream object that writes a key twice, plainly or escaped, gives no evidence
+  local ok=0 j o
+  for j in "$(printf '%s' "$UPJ" | perl -pe '$n ||= s/"Effect": "Allow"/"Effect": "Deny", "Effect": "Allow"/')" \
+           "$(printf '%s' "$UPJ" | perl -pe '$n ||= s/"Effect": "Allow"/"\\u0045ffect": "Deny", "Effect": "Allow"/')"; do
+    up_file "$C2" "$j"
+    o="$(vp "$MAIN" "$MB" "$MH" | head -n 1)"
+    [ "$o" = "policies.tf widget unknown upstream duplicate key" ] || { echo "  dupkey: $o" >&2; ok=1; }
+  done
+  up_file "$C2" "$UPJ"
+  return "$ok"
+}
+t_dupkey; check "duplicate key: an upstream key written twice in one object, plainly or escaped, gives no evidence" $?
+
+t_closing() { # a block that opens on the closing line of the document: Terraform refuses the file
+  local o
+  o="$(variant closing 's/^\}\n\nresource "aws_iam_policy" "widget"/} data "aws_iam_policy_document" "sib" {\n  statement {\n    actions   = ["*"]\n    resources = ["*"]\n  }\n}\n\nresource "aws_iam_policy" "widget"/m' | head -n 1)"
+  [ "$o" = "policies.tf widget unknown directory parse error" ] || { echo "  closing: $o" >&2; return 1; }
+}
+t_closing; check "closing line: a block opened on the document's closing line gives no evidence" $?
+
 # --- review-run.sh: the handover step, the equal documents and the LOW raise, taken from the
 # script and run on a run directory of fixtures.
 fn() { awk -v f="$1() {" 'index($0, f) == 1 { p = 1 } p { print } p && $0 == "}" { exit }' "$RR"; }
@@ -679,6 +718,8 @@ t_handover() {
   step "$d" true false; [ ! -e "$d/vendored" ] || return 1
   step "$d" false true; [ ! -e "$d/vendored" ] || return 1
   MODULESTF_FACTS_VARIANT=judgment step "$d" false false; [ ! -e "$d/vendored" ] || return 1
+  # a change with no merge base: nothing to compare
+  local keep="$MB"; MB=""; step "$d" false false; MB="$keep"; [ ! -e "$d/vendored" ] || return 1
   # handover calls the step, states its lines before the block and render raises from its record
   grep -qF '  vendored_policy "$t" "$s" "$mbl" "$nm"' "$RR" &&
     grep -qF "! vendored_ok || sed 's/^/Vendored policy: /' \"\$RUN/vendored/vendored.txt\"" "$RR" &&
@@ -760,6 +801,11 @@ mutate "the judgment variant given lines" 's/  \[ "\$\{MODULESTF_FACTS_VARIANT:-
 mutate "the LOW raise dropped" 's/then \.severity = "HIGH" else \. end/then . else . end/' review-run.sh t_raise
 mutate "equal at any line of the file" 's/ and \(\$l \| type == "number"\) and \.first <= \$l and \$l <= \.last//' review-run.sh t_raise
 mutate "a differing document read as equal" 's/select\(any\(\.\[\]; \.fact == \["upstream", "equal"\]\)\)/select(true)/' review-run.sh t_raise
+mutate "an older policy version compared" 's/^def facts_doc\(\$s\): if \(\.version \/\/ "2012-10-17"\) != "2012-10-17" then error\("unsupported version"\) else \. end\n  \| /def facts_doc(\$s): /m' vendored-policy.jq t_version
+mutate "an older upstream version compared" 's/  elif \.Version != null and \.Version != "2012-10-17" then error\("unsupported version"\)\n//' vendored-policy.jq t_version
+mutate "a duplicate upstream key read" 's/  limit perl -MJSON::PP -0777 -e "\$DUPKEY_PL"[^\n]*\n//' vendored-policy.sh t_dupkey
+mutate "duplicate keys compared as written" 's/my \$k = \$j->decode\(\$1\);/my \$k = \$1;/' vendored-policy.sh t_dupkey
+mutate "a change with no merge base given lines" 's/ && \[ -n "\$3" \] \|\| return 0/ || return 0/' review-run.sh t_handover
 mutate "the grammar takes a line with a tail" "s/\\{1,60\\}\\)\\\$'\\n# The review budget/{1,60})'\\n# The review budget/" review-run.sh t_grammar
 
 echo

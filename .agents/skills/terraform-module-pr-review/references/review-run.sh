@@ -1266,8 +1266,9 @@ readme_regions() {
 vendored_policy() { # task file, block id, merge base, new module (true or false)
   local pd="" id
   rm -rf "$RUN/vendored"
-  # No evidence for a triage run or a new module, which has no base to compare.
-  [ "$TRIAGE" = false ] && [ "$4" = false ] || return 0
+  # No evidence for a triage run, a new module or a change with no merge base, which has no base
+  # to compare.
+  [ "$TRIAGE" = false ] && [ "$4" = false ] && [ -n "$3" ] || return 0
   # Nor for a host that selects the judgment variant: its prefix leaves out the reviewer's evidence
   # section for the size cap, so such a run keeps the rules it had (vendored-policy.md).
   [ "${MODULESTF_FACTS_VARIANT:-full}" != judgment ] || return 0

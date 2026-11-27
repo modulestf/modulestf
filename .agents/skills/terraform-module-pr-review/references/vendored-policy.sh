@@ -94,6 +94,17 @@ limit() {
   elif command -v gtimeout > /dev/null; then gtimeout 30 "$@"
   else perl -e 'alarm 30; exec @ARGV' "$@"; fi
 }
+# DUPKEY_PL: exit 0 when no object of the JSON file holds a key twice, keys compared decoded, else 1.
+# shellcheck disable=SC2016 # a perl program
+DUPKEY_PL='
+my $s = <>; my @st; my $j = JSON::PP->new->allow_nonref;
+while ($s =~ /\G\s*(?:("(?:[^"\\]|\\.)*")(\s*:)?|([\[{])|([\]}])|([^"\[\]{}]+))/gcs) {
+  if (defined $2) { my $k = $j->decode($1); exit 1 if $st[-1] && $st[-1]{$k}++ }
+  elsif (defined $3) { push @st, ($3 eq "{" ? {} : undef) }
+  elsif (defined $4) { pop @st }
+}
+exit((pos($s) // 0) == length($s) ? 0 : 1);
+'
 TAG_RE='^v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$'
 # tags <upstream> <file>...: each release tag the files name in a GitHub address of the upstream,
 # the address as GitHub writes it, followed by a delimiter or punctuation that ends a sentence.
@@ -267,6 +278,9 @@ while read -r path block up upath; do
     jq -er --arg p "$upath" 'select(.type == "file" and .path == $p and .encoding == "base64" and .size <= 1048576) | .content' \
       "$d/up.raw" 2> /dev/null | tr -d '\n' | base64 -d > "$d/up.json" 2> /dev/null && [ -s "$d/up.json" ] ||
     { line "unknown fetch failed"; continue; }
+  # A key written twice in one object: jq keeps the last, another reader may keep the first, so the
+  # file is no evidence (vendored-policy.md, step 5).
+  limit perl -MJSON::PP -0777 -e "$DUPKEY_PL" "$d/up.json" 2> /dev/null || { line "unknown upstream duplicate key"; continue; }
   if ! limit jq -r -n -L "$HERE" --slurpfile h "$d/head.json" --slurpfile b "$d/base.json" --slurpfile u "$d/up.json" --arg bs "$bstate" '
       include "vendored-policy";
       try ({head: ($h[0] | tuples), up: ($u[0] | upstream | tuples),
