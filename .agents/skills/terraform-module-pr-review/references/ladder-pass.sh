@@ -873,12 +873,28 @@ done({ok => JSON::PP::true, wrap => $wrap, sides => \@sides, canaries => [map { 
 FB_NORM_JQ='def norm: with_entries(.value |= {value, unknown: (.unknown // false), "null": (.["null"] // false),
   omitted: (.omitted // false), unknown_elements: (.unknown_elements // [])});
 def okstate: type == "object" and ((keys - ["value", "unknown", "null", "omitted", "unknown_elements"]) | length) == 0
-  and (to_entries | all(.[]; if .key == "value" then true elif .key == "unknown_elements" then (.value | type == "array") else (.value | type == "boolean") end))
+  and (to_entries | all(.[]; if .key == "value" then true elif .key == "unknown_elements" then (.value | type == "array" or . == null) else (.value | type == "boolean") end))
   and ([.unknown, .["null"], .omitted] | map(select(. == true)) | length) <= 1
   and (if ([.unknown, .["null"], .omitted] | any(. == true)) then ((.unknown_elements // []) | length) == 0 else true end)
   and ((.unknown_elements // []) | all(.[]; (type == "string" or type == "number") and (tostring | test("^[A-Za-z0-9_.-]{1,64}\\z"))));'
 # shellcheck disable=SC2016
 FB_EXPECT_JQ='def bad: error("no expected answer");
+def want($x): if .[0] == $x then .[1:] else bad end;
+def ident: type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]*\\z");
+def optcomma: if .[0] == "," then .[1:] else . end;
+def ty($d):
+  def tup: if .[0] == "]" then . else (ty($d + 1) | optcomma | tup) end;
+  def obj: if .[0] == "}" then . else
+    ((if (.[0] | ident) then .[1:] else bad end) | want("=")
+     | (if .[0] == "optional" then (.[1:] | want("(") | ty($d + 1) | want(")")) else ty($d + 1) end) | optcomma | obj) end;
+  if $d > 20 then bad else (.[0] // bad) as $k | .[1:] as $r
+    | if ($k | test("^(string|number|bool|any)\\z")) then $r
+      elif ($k | test("^(list|set|map)\\z")) then ($r | want("(") | ty($d + 1) | want(")"))
+      elif $k == "tuple" then ($r | want("(") | want("[") | tup | want("]") | want(")"))
+      elif $k == "object" then ($r | want("(") | want("{") | obj | want("}") | want(")"))
+      else bad end end;
+def ptype_ok: type == "string" and (gsub("[A-Za-z_][A-Za-z0-9_-]*|[()\\[\\]{},=]|[ \\t\\n\\r\\f\\x0b]+"; "") == "")
+  and ([scan("[A-Za-z_][A-Za-z0-9_-]*|[()\\[\\]{},=]")] | length <= 400 and (try (ty(0) | length == 0) catch false));
 $t[0] as $t
 | (($t.contextual_ref_details // []) | if type == "array" then . else [] end) as $det
 | ($t.cases // null) as $cs
@@ -887,6 +903,8 @@ $t[0] as $t
      or ($cs | all(.[]; type == "object" and (.id | type == "string" and test("^[A-Za-z0-9_.:-]{1,64}\\z"))) | not)
      or ($cs | map(.id) | unique | length) != ($cs | length)
      or ($sides | length) == 0
+     or ([$t.base_expr, $t.head_expr] | all(.[]; . == null or type == "string") | not)
+     or ([$t.base_expr, $t.head_expr] | any(.[]; type == "string" and utf8bytelength > 16384))
      or ($det | all(.[]; type == "object" and (.kind | type == "string") and (.text | type == "string" and length <= 256)) | not)
      or ($kinds | all(.[]; . == "resource" or . == "data" or . == "count" or . == "each") | not)
      or ([$det[] | select((.kind == "count" and .text != "count.index") or (.kind == "each" and .text != "each.key"))] | length) > 0
@@ -896,12 +914,12 @@ $t[0] as $t
 | (if ($kinds | index("count")) != null then "count" elif ($kinds | index("each")) != null then "for_each" else "none" end) as $wrap
 | (if $lvl != "l1" and $wrap != "none" then bad else . end)
 | ([($t.referenced_inputs // [])[]
-      | if type == "object" and (.name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]{0,63}\\z")) and (.type | type == "string")
-        then {name: .name, e: (.type | test("^\\s*(list|set|map)\\s*\\("))} else bad end]
+      | if type == "object" and (.name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]{0,63}\\z")) and (.type | ptype_ok)
+        then {name: .name, e: (.type | test("^[ \\t\\n\\r\\f\\x0b]*(list|set|map)[ \\t\\n\\r\\f\\x0b]*\\("))} else bad end]
    + [$det[] | select(.kind == "resource" or .kind == "data")
       | (.text | capture("^(?:data\\.)?[a-z][a-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_-]*(?<ix>\\[\\*\\]|\\[[0-9]+\\]|\\.\\*)?\\.(?<attr>[A-Za-z_][A-Za-z0-9_]*)\\z") // bad) as $m
-      | if (.type | type == "string") or $m.attr == "id"
-        then {name: .text, e: ((($m.ix // "") | contains("*")) or ((.type // "") | type == "string" and test("^\\s*(list|set|map)\\s*\\(")))} else bad end]
+      | if (.type != null and (.type | ptype_ok)) or (.type == null and $m.attr == "id")
+        then {name: .text, e: ((($m.ix // "") | contains("*")) or ((.type // "") | type == "string" and test("^[ \\t\\n\\r\\f\\x0b]*(list|set|map)[ \\t\\n\\r\\f\\x0b]*\\(")))} else bad end]
    | reduce .[] as $i ([]; if any(.[]; .name == $i.name) then . else . + [$i] end)) as $ins
 | ($ins | map(.name)) as $names
 | ($ins | to_entries | map("canary_ladder_u_\(.key)", (if .value.e then "canary_ladder_ue_\(.key)" else empty end))) as $canaries
@@ -944,7 +962,7 @@ fixbuild() {
   if [ -n "${4:-}" ] && [ "$4" != - ]; then a+=(--level L3 --attribute "$5" --resource "$6" --resource-template "$4"); lvl=l3
   elif [ "${6:-}" = L2 ]; then a+=(--level L2 --attribute "$5"); lvl=l2; fi
   t="$(left 120)" || return 1
-  out="$(facts_run "$t" "$MIB" "$FACTS" fixture-build "${a[@]}")" || rc=$?
+  out="$(FACTS_RUN_NOERR=1 facts_run "$t" "$MIB" "$FACTS" fixture-build "${a[@]}")" || rc=$?
   case "$rc" in
     0) fb_expect "$1" "$3" "$lvl" > "$want" || return 1
        printf '%s\n' "$out" | jq -e -s --slurpfile e "$want" "$FB_NORM_JQ"'$e[0] as $e | length == 1 and (.[0] | type == "object"
@@ -954,7 +972,7 @@ fixbuild() {
          and .wrap == $e.wrap
          and .sides == $e.sides
          and .canaries == $e.canaries
-         and (.cases | type == "array" and all(.[]; type == "object" and keys == ["addr", "id", "inputs", "unknown_inputs"]))
+         and (.cases | type == "array" and all(.[]; type == "object" and (.inputs | type == "object") and keys == ["addr", "id", "inputs", "unknown_inputs"]))
          and [.cases[].id] == [$e.cases[].id]
          and ([.cases[].inputs[]] | all(.[]; okstate))
          and [.cases[].inputs | norm] == [$e.cases[].inputs]
