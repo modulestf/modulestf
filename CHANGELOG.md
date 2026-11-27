@@ -1,3 +1,12 @@
+## [0.19.5](https://github.com/modulestf/modulestf/compare/v0.19.4...v0.19.5) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Render a review when the plan or ladder step cannot run ([#303](https://github.com/modulestf/modulestf/issues/303)) ([5ea212b](https://github.com/modulestf/modulestf/commit/5ea212b262ad97459a8445e4def8a6ec7fcb446e)), closes [#295](https://github.com/modulestf/modulestf/issues/295) [#297](https://github.com/modulestf/modulestf/issues/297) [#295](https://github.com/modulestf/modulestf/issues/295)
+
+
+
 ## [0.19.4](https://github.com/modulestf/modulestf/compare/v0.19.3...v0.19.4) (2026-11-27)
 
 
