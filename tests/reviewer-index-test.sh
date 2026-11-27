@@ -330,7 +330,10 @@ references/check-c-structure.md|when the index is the position in the list the `
 references/check-c-structure.md|when the module builds the list with a count that bounds the index on every path
 references/check-c-structure.md|when the index is a value the caller gives per element
 references/check-c-structure.md|for `element()`, whose wrap is the family idiom
-references/check-c-structure.md|such as a fallback to `""`
+references/check-c-structure.md|the direct read is the value the block needs
+references/check-c-structure.md|A comment about other blocks keeps LOW.
+references/check-c-structure.md|the direct read fails or gives another value, and the local does not
+references/check-c-structure.md|unless the value only unsets an optional argument the resource works without
 references/check-c-structure.md|whenever the need rests only on the siblings' `depends_on` and a page that names the block; never LOW
 references/check-c-structure.md|A page that only recommends it, or shows it in an example, keeps MEDIUM.
 references/check-c-structure.md|gated on the branch that reads the caller's list
@@ -609,11 +612,14 @@ calibration guard 91 dropped~calibration guard~references/check-c-structure.md~s
 calibration guard 92 dropped~calibration guard~references/check-c-structure.md~s#when the module builds the list with a count that bounds the index on every path#dropped#g
 calibration guard 93 dropped~calibration guard~references/check-c-structure.md~s#when the index is a value the caller gives per element#dropped#g
 calibration guard 94 dropped~calibration guard~references/check-c-structure.md~s#for `element()`, whose wrap is the family idiom#dropped#g
-calibration guard 95 dropped~calibration guard~references/check-c-structure.md~s#such as a fallback to `""`#dropped#g
+calibration guard 95 dropped~calibration guard~references/check-c-structure.md~s#the direct read is the value the block needs#dropped#g
 calibration guard 96 dropped~calibration guard~references/check-c-structure.md~s#whenever the need rests only on the siblings' `depends_on` and a page that names the block; never LOW#dropped#g
 calibration guard 97 dropped~calibration guard~references/check-c-structure.md~s#A page that only recommends it, or shows it in an example, keeps MEDIUM\.#dropped#g
 calibration guard 98 dropped~calibration guard~references/check-c-structure.md~s#gated on the branch that reads the caller's list#dropped#g
 calibration guard 99 dropped~calibration guard~references/judgment/prefix.md~s#- A new block beside its siblings, or a new list index:#dropped#g
+calibration guard 100 dropped~calibration guard~references/check-c-structure.md~s#A comment about other blocks keeps LOW\.#dropped#g
+calibration guard 101 dropped~calibration guard~references/check-c-structure.md~s#the direct read fails or gives another value, and the local does not#dropped#g
+calibration guard 102 dropped~calibration guard~references/check-c-structure.md~s#unless the value only unsets an optional argument the resource works without#dropped#g
 EOF
 
 echo
