@@ -74,8 +74,17 @@ echo "\$*" >> "$TMP/facts.log"
 echo "cwd \$PWD" >> "$TMP/facts.log"
 case "\$1" in
 behaviour)
-  while [ \$# -gt 0 ]; do [ "\$1" = --diff ] && cp "\$2" "$TMP/diff-seen.json"; shift; done
+  b=""
+  while [ \$# -gt 0 ]; do
+    [ "\$1" = --diff ] && cp "\$2" "$TMP/diff-seen.json"
+    [ "\$1" = --base ] && b=1
+    [ "\$1" = --stats-file ] && echo '{"schema_version":1}' > "\$2"
+    shift
+  done
   [ -f "$TMP/behaviour.sleep" ] && sleep 5
+  # A run with --base takes base.rc and base.out when the case set them.
+  [ -n "\$b" ] && [ -f "$TMP/base.rc" ] && exit "\$(cat "$TMP/base.rc")"
+  [ -n "\$b" ] && [ -f "$TMP/base.out" ] && { cat "$TMP/base.out"; exit 0; }
   [ -f "$TMP/behaviour.rc" ] && exit "\$(cat "$TMP/behaviour.rc")"; cat "$TMP/behaviour.out" ;;
 version)
   [ -f "$TMP/features" ] || exit 2; cat "$TMP/features" ;;
@@ -93,7 +102,8 @@ FACTS="$TMP/bin/mtf-facts"
 c=0
 setup() {
   c=$((c + 1)); O="$TMP/out-$c"; mkdir -p "$O"
-  rm -f "$TMP/behaviour.rc" "$TMP/eval.rc" "$TMP/behaviour.sleep" "$TMP/eval.sleep" "$TMP/facts.log" "$TMP/ladder-seen.json" "$TMP/diff-seen.json" "$TMP/features"
+  rm -f "$TMP/behaviour.rc" "$TMP/eval.rc" "$TMP/behaviour.sleep" "$TMP/eval.sleep" "$TMP/facts.log" "$TMP/ladder-seen.json" "$TMP/diff-seen.json" "$TMP/features" \
+    "$TMP/base.rc" "$TMP/base.out"
   # FEATS: the feature names the stub's version --json lists; with none set it exits 2, as a binary
   # older than the command does.
   [ -z "${FEATS-}" ] || jq -n --arg f "$FEATS" '{schema_version: 1, version: "v0.0.0", features: ($f | split(" "))}' > "$TMP/features"
@@ -798,9 +808,11 @@ setup; : > "$TMP/eval.sleep"; classify; BEHAVIOUR_PASS_TIMEOUT=1 evalp --claims 
 notrun "claims-eval over the deadline" "mtf-facts timed out"
 
 # --- The files list: the module root prefix is stripped, files outside it are left out, a
-# rename is checked at its old path too, and unchanged or tool-owned paths need no entry.
+# rename is checked at its old path too, and an unchanged path needs no entry, while a committed
+# .terraform file needs one like any other change.
 setup
 jq '[.[0] + {filename: "mod/main.tf"}, {filename: "other/x.tf", status: "modified"}, {filename: "mod/.terraform/x", status: "added"}, {filename: "mod/README.md", status: "unchanged"}]' "$TMP/files.json" > "$TMP/files-pfx.json"
+jq '.entries += [{path: ".terraform/x", change_kind: "added", inert: true, trigger_ids: []}]' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
 DIFF="$TMP/files-pfx.json" PFX=mod classify
 check "prefix: classify accepts" "$([ -f "$O/behaviour.json" ]; echo $?)"
 jq -e '[.[].filename] == ["main.tf", ".terraform/x", "README.md"]' "$TMP/diff-seen.json" > /dev/null; check "prefix: mtf-facts gets the module-relative list" $?
@@ -1605,6 +1617,68 @@ wmutate "caller code: the inert state not required" 's/if \$pre != "" and \.stat
 wmutate "caller code: every inert trigger dropped" 's/ and \(first\(\$b\.triggers\[\] \| select\(\.id == \$id\)\) \| \.caller_code == true\)\n/\n/' t_caller_pfx
 wmutate "caller code: the type of the mark not checked" 's/\n        and \(\(has\("caller_code"\) \| not\) or \(\.caller_code \| type == "boolean"\)\)//' t_caller_type_str
 wmutate "caller code: the drop never made" 's/if \$pre != "" and \.state == "inert" and/if false and \.state == "inert" and/' t_caller_render_pfx
+
+# --- The merge base tree: classify with --diff and --base runs mtf-facts on the base tree first,
+# and on the files list only when that run fails or its output is refused, as a classify given
+# --diff alone would. --stats reaches mtf-facts as --stats-file only when the binary lists the flag.
+BT="$TMP/basetree"; mkdir -p "$BT"
+bclassify() { # extra arguments
+  bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --base "$BT" "$@" --out "$O" > "$O/classify.txt" 2>&1
+}
+t_base_ok() {
+  FEATS="flag:behaviour:stats-file" setup; bclassify --stats "$O/st.json"
+  [ -f "$O/behaviour.json" ] && [ "$(cat "$O/input")" = base ] &&
+    grep -qxF "behaviour $MOD --base $BT --stats-file $O/st.json --json" "$TMP/facts.log" &&
+    ! grep -q -- "--diff" "$TMP/facts.log" && [ -f "$O/st.json" ]
+}
+t_base_fail() {
+  FEATS="flag:behaviour:stats-file" setup; echo 2 > "$TMP/base.rc"; bclassify --stats "$O/st.json"
+  [ -f "$O/behaviour.json" ] && [ ! -e "$O/status" ] && [ "$(cat "$O/input")" = "diff (base mtf-facts failed)" ] &&
+    grep -qxF "behaviour $MOD --diff $O/files-module.json --stats-file $O/st.diff.json --json" "$TMP/facts.log" &&
+    cmp -s <(jq -S . "$O/behaviour.json") <(jq -S . "$TMP/behaviour-556.json")
+}
+t_base_refused() { # a base report that leaves a changed file out is refused, and the files list runs
+  setup; jq '.entries = [] | .triggers = []' "$TMP/behaviour-556.json" > "$TMP/base.out"; bclassify
+  [ "$(cat "$O/input")" = "diff (base output refused)" ] && [ "$(jq '.triggers | length' "$O/behaviour.json")" = 2 ]
+}
+t_base_both() {
+  setup; echo 2 > "$TMP/base.rc"; echo 2 > "$TMP/behaviour.rc"; bclassify
+  [ "$(cat "$O/status")" = "mtf-facts failed" ] && [ ! -e "$O/behaviour.json" ] && [ "$(cat "$O/input")" = "diff (base mtf-facts failed)" ]
+}
+t_base_alone() { # --base alone keeps its fixed reason, with no fallback
+  setup; echo 2 > "$TMP/base.rc"; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --base "$BT" --out "$O" > /dev/null 2>&1
+  [ "$(cat "$O/status")" = "mtf-facts failed" ] && [ "$(grep -c '^behaviour' "$TMP/facts.log")" = 1 ]
+}
+t_stats_nofeat() { setup; bclassify --stats "$O/st.json"; [ -f "$O/behaviour.json" ] && ! grep -q -- "--stats-file" "$TMP/facts.log"; }
+t_eval_stats() {
+  FEATS="flag:claims-eval:stats-file" setup; classify; evalp --claims "$TMP/claims-556.json" --stats "$O/ev.json"
+  [ "$(q '.status == "ran"')" = 0 ] && grep -q -- "^claims-eval .* --stats-file $O/ev.json --json$" "$TMP/facts.log"
+}
+t_eval_nofeat() { setup; classify; evalp --claims "$TMP/claims-556.json" --stats "$O/ev.json"; [ "$(q '.status == "ran"')" = 0 ] && ! grep -q -- "--stats-file" "$TMP/facts.log"; }
+t_base_ok; check "base tree: classify runs on the merge base tree first, with the stats file, and not on the files list" $?
+t_base_fail; check "base tree: a failed base run falls back to the files list, with its own stats file, as with --diff alone" $?
+t_base_refused; check "base tree: a base report that leaves a changed file out falls back to the files list" $?
+t_base_both; check "base tree: both runs failed keep the files list run's fixed reason" $?
+t_base_alone; check "base tree: --base alone has no fallback" $?
+t_stats_nofeat; check "stats: no --stats-file for a binary that does not list the flag" $?
+t_eval_stats; check "stats: eval passes --stats-file to claims-eval when the binary lists the flag" $?
+t_eval_nofeat; check "stats: eval passes no --stats-file without the flag" $?
+setup; bash "$BP" classify --facts "$FACTS" --dir "$MOD" --diff "$TMP/files.json" --stats st.json --out "$O" > /dev/null 2>&1
+check "stats: a relative --stats is a usage error" "$([ $? = 2 ] && [ ! -e "$O/input" ]; echo $?)"
+# A committed .terraform file is a change: a report that leaves it out is refused, one that lists it kept.
+jq '. + [{filename: ".terraform/modules/m/main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"}]' "$TMP/files.json" > "$TMP/files-tf.json"
+t_tf_cover() {
+  setup; DIFF="$TMP/files-tf.json" classify; [ "$(cat "$O/status" 2> /dev/null)" = "output refused" ] || return 1
+  setup; jq '.entries += [{path: ".terraform/modules/m/main.tf", change_kind: "modified", inert: true, trigger_ids: []}]' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
+  DIFF="$TMP/files-tf.json" classify; [ -f "$O/behaviour.json" ]
+}
+t_tf_cover; check "covers: a committed .terraform file left out of the report is refused, and kept when listed" $?
+wmutate "covers: the skip of .git and .terraform paths restored" 's/\| \.filename, \(\.previous_filename \/\/ empty\)\]\n     - \[\$o\.entries/| .filename, (.previous_filename \/\/ empty) | select(test("(^|\/)\\\\.(git|terraform)(\/|\$)") | not)]\n     - [\$o.entries/' t_tf_cover
+wmutate "base tree: the base never run" 's/    if \[ -n "\$base" \]; then\n      why=/    if false; then\n      why=/' t_base_ok
+wmutate "base tree: no fallback after a failed base run" 's/if \[ -n "\$diff" \] && \[ "\$why" != ok \]; then/if [ -n "\$diff" ] && [ -z "\$base" ]; then/' t_base_fail
+wmutate "base tree: the base report not checked" 's/ok\) if jq -e --slurpfile d "\$cover"/ok) if true || jq -e --slurpfile d "\$cover"/' t_base_refused
+wmutate "stats: passed without the feature" 's/\[ -z "\$stats" \] \|\| ! facts_has flag:behaviour:stats-file \|\| st=/[ -z "\$stats" ] || st=/' t_stats_nofeat
+wmutate "stats: eval passed without the feature" 's/! facts_has flag:claims-eval:stats-file \|\| set --/set --/' t_eval_nofeat
 
 echo
 if [ "$fails" -eq 0 ]; then echo "behaviour pass: all checks hold"; else echo "behaviour pass: $fails failed"; exit 1; fi
