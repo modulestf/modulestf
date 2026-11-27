@@ -1,3 +1,12 @@
+# [0.17.0](https://github.com/modulestf/modulestf/compare/v0.16.15...v0.17.0) (2026-11-27)
+
+
+### Features
+
+* **pr-review:** Give mtf-facts the merge base tree and record its stats per run ([#268](https://github.com/modulestf/modulestf/issues/268)) ([a97f3f1](https://github.com/modulestf/modulestf/commit/a97f3f1ba83e2a84d48d5078ab9516a2248cdee2))
+
+
+
 ## [0.16.15](https://github.com/modulestf/modulestf/compare/v0.16.14...v0.16.15) (2026-11-26)
 
 
