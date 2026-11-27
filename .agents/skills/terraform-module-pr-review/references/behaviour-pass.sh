@@ -293,16 +293,21 @@ decl_vars() {
   fi
 }
 
-# classify_run <split> <files list or /dev/null> <args...>: one behaviour run. On "ok" behaviour.json
+# classify_run <split> <files list or /dev/null> <base or diff> <args...>: one behaviour run. On "ok" behaviour.json
 # holds its checked output; else it prints the reason and nothing is kept.
-classify_run() {
-  local split="$1" cover="$2" why; shift 2
+classify_run() { # split, files list or /dev/null, input (base or diff), args...
+  local split="$1" cover="$2" input="$3" why; shift 3
   case "$(run_facts "$out/behaviour.raw" behaviour "$dir" "$@" --json)" in
     big) why="output refused" ;;
     late) why="mtf-facts timed out" ;;
     fail) why="mtf-facts failed" ;;
-    ok) if jq -e --slurpfile d "$cover" --argjson split "$split" "$JQ_DEFS"' valid_behaviour($split)
-           and ($d == [] or covers($d[0]))' "$out/behaviour.raw" > /dev/null 2>&1; then
+    # From the files list, an inert report beside a removed Terraform file with no patch is refused: the
+    # tool cannot see what the file held, and a binary that reads it as an empty file would call the
+    # removal inert. The merge base tree holds the file, so a run on it needs no such guard.
+    ok) if jq -e --slurpfile d "$cover" --argjson split "$split" --arg in "$input" "$JQ_DEFS"' valid_behaviour($split)
+           and ($d == [] or covers($d[0]))
+           and ($in != "diff" or $d == [] or .inert != true or ([$d[0][] | select(.status == "removed" and (.patch // null) == null
+                 and (.filename | test("\\.(tf|tofu|hcl)(\\.json)?$")))] == []))' "$out/behaviour.raw" > /dev/null 2>&1; then
           mv -- "$out/behaviour.raw" "$out/behaviour.json"; why=ok
         else why="output refused"; fi ;;
   esac
@@ -319,16 +324,8 @@ classify() {
     # The GitHub files list, module-relative: the prefix stripped, paths outside it left out.
     jq -e --arg p "$prefix" 'type == "array" and all(.[]; type == "object" and (.filename | type == "string"))' \
       "$diff" > /dev/null 2>&1 || die "--diff is not a GitHub files list"
-    jq --arg p "${prefix:+$prefix/}" '
-      def rel: if $p == "" then . elif startswith($p) then .[($p | length):] else null end;
-      # A rename across the module root is a deletion or an addition of the module: out of it, a
-      # removed file at its old path; into it, an added file. Neither keeps the patch of the rename.
-      [.[] | (.filename | rel) as $n | ((.previous_filename // null) | if . == null then null else rel end) as $o
-       | if $n != null and (has("previous_filename") | not) then .filename = $n
-         elif $n != null and $o != null then .filename = $n | .previous_filename = $o
-         elif $n != null then del(.previous_filename, .patch) | .filename = $n | .status = "added"
-         elif $o != null then del(.previous_filename, .patch) | .filename = $o | .status = "removed"
-         else empty end]' "$diff" > "$out/files-module.json" || die "--diff cannot be read"
+    jq -L "$HERE" --arg p "${prefix:+$prefix/}" '
+      include "module-files"; module_files($p)' "$diff" > "$out/files-module.json" || die "--diff cannot be read"
     cover="$out/files-module.json"
     [ -z "$base" ] || abs "$base" --base
   elif [ -n "$base" ] && [ -z "$prefix" ]; then abs "$base" --base
@@ -350,13 +347,13 @@ classify() {
     [ -z "$stats" ] || ! facts_has flag:behaviour:stats-file || st=(--stats-file "$stats")
     # The merge base tree first when there is one; with a files list too, that list is the fallback.
     if [ -n "$base" ]; then
-      why="$(classify_run "$split" "$cover" --base "$base" "$@" ${st[@]+"${st[@]}"})"; bwhy="$why"
+      why="$(classify_run "$split" "$cover" base --base "$base" "$@" ${st[@]+"${st[@]}"})"; bwhy="$why"
       if [ "$why" = ok ]; then echo base > "$out/input"
       elif [ -z "$diff" ]; then echo "$why" > "$out/status"; echo base > "$out/input"; fi
     fi
     if [ -n "$diff" ] && [ "$why" != ok ]; then
       [ "${#st[@]}" = 0 ] || [ -z "$base" ] || st=(--stats-file "${stats%.json}.diff.json")
-      why="$(classify_run "$split" "$cover" --diff "$out/files-module.json" "$@" ${st[@]+"${st[@]}"})"
+      why="$(classify_run "$split" "$cover" diff --diff "$out/files-module.json" "$@" ${st[@]+"${st[@]}"})"
       [ "$why" = ok ] || echo "$why" > "$out/status"
       if [ -z "$base" ]; then echo diff > "$out/input"; else printf 'diff (base %s)\n' "$bwhy" > "$out/input"; fi
     fi

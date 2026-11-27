@@ -544,8 +544,8 @@ select_examples() {
       fi
     else
       if [ -n "$PREFIX" ]; then
-        jq --arg p "$PREFIX" '[.[] | select((.filename | startswith($p)) or ((.previous_filename // "") | startswith($p)))
-          | .filename |= ltrimstr($p) | if .previous_filename then .previous_filename |= ltrimstr($p) else . end]' \
+        # module-files.jq: the module-relative list, a rename across the module root as a removal or an addition.
+        jq -L "$HERE" --arg p "$PREFIX" 'include "module-files"; module_files($p)' \
           "$FILES" > "$W/affected-files.json" 2> /dev/null || die "--files is not a JSON array of file objects"
       else
         cp -- "$FILES" "$W/affected-files.json"

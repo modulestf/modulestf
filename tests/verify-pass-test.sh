@@ -12,6 +12,7 @@ trap 'rm -rf "$TMP"' EXIT
 fails=0
 # The mutated copies of the script below source the resolver from their own directory.
 cp "${VP%/*}/facts-resolve.sh" "$TMP/facts-resolve.sh"
+cp "${VP%/*}/module-files.jq" "$TMP/module-files.jq"
 
 check() { # name, command status (0 = holds)
   if [ "$2" = 0 ]; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
@@ -465,6 +466,14 @@ $BASE" --out "$R3/x.json")"
     "$(q "$TMP/sel6.json" '[.dirs[] | "\(.affected) \(.dir)"] == ["touched mod/examples/b", "caller mod/examples/a"]')"
   check "$sh: under a prefix, mtf-facts reads the files list cut to the module root" \
     "$(jq -e '[.[].filename] == ["main.tf", "examples/b/main.tf"]' "$TMP/facts-diff.json" > /dev/null 2>&1; echo $?)"
+  # A rename out of the module root reaches mtf-facts as a removed file at its old path, through the
+  # shared module-files.jq, with a copy that keeps the old prefix cut caught.
+  jq -n '[{filename: "mod/main.tf", status: "modified"}, {filename: "other/vars.tf", previous_filename: "mod/vars.tf", status: "renamed", additions: 0, deletions: 0}]' > "$TMP/files6r.json"
+  sel6r() { rm -f "$TMP/facts-diff.json"; PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "$1" select "$R6" --files "$TMP/files6r.json" --prefix mod > /dev/null 2>&1
+    jq -e '. == [{filename: "main.tf", status: "modified"}, {filename: "vars.tf", status: "removed"}]' "$TMP/facts-diff.json" > /dev/null 2>&1; }
+  check "$sh: under a prefix, a rename out of the module root reaches mtf-facts as a removed file" "$(sel6r "$VP"; echo $?)"
+  perl -0pe 's/include "module-files"; module_files\(\$p\)/[.[] | select((.filename | startswith(\$p)) or ((.previous_filename \/\/ "") | startswith(\$p))) | .filename |= ltrimstr(\$p) | if .previous_filename then .previous_filename |= ltrimstr(\$p) else . end]/' "$VP" > "$TMP/vp-mf.sh"
+  check "$sh: self-check: the old prefix cut is caught" "$( ! cmp -s "$VP" "$TMP/vp-mf.sh" && ! sel6r "$TMP/vp-mf.sh"; echo $?)"
 
   # A submodule whose examples sit at the repository root: those whose local source resolves to
   # it are selected after its own, touched before caller; the rest, a source that climbs out of
@@ -780,7 +789,7 @@ $BASE" --out "$R3/x.json")"
   # An exported CDPATH naming a directory with a subdirectory of the script's own directory name
   # must not redirect the lookup (cd would use that subdirectory and print its path).
   mkdir -p "$TMP/vpd" "$TMP/decoy/vpd"
-  cp "$VP" "$TMP/vpd/verify-pass.sh"; cp "$TMP/facts-resolve.sh" "$TMP/vpd/facts-resolve.sh"
+  cp "$VP" "$TMP/vpd/verify-pass.sh"; cp "$TMP/facts-resolve.sh" "$TMP/module-files.jq" "$TMP/vpd/"
   sed 's|^HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"$|HERE="$(cd "$(dirname "$0")" \&\& pwd -P)"|' "$VP" > "$TMP/vpd/vp-cdpath-mut.sh"
   cdp() { (cd "$TMP" && CDPATH="$TMP/decoy" PATH="$TMP/facts:$TMP/bin:/usr/bin:/bin" "$sh" "vpd/$1" select "$R9" --files files9.json --prefix modules/a 2> /dev/null | jq -e '.selection.tool == "mtf-facts"' > /dev/null 2>&1); }
   check "$sh: with CDPATH set to a directory holding a same-named subdirectory the script reads facts-resolve.sh from its own directory" \
