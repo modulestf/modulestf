@@ -1730,9 +1730,45 @@ wmutate "prefix: a rename out of the module root dropped" 's/elif \$o != null an
 wmutate "prefix: a rename into the module root kept as a rename" 's/elif \$n != null then del\(\.previous_filename, \.patch, \.additions, \.deletions, \.changes\) \| \.filename = \$n \| \.status = "added"/elif \$n != null then .filename = \$n/' t_ren_list module-files.jq
 wmutate "prefix: the line counts of a removal kept" 's/del\(\.previous_filename, \.patch, \.additions, \.deletions, \.changes\) \| \.filename = \$o/del(.previous_filename, .patch) | .filename = \$o/' t_ren_list module-files.jq
 wmutate "prefix: a copy out of the module root read as a removal" 's/elif \$o != null and \.status == "renamed" then/elif \$o != null then/' t_ren_list module-files.jq
-wmutate "prefix: a null previous_filename read as a rename" 's/if \$n != null and \(\.previous_filename \/\/ null\) == null then/if \$n != null and (has("previous_filename") | not) then/' t_ren_list module-files.jq
-wmutate "prefix: the inert guard for a removed file with no patch dropped" 's/\(\$in != "diff" or \$d == \[\] or \.inert != true or/(true or/' t_rm_inert
-wmutate "prefix: the inert guard applied to the merge base tree too" 's/\(\$in != "diff" or \$d == \[\] or \.inert != true or/(\$d == [] or .inert != true or/' t_rm_base
+wmutate "prefix: a null previous_filename read as a rename" 's/if \$n != null and \(\$mv \| not\) then/if \$n != null and (has("previous_filename") | not) then/' t_ren_list module-files.jq
+wmutate "prefix: the inert guard for a removed file with no patch dropped" 's/\(\$in != "diff" or \$d == \[\] or \(\[/(true or ([/' t_rm_inert
+wmutate "prefix: the inert guard applied to the merge base tree too" 's/\(\$in != "diff" or \$d == \[\] or \(\[/(\$d == [] or ([/' t_rm_base
+# The guard reads the removed file's own entry: a sibling trigger that makes the report not inert
+# leaves an inert entry for the removed file refused, and an empty patch is no patch.
+t_rm_sib() {
+  setup; cross_report '[{path: "vars.tf", change_kind: "removed", inert: true, trigger_ids: []}]'
+  DIFF="$TMP/files-cross.json" PFX=mod classify
+  jq -e '.inert == false' "$TMP/behaviour.out" > /dev/null && [ "$(cat "$O/status" 2> /dev/null)" = "output refused" ]
+}
+t_rm_empty() {
+  # A file GitHub lists as removed with an empty patch, as it does for a file too large to diff.
+  jq 'map(if .filename == "other/vars.tf" then {filename: "mod/vars.tf", status: "removed", additions: 0, deletions: 0, patch: ""} else . end)' \
+    "$TMP/files-cross.json" > "$TMP/files-cross-e.json"
+  setup; cross_report '[{path: "vars.tf", change_kind: "removed", inert: true, trigger_ids: []}]'
+  DIFF="$TMP/files-cross-e.json" PFX=mod classify; [ "$(cat "$O/status" 2> /dev/null)" = "output refused" ]
+}
+t_rm_sib; check "prefix: a removed file with no patch whose own entry is inert is refused beside a sibling trigger" $?
+t_rm_empty; check "prefix: an empty patch on a removed file is no patch" $?
+wmutate "prefix: the guard back to the top-level inert only" 's/\| \[\.entries\[\] \| select\(\.path as \$q \| \$rm \| index\(\$q\)\) \| select\(\.inert == true or \(\.trigger_ids \| length\) == 0\)\] == \[\]\)\)/| (.inert != true or \$rm == [])))/' t_rm_sib
+wmutate "prefix: an empty patch read as a patch" 's/\(\(\.patch \/\/ ""\) == ""\)/((.patch \/\/ null) == null)/' t_rm_empty
+# A trailing slash on the prefix is the same module root; an empty or a non-rename previous_filename
+# is no rename.
+t_pfx_slash() { setup; cross_report '[{path: "vars.tf", change_kind: "removed", inert: false, trigger_ids: ["T-002"]}]'
+  DIFF="$TMP/files-cross.json" PFX=mod/ classify; jq -e ". == $CROSS_WANT" "$TMP/diff-seen.json" > /dev/null; }
+t_prev_odd() {
+  jq -n '[{filename: "mod/main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"},
+    {filename: "mod/e.tf", previous_filename: "", status: "renamed", additions: 0, deletions: 0},
+    {filename: "mod/m.tf", previous_filename: "other/m.tf", status: "modified", additions: 0, deletions: 0}]' > "$TMP/files-odd.json"
+  setup; jq '.entries += [{path: "e.tf", change_kind: "renamed", inert: true, trigger_ids: []}, {path: "m.tf", change_kind: "modified", inert: true, trigger_ids: []}]' \
+    "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
+  DIFF="$TMP/files-odd.json" PFX=mod classify
+  jq -e '. == [{filename: "main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"},
+    {filename: "e.tf", status: "renamed", additions: 0, deletions: 0}, {filename: "m.tf", status: "modified", additions: 0, deletions: 0}]' "$TMP/diff-seen.json" > /dev/null
+}
+t_pfx_slash; check "prefix: a trailing slash on the prefix gives the same module files list" $?
+t_prev_odd; check "prefix: an empty previous_filename or one on a status that is no rename is no rename" $?
+wmutate "prefix: the trailing slash kept in classify" 's/  prefix="\$\{prefix%\/\}" # a trailing slash names the same module root\n//' t_pfx_slash
+wmutate "prefix: any previous_filename read as a rename" 's/\(\(\.status \| IN\("renamed", "copied"\)\) and \(\(\.previous_filename \/\/ ""\) \| type == "string" and \. != ""\)\)/((.previous_filename \/\/ null) != null)/' t_prev_odd module-files.jq
 wmutate "base tree: the base never run" 's/    if \[ -n "\$base" \]; then\n      why=/    if false; then\n      why=/' t_base_ok
 wmutate "base tree: no fallback after a failed base run" 's/if \[ -n "\$diff" \] && \[ "\$why" != ok \]; then/if [ -n "\$diff" ] && [ -z "\$base" ]; then/' t_base_fail
 wmutate "base tree: the base report not checked" 's/ok\) if jq -e --slurpfile d "\$cover"/ok) if true || jq -e --slurpfile d "\$cover"/' t_base_refused

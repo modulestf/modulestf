@@ -301,13 +301,16 @@ classify_run() { # split, files list or /dev/null, input (base or diff), args...
     big) why="output refused" ;;
     late) why="mtf-facts timed out" ;;
     fail) why="mtf-facts failed" ;;
-    # From the files list, an inert report beside a removed Terraform file with no patch is refused: the
-    # tool cannot see what the file held, and a binary that reads it as an empty file would call the
-    # removal inert. The merge base tree holds the file, so a run on it needs no such guard.
+    # From the files list, a removed Terraform file with no patch whose entry is inert or names no
+    # trigger is refused, whatever the report says of the rest: the tool cannot see what the file held,
+    # and a binary that reads it as an empty file would call the removal inert. The merge base tree
+    # holds the file, so a run on it needs no such guard.
     ok) if jq -e --slurpfile d "$cover" --argjson split "$split" --arg in "$input" "$JQ_DEFS"' valid_behaviour($split)
            and ($d == [] or covers($d[0]))
-           and ($in != "diff" or $d == [] or .inert != true or ([$d[0][] | select(.status == "removed" and (.patch // null) == null
-                 and (.filename | test("\\.(tf|tofu|hcl)(\\.json)?$")))] == []))' "$out/behaviour.raw" > /dev/null 2>&1; then
+           and ($in != "diff" or $d == [] or ([$d[0][] | select(.status == "removed" and ((.patch // "") == "")
+                 and (.filename | test("\\.(tf|tofu|hcl)(\\.json)?$"))) | .filename] as $rm
+               | [.entries[] | select(.path as $q | $rm | index($q)) | select(.inert == true or (.trigger_ids | length) == 0)] == []))' \
+           "$out/behaviour.raw" > /dev/null 2>&1; then
           mv -- "$out/behaviour.raw" "$out/behaviour.json"; why=ok
         else why="output refused"; fi ;;
   esac
@@ -317,6 +320,8 @@ classify_run() { # split, files list or /dev/null, input (base or diff), args...
 
 classify() {
   abs "$dir" --dir; [ -d "$dir" ] || die "--dir is not a directory"
+  prefix="${prefix%/}" # a trailing slash names the same module root
+  case "${prefix}" in /* | *..* | .) die "--prefix must be repository-relative" ;; esac
   [ ! -e "$out/behaviour.json" ] && [ ! -e "$out/status" ] || die "--out already holds a classification"
   local cover=/dev/null
   if [ -n "$diff" ]; then
