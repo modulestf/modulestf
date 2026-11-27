@@ -1,3 +1,12 @@
+## [0.19.3](https://github.com/modulestf/modulestf/compare/v0.19.2...v0.19.3) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Mark a new dynamic block over an empty new default identical ([#293](https://github.com/modulestf/modulestf/issues/293)) ([dbfe788](https://github.com/modulestf/modulestf/commit/dbfe788fa14bb14e764c2650d196eaa643ca846a)), closes [#291](https://github.com/modulestf/modulestf/issues/291) [#291](https://github.com/modulestf/modulestf/issues/291)
+
+
+
 ## [0.19.2](https://github.com/modulestf/modulestf/compare/v0.19.1...v0.19.2) (2026-11-27)
 
 
