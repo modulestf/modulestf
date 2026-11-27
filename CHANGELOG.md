@@ -1,3 +1,12 @@
+## [0.18.5](https://github.com/modulestf/modulestf/compare/v0.18.4...v0.18.5) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Keep a rename out of the module root as a deletion ([#276](https://github.com/modulestf/modulestf/issues/276)) ([7022eae](https://github.com/modulestf/modulestf/commit/7022eae8cc41dbd080b91f4c94b661b4caae8b2d))
+
+
+
 ## [0.18.4](https://github.com/modulestf/modulestf/compare/v0.18.3...v0.18.4) (2026-11-27)
 
 
