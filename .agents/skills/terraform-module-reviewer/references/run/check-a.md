@@ -22,6 +22,7 @@ When any row below applies: [Reads, Fails When and Severity](../check-a-compatib
 | `compat.type-narrowed` | The change edits a variable's `type`, or adds or edits a `validation` block. | none | [engine](../engine/check-a-compatibility.md#compattype-narrowed) |
 | `compat.variable-now-required` | The change adds a variable, or edits a variable's `default`, `nullable` or `type`. | none | [engine](../engine/check-a-compatibility.md#compatvariable-now-required) |
 | `compat.variable-removed` | The change removes or renames a variable or output. | none | [engine](../engine/check-a-compatibility.md#compatvariable-removed) |
+| `compat.vendored-policy-drift` | The task carries a `Vendored policy:` line. | none | [Check A](../check-a-compatibility.md#host-vendored-policy-evidence) |
 | `compat.version-constraint-raised` | The change edits `required_version` or a provider version constraint. | none | [engine](../engine/check-a-compatibility.md#compatversion-constraint-raised) |
 
 ## Other Sections
@@ -30,3 +31,4 @@ When any row below applies: [Reads, Fails When and Severity](../check-a-compatib
 |---------|-----------|
 | [Suggested Fixes](../check-a-compatibility.md#suggested-fixes) | Check A reports a finding. |
 | [No base](../check-a-compatibility.md#no-base) | The task is a new module. |
+| [Host Vendored Policy Evidence](../check-a-compatibility.md#host-vendored-policy-evidence) | The task carries a `Vendored policy:` line. |

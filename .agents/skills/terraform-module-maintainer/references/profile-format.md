@@ -19,6 +19,7 @@ A profile is one self-contained directory. It links to no other profile and hold
 | `plan-providers.txt` | no | Providers the review's plan pass admits in runner mode. The plan pass reads only the default profile's file today, whatever profile is selected |
 | `generated-artifacts.txt` | no | The generators the generated-only mode of `terraform-module-pr-fix` may run, in the grammar of [Generated artifacts](#generated-artifacts). Absent means none |
 | `nonhcl-reach.txt` | no | Example directories that run no changed file outside Terraform, in the grammar of [Reach of changes outside Terraform](#reach-of-changes-outside-terraform). Absent means every example runs every such file |
+| `vendored-policies.txt` | no | The policy documents a module of the family copies from a workload's published IAM policy, with that policy's repository and file, and the expressions the documents use, in the grammar of the pull request review skill's [Profile Entries](../../terraform-module-pr-review/references/vendored-policy.md#profile-entries). Absent means none |
 
 A file the profile omits means only the generic rules of the skills apply where a rule links to it. The reviewer's checks link to the files of the default profile, [terraform-aws-modules](../profiles/terraform-aws-modules/PROFILE.md); under another profile each link means the selected profile's file of the same name, and the same section in it.
 

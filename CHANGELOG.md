@@ -1,3 +1,12 @@
+# [0.19.0](https://github.com/modulestf/modulestf/compare/v0.18.7...v0.19.0) (2026-11-27)
+
+
+### Features
+
+* **pr-review:** Compare a vendored upstream IAM policy with its source at a resolved commit ([#220](https://github.com/modulestf/modulestf/issues/220)) ([03a93f1](https://github.com/modulestf/modulestf/commit/03a93f1f348f00d758fb9abe80c71df872505295))
+
+
+
 ## [0.18.7](https://github.com/modulestf/modulestf/compare/v0.18.6...v0.18.7) (2026-11-27)
 
 

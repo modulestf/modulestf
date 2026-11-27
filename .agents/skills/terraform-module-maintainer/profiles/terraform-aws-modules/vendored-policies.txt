@@ -1,0 +1,17 @@
+# Vendored upstream IAM policies: the policy documents a module of this family copies from a
+# workload's published policy, and where that policy lives. The pull request review skill's
+# vendored-policy.sh reads this file; the grammar is in its vendored-policy.md, Profile Entries.
+#
+# entry <module repository> <file> <data block name> <upstream repository> <upstream file>
+# The iam ebs_csi document has a dynamic condition and the two eks-pod-identity documents merge
+# other documents; the facts engine reads neither shape as literal content, so both answer unknown.
+# The entries stay so a change to them is still compared once the engine reads the shape.
+entry terraform-aws-modules/terraform-aws-iam modules/iam-role-for-service-accounts/policies.tf load_balancer_controller kubernetes-sigs/aws-load-balancer-controller docs/install/iam_policy.json
+entry terraform-aws-modules/terraform-aws-iam modules/iam-role-for-service-accounts/policies.tf ebs_csi kubernetes-sigs/aws-ebs-csi-driver docs/example-iam-policy.json
+entry terraform-aws-modules/terraform-aws-eks-pod-identity aws_lb_controller.tf lb_controller kubernetes-sigs/aws-load-balancer-controller docs/install/iam_policy.json
+entry terraform-aws-modules/terraform-aws-eks-pod-identity aws_ebs_csi.tf ebs_csi kubernetes-sigs/aws-ebs-csi-driver docs/example-iam-policy.json
+#
+# subst <expression> <value>: an expression the documents use, read as the value the upstream
+# file writes in the aws partition. Any other expression leaves the document without evidence.
+subst local.partition aws
+subst data.aws_service_principal.elasticloadbalancing[0].name elasticloadbalancing.amazonaws.com
