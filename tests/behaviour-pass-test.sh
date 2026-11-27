@@ -609,7 +609,8 @@ t_pd_old; check "identical: an argument from an existing variable, a propagation
 t_pd_shape() { pdx && q '.triggers[] | select(.id == "T-010") | has("identical") | not' | grep -qx 0; }
 t_pd_shape; check "identical: an argument from a new variable whose default is not null is not marked" $?
 # A dynamic block whose for_each is exactly a variable the change adds with no level.
-DYN='.triggers |= map(if .id == "T-014" then .head_expr = "var.new_on" | .referenced_inputs = [{name: "new_on", type: "map(string)"}] else . end)'
+DYN='.triggers |= map(if .id == "T-014" then .head_expr = "var.new_on" | .referenced_inputs = [{name: "new_on", type: "map(string)"}]
+  elif .id == "T-018" then .declaration = {added: true, default: "literal", nullable: "unset"} else . end)'
 t_pd_dyn() { pdx . . "$DYN" && q '.triggers[] | select(.id == "T-014") | .identical == ["examples/complete", "examples/minimal"]' | grep -qx 0 \
   && grep -qxF 'trigger T-014 `main.tf` line 13 dynamic-block-change: unverifiable, identical' "$O/record.txt"; }
 t_pd_dyn; check "identical: a dynamic block whose for_each is a new variable with no level is marked" $?
@@ -650,6 +651,29 @@ t_pd_dyndecl; check "identical: a dynamic block over a new variable whose defaul
 t_pd_dynlit() { pdx . . "$DYN"' | .triggers |= map(if .id == "T-018" then .declaration = {added: true, default: "literal", nullable: "unset"} else . end)' \
   && q '.triggers[] | select(.id == "T-014") | .identical == ["examples/complete", "examples/minimal"]' | grep -qx 0; }
 t_pd_dynlit; check "identical: a dynamic block over a new variable with a literal default and no level is marked" $?
+# {} converts to an object whose optional attributes take their defaults, and for_each iterates
+# the object's attributes: an object type makes a block at the default.
+t_pd_dynobj() { pdx . . "$DYN"' | .triggers |= map(if .id == "T-014" then .referenced_inputs[0].type = "object({a = optional(string, \"10.0.0.0/8\")})" else . end)' \
+  && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
+t_pd_dynobj; check "identical: a dynamic block over a new variable of an object type is not marked" $?
+t_pd_dynlist() { pdx . . "$DYN"' | .triggers |= map(if .id == "T-014" then .referenced_inputs[0].type = "list(object({ port = number }))" else . end)' \
+  && q '.triggers[] | select(.id == "T-014") | .identical == ["examples/complete", "examples/minimal"]' | grep -qx 0; }
+t_pd_dynlist; check "identical: a dynamic block over a new variable of a list type is marked" $?
+t_pd_dynnodecl() { pdx . . "$DYN"' | .triggers |= map(if .id == "T-018" then .declaration = null else . end)' \
+  && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
+t_pd_dynnodecl; check "identical: a dynamic block over a new variable with no reported declaration is not marked" $?
+t_pd_dynnoattr() { pdx . . "$DYN"' | .triggers += [{id: "T-021", file: "main.tf", line: 13, category: "unclassified-change", change_kind: "modified",
+    address: "aws_lb_listener.secondary", attribute: null, base_expr: null, head_expr: null, levels: ["L4"],
+    referenced_inputs: [], contextual_refs: [], contextual_ref_details: []}] | .entries[0].trigger_ids += ["T-021"]' \
+    '.triggers += [{id: "T-021", state: "unverifiable", reason: "x"}]' \
+  && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
+t_pd_dynnoattr; check "identical: a dynamic block beside a change at its address that names no attribute is not marked" $?
+t_pd_dyncap() { pdx . . "$DYN"' | .capped = 1' '.capped = 1' \
+  && [ "$(q '.status == "ran"')" = 0 ] && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
+t_pd_dyncap; check "identical: a dynamic block is not marked when triggers went over the classifier cap" $?
+t_pd_dynmeta() { pdx . . "$DYN"' | .triggers |= map(if .id == "T-014" then .attribute = "dynamic.lifecycle" else . end)' \
+  && q '.triggers[] | select(.id == "T-014") | has("identical") | not' | grep -qx 0; }
+t_pd_dynmeta; check "identical: a dynamic block named like a meta-argument is not marked" $?
 t_pd_wrap() { pdx . . '.triggers |= map(if .id == "T-008" then .head_expr = "coalesce(var.new_idle, 60)" else . end)' \
   && q '.triggers[] | select(.id == "T-008") | has("identical") | not' | grep -qx 0; }
 t_pd_wrap; check "identical: a function around the new variable is not marked" $?
@@ -1384,8 +1408,13 @@ wmutate "identical: a nested dynamic block" 's/test\("\^dynamic\\\\\.\[A-Za-z_\]
 wmutate "identical: any for_each over the new variable" 's/      \| \$t\.head_expr == \("var\." \+ \$n\)\n/      | true\n/' t_pd_dynwrap
 wmutate "identical: a dynamic block beside a removed block of its type" 's/\n      and \(any\(\$b\.triggers\[\]; \.address == \$t\.address and \.change_kind != "added".*?\| not\)\)/)/s' t_pd_dynstatic
 wmutate "identical: a dynamic block beside an edited block of its type" 's/ and \.change_kind != "added"\n/ and .change_kind == "removed"\n/' t_pd_dynedit
-wmutate "identical: a dynamic block over a new variable with a level" 's/ and \.levels == \[\] and \(\.declaration == null/ and (.declaration == null/' t_pd_dynfull
-wmutate "identical: a dynamic block over a default that is not a literal" 's/ and \(\.declaration == null or \.declaration\.default == "literal"\)//' t_pd_dyndecl
+wmutate "identical: a dynamic block over a new variable with a level" 's/ and \.levels == \[\] and \.declaration\.added == true/ and .declaration.added == true/' t_pd_dynfull
+wmutate "identical: a dynamic block over a default that is not a literal" 's/ and \.declaration\.default == "literal"\n/\n/' t_pd_dyndecl
+wmutate "identical: a dynamic block over a variable with no declaration" 's/ and \.declaration\.added == true and \.declaration\.default == "literal"/ and (.declaration == null or .declaration.default == "literal")/' t_pd_dynnodecl
+wmutate "identical: a dynamic block over an object type" 's/\n    and \(\$t\.referenced_inputs\[0\] \| \.type \| type == "string" and test\("\^\[ \\\\t\]\*\(map\|list\|set\)\[ \\\\t\]\*\\\\\("\)\)//' t_pd_dynobj
+wmutate "identical: a dynamic block beside a change with no attribute" 's/\(\.attribute == null or \(\.attribute \| type == "string" and \(ltrimstr\("dynamic\."\) \| split\("\."\)\[0\]\) == \$bt\)\)/(.attribute | type == "string" and (ltrimstr("dynamic.") | split(".")[0]) == \$bt)/' t_pd_dynnoattr
+wmutate "identical: a dynamic block marked over the classifier cap" 's/ and \(\(\$b\.capped \/\/ 0\) == 0\)//' t_pd_dyncap
+wmutate "identical: a dynamic block named like a meta-argument" 's/\n      and \(ltrimstr\("dynamic\."\) as \$m \| meta_args \| index\(\$m\) == null\)\)/)/' t_pd_dynmeta
 wmutate "identical: the list not sorted" 's/\| unique \| \.\[:20\]/| .[:20]/' t_pd_sort
 wmutate "identical: the list not capped" 's/\| unique \| \.\[:20\]/| unique/' t_pd_cap
 wmutate "identical: beside unexercised" 's/if \$i != \[\] and \(unex\(\$t; \$et\) \| not\) then \{identical/if \$i != [] then {identical/' t_pd_unex

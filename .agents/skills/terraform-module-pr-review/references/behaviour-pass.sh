@@ -183,24 +183,28 @@ def diff_kind($t; $b; $nv): if $t.change_kind != "added" or ($t.address | type !
            else $h == ("var." + $n) end)) then "argument"
   # A dynamic block whose for_each is exactly a variable the change adds in the same directory with
   # an empty default: no existing caller sets that variable, so at the default it makes no block,
-  # whatever input an existing caller sets.
+  # whatever input an existing caller sets. Only a map, list or set type: {} converts to a whole
+  # object of optional attributes, which for_each iterates, so an object type makes a block.
   elif ($t.address | test("^[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*$")) and $t.levels == ["L4"]
-    and $t.category == "dynamic-block-change" and (($t.also_categories // []) == [])
-    and ($t.attribute | type == "string" and test("^dynamic\\.[A-Za-z_][A-Za-z0-9_-]*$"))
+    and $t.category == "dynamic-block-change" and (($t.also_categories // []) == []) and (($b.capped // 0) == 0)
+    and ($t.attribute | type == "string" and test("^dynamic\\.[A-Za-z_][A-Za-z0-9_-]*$")
+      and (ltrimstr("dynamic.") as $m | meta_args | index($m) == null))
     and $t.contextual_refs == [] and ($t.head_expr | type == "string")
     and (($t.referenced_inputs | type) == "array" and ($t.referenced_inputs | length) == 1)
     and ($t.referenced_inputs[0] | .name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]*$"))
+    and ($t.referenced_inputs[0] | .type | type == "string" and test("^[ \\t]*(map|list|set)[ \\t]*\\("))
     and ($t.referenced_inputs[0].name as $n | ($t.file | tdir) as $d | ($t.attribute | ltrimstr("dynamic.")) as $bt
       | $t.head_expr == ("var." + $n)
       # The variable has no level: its default is null, {}, [] or a scalar, and only {} or [] plans
       # with a for_each, so at the default the block makes no block.
       and any($b.triggers[]; .address == ("var." + $n) and .change_kind == "added" and .category == "unclassified-change"
-        and ((.also_categories // []) == []) and .levels == [] and (.declaration == null or .declaration.default == "literal")
+        and ((.also_categories // []) == []) and .levels == [] and .declaration.added == true and .declaration.default == "literal"
         and (.file | type == "string") and (.file | tdir) == $d)
       # The engine reads only the for_each: a block of the same type the change edits or removes,
-      # such as a static block turned dynamic, may read existing inputs in the content body.
+      # such as a static block turned dynamic, may read existing inputs in the content body, and so
+      # may a change at the same address that names no attribute.
       and (any($b.triggers[]; .address == $t.address and .change_kind != "added"
-        and (.attribute | type == "string" and (ltrimstr("dynamic.") | split(".")[0]) == $bt)) | not))
+        and (.attribute == null or (.attribute | type == "string" and (ltrimstr("dynamic.") | split(".")[0]) == $bt))) | not))
   then "argument"
   else null end;
 def valid_claims: type == "object" and (.claims | type == "array" and length <= 48
