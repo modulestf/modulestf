@@ -202,9 +202,9 @@ def diff_kind($t; $b; $nv): if $t.change_kind != "added" or ($t.address | type !
         and (.file | type == "string") and (.file | tdir) == $d)
       # The engine reads only the for_each: a block of the same type the change edits or removes,
       # such as a static block turned dynamic, may read existing inputs in the content body, and so
-      # may a change at the same address that names no attribute.
+      # may a change at the same address that names no attribute, or one whose attribute is no string.
       and (any($b.triggers[]; .address == $t.address and .change_kind != "added"
-        and (.attribute == null or (.attribute | type == "string" and (ltrimstr("dynamic.") | split(".")[0]) == $bt))) | not))
+        and ((.attribute | type) != "string" or ((.attribute | ltrimstr("dynamic.") | split(".")[0]) == $bt))) | not))
   then "argument"
   else null end;
 def valid_claims: type == "object" and (.claims | type == "array" and length <= 48

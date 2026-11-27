@@ -951,7 +951,7 @@ for sh in bash zsh; do
   # taken from the script, with the gates passed and init failing as it spends the budget.
   peinit() { # plan-pass.sh copy: the class and the number of init runs
     fn="$(perl -0ne 'print $1 if /\n(pe_init\(\) \{.*?\n\})\n/s' "$1")"; rm -rf "$TMP/pe"; mkdir -p "$TMP/pe/ex"; : > "$TMP/pe/g0"
-    W="$TMP/pe" FN="$fn" bash -c '
+    W="$TMP/pe" FN="$fn" "$sh" -c '
       PLAN="$W"; PTREE="$W/tree.tfrc"; GATES_PL=; GMODE=laptop; TFENV=(env)
       left() { if [ -e "$W/spent" ]; then echo 0; else echo "$1"; fi; }
       run_capped() { : > "$W/spent"; echo run >> "$W/runs.log"; return 1; }

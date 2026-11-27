@@ -1,3 +1,12 @@
+## [0.19.7](https://github.com/modulestf/modulestf/compare/v0.19.6...v0.19.7) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Test the identical guards and refuse a binary path with a newline ([#305](https://github.com/modulestf/modulestf/issues/305)) ([4d4e9e3](https://github.com/modulestf/modulestf/commit/4d4e9e3e8d8be2aa4b38039a90b486e56221379d)), closes [#300](https://github.com/modulestf/modulestf/issues/300)
+
+
+
 ## [0.19.6](https://github.com/modulestf/modulestf/compare/v0.19.5...v0.19.6) (2026-11-27)
 
 
