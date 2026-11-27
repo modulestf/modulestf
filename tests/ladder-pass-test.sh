@@ -151,6 +151,7 @@ if [ "\$1" = fixture-build ]; then
     mkdir -p "\$out/expect"
     for sd in base head; do c=\$can; [ \$sd = head ] && c=\$canh
       jq -n --argjson c "\$c" '{schema_version: 1, files: {"main.tf": {blocks: ([\$c[] | {type: "output", labels: [.]}] + [{type: "output", labels: ["canary_known"]}])}}}' > "\$out/expect/\$sd.json"; done
+    [ -f "$ST/fb.stderr" ] && echo 'engine note on stderr' >&2
     jq -c "\$(cat "$ST/fb.shape")" "$ST/fb.valid"; exit 0
   fi
   [ -f "$ST/fb.shape1" ] && { echo '{"ok":false,"reason":"stub refusal","schema_version":1}' | jq -c "\$(cat "$ST/fb.shape1")"; exit 1; }
@@ -190,7 +191,7 @@ good_canary() {
     echo "end canary"
   } > "$ST/canary.txt"
 }
-reset() { rm -f "$ST"/{fb.on,fb.refuse,fb.error,fb.exit1ok,fb.exit1none,fb.exit2ok,fb.shape,fb.shape1,fb.valid,fb.canlist,fb.canhead,fb.refuse2,fb.nofeat,fb.featstr,log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan,test.unknownvalue}; good_canary; }
+reset() { rm -f "$ST"/{fb.on,fb.refuse,fb.error,fb.exit1ok,fb.exit1none,fb.exit2ok,fb.shape,fb.shape1,fb.valid,fb.canlist,fb.canhead,fb.stderr,fb.refuse2,fb.nofeat,fb.featstr,log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan,test.unknownvalue}; good_canary; }
 BASE=d72cba285514b5e2e83bea7dd1272c1c206a4f64
 HEAD=3b19adcd09b08528221d3286b30338b1e0cf6f16
 RUND="$TMP/runs/pr-review.abcdef"; mkdir -p "$RUND/clone"
@@ -792,6 +793,77 @@ sc_f_statekey() { sc_forge '.cases[0].inputs.vpc_security_group_ids.extra = 1' "
 sc_c_big() { # 32 cases of 10 KB: the expected answer is far beyond one argument
   sc_tc "$NOIN | .triggers[0].referenced_inputs = [{name: \"s\", type: \"string\"}] | .triggers[0].cases = [range(32) | {id: (\"c\" + tostring), inputs: {s: {value: (\"x\" * 10000), unknown: false, $SK}}}]" \
     '.canaries = ["canary_ladder_u_0"] | .cases = [range(32) | {id: ("c" + tostring), inputs: {s: {value: ("x" * 10000), unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0"]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+# Round 5: refusals FIX_PL makes that the derived answer must make too, and two tolerances it shares.
+sc_g_type() { # an input type outside the L1 type grammar
+  sc_tc "$NOIN | .triggers[0].referenced_inputs = [{name: \"v\", type: \"bogus\"}] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: \"x\", unknown: false, $SK}}}]" \
+    '.canaries = ["canary_ladder_u_0"] | .cases = [{id: "a", inputs: {v: {value: "x", unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_g_typeopen() { # a type that does not close
+  sc_tc "$NOIN | .triggers[0].referenced_inputs = [{name: \"v\", type: \"list(string\"}] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: [], unknown: false, $SK}}}]" \
+    '.canaries = ["canary_ladder_u_0", "canary_ladder_ue_0"] | .cases = [{id: "a", inputs: {v: {value: [], unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_g_typeok() { # an object type with an optional member is inside the grammar
+  sc_tc "$NOIN | .triggers[0].referenced_inputs = [{name: \"v\", type: \"object({a = string, b = optional(list(string))})\"}] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: {a: \"x\"}, unknown: false, $SK}}}]" \
+    '.canaries = ["canary_ladder_u_0"] | .cases = [{id: "a", inputs: {v: {value: {a: "x"}, unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0"]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_g_reftype() { # a reference with a type outside the grammar
+  sc_tc "$NOIN | .triggers[0].contextual_ref_details = [{text: \"aws_x.y.arn\", kind: \"resource\", type: \"bogus\"}] | .triggers[0].cases = [{id: \"a\", inputs: {\"aws_x.y.arn\": {value: \"x\", unknown: false, $SK}}}]" \
+    '.canaries = ["canary_ladder_u_0"] | .cases = [{id: "a", inputs: {"aws_x.y.arn": {value: "x", unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_g_idnum() { # an .id reference whose type is not a string
+  sc_tc "$NOIN | .triggers[0].contextual_ref_details = [{text: \"aws_x.y.id\", kind: \"resource\", type: 5}] | .triggers[0].cases = [{id: \"a\", inputs: {\"aws_x.y.id\": {value: \"x\", unknown: false, $SK}}}]" \
+    '.canaries = ["canary_ladder_u_0"] | .cases = [{id: "a", inputs: {"aws_x.y.id": {value: "x", unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_g_idfallback() { # an .id reference with no type is a string
+  sc_tc "$NOIN | .triggers[0].contextual_ref_details = [{text: \"aws_x.y.id\", kind: \"resource\", type: null}] | .triggers[0].cases = [{id: \"a\", inputs: {\"aws_x.y.id\": {value: \"x\", unknown: false, $SK}}}]" \
+    '.canaries = ["canary_ladder_u_0"] | .cases = [{id: "a", inputs: {"aws_x.y.id": {value: "x", unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0"]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_g_notype() { # an attribute other than id with no type has no type to build
+  sc_tc "$NOIN | .triggers[0].contextual_ref_details = [{text: \"aws_x.y.arn\", kind: \"resource\", type: null}] | .triggers[0].cases = [{id: \"a\", inputs: {\"aws_x.y.arn\": {value: \"x\", unknown: false, $SK}}}]" \
+    '.canaries = ["canary_ladder_u_0"] | .cases = [{id: "a", inputs: {"aws_x.y.arn": {value: "x", unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_g_long() { # an expression over 16 KiB
+  sc_tc "$NOIN | .triggers[0].base_expr = (\"x\" * 16385) | .triggers[0].cases = [{id: \"a\", inputs: {}}]" \
+    '.canaries = [] | .cases = [{id: "a", inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_g_longok() { sc_tc "$NOIN | .triggers[0].base_expr = (\"x\" * 16384) | .triggers[0].cases = [{id: \"a\", inputs: {}}]" \
+    '.canaries = [] | .cases = [{id: "a", inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_g_exprnum() { # an expression that is neither null nor a string is not dropped from the sides
+  sc_tc "$NOIN | .triggers[0].head_expr = 5 | .triggers[0].cases = [{id: \"a\", inputs: {}}]" \
+    '.canaries = [] | .sides = ["base"] | .cases = [{id: "a", inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_g_inputsarr() { # case inputs that are an array
+  sc_tc "$NOIN | .triggers[0].cases = [{id: \"a\", inputs: {}}]" \
+    '.canaries = [] | .cases = [{id: "a", inputs: [], unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_g_uenull() { # unknown_elements null is []
+  sc_tc "$NOIN | .triggers[0].referenced_inputs = [$LV] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: [], unknown: false, $SK, unknown_elements: null}}}]" \
+    '.canaries = ["canary_ladder_u_0", "canary_ladder_ue_0"] | .cases = [{id: "a", inputs: {v: {value: [], unknown: false, "null": false, omitted: false, unknown_elements: null}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_g_stderr() { # a valid answer with a note on the engine's standard error
+  fbsetup .; touch "$ST/fb.stderr"; fbrun "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+# Round 6: the type grammar is ASCII, the expression cap counts bytes, and the grammar check is linear.
+sc_g_unispace() { # a type with a space the grammar does not know (U+00A0, U+2009, U+0085): no answer to take
+  local u
+  for u in 00a0 2009 0085; do
+    sc_tc "$NOIN | .triggers[0].referenced_inputs = [{name: \"v\", type: \"list(\\u$u string)\"}] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: [], unknown: false, $SK}}}]" \
+      '.canaries = ["canary_ladder_u_0", "canary_ladder_ue_0"] | .cases = [{id: "a", inputs: {v: {value: [], unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"
+    [ "$(r0 reason)" = "$FBF" ] || { echo "taken with U+$u"; return 1; }
+  done
+}
+sc_g_asciispace() { # a tab, newline, vertical tab and form feed inside a type are the grammar's own white space
+  sc_tc "$NOIN | .triggers[0].referenced_inputs = [{name: \"v\", type: \"list(\\t\\n\\u000b\\fstring )\"}] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: [], unknown: false, $SK}}}]" \
+    '.canaries = ["canary_ladder_u_0", "canary_ladder_ue_0"] | .cases = [{id: "a", inputs: {v: {value: [], unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_g_trailing() { # tokens after a valid type, and a type that is another type's head
+  local t c
+  for t in 'list(string))' 'string(list' 'string string'; do
+    c='["canary_ladder_u_0"]'; case "$t" in list*) c='["canary_ladder_u_0", "canary_ladder_ue_0"]' ;; esac
+    sc_tc "$NOIN | .triggers[0].referenced_inputs = [{name: \"v\", type: \"$t\"}] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: [], unknown: false, $SK}}}]" \
+      ".canaries = $c | .cases = [{id: \"a\", inputs: {v: {value: [], unknown: false, \"null\": false, omitted: false}}, unknown_inputs: [], addr: \"\"}]" "$c" "$1"
+    [ "$(r0 reason)" = "$FBF" ] || { echo "taken: $t"; return 1; }
+  done
+}
+sc_g_bytes() { # 8193 two-byte characters are 16386 bytes
+  sc_tc "$NOIN | .triggers[0].base_expr = (\"\\u00e9\" * 8193) | .triggers[0].cases = [{id: \"a\", inputs: {}}]" \
+    '.canaries = [] | .cases = [{id: "a", inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_g_bytesok() { sc_tc "$NOIN | .triggers[0].base_expr = (\"\\u00e9\" * 8192) | .triggers[0].cases = [{id: \"a\", inputs: {}}]" \
+    '.canaries = [] | .cases = [{id: "a", inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_g_linear() { # a long run of type tokens and a bad character is a clean false, not a regex error
+  local defs; defs="$(sed -n "/^FB_EXPECT_JQ='/,/^\$t\[0\] as \$t/p" "$1" | sed '$d' | sed "1s/^FB_EXPECT_JQ='//")"
+  [ -n "$defs" ] || return 1
+  [ "$(jq -n --arg t "$(printf 'a%.0s' $(seq 40))!" -f <(printf '%s\n$t | ptype_ok\n' "$defs") 2> /dev/null)" = false ] &&
+  [ "$(jq -n --arg t "list($(printf 'a%.0s' $(seq 300))" -f <(printf '%s\n$t | ptype_ok\n' "$defs") 2> /dev/null)" = false ] &&
+  [ "$(jq -n --arg t 'list(string)' -f <(printf '%s\n$t | ptype_ok\n' "$defs") 2> /dev/null)" = true ]
+}
 sc_relpath() { # a relative PATH entry that shadows the binary: tools finds it, facts-resolve.sh does not
   reset; touch "$ST/fb.on"; rm -rf "${TMP:?}/relcwd"; mkdir -p "$TMP/relcwd/relbin"; cp "$B/mtf-facts" "$TMP/relcwd/relbin/mtf-facts"
   trig 'local.a' 'local.b' '[{"text":"local.a","kind":"local","type":null,"multi":null}]'
@@ -867,6 +939,25 @@ t_sc "a trigger input state with a key of its own gives no answer to take" sc_c_
 t_sc "an input state with a null flag is a failed builder" sc_f_nullstate
 t_sc "an input state with an extra key is a failed builder" sc_f_statekey
 t_sc "32 cases of 10 KB are taken: the expected answer goes through a file" sc_c_big
+t_sc "an input type outside the L1 grammar gives no answer to take" sc_g_type
+t_sc "a type that does not close gives no answer to take" sc_g_typeopen
+t_sc "an object type with an optional member is inside the grammar" sc_g_typeok
+t_sc "a reference type outside the L1 grammar gives no answer to take" sc_g_reftype
+t_sc "an .id reference with a type that is no string gives no answer to take" sc_g_idnum
+t_sc "an .id reference with no type is a string and is built" sc_g_idfallback
+t_sc "an attribute other than id with no type gives no answer to take" sc_g_notype
+t_sc "an expression over 16 KiB gives no answer to take" sc_g_long
+t_sc "an expression of exactly 16 KiB is built" sc_g_longok
+t_sc "an expression that is no string gives no answer to take" sc_g_exprnum
+t_sc "case inputs that are an array are a failed builder" sc_g_inputsarr
+t_sc "unknown_elements null is taken as an empty list" sc_g_uenull
+t_sc "a note on the engine's standard error does not spoil a valid answer" sc_g_stderr
+t_sc "a type with U+00A0, U+2009 or U+0085 in it gives no answer to take" sc_g_unispace
+t_sc "a tab and a newline inside a type are the grammar's white space" sc_g_asciispace
+t_sc "tokens after a valid type, or a type that is another type's head, give no answer to take" sc_g_trailing
+t_sc "an expression of 16386 bytes in 8193 characters gives no answer to take" sc_g_bytes
+t_sc "an expression of exactly 16384 bytes in 8192 characters is built" sc_g_bytesok
+t_sc "the type grammar check gives false, not an error, for a long run of tokens and a bad character" sc_g_linear
 t_sc "a relative PATH entry that shadows the binary: the engine is not used" sc_relpath
 t_sc "a valid version report without cmd:fixture-build runs the Perl builder" sc_nofeat
 t_sc "a features string that contains the name is no feature" sc_featstr
@@ -892,7 +983,7 @@ fbmut "the wrap not compared" 's/\n         and \.wrap == \$e\.wrap//' sc_f_wrap
 fbmut "the wrap not derived from the trigger" 's/elif \(\$kinds \| index\("each"\)\) != null then "for_each" else "none" end/elif ($kinds | index("each")) != null then "for_each" else "none" end/; s/if \(\$kinds \| index\("count"\)\) != null then "count"/if (false) then "count"/' sc_c_count
 fbmut "any wrap string taken" 's/\n         and \.wrap == \$e\.wrap/\n         and (.wrap | type == "string")/' sc_f_wraplvl
 fbmut "the keys of the answer not checked" 's/\n         and keys == \["canaries", "cases", "ok", "schema_version", "sides", "wrap"\]//' sc_f_extra
-fbmut "the keys of a case not checked" 's/ and all\(\.\[\]; type == "object" and keys == \["addr", "id", "inputs", "unknown_inputs"\]\)/ and all(.[]; type == "object")/' sc_f_casekey
+fbmut "the keys of a case not checked" 's/ and keys == \["addr", "id", "inputs", "unknown_inputs"\]\)\)/))/' sc_f_casekey
 fbmut "the schema version of the answer not checked" 's/\n         and \.schema_version == 1\n         and \.wrap/\n         and .wrap/' sc_f_schema
 fbmut "the case ids not compared" 's/\n         and \[\.cases\[\]\.id\] == \[\$e\.cases\[\]\.id\]//' sc_f_ids
 fbmut "one document not required on exit 0" 's/\x27\$e\[0\] as \$e \| length == 1 and \(\.\[0\] \| type == "object"/\x27\$e[0] as \$e | (.[0] | type == "object"/' sc_f_twodocs
@@ -921,6 +1012,24 @@ fbmut "a default change in a counted context taken" 's/\(\$wrap != "none" or \$l
 fbmut "a default change at L2 taken" 's/\(\$wrap != "none" or \$lvl != "l1"\)/(\$wrap != "none")/' sc_c_omitl2
 fbmut "the states of the trigger not checked" 's/\n        and \(\.inputs \| to_entries \| all\(\.\[\]; \.value \| okstate\)\)//' sc_c_badstate
 fbmut "the states of the answer not checked" 's/\n         and \(\[\.cases\[\]\.inputs\[\]\] \| all\(\.\[\]; okstate\)\)//' sc_f_nullstate
+fbmut "the input type grammar not checked" 's/and \(\.type \| ptype_ok\)\n        then \{name: \.name/and (.type | type == "string")\n        then {name: .name/' sc_g_type
+fbmut "an unclosed type taken" 's/ and \(try \(ty\(0\) \| length == 0\) catch false\)\)/)/' sc_g_typeopen
+fbmut "the type grammar rejects an optional member" 's/elif \$k == "object" then/elif \$k == "objectx" then/' sc_g_typeok
+fbmut "the grammar of a reference type not checked" 's/\(\.type != null and \(\.type \| ptype_ok\)\)/(.type != null)/' sc_g_reftype
+fbmut "an .id reference with a non-string type taken" 's/\(\.type != null and \(\.type \| ptype_ok\)\) or \(\.type == null and \$m\.attr == "id"\)/(.type != null and (.type | ptype_ok)) or \$m.attr == "id"/' sc_g_idnum
+fbmut "the id fallback refused" 's/ or \(\.type == null and \$m\.attr == "id"\)//' sc_g_idfallback
+fbmut "an untyped attribute other than id taken" 's/ or \(\.type == null and \$m\.attr == "id"\)/ or (.type == null)/' sc_g_notype
+fbmut "the expression length cap dropped" 's/\n     or \(\[\$t\.base_expr, \$t\.head_expr\] \| any\(\.\[\]; type == "string" and utf8bytelength > 16384\)\)//' sc_g_long
+fbmut "the expression length cap off by one" 's/length > 16384\)\)/length >= 16384))/' sc_g_longok
+fbmut "a non-string expression dropped from the sides" 's/\n     or \(\[\$t\.base_expr, \$t\.head_expr\] \| all\(\.\[\]; \. == null or type == "string"\) \| not\)//' sc_g_exprnum
+fbmut "the case inputs not required to be an object" 's/ and \(\.inputs \| type == "object"\) and keys == \["addr"/ and keys == ["addr"/' sc_g_inputsarr
+fbmut "a null unknown_elements refused" 's/\(\.value \| type == "array" or \. == null\)/(.value | type == "array")/' sc_g_uenull
+fbmut "the engine's standard error merged into its answer" 's/FACTS_RUN_NOERR=1 //' sc_g_stderr
+fbmut "the type grammar white space widened to Unicode" 's/\[ \\\\t\\\\n\\\\r\\\\f\\\\x0b\]\+"; ""\)/\\\\s+"; "")/' sc_g_unispace
+fbmut "the expression cap counted in characters" 's/utf8bytelength > 16384/length > 16384/' sc_g_bytes
+fbmut "the type grammar check made a nested pattern again" 's/\(gsub\(.*?"; ""\) == ""\)/test("^(\\\\s*([A-Za-z_][A-Za-z0-9_-]*|[()\\\\[\\\\]{},=]))*\\\\s*\\\\z")/' sc_g_linear
+fbmut "tokens after a valid type taken" 's/try \(ty\(0\) \| length == 0\) catch false/try (ty(0)) catch false/' sc_g_trailing
+fbmut "a vertical tab dropped from the grammar white space" 's/\[ \\\\t\\\\n\\\\r\\\\f\\\\x0b\]\+"; ""\)/[ \\\\t\\\\n\\\\r\\\\f]+"; "")/' sc_g_asciispace
 fbmut "the binary match alone dropped" 's/ && \[ "\$FACTS_BIN" = "\$FACTS" \]//' sc_relpath
 fbmut "the engine inside the run directory accepted" 's/facts_resolve "\$RUN"\n/facts_resolve\n/' sc_inrun
 fbmut "the run directory and the binary match both dropped" 's/facts_resolve "\$RUN"\n/facts_resolve\n/; s/ \&\& \[ "\$FACTS_BIN" = "\$FACTS" \]//' sc_inrun

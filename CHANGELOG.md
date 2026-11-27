@@ -1,3 +1,21 @@
+## [0.18.4](https://github.com/modulestf/modulestf/compare/v0.18.3...v0.18.4) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Pin mtf-facts v0.21.3 ([#286](https://github.com/modulestf/modulestf/issues/286)) ([f4cc7f2](https://github.com/modulestf/modulestf/commit/f4cc7f24429b094f8871d587a7314667b71e93fc)), closes [#276](https://github.com/modulestf/modulestf/issues/276)
+
+
+
+## [0.18.3](https://github.com/modulestf/modulestf/compare/v0.18.2...v0.18.3) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Match the fixture builder's refusals in the expected answer ([#280](https://github.com/modulestf/modulestf/issues/280)) ([f9fa2c3](https://github.com/modulestf/modulestf/commit/f9fa2c37b0f4cec1dca69eee748c4d203707d486))
+
+
+
 ## [0.18.2](https://github.com/modulestf/modulestf/compare/v0.18.1...v0.18.2) (2026-11-27)
 
 
