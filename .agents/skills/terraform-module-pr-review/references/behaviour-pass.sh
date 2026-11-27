@@ -163,7 +163,8 @@ def covers($files):
 # exactly var.<name>, or a dynamic block null-guarded on it, where the change adds that variable
 # with a null default in the same directory ($nv). Never a module call argument, which the plan
 # shows only through the child, an output, which the engine takes to L1, nor a changed default or
-# type of an existing variable.
+# type of an existing variable. Also a dynamic block whose for_each is exactly a variable the change
+# adds in the same directory, at any default, the next branch.
 def tdir: if test("/") then sub("/[^/]*$"; "") else "." end;
 def meta_args: ["provider", "count", "for_each", "depends_on", "lifecycle", "provisioner", "connection"];
 def diff_kind($t; $b; $nv): if $t.change_kind != "added" or ($t.address | type != "string") then null
@@ -180,6 +181,19 @@ def diff_kind($t; $b; $nv): if $t.change_kind != "added" or ($t.address | type !
       and (if $t.category == "dynamic-block-change"
            then ($h | test("^var\\.\($n) == null \\? \\[\\] : \\[[^?:]*\\]$") or test("^var\\.\($n) != null \\? \\[[^?:]*\\] : \\[\\]$"))
            else $h == ("var." + $n) end)) then "argument"
+  # A dynamic block whose for_each is exactly a variable the change adds in the same directory,
+  # whatever its default: no existing caller sets that variable, so the blocks it makes at the
+  # default do not depend on any input an existing caller can set.
+  elif ($t.address | test("^[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*$")) and $t.levels == ["L4"]
+    and $t.category == "dynamic-block-change" and (($t.also_categories // []) == [])
+    and ($t.attribute | type == "string" and test("^dynamic\\.[A-Za-z_][A-Za-z0-9_-]*$"))
+    and $t.contextual_refs == [] and ($t.head_expr | type == "string")
+    and (($t.referenced_inputs | type) == "array" and ($t.referenced_inputs | length) == 1)
+    and ($t.referenced_inputs[0] | .name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]*$"))
+    and ($t.referenced_inputs[0].name as $n | ($t.file | tdir) as $d
+      | $t.head_expr == ("var." + $n)
+      and any($b.triggers[]; .address == ("var." + $n) and .change_kind == "added" and (.file | type == "string") and (.file | tdir) == $d))
+  then "argument"
   else null end;
 def valid_claims: type == "object" and (.claims | type == "array" and length <= 48
   and all(.[]; type == "object" and (.claim_id | cid)) and (map(.claim_id) | length == (unique | length)));
