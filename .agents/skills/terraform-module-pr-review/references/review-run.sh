@@ -575,10 +575,16 @@ cmd_prepare() {
     # a second run on the clone root.
     local mraff=false
     [ -z "$prefix" ] || ! facts_has flag:affected:module-root || mraff=true
-    jq --arg p "$prefix" '[.[] | select($p == "" or (.filename | startswith($p + "/")))
-      | .filename |= (if $p == "" then . else .[($p | length) + 1:] end)
-      | if .previous_filename then .previous_filename |= (if $p == "" then . else ltrimstr($p + "/") end) else . end]' \
-      "$RUN/host/files.json" > "$RUN/state/files-module.json"
+    jq --arg p "${prefix:+$prefix/}" '
+      def rel: if $p == "" then . elif startswith($p) then .[($p | length):] else null end;
+      # A rename across the module root is a deletion or an addition of the module: out of it, a
+      # removed file at its old path; into it, an added file. Neither keeps the patch of the rename.
+      [.[] | (.filename | rel) as $n | ((.previous_filename // null) | if . == null then null else rel end) as $o
+       | if $n != null and (has("previous_filename") | not) then .filename = $n
+         elif $n != null and $o != null then .filename = $n | .previous_filename = $o
+         elif $n != null then del(.previous_filename, .patch) | .filename = $n | .status = "added"
+         elif $o != null then del(.previous_filename, .patch) | .filename = $o | .status = "removed"
+         else empty end]' "$RUN/host/files.json" > "$RUN/state/files-module.json"
     if [ "$mraff" = true ]; then
       local mrin=(--diff "$RUN/host/files.json") mrok=false
       if [ -n "$broot" ]; then

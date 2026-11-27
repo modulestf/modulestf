@@ -321,8 +321,14 @@ classify() {
       "$diff" > /dev/null 2>&1 || die "--diff is not a GitHub files list"
     jq --arg p "${prefix:+$prefix/}" '
       def rel: if $p == "" then . elif startswith($p) then .[($p | length):] else null end;
-      [.[] | .filename |= rel | if has("previous_filename") then .previous_filename |= rel else . end
-       | select(.filename != null)]' "$diff" > "$out/files-module.json" || die "--diff cannot be read"
+      # A rename across the module root is a deletion or an addition of the module: out of it, a
+      # removed file at its old path; into it, an added file. Neither keeps the patch of the rename.
+      [.[] | (.filename | rel) as $n | ((.previous_filename // null) | if . == null then null else rel end) as $o
+       | if $n != null and (has("previous_filename") | not) then .filename = $n
+         elif $n != null and $o != null then .filename = $n | .previous_filename = $o
+         elif $n != null then del(.previous_filename, .patch) | .filename = $n | .status = "added"
+         elif $o != null then del(.previous_filename, .patch) | .filename = $o | .status = "removed"
+         else empty end]' "$diff" > "$out/files-module.json" || die "--diff cannot be read"
     cover="$out/files-module.json"
     [ -z "$base" ] || abs "$base" --base
   elif [ -n "$base" ] && [ -z "$prefix" ]; then abs "$base" --base

@@ -1674,6 +1674,36 @@ t_tf_cover() {
 }
 t_tf_cover; check "covers: a committed .terraform file left out of the report is refused, and kept when listed" $?
 wmutate "covers: the skip of .git and .terraform paths restored" 's/\| \.filename, \(\.previous_filename \/\/ empty\)\]\n     - \[\$o\.entries/| .filename, (.previous_filename \/\/ empty) | select(test("(^|\/)\\\\.(git|terraform)(\/|\$)") | not)]\n     - [\$o.entries/' t_tf_cover
+# The old path of a rename alone: the triggers name only new.tf, so covers is the one check that can
+# refuse a report with no entry at main.tf.
+t_ren_old() {
+  setup; jq '[.[0] + {filename: "new.tf", previous_filename: "main.tf", status: "renamed"}]' "$TMP/files.json" > "$TMP/files-ren.json"
+  jq '.entries = [{path: "new.tf", change_kind: "renamed", inert: false, trigger_ids: ["T-001", "T-002"]}] | .triggers |= map(.file = "new.tf")' \
+    "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
+  DIFF="$TMP/files-ren.json" classify; [ "$(cat "$O/status" 2> /dev/null)" = "output refused" ]
+}
+t_ren_old; check "covers: a report with no entry at the old path of a rename is refused" $?
+wmutate "covers: the old path of a rename dropped" 's/\| \.filename, \(\.previous_filename \/\/ empty\)\]\n     - \[\$o\.entries/| .filename]\n     - [\$o.entries/' t_ren_old
+# A rename across the module root: out of it, the module loses the file, a removed file at its old
+# path that classify must cover; into it, an added file with no rename.
+jq -n '[{filename: "mod/main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"},
+  {filename: "other/vars.tf", previous_filename: "mod/vars.tf", status: "renamed", additions: 0, deletions: 0, patch: "@@ -1 +1 @@\n-a\n+b"},
+  {filename: "mod/in.tf", previous_filename: "other/in.tf", status: "renamed", additions: 0, deletions: 0, patch: "@@ -1 +1 @@\n-a\n+b"}]' > "$TMP/files-cross.json"
+t_ren_out() {
+  setup; jq '.entries += [{path: "in.tf", change_kind: "added", inert: true, trigger_ids: []}]' "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
+  DIFF="$TMP/files-cross.json" PFX=mod classify
+  jq -e '. == [{filename: "main.tf", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"},
+    {filename: "vars.tf", status: "removed", additions: 0, deletions: 0}, {filename: "in.tf", status: "added", additions: 0, deletions: 0}]' \
+    "$TMP/diff-seen.json" > /dev/null || return 1
+  # A report with no entry for the removed file is refused: the loss can never pass as inert.
+  [ "$(cat "$O/status" 2> /dev/null)" = "output refused" ] || return 1
+  setup; jq '.entries += [{path: "in.tf", change_kind: "added", inert: true, trigger_ids: []}, {path: "vars.tf", change_kind: "removed", inert: false, trigger_ids: ["T-002"]}]' \
+    "$TMP/behaviour-556.json" > "$TMP/behaviour.out"
+  DIFF="$TMP/files-cross.json" PFX=mod classify; [ -f "$O/behaviour.json" ] && jq -e '.inert == false' "$O/behaviour.json" > /dev/null
+}
+t_ren_out; check "prefix: a rename out of the module root is a removed file classify must cover, one into it an added file" $?
+wmutate "prefix: a rename out of the module root dropped" 's/elif \$o != null then del\(\.previous_filename, \.patch\) \| \.filename = \$o \| \.status = "removed"/elif false then ./' t_ren_out
+wmutate "prefix: a rename into the module root kept as a rename" 's/elif \$n != null then del\(\.previous_filename, \.patch\) \| \.filename = \$n \| \.status = "added"/elif \$n != null then .filename = \$n/' t_ren_out
 wmutate "base tree: the base never run" 's/    if \[ -n "\$base" \]; then\n      why=/    if false; then\n      why=/' t_base_ok
 wmutate "base tree: no fallback after a failed base run" 's/if \[ -n "\$diff" \] && \[ "\$why" != ok \]; then/if [ -n "\$diff" ] && [ -z "\$base" ]; then/' t_base_fail
 wmutate "base tree: the base report not checked" 's/ok\) if jq -e --slurpfile d "\$cover"/ok) if true || jq -e --slurpfile d "\$cover"/' t_base_refused

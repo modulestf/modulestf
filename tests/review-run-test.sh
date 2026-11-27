@@ -2693,6 +2693,25 @@ rmut "the base tree line for a new module" 's/  \[ "\$1" = true \] \|\| \[ -z "\
 rmut "the base tree line with no .git directory check" 's/ \[ ! -d "\$RUN\/base\/\.git" \] \|\| \[ -L "\$RUN\/base" \] \|\|\n    ! base_root_ok "\$PREFIX"/ [ -L "\$RUN\/base" ] ||\n    ! base_root_ok "\$PREFIX"/' t_bt_nogit
 rmut "the module root guard following a link" 's/ && r="\$\(cd "\$d" 2> \/dev\/null && pwd -P\)" && \[ "\$r" = [^\n]*\n/\n/' t_bt_rootlink
 
+# The module-relative files list prepare hands affected, its filter taken from review-run.sh: a rename
+# out of the module root is a removed file at its old path, one into it an added file, and neither
+# keeps the patch of the rename; a rename inside it stays a rename and a path outside it is left out.
+FM_SRC() { awk '/^    jq --arg p "\$\{prefix:\+\$prefix\/\}" .$/ { on = 1; next } on && /^      def rel:/ { pr = 1 } pr && /"\$RUN\/host\/files.json" > "\$RUN\/state\/files-module.json"$/ { sub(/\x27 "\$RUN.*$/, ""); print; exit } pr { print }' "${1:-$RR}"; }
+t_fm() { # review-run.sh copy -> 0 when the cross-root renames read right
+  jq -n '[{filename: "modules/a/main.tf", status: "modified", patch: "p"},
+    {filename: "other/vars.tf", previous_filename: "modules/a/vars.tf", status: "renamed", patch: "q"},
+    {filename: "modules/a/in.tf", previous_filename: "other/in.tf", status: "renamed", patch: "r"},
+    {filename: "modules/a/new.tf", previous_filename: "modules/a/old.tf", status: "renamed"},
+    {filename: "other/x.tf", status: "modified"}]' > "$TMP/fm.json"
+  local prog; prog="$(FM_SRC "$1")" && [ -n "$prog" ] &&
+    jq -e --arg p "modules/a/" "$prog"' == [{filename: "main.tf", status: "modified", patch: "p"}, {filename: "vars.tf", status: "removed"},
+      {filename: "in.tf", status: "added"}, {filename: "new.tf", previous_filename: "old.tf", status: "renamed"}]' "$TMP/fm.json" > /dev/null &&
+    jq -e --arg p "" "$prog"' | length == 5' "$TMP/fm.json" > /dev/null
+}
+t_fm "$RR"; check "prepare: the module files list keeps a rename out of the module root as a removed file and one into it as an added file" $?
+rmut "a rename out of the module root dropped from the module files list" 's/elif \$o != null then del\(\.previous_filename, \.patch\) \| \.filename = \$o \| \.status = "removed"/elif false then ./' t_fm
+rmut "a rename into the module root kept as a rename in the module files list" 's/elif \$n != null then del\(\.previous_filename, \.patch\) \| \.filename = \$n \| \.status = "added"/elif \$n != null then .filename = \$n/' t_fm
+
 echo
 [ "$fails" -eq 0 ] && echo "all checks passed" || echo "$fails check(s) failed"
 [ "$fails" -eq 0 ]
