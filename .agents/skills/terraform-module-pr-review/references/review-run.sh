@@ -92,6 +92,19 @@ facts_bin() {
   facts="${FACTS_BIN:-/dev/null/mtf-facts}"
 }
 
+# facts_bin_line: the binary prepare resolved, as the reviewer's "mtf-facts binary:" line, so the
+# reviewer runs the run's mtf-facts, not another one on its own PATH. Only one absolute,
+# canonical path of plain characters that is still a regular executable file and no link.
+facts_bin_line() {
+  local b
+  [ -f "$RUN/state/facts-bin" ] && [ ! -L "$RUN/state/facts-bin" ] && [ "$(wc -l < "$RUN/state/facts-bin")" -eq 1 ] || return 0
+  b="$(cat "$RUN/state/facts-bin")"
+  [ ${#b} -le 1024 ] && printf '%s\n' "$b" | grep -Eqx '/[A-Za-z0-9._+@/-]+' || return 0
+  case "$b/" in */./*|*/../*|*//*) return 0 ;; esac
+  [ -f "$b" ] && [ -x "$b" ] && [ ! -L "$b" ] || return 0
+  printf 'mtf-facts binary: %s\n' "$b"
+}
+
 # The run directory a later subcommand names: "<root>/pr-review.XXXXXX", a real directory of
 # this user holding the state prepare wrote.
 open_run() {
@@ -546,6 +559,7 @@ cmd_prepare() {
   facts_bin
   # The binary and what it reports it can do, for the summary and the reviewer's task.
   facts_line > "$RUN/state/facts"
+  [ -z "$FACTS_BIN" ] || printf '%s\n' "$FACTS_BIN" > "$RUN/state/facts-bin"
   [ "$FACTS_STATE" != ok ] || printf '%s\n' "$FACTS_REPORT" > "$RUN/state/facts-version.json"
   if [ "$triage" = false ]; then
     mkdir "$RUN/behaviour"
@@ -1346,6 +1360,7 @@ cmd_handover() {
       and (test("/[.]+$") | not)) | "Base repository: \(.repo)"' "$RUN/host/host.json" 2> /dev/null || true
     # The host's mtf-facts as one fact line from facts-resolve.sh (review-run-details.md, section "The mtf-facts line").
     [ ! -s "$RUN/state/facts" ] || head -n 1 "$RUN/state/facts" | grep -E '^mtf-facts: [ -~]+$' || true
+    facts_bin_line
     # The host's wrapper evidence as its own fact lines, read as eval reads it: every line in the
     # grammar of behaviour-pass.sh wrappers and at most 256 of them, or no line at all.
     if [ "$TRIAGE" = false ] && [ -f "$RUN/behaviour/wrappers.txt" ] && [ "$(wc -l < "$RUN/behaviour/wrappers.txt")" -le 256 ] &&

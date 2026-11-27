@@ -3435,6 +3435,18 @@ t_own_block() { render "$(one structure.wrong-file HIGH main.tf 3 "S." "F.")" "$
   grep -qxF "Earlier review from this account: changes requested on ${BASE:0:7}; this review replaces it." "$O/comment.md" &&
   ! grep -qF 'stands until' "$O/comment.md"; }
 t_own_block; check "earlier review: a fresh block proposes REQUEST_CHANGES, which replaces the earlier one" $?
+# A fresh block over our block with no record keeps it: both sections say the block stands, and
+# neither says this review replaces it.
+t_own_kept() { render "$(one structure.wrong-file HIGH main.tf 3 "S." "F.")" "$HOWN"; [ "$ST" = 0 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ] &&
+  grep -qxF "This account requested changes on \`${BASE:0:7}\`, and that review cannot be checked against this head: no record of it was kept where it was posted." "$O/comment.md" &&
+  grep -qxF 'That request for changes stands: this review keeps the block, and a later run reads its requests as never judged.' "$O/comment.md" &&
+  grep -qxF "Earlier review from this account: changes requested on ${BASE:0:7}; it could not be checked, so this review keeps its block." "$O/comment.md" &&
+  ! grep -qF 'this review replaces it' "$O/comment.md"; }
+t_own_kept; check "earlier review: a fresh block over our block with no record keeps it, in both sections" $?
+t_own_kept_ap() { render "$NONE" "$HOWN" "" "" "" --event APPROVE; [ "$ST" = 0 ] &&
+  grep -qxF "Earlier review from this account: changes requested on ${BASE:0:7}; this review replaces it." "$O/comment.md" &&
+  ! grep -qF 'keeps the block' "$O/comment.md"; }
+t_own_kept_ap; check "earlier review: a confirmed APPROVE over our block with no record still replaces it" $?
 t_own_draft() { render "$NONE" "$(host owndraft ".own_review = $OWNC | .state.draft = true")" "" "$EOK"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve COMMENT" ]; }
 t_own_draft; check "earlier review: the draft clamp still turns APPROVE into COMMENT" $?
 t_own_appr() { render "$NONE" "$(host ownappr ".own_review = ($OWNC | .state = \"APPROVED\")")"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve APPROVE" ] &&
@@ -3507,6 +3519,9 @@ t_own_badevent() { render "$NONE" "$HOWN" "" "$EOK" "" --event DISMISS; [ "$ST" 
 t_own_badevent; check "earlier review: an --event outside the three events is refused" $?
 mutate "a record of another commit read" 's/ and \$e\.commit_id == \$h\.own_review\.commit_id//' t_own_commit
 mutate "a carried id refused" 's/\(@\[0-9\]\{1,16\}\)\?\$"\)\)/\$"))/' t_own_carried
+mutate "a fresh block over an unchecked block said to replace it" 's/ elif earlier_kept\(\$e; \$event\) then "own-review-kept"//' t_own_kept
+mutate "the Earlier review section silent on a kept block" 's/ elif earlier_kept\(\$e; \$event\) then \[tx\("earlier-kept"\)\]//' t_own_kept
+mutate "a kept block read for an approval too" 's/def earlier_kept\(\$e; \$event\): \$event == "REQUEST_CHANGES" and/def earlier_kept(\$e; \$event): \$event != "COMMENT" and/' t_own_kept_ap
 mutate "the confirmed event ignored" 's/\(\$in\.confirmed \/\/ \$proposed\) as \$event/\$proposed as \$event/' t_own_confirmed
 mutate "result.json taking the confirmed event" 's/event: \$proposed, tier: \$tier,/event: \$event, tier: \$tier,/' t_own_confirmed
 
