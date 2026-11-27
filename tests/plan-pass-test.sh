@@ -1533,6 +1533,20 @@ check "PDIFF_JQ: a recorded block type written as a static and a dynamic block, 
   "$([ "$(pdq "$PDF/static-dynamic-mix-base.json" "$PDF/static-dynamic-mix-head.json" "$PDF/static-dynamic-schema.json")" = "unknown block" ]; echo $?)"
 check "PDIFF_JQ: a recorded block type written as a static and a dynamic block, the dynamic content reading another id, is unknown" \
   "$([ "$(pdq "$PDF/static-dynamic-ref-base.json" "$PDF/static-dynamic-ref-head.json" "$PDF/static-dynamic-schema.json")" = "unknown block" ]; echo $?)"
+# Recorded the same way for issue 291's additive shapes, each head against one base module with
+# an aws_security_group: a new security group whose count reads a new bool defaulting to false
+# plans no instance and is equal, the plan the identical mark of a gated resource reads; the same
+# default at true plans it, and the comparison ends unknown (config): never equal. An argument
+# set to a new bool with a non-null default is equal at false only because the provider's own
+# default is false for these arguments, and differs at true: an equal there would rest on the provider default, so it is never marked.
+check "PDIFF_JQ: a recorded new resource whose count reads a new variable defaulting to false is equal" \
+  "$([ "$(pdq "$PDF/additive-base.json" "$PDF/additive-gate-off.json" "$PDF/additive-schema.json")" = equal ]; echo $?)"
+check "PDIFF_JQ: a recorded new resource whose count reads a new variable defaulting to true is not equal" \
+  "$([ "$(pdq "$PDF/additive-base.json" "$PDF/additive-gate-on.json" "$PDF/additive-schema.json")" = "unknown config" ]; echo $?)"
+check "PDIFF_JQ: a recorded argument set to a new variable whose default equals the provider default is equal" \
+  "$([ "$(pdq "$PDF/additive-base.json" "$PDF/additive-default-false.json" "$PDF/additive-schema.json")" = equal ]; echo $?)"
+check "PDIFF_JQ: a recorded argument set to a new variable whose default differs from the provider default differs" \
+  "$([ "$(pdq "$PDF/additive-base.json" "$PDF/additive-default-true.json" "$PDF/additive-schema.json")" = "differs module.this.aws_security_group.this" ]; echo $?)"
 check "PDIFF_JQ: the recorded round 1 case with its configuration is unknown" \
   "$([ "$(pdq "$PDF/data-base.json" "$PDF/data-head.json" "$PDF/data-schema.json")" = "unknown configured" ]; echo $?)"
 check "PDIFF_JQ: a value the child joins to an id, unknown at both revisions, is unknown" \
