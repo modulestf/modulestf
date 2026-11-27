@@ -56,6 +56,8 @@ Three rows change `scope` after the facts engine review found them:
 
 - `structure.non-hcl-logic-error`, `structure.non-hcl-unsafe-subprocess` and `structure.non-hcl-test-missing`: [Check H](check-h-non-hcl.md) adds them, as `structure.embedded-code-defect` was added for embedded code. All three are `llm`, `path`, since they read a file outside Terraform whether the configuration parses or not, `touched-block` for the unit of that file the change edits, `cross_area` `no`, root and submodule, and read no bundle section. Severities are Check H's, and none is carried: the evidence is the file, the `.tf` lines that run it and the tests.
 
+- `structure.local-bypassed`, `structure.prerequisite-condition-unmet` and `structure.index-length-unchecked`: [Check C](check-c-structure.md) adds them, from defects a review of a new resource beside existing ones of its type missed. All three are `llm`, `config-semantic` and `newly-introduced`: each judges a block or an expression the change adds against the module's other blocks. `structure.sibling-argument-omitted` gains a `depends_on` case at MEDIUM, and reads a page for its HIGH.
+
 ## Severities that needed a reading
 
 - `compat.variable-removed`, `compat.variable-now-required`, `compat.type-narrowed`, `compat.resource-address-changed`, `compat.version-constraint-raised`, `compat.generated-policy-narrowed`: CRITICAL undeclared, HIGH declared with no migration path. Check A gives the declared break with a migration path no level, so it is not a finding of these rules. The LOW band of `compat.generated-policy-narrowed` joined the registry with the host step that supplies its reference, the vendored policy comparison of the pull request review skill; the host raises a LOW answer to HIGH when that reference is missing, and `findings-check.sh` refuses it unless `--vendored-equal` counts one.
@@ -75,6 +77,8 @@ Three rows change `scope` after the facts engine review found them:
 - `profile.template-drift`: MEDIUM, and LOW when the divergence is cosmetic or in `.gitignore`, save a removed or weakened pattern that keeps state, variable files, `.terraform` or credentials out, which stays MEDIUM.
 - `compat.expression-behaviour-changed`: CRITICAL, HIGH and LOW, as Check G gives them. Its documented-intent case where only calls that write the base default change is filed as `review.check-not-run` MEDIUM, so no MEDIUM joins the row.
 - `coverage.mutual-exclusion-unguarded`: HIGH, and LOW for a conditional rule only the caller can break, a conflicting pair in any wording staying HIGH.
+- `structure.prerequisite-condition-unmet`: HIGH and MEDIUM; Check C gives it no LOW.
+- `structure.local-bypassed`, `structure.index-length-unchecked`: HIGH, MEDIUM and LOW, all three named in their Check C bullets.
 - `structure.validation-missing`: MEDIUM, and LOW for a branch value an argument checked at plan also takes, read from a page; a commented-out block stays MEDIUM.
 - `examples.custom-input-required`: HIGH, and LOW for an example the change adds that replaces none the base had.
 - `profile.region-not-allowed`: HIGH, and LOW for a literal under `examples/` outside a `*.tftest.hcl` file, in an example no such file sources.
