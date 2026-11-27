@@ -1609,6 +1609,23 @@ if { [ -n "${MTF_FACTS_BIN:-}" ] && [ -x "$MTF_FACTS_BIN" ] && cp "$MTF_FACTS_BI
   check "e2e: a provider floor bump is deep" \
     "$([ "$(jq -r '.depth' "$RUN/index.json")" = deep ]; echo $?)"
   (cd "$TMP/cwd" && "$SH" "$SK2/review-run.sh" cleanup "$RUN") > /dev/null
+  # A pure move of a variables file out of the module root, its variable still used by main.tf: with
+  # the real mtf-facts the classify step never ends inert, by the engine's reading of the removed file
+  # or by the host guard on a removed file with no patch.
+  MV="$TMP/e2e-move"; rm -rf "$MV"; mkdir -p "$MV/mod" "$MV/out"
+  printf 'resource "aws_s3_bucket" "this" {\n  bucket = var.x\n}\n' > "$MV/mod/main.tf"
+  jq -n '[{filename: "other/vars.tf", previous_filename: "mod/vars.tf", status: "renamed", additions: 0, deletions: 0, changes: 0}]' > "$MV/files.json"
+  mvc() { # behaviour-pass.sh copy -> the classify result: inert, classified or not-run
+    rm -rf "$MV/out" && mkdir -p "$MV/out"
+    bash "$1" classify --facts "$TMP/real/mtf-facts" --dir "$MV/mod" --diff "$MV/files.json" --prefix mod --out "$MV/out" > /dev/null 2>&1
+    if [ -f "$MV/out/behaviour.json" ]; then jq -r 'if .inert then "inert" else "classified" end' "$MV/out/behaviour.json"; else echo not-run; fi
+  }
+  check "e2e: a variables file moved out of the module root never classifies inert" "$([ "$(mvc "$SK2/behaviour-pass.sh")" != inert ]; echo $?)"
+  perl -0pe 's/\(\$in != "diff" or \$d == \[\] or \(\[/(true or ([/' "$SK2/behaviour-pass.sh" > "$SK2/behaviour-pass-noguard.sh"
+  check "e2e: the copy without the guard differs from the script" "$( ! cmp -s "$SK2/behaviour-pass.sh" "$SK2/behaviour-pass-noguard.sh"; echo $?)"
+  if [ "$(mvc "$SK2/behaviour-pass-noguard.sh")" = inert ]; then echo "ok   e2e: this mtf-facts reads the move as inert, so the host guard is what refuses it"
+  else echo "note e2e: this mtf-facts does not read the move as inert; the host guard is not exercised live"; fi
+  rm -f "$SK2/behaviour-pass-noguard.sh"
 else
   e2e_unavailable
 fi
@@ -2692,6 +2709,25 @@ rmut "the module root guard testing only its own path" 's/  \[ -d "\$d" \] && r=
 rmut "the base tree line for a new module" 's/  \[ "\$1" = true \] \|\| \[ -z "\$2" \]/  [ -z "\$2" ]/' t_bt_nm
 rmut "the base tree line with no .git directory check" 's/ \[ ! -d "\$RUN\/base\/\.git" \] \|\| \[ -L "\$RUN\/base" \] \|\|\n    ! base_root_ok "\$PREFIX"/ [ -L "\$RUN\/base" ] ||\n    ! base_root_ok "\$PREFIX"/' t_bt_nogit
 rmut "the module root guard following a link" 's/ && r="\$\(cd "\$d" 2> \/dev\/null && pwd -P\)" && \[ "\$r" = [^\n]*\n/\n/' t_bt_rootlink
+
+# The module-relative files list prepare hands affected, its jq program taken from review-run.sh and
+# run with the skill's module-files.jq: a rename out of the module root is a removed file at its old
+# path, one into it an added file, a rename inside it stays a rename and a path outside it is left out.
+FM_SRC() { awk '/^    jq -L "\$HERE" --arg p "\$\{prefix:\+\$prefix\/\}" .$/ { on = 1; next }
+  on && /"\$RUN\/host\/files.json" > "\$RUN\/state\/files-module.json"$/ { sub(/\x27 "\$RUN.*$/, ""); print; exit } on { print }' "${1:-$RR}"; }
+t_fm() { # review-run.sh copy -> 0 when the cross-root renames read right
+  jq -n '[{filename: "modules/a/main.tf", status: "modified", patch: "p"},
+    {filename: "other/vars.tf", previous_filename: "modules/a/vars.tf", status: "renamed", patch: "q"},
+    {filename: "modules/a/in.tf", previous_filename: "other/in.tf", status: "renamed", patch: "r"},
+    {filename: "modules/a/new.tf", previous_filename: "modules/a/old.tf", status: "renamed"},
+    {filename: "other/x.tf", status: "modified"}]' > "$TMP/fm.json"
+  local prog; prog="$(FM_SRC "$1")" && [ -n "$prog" ] &&
+    jq -e -L "$SK" --arg p "modules/a/" "$prog"' == [{filename: "main.tf", status: "modified", patch: "p"}, {filename: "vars.tf", status: "removed"},
+      {filename: "in.tf", status: "added"}, {filename: "new.tf", previous_filename: "old.tf", status: "renamed"}]' "$TMP/fm.json" > /dev/null &&
+    jq -e -L "$SK" --arg p "" "$prog"' | length == 5' "$TMP/fm.json" > /dev/null
+}
+t_fm "$RR"; check "prepare: the module files list keeps a rename out of the module root as a removed file and one into it as an added file" $?
+rmut "the module files list built without module-files.jq" 's/include "module-files"; module_files\(\$p\)\x27 "\$RUN\/host\/files.json"/[.[] | select(.filename | startswith(\$p)) | .filename |= ltrimstr(\$p) | if .previous_filename then .previous_filename |= ltrimstr(\$p) else . end]\x27 "\$RUN\/host\/files.json"/' t_fm
 
 echo
 [ "$fails" -eq 0 ] && echo "all checks passed" || echo "$fails check(s) failed"

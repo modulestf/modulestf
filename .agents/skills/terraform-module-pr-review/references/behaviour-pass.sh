@@ -293,16 +293,24 @@ decl_vars() {
   fi
 }
 
-# classify_run <split> <files list or /dev/null> <args...>: one behaviour run. On "ok" behaviour.json
+# classify_run <split> <files list or /dev/null> <base or diff> <args...>: one behaviour run. On "ok" behaviour.json
 # holds its checked output; else it prints the reason and nothing is kept.
-classify_run() {
-  local split="$1" cover="$2" why; shift 2
+classify_run() { # split, files list or /dev/null, input (base or diff), args...
+  local split="$1" cover="$2" input="$3" why; shift 3
   case "$(run_facts "$out/behaviour.raw" behaviour "$dir" "$@" --json)" in
     big) why="output refused" ;;
     late) why="mtf-facts timed out" ;;
     fail) why="mtf-facts failed" ;;
-    ok) if jq -e --slurpfile d "$cover" --argjson split "$split" "$JQ_DEFS"' valid_behaviour($split)
-           and ($d == [] or covers($d[0]))' "$out/behaviour.raw" > /dev/null 2>&1; then
+    # From the files list, a removed Terraform file with no patch whose entry is inert or names no
+    # trigger is refused, whatever the report says of the rest: the tool cannot see what the file held,
+    # and a binary that reads it as an empty file would call the removal inert. The merge base tree
+    # holds the file, so a run on it needs no such guard.
+    ok) if jq -e --slurpfile d "$cover" --argjson split "$split" --arg in "$input" "$JQ_DEFS"' valid_behaviour($split)
+           and ($d == [] or covers($d[0]))
+           and ($in != "diff" or $d == [] or ([$d[0][] | select(.status == "removed" and ((.patch // "") | type != "string" or . == "")
+                 and (.filename | test("\\.(tf|tofu|hcl)(\\.json)?$"))) | .filename] as $rm
+               | [.entries[] | select([.path, (.previous_path // empty)] - $rm != [.path, (.previous_path // empty)]) | select(.inert == true or (.trigger_ids | length) == 0)] == []))' \
+           "$out/behaviour.raw" > /dev/null 2>&1; then
           mv -- "$out/behaviour.raw" "$out/behaviour.json"; why=ok
         else why="output refused"; fi ;;
   esac
@@ -312,6 +320,8 @@ classify_run() {
 
 classify() {
   abs "$dir" --dir; [ -d "$dir" ] || die "--dir is not a directory"
+  prefix="${prefix%/}" # a trailing slash names the same module root
+  case "${prefix}" in /* | *..* | . | *//* | */) die "--prefix must be repository-relative" ;; esac
   [ ! -e "$out/behaviour.json" ] && [ ! -e "$out/status" ] || die "--out already holds a classification"
   local cover=/dev/null
   if [ -n "$diff" ]; then
@@ -319,10 +329,8 @@ classify() {
     # The GitHub files list, module-relative: the prefix stripped, paths outside it left out.
     jq -e --arg p "$prefix" 'type == "array" and all(.[]; type == "object" and (.filename | type == "string"))' \
       "$diff" > /dev/null 2>&1 || die "--diff is not a GitHub files list"
-    jq --arg p "${prefix:+$prefix/}" '
-      def rel: if $p == "" then . elif startswith($p) then .[($p | length):] else null end;
-      [.[] | .filename |= rel | if has("previous_filename") then .previous_filename |= rel else . end
-       | select(.filename != null)]' "$diff" > "$out/files-module.json" || die "--diff cannot be read"
+    jq -L "$HERE" --arg p "${prefix:+$prefix/}" '
+      include "module-files"; module_files($p)' "$diff" > "$out/files-module.json" || die "--diff cannot be read"
     cover="$out/files-module.json"
     [ -z "$base" ] || abs "$base" --base
   elif [ -n "$base" ] && [ -z "$prefix" ]; then abs "$base" --base
@@ -344,13 +352,13 @@ classify() {
     [ -z "$stats" ] || ! facts_has flag:behaviour:stats-file || st=(--stats-file "$stats")
     # The merge base tree first when there is one; with a files list too, that list is the fallback.
     if [ -n "$base" ]; then
-      why="$(classify_run "$split" "$cover" --base "$base" "$@" ${st[@]+"${st[@]}"})"; bwhy="$why"
+      why="$(classify_run "$split" "$cover" base --base "$base" "$@" ${st[@]+"${st[@]}"})"; bwhy="$why"
       if [ "$why" = ok ]; then echo base > "$out/input"
       elif [ -z "$diff" ]; then echo "$why" > "$out/status"; echo base > "$out/input"; fi
     fi
     if [ -n "$diff" ] && [ "$why" != ok ]; then
       [ "${#st[@]}" = 0 ] || [ -z "$base" ] || st=(--stats-file "${stats%.json}.diff.json")
-      why="$(classify_run "$split" "$cover" --diff "$out/files-module.json" "$@" ${st[@]+"${st[@]}"})"
+      why="$(classify_run "$split" "$cover" diff --diff "$out/files-module.json" "$@" ${st[@]+"${st[@]}"})"
       [ "$why" = ok ] || echo "$why" > "$out/status"
       if [ -z "$base" ]; then echo diff > "$out/input"; else printf 'diff (base %s)\n' "$bwhy" > "$out/input"; fi
     fi

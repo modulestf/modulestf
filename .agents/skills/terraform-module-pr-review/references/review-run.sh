@@ -575,10 +575,8 @@ cmd_prepare() {
     # a second run on the clone root.
     local mraff=false
     [ -z "$prefix" ] || ! facts_has flag:affected:module-root || mraff=true
-    jq --arg p "$prefix" '[.[] | select($p == "" or (.filename | startswith($p + "/")))
-      | .filename |= (if $p == "" then . else .[($p | length) + 1:] end)
-      | if .previous_filename then .previous_filename |= (if $p == "" then . else ltrimstr($p + "/") end) else . end]' \
-      "$RUN/host/files.json" > "$RUN/state/files-module.json"
+    jq -L "$HERE" --arg p "${prefix:+$prefix/}" '
+      include "module-files"; module_files($p)' "$RUN/host/files.json" > "$RUN/state/files-module.json"
     if [ "$mraff" = true ]; then
       local mrin=(--diff "$RUN/host/files.json") mrok=false
       if [ -n "$broot" ]; then
