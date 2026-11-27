@@ -1,3 +1,12 @@
+## [0.18.3](https://github.com/modulestf/modulestf/compare/v0.18.2...v0.18.3) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Match the fixture builder's refusals in the expected answer ([#280](https://github.com/modulestf/modulestf/issues/280)) ([f9fa2c3](https://github.com/modulestf/modulestf/commit/f9fa2c37b0f4cec1dca69eee748c4d203707d486))
+
+
+
 ## [0.18.2](https://github.com/modulestf/modulestf/compare/v0.18.1...v0.18.2) (2026-11-27)
 
 
