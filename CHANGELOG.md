@@ -1,3 +1,12 @@
+# [0.20.0](https://github.com/modulestf/modulestf/compare/v0.19.8...v0.20.0) (2026-11-27)
+
+
+### Features
+
+* **pr-review:** Name a review tool limit on an unverified trigger ([#313](https://github.com/modulestf/modulestf/issues/313)) ([a094523](https://github.com/modulestf/modulestf/commit/a094523fef7616737c8324e6bdd60154ade6c993))
+
+
+
 ## [0.19.8](https://github.com/modulestf/modulestf/compare/v0.19.7...v0.19.8) (2026-11-27)
 
 
