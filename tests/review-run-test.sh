@@ -352,6 +352,18 @@ fbin_task "$TMP/fbinlink/mtf-facts"
 check "self-check: a handover that takes a path that is not canonical is caught" \
   "$(! cmp -s "$RR" "$TMP/rr-fbin-keep" && grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
 cp "$TMP/rr-fbin-keep" "$RR"; rm -rf "$FM/state/bin"; rm -f "$TMP/runlink" "$TMP/fbinlink"
+# A path holding a newline, with no newline at its end: one line to wc, and each of its lines
+# passes the grammar. A directory name with a newline makes it a real file.
+NLD="$TMP/nl/a"$'\n'"/b"; mkdir -p "$NLD"; cp "$TMP/fbin/mtf-facts" "$NLD/mtf-facts"
+NLB="$(cd "$NLD" && pwd -P)/mtf-facts"
+nl_task() { printf '%s' "$NLB" > "$FM/state/facts-bin"; run_rr handover "$FM" > /dev/null 2>&1; }
+nl_task
+check "handover: no binary line for a path holding a newline" "$(! grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
+cp "$RR" "$TMP/rr-fbin-keep"; perl -0pi -e 's/  case "\$b" in \*\$\x27\\n\x27\*\) return 0 ;; esac\n//' "$RR"
+nl_task
+check "self-check: a handover that takes a path holding a newline is caught" \
+  "$(! cmp -s "$RR" "$TMP/rr-fbin-keep" && grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
+cp "$TMP/rr-fbin-keep" "$RR"; rm -rf "$TMP/nl"
 rm -f "$FM/state/facts-bin"; run_rr handover "$FM" > /dev/null 2>&1
 check "handover: no facts-bin file, no binary line" "$(! grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
 cp "$RR" "$TMP/rr-fbin-keep"; perl -0pi -e 's/  \[ -f "\$b" \] && \[ -x "\$b" \] && \[ ! -L "\$b" \] \|\| return 0\n//' "$RR"

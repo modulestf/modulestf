@@ -104,6 +104,8 @@ facts_bin_line() {
   local b r c
   [ -f "$RUN/state/facts-bin" ] && [ ! -L "$RUN/state/facts-bin" ] && [ "$(wc -l < "$RUN/state/facts-bin")" -eq 1 ] || return 0
   b="$(cat "$RUN/state/facts-bin")"
+  # One line: a path holding a newline would pass the line count and print a second task line.
+  case "$b" in *$'\n'*) return 0 ;; esac
   [ ${#b} -le 1024 ] && printf '%s\n' "$b" | grep -Eqx '/[A-Za-z0-9._+@/-]+' || return 0
   case "$b/" in */./*|*/../*|*//*) return 0 ;; esac
   # A binary inside the run directory is the run's own data, never the engine, as facts_resolve refuses it.
