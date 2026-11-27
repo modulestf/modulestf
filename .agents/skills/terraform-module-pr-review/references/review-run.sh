@@ -104,8 +104,9 @@ facts_bin_line() {
   case "$b/" in */./*|*/../*|*//*) return 0 ;; esac
   # A binary inside the run directory is the run's own data, never the engine, as facts_resolve refuses it.
   r="$(CDPATH= cd -- "$RUN" 2> /dev/null && pwd -P)" || return 0
-  c="$(perl -MCwd=realpath -e 'my $p = realpath($ARGV[0]); print $p if defined $p' "$b")"
-  [ -n "$c" ] || return 0
+  # Only a canonical path: one through a link would name another file than the one checked.
+  c="$(perl -MCwd=realpath -e 'my $p = realpath($ARGV[0]); print $p if defined $p' "$b" 2> /dev/null)"
+  [ -n "$c" ] && [ "$c" = "$b" ] || return 0
   case "$c/" in "$r"/*) return 0 ;; esac
   [ -f "$b" ] && [ -x "$b" ] && [ ! -L "$b" ] || return 0
   printf 'mtf-facts binary: %s\n' "$b"
