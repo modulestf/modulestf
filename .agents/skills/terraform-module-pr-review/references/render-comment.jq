@@ -1047,11 +1047,12 @@ def profile_lines($run): if $run | has("profile") then [tx("profile-line"; $run.
 
 # Rule 4 per depth (verdict.md): an example out of scope by the run's depth is no verification gap
 # and no example not planned, and at light the plan pass is out of scope, so no example is
-# unplanned; the depth lines list them instead.
+# unplanned; the depth lines list them instead. A plan step recorded as not run stays, whatever
+# the scope, as host-pass.sh accept --run reads it: it fails closed.
 def scoped_run: if has("depth") | not then . else .depth.examples_out_of_scope as $o
   | .verify_gaps |= map(select(.dir | IN($o[]) | not))
-  | .coverage.unplanned |= map(select(.dir | IN($o[]) | not))
-  | if .depth.depth == "light" then .coverage.unplanned = [] else . end
+  | .coverage.unplanned |= map(select((.dir | IN($o[]) | not) or (.reason | IN(plan_not_run_reasons[]))))
+  | if .depth.depth == "light" then .coverage.unplanned |= map(select(.reason | IN(plan_not_run_reasons[]))) else . end
   | if .coverage.unplanned == [] then .coverage.class = "complete" else . end end;
 
 # The files over the review budget: the count, then one line per top-level directory under the
@@ -1525,7 +1526,7 @@ def render($in):
   | causes($l; $h; $in.run; $b) as $c
   | (if $v.rule == 8 then [] else todo_items($l; $v.rule; $p;
        ([$h.could_not_run[] | select(.kind != "thread-resolution-unknown")] | cnr_count) + ($in.run.verify_gaps | length)
-       + $l.unplanned_open + ($b | behaviour_gaps) + ($unreg | length) + $l.skipped + ($in.run | plan_not_run_gap)) end) as $items
+       + $l.unplanned_open + ($b | behaviour_gaps) + ($unreg | length) + $l.skipped + (if $l.unplanned_open == 0 then $in.run | plan_not_run_gap else 0 end)) end) as $items
   # At rule 4 a list of quiet items alone, which section 5 already holds, gives way to the action line.
   | ($v.rule == 4 and all($items[]; .quiet)) as $quiet
   | ([$in.assessment, "**" + (if $conflict then tx("verdict-conflict") else $v.verdict | verdict_line end) + "**"]

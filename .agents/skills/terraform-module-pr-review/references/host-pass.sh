@@ -1031,7 +1031,7 @@ cmd_accept() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --prior) prior="${2-}"; shift 2 || die "--prior needs a value" ;;
-      --run) run="${2-}"; shift 2 || die "--run needs a value" ;;
+      --run) run="${2-}"; shift 2 || die "--run needs a value"; [ -n "$run" ] || die "--run needs a value" ;;
       --findings) findings="${2-}"; shift 2 || die "--findings needs a value" ;;
       --result) result="${2-}"; shift 2 || die "--result needs a value" ;;
       --rules) rules="${2-}"; shift 2 || die "--rules needs a value" ;;

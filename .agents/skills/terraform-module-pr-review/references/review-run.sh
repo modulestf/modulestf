@@ -976,6 +976,7 @@ cmd_ladder() {
     jq -n --arg r "ladder not run: $NOT_RUN" '{status: "not-run", reason: $r, triggers: [], claims: [], capped: 0}' \
       > "$RUN/behaviour/run-behaviour.json" || fail "the behaviour object could not be written"
     printf 'behaviour: not run: ladder not run: %s\n' "$NOT_RUN" | tee "$RUN/behaviour/record.txt"
+    facts_totals
     return 0
   fi
   facts_bin; opid="$(arg owner_pid)"; [ -z "$opid" ] || own=(--owner-pid "$opid")

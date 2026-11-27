@@ -1066,10 +1066,31 @@ nr_rr() { # review-run.sh copy -> 0 when every rule holds
     grep -qE '^behaviour: not run: ladder not run: time \([0-9]+s\)$' "$TMP/nr-l.out" &&
     [ "$(q "$RUN/behaviour/run-behaviour.json" '. == {status: "not-run", reason: "ladder not run: time", triggers: [], claims: [], capped: 0}')" = 0 ] &&
     grep -qxF 'behaviour: not run: ladder not run: time' "$RUN/handover/record.txt" &&
+    [ "$(q "$RUN/facts-stats.json" '.fallbacks.behaviour_not_run == true')" = 0 ] &&
     [ "$(jq -r .verdict "$TMP/nr-render/result.json")" = inconclusive ] &&
     grep -qxF -- '- Behaviour check: ladder not run: time, so no change was classified or verified.' "$TMP/nr-render/comment.md" || return 1
   run_rr cleanup "$RUN" > /dev/null; rm -rf "$TMP/nr-render"
 }
+nr2_rr() { # review-run.sh copy -> 0 when a step that ran refuses its --not-run
+  DEPTH_STUB=deep prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review
+  (cd "$TMP/cwd" && "$SH" "$1" verify "$RUN") > /dev/null 2>&1
+  (cd "$TMP/cwd" && "$SH" "$1" plan "$RUN") > /dev/null 2>&1 || return 1
+  (cd "$TMP/cwd" && "$SH" "$1" plan "$RUN" --not-run disk) > "$TMP/nr2-pl.out" 2>&1; [ $? = 1 ] || return 1
+  (cd "$TMP/cwd" && "$SH" "$1" ladder "$RUN") > /dev/null 2>&1 || return 1
+  (cd "$TMP/cwd" && "$SH" "$1" ladder "$RUN" --not-run time) > "$TMP/nr2-l.out" 2>&1; [ $? = 1 ] || return 1
+  grep -q 'plan already ran' "$TMP/nr2-pl.out" && grep -q 'ladder already ran' "$TMP/nr2-l.out" &&
+    [ "$(q "$RUN/behaviour/run-behaviour.json" '.status == "ran"')" = 0 ] || return 1
+  run_rr cleanup "$RUN" > /dev/null
+}
+nr2_rr "$RR"; check "not run: plan --not-run after a plan and ladder --not-run after a ladder are refused" $?
+run_rr cleanup "$RUN" > /dev/null 2>&1
+nr2_mut() { # name, perl substitution
+  perl -0pe "$2" "$RR" > "$SK/review-run-nr.sh"
+  check "self-check: $1 is caught" "$( ! cmp -s "$RR" "$SK/review-run-nr.sh" && ! nr2_rr "$SK/review-run-nr.sh"; echo $?)"
+  run_rr cleanup "$RUN" > /dev/null 2>&1
+}
+nr2_mut "plan --not-run over a plan that ran" 's/\n  \[ ! -e "\$RUN\/coverage\.json" \] \|\| fail "plan already ran in this run"//'
+nr2_mut "ladder --not-run over a ladder that ran" 's/\n    \[ ! -e "\$RUN\/behaviour\/run-behaviour\.json" \] && \[ ! -e "\$RUN\/behaviour\/record\.txt" \] \|\| fail "ladder already ran in this run"//'
 nr_rr "$RR"; check "not run: plan and ladder --not-run record the step with its token, ladder runs after a plan not run, and the render is inconclusive" $?
 run_rr cleanup "$RUN" > /dev/null 2>&1; rm -rf "$TMP/nr-render"
 nr_mut() { # name, perl substitution
@@ -1078,8 +1099,10 @@ nr_mut() { # name, perl substitution
   run_rr cleanup "$RUN" > /dev/null 2>&1; rm -rf "$TMP/nr-render"
 }
 nr_mut "plan --not-run ignored" 's/if \[ -n "\$NOT_RUN" \]; then missed="plan pass not run: \$NOT_RUN"; note plan-not-run "\$NOT_RUN"\n  elif/if/'
-nr_mut "ladder --not-run still runs the step" 's/(tee "\$RUN\/behaviour\/record\.txt"\n)    return 0\n/$1/'
+nr_mut "ladder --not-run still runs the step" 's/(tee "\$RUN\/behaviour\/record\.txt"\n    facts_totals\n)    return 0\n/$1/'
 nr_mut "a token outside the list taken" 's/\*\) die "--not-run takes one of: \$NOT_RUN_TOKENS" ;;/*) NOT_RUN="\$2" ;;/'
+nr_mut "ladder over a ladder not run" 's/\n  \[ ! -e "\$RUN\/state\/ladder-not-run" \] \|\| fail "ladder already ran in this run"//'
+nr_mut "no facts stats after a ladder not run" 's/(tee "\$RUN\/behaviour\/record\.txt"\n)    facts_totals\n/$1/'
 nr_mut "ladder blocked by a plan not run" 's/\[ -f "\$RUN\/coverage\.json" \] \|\| fail "ladder needs plan first"/[ -f "\$RUN\/state\/plan" ] || fail "ladder needs plan first"/'
 
 # The plan diff (plan-pass.md, Plan diff): plan passes each directory diff-dirs prints as
