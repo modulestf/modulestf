@@ -328,6 +328,17 @@ for bad in "$TMP/fbin/gone" fbin/mtf-facts "$TMP/fbin/../fbin/mtf-facts" "$TMP/f
   fbin_task "$bad"
   check "handover: no binary line for $(basename -- "$bad")" "$(! grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
 done
+# A binary inside the run directory is the run's own data, never the engine.
+mkdir -p "$FM/state/bin"; cp "$TMP/fbin/mtf-facts" "$FM/state/bin/mtf-facts"
+fbin_task "$(cd "$FM" && pwd -P)/state/bin/mtf-facts"
+check "handover: no binary line for a binary inside the run directory" "$(! grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
+fbin_task "$FM/state/bin/mtf-facts"
+check "handover: no binary line for a binary inside the run directory named by another path" "$(! grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
+cp "$RR" "$TMP/rr-fbin-keep"; perl -0pi -e 's/  case "\$c\/" in "\$r"\/\*\) return 0 ;; esac\n//' "$RR"
+fbin_task "$(cd "$FM" && pwd -P)/state/bin/mtf-facts"
+check "self-check: a handover that names a binary inside the run directory is caught" \
+  "$(! cmp -s "$RR" "$TMP/rr-fbin-keep" && grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
+cp "$TMP/rr-fbin-keep" "$RR"; rm -rf "$FM/state/bin"
 rm -f "$FM/state/facts-bin"; run_rr handover "$FM" > /dev/null 2>&1
 check "handover: no facts-bin file, no binary line" "$(! grep -q '^mtf-facts binary:' "$FM/handover/task.md"; echo $?)"
 cp "$RR" "$TMP/rr-fbin-keep"; perl -0pi -e 's/  \[ -f "\$b" \] && \[ -x "\$b" \] && \[ ! -L "\$b" \] \|\| return 0\n//' "$RR"

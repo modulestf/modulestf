@@ -157,6 +157,7 @@ if [ "\$1" = fixture-build ]; then
   [ -f "$ST/fb.shape1" ] && { echo '{"ok":false,"reason":"stub refusal","schema_version":1}' | jq -c "\$(cat "$ST/fb.shape1")"; exit 1; }
   [ -f "$ST/fb.refuse2" ] && { for i in 1 2; do echo '{"ok":false,"reason":"stub refusal","schema_version":1}'; done; exit 1; }
   [ -f "$ST/fb.refuse" ] && { echo '{"ok":false,"reason":"stub refusal","schema_version":1}'; exit 1; }
+  [ -f "$ST/fb.refusel1m" ] && { echo '{"ok":false,"reason":"a resource reference shape L1 cannot model","schema_version":1}'; exit 1; }
   [ -f "$ST/fb.refusel1" ] && { echo '{"ok":false,"reason":"local, module, self and other references are unverifiable at L1","schema_version":1}'; exit 1; }
   [ -n "${LADDER_TEST_FIXTURE_BUILD:-}" ] && exec "${LADDER_TEST_FIXTURE_BUILD:-}" "\$@"
   exit 2
@@ -192,7 +193,7 @@ good_canary() {
     echo "end canary"
   } > "$ST/canary.txt"
 }
-reset() { rm -f "$ST"/{fb.on,fb.refuse,fb.refusel1,fb.error,fb.exit1ok,fb.exit1none,fb.exit2ok,fb.shape,fb.shape1,fb.valid,fb.canlist,fb.canhead,fb.stderr,fb.refuse2,fb.nofeat,fb.featstr,log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan,test.unknownvalue}; good_canary; }
+reset() { rm -f "$ST"/{fb.on,fb.refuse,fb.refusel1,fb.refusel1m,fb.error,fb.exit1ok,fb.exit1none,fb.exit2ok,fb.shape,fb.shape1,fb.valid,fb.canlist,fb.canhead,fb.stderr,fb.refuse2,fb.nofeat,fb.featstr,log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan,test.unknownvalue}; good_canary; }
 BASE=d72cba285514b5e2e83bea7dd1272c1c206a4f64
 HEAD=3b19adcd09b08528221d3286b30338b1e0cf6f16
 RUND="$TMP/runs/pr-review.abcdef"; mkdir -p "$RUND/clone"
@@ -974,6 +975,13 @@ sc_l2engine() { reset; touch "$ST/fb.on" "$ST/fb.refusel1"; trig2; fbrun "$1"
   [ "$(r0 reason)" = "$LOCALREF" ] && [ "$(r2 reason)" = 'local, module, self and other references are unverifiable at L2' ]; }
 t_sc "an L2 refusal of the Perl builder names L2, the L1 one L1" sc_l2word
 t_sc "an engine refusal worded for L1 is recorded at L2 for the L2 run" sc_l2engine
+sc_l2model() { reset; touch "$ST/fb.on" "$ST/fb.refusel1m"; trig2; fbrun "$1"
+  [ "$(r0 reason)" = 'a resource reference shape L1 cannot model' ] && [ "$(r2 reason)" = 'a resource reference shape L2 cannot model' ]; }
+sc_l3model() { reset; touch "$ST/fb.on" "$ST/fb.refusel1m"; schema_aws; trig3
+  bash "$1" run "$RUND" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" --schema "$TMP/aws-schema.json" > "$TMP/run.out" 2>&1
+  [ "$(r3 reason)" = 'a resource reference shape L3 cannot model' ]; }
+t_sc "an engine refusal saying L1 cannot model is recorded for L2 at L2" sc_l2model
+t_sc "an engine refusal saying L1 cannot model is recorded for L3 at L3" sc_l3model
 fbmut() { # label, perl -0 substitution, the scenario that must now fail
   rm -rf "${TMP:?}/fbmut"; mkdir -p "$TMP/fbmut"; cp -R "$REF"/. "$TMP/fbmut/"; perl -0pi -e "$2" "$TMP/fbmut/ladder-pass.sh"
   if cmp -s "$LP" "$TMP/fbmut/ladder-pass.sh"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
@@ -982,6 +990,8 @@ fbmut() { # label, perl -0 substitution, the scenario that must now fail
 }
 fbmut "the Perl builder's L1 wording kept at L2" 's/r="\$\{r\/\/unverifiable at L1\/unverifiable at \$\{LV:-L1\}\}"//' sc_l2word
 fbmut "the engine's L1 wording kept at L2" 's/r="\$\{r\/\/unverifiable at L1\/unverifiable at \$\{LV:-L1\}\}"//' sc_l2engine
+fbmut "the L1 cannot model wording kept at L2" 's/printf \x27%s\x27 "\$\{r\/\/L1 cannot model\/\$\{LV:-L1\} cannot model\}"/printf \x27%s\x27 "\$r"/' sc_l2model
+fbmut "the L1 cannot model wording kept at L3" 's/printf \x27%s\x27 "\$\{r\/\/L1 cannot model\/\$\{LV:-L1\} cannot model\}"/printf \x27%s\x27 "\$r"/' sc_l3model
 fbmut "the feature check dropped" 's/ && facts_has cmd:fixture-build//' sc_nofeat
 fbmut "the version report read without the resolver" 's/if \[ "\$FACTS_STATE" = ok \].*; then FB_GO=1; fi/if "\$FACTS" version --json 2> \/dev\/null | grep -q cmd:fixture-build; then FB_GO=1; fi/' sc_featstr
 fbmut "exit 2 taken as success" 's/    \*\) return 1 ;;\n  esac/    *) ;;\n  esac/' sc_exit2ok

@@ -94,13 +94,19 @@ facts_bin() {
 
 # facts_bin_line: the binary prepare resolved, as the reviewer's "mtf-facts binary:" line, so the
 # reviewer runs the run's mtf-facts, not another one on its own PATH. Only one absolute,
-# canonical path of plain characters that is still a regular executable file and no link.
+# canonical path of plain characters outside the run directory that is still a regular executable
+# file and no link.
 facts_bin_line() {
-  local b
+  local b r c
   [ -f "$RUN/state/facts-bin" ] && [ ! -L "$RUN/state/facts-bin" ] && [ "$(wc -l < "$RUN/state/facts-bin")" -eq 1 ] || return 0
   b="$(cat "$RUN/state/facts-bin")"
   [ ${#b} -le 1024 ] && printf '%s\n' "$b" | grep -Eqx '/[A-Za-z0-9._+@/-]+' || return 0
   case "$b/" in */./*|*/../*|*//*) return 0 ;; esac
+  # A binary inside the run directory is the run's own data, never the engine, as facts_resolve refuses it.
+  r="$(CDPATH= cd -- "$RUN" 2> /dev/null && pwd -P)" || return 0
+  c="$(perl -MCwd=realpath -e 'my $p = realpath($ARGV[0]); print $p if defined $p' "$b")"
+  [ -n "$c" ] || return 0
+  case "$c/" in "$r"/*) return 0 ;; esac
   [ -f "$b" ] && [ -x "$b" ] && [ ! -L "$b" ] || return 0
   printf 'mtf-facts binary: %s\n' "$b"
 }
