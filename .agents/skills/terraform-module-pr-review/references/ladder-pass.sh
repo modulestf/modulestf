@@ -486,19 +486,22 @@ prov_config() { # pins jsonl, platform: the CLI configuration that runs each pin
 }
 
 # --- the tree for the other passes -------------------------------------------------------------
-# Read only: the tree as acquisition left it, every hash checked, and one directory per pin. A
-# pinned provider comes from the tree alone, so a version the tree lacks fails init and the caller
-# runs init again with its own configuration. terraform links a provider from an unpacked mirror
-# rather than copying it, and the tree stays read-only. No other pass may run while L3 does: its
-# sweep kills every process whose executable lies under the tree.
+# Read only: the tree as acquisition left it, every hash checked, and one directory per pin. The
+# configuration offers the tree beside the registry: terraform selects the newest version the
+# constraints allow across both, as with no tree, and takes it from the tree only when the tree
+# holds that version. It links a provider from an unpacked mirror rather than copying it and
+# writes nothing into the tree. The read-only mode stops terraform writing there, not a provider
+# that runs as the same user. No other pass may run while L3 does: its sweep kills every process
+# whose executable lies under the tree.
 if [ "$CMD" = tree ]; then
   why() { echo "tree unusable: $1"; exit 1; }
   case "$OUT" in /?*) ;; *) die "--out must be an absolute path" ;; esac
   [ -d "$L" ] && [ ! -L "$L" ] && [ -O "$L" ] || why "no acquisition"
   pathok "$P" || why "path"
-  [ -d "$P" ] && [ ! -L "$P" ] && [ -f "$L/providers.manifest" ] && [ ! -L "$L/providers.manifest" ] \
+  [ -d "$P" ] && [ ! -L "$P" ] && [ -f "$L/providers.manifest" ] && [ ! -L "$L/providers.manifest" ] && [ -s "$L/providers.manifest" ] \
     && [ -f "$L/pins.jsonl" ] && [ ! -L "$L/pins.jsonl" ] || why "no acquisition"
-  perl -e "$MANIFEST_PL" "$P" | cmp -s - "$L/providers.manifest" || why "the tree differs from its manifest"
+  # perl refuses a link, a second name of a file or an odd entry by its exit status
+  m="$(perl -e "$MANIFEST_PL" "$P")" && [ "$m" = "$(cat "$L/providers.manifest")" ] || why "the tree differs from its manifest"
   srcs="$(jq -r 'select((.source | type == "string" and test("^[a-z0-9.-]+/[a-z0-9-]+/[a-z0-9-]+$"))
     and (.version | type == "string" and test("^[0-9]+[.][0-9]+[.][0-9]+$"))) | "\(.source)\t\(.version)"' "$L/pins.jsonl" 2> /dev/null)" \
     && [ -n "$srcs" ] && [ "$(printf '%s\n' "$srcs" | wc -l)" -eq "$(grep -c . "$L/pins.jsonl")" ] || why "pins"
@@ -507,8 +510,8 @@ if [ "$CMD" = tree ]; then
     [ -d "$P/$src/$ver" ] && [ ! -L "$P/$src/$ver" ] || why "no directory for $src $ver"
     inc="$inc${inc:+, }\"$src\""
   done <<< "$srcs"
-  printf 'provider_installation {\n  filesystem_mirror {\n    path    = "%s"\n    include = [%s]\n  }\n  direct {\n    exclude = [%s]\n  }\n}\n' \
-    "$P" "$inc" "$inc" > "$OUT.tmp" && mv -- "$OUT.tmp" "$OUT" || die "cannot write $OUT"
+  printf 'provider_installation {\n  filesystem_mirror {\n    path    = "%s"\n    include = [%s]\n  }\n  direct {}\n}\n' \
+    "$P" "$inc" > "$OUT.tmp" && mv -- "$OUT.tmp" "$OUT" || die "cannot write $OUT"
   exit 0
 fi
 

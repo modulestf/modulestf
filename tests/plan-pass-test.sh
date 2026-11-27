@@ -75,7 +75,7 @@ cat > "$TMP/bin/terraform" <<EOF
 echo "\${PWD##*/} \$1" >> "$TMP/tf.log"
 echo "\${TMPDIR:-}" >> "$TMP/tmpdir.log"
 # init logs the CLI configuration it got and keeps a copy of the acquired tree's one; with the
-# file mirror.absent, init from that tree finds no version the example asks for
+# file mirror.absent, init with that tree fails
 if [ "\$1" = init ]; then
   echo "\${PWD##*/} \${TF_CLI_CONFIG_FILE##*/}" >> "$TMP/cfg.log"
   [ "\${TF_CLI_CONFIG_FILE##*/}" != tree.tfrc ] || cp "\$TF_CLI_CONFIG_FILE" "$TMP/tree.seen"
@@ -894,7 +894,7 @@ for sh in bash zsh; do
   rm -rf "$TMP/ppt" "$TMP/short-tmp"
 
   # The acquired provider tree (ladder-pass.sh tree): init of an example with no lock file of its
-  # own takes it, one that names a version the tree lacks runs init again with the pass's own
+  # own takes it, one whose init with the tree fails runs init again with the pass's own
   # configuration, one with a committed lock file and a run with no tree keep that configuration.
   MPL="$(perl -0ne 'print $1 if /\nMANIFEST_PL=\x27(.*?)\n\x27\n/s' "${PP%/*}/ladder-pass.sh")"
   mktree() { # run directory: the tree, manifest and pins acquisition leaves
@@ -913,7 +913,7 @@ for sh in bash zsh; do
     "$([ "$(cat "$TMP/cfg.log")" = "ok tree.tfrc" ] && [ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ] \
       && grep -qxF "    path    = \"$RT/ladder/providers\"" "$TMP/tree.seen"; echo $?)"
   RT="$(newrun)"; mktree "$RT"; : > "$TMP/mirror.absent"; out="$(treeplan "$PP" "$RT")"
-  check "$sh: tree: a version the tree lacks runs init again with the pass's own configuration" \
+  check "$sh: tree: an init with the tree that fails runs init again with the pass's own configuration" \
     "$([ "$(tr '\n' '|' < "$TMP/cfg.log")" = "ok tree.tfrc|ok cli.tfrc|" ] && [ "$(has "$out" 'plan: planned | Plan: 1 to add, 0 to change, 0 to destroy.')" = 0 ]; echo $?)"
   rm -rf "$TMP/ppt"; cp -R "${PP%/*}" "$TMP/ppt"
   perl -0pe 's/  if \[ "\$rc" -ne 0 \] && \[ "\$rc" -ne 124 \] && \[ "\$tcfg" != .*?\n  fi\n//s' "$PP" > "$TMP/ppt/plan-pass.sh"

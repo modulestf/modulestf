@@ -649,8 +649,8 @@ if [ -z "$PHASE" ] || [ "$PHASE" = init ]; then
   : > "$PLAN/cli.tfrc"; : > "$PLAN/aws-config"; : > "$PLAN/aws-credentials"
 fi
 # Laptop mode: the provider tree this run's acquisition unpacked, as verify takes it
-# (verify-pass.md, The acquired provider tree): init links each pinned provider from it instead of unpacking it
-# again. The runner has no such tree.
+# (verify-pass.md, The acquired provider tree): when terraform selects the version the tree holds,
+# init links it from there instead of unpacking it again. The runner has no such tree.
 PTREE=
 if [ "$GMODE" = laptop ] && [ -z "$PHASE" ] && bash "$HERE/ladder-pass.sh" tree "$RUN" --out "$PLAN/tree.tfrc" > /dev/null 2>&1; then
   PTREE="$PLAN/tree.tfrc"

@@ -818,8 +818,9 @@ mkdir -p "$RUN/plugin-cache"
 
 mkdir "$W/home"
 # The provider tree this run's acquisition unpacked (ladder-pass.md, Acquisition), checked against
-# its manifest: init links each pinned provider from it instead of unpacking a second copy into
-# the plugin cache. No tree, or one that fails the check, leaves init as it always ran.
+# its manifest: when terraform selects the version the tree holds, init links it from there
+# instead of unpacking a second copy into the plugin cache; any other version downloads as
+# always. No tree, or one that fails the check, leaves init as it always ran.
 MIRROR=
 bash "$HERE/ladder-pass.sh" tree "$RUN" --out "$W/mirror.tfrc" > /dev/null 2>&1 && MIRROR="$W/mirror.tfrc"
 TFCFG=/dev/null
@@ -896,9 +897,10 @@ verify_side() { # tree root, module root, example directory: sets SIDEJ to one s
   [ -z "$MIRROR" ] || [ -e "$1/$3/.terraform.lock.hcl" ] || [ -L "$1/$3/.terraform.lock.hcl" ] || TFCFG=$MIRROR
   tf 180 "$1/$3" init -backend=false -input=false -no-color
   INIT=$?
-  if [ "$INIT" -ne 0 ] && [ "$TFCFG" != /dev/null ] && [ ! -e "$W/out.txt.cap" ] && [ "$(left)" -gt 0 ]; then
-    # a version the tree lacks, or any other failure: init again as the pass always ran it
+  if [ "$INIT" -ne 0 ] && [ "$TFCFG" != /dev/null ] && [ ! -e "$W/out.txt.cap" ]; then
+    # any failure but a limit: init again as the pass always ran it, when the budget allows
     TFCFG=/dev/null
+    if [ "$(left)" -le 0 ]; then SIDEJ="$(side "" "" not-run-budget "")"; return; fi
     tf 180 "$1/$3" init -backend=false -input=false -no-color
     INIT=$?
   fi
