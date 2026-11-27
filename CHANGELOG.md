@@ -1,3 +1,12 @@
+## [0.18.1](https://github.com/modulestf/modulestf/compare/v0.18.0...v0.18.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **pr-review:** Keep verify-pass terraform data out of the clone ([#273](https://github.com/modulestf/modulestf/issues/273)) ([d4b20d0](https://github.com/modulestf/modulestf/commit/d4b20d05ac74991293d1f196e1f22b8a6f79271b))
+
+
+
 # [0.18.0](https://github.com/modulestf/modulestf/compare/v0.17.0...v0.18.0) (2026-11-27)
 
 
