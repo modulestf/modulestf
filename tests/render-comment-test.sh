@@ -1140,7 +1140,7 @@ mutate "a file outside the module root grouped by its own first directory" 's/th
 mutate "the classifier cap not counted" 's/\+ \(if \.capped > 0 then 1 else 0 end\) end;/+ 0 end;/' t_capped_alone
 mutate "the classifier cap counted per change" 's/\+ \(if \.capped > 0 then 1 else 0 end\) end;/+ .capped end;/' t_capped
 mutate "the classifier cap counted among the changes not verified" 's/unverifiable: n\(\$b\.triggers; "unverifiable"\),/unverifiable: (n(\$b.triggers; "unverifiable") + \$b.capped),/' t_capped
-mutate "skipped files no cause outside the COMPACT table" 's/ or \$l\.skipped > 0\)\}/)}/' t_skipped_clean
+mutate "skipped files no cause outside the COMPACT table" 's/ or \$l\.skipped > 0 or / or /' t_skipped_clean
 mutate "unregistered rules not counted as gaps" 's/ \+ \(\$unreg \| length\) \+ \(\$in\.run/ + (\$in.run/' t_unreg
 mutate "the registry read from every table row" 's/\| if \$h == null then \[\] else/| if true then [\$l[] | capture("^\\\\| `(?<id>" + rule_pat + ")` \\\\|") | .id] else/' t_bad_fenced
 mutate_hp() { # name, perl substitution on host-pass.sh and incremental.jq, case function
@@ -1153,7 +1153,7 @@ mutate_hp() { # name, perl substitution on host-pass.sh and incremental.jq, case
   HPA="$d/host-pass.sh"; "$3" > /dev/null 2>&1; local s=$?; HPA="$keep"; fails="$before"
   check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
-mutate_hp "accept without the registry" 's/host_verdict\(\$v; \$reg\)/host_verdict(\$v)/' t_accept_high
+mutate_hp "accept without the registry" 's/host_verdict_run\(\$v; \$reg; \$nr\)/host_verdict_known(\$v)/' t_accept_high
 mutate_hp "host_verdict reading unregistered rules" 's/map\(select\(\(\.rule_id \| IN\(\$reg\[\]\)\) or \.severity == "LOW"\)\) as \$k/. as \$k/' t_accept_crit
 mutate_hp "host_verdict holding an unregistered LOW as an unknown" 's/ or \.severity == "LOW"\)\) as \$k/)) as \$k/' t_accept_low
 mutate_hp "the verdict check skipped" 's/\|\|\n    reject "the verdict does not follow from the findings"/|| true/' t_inc_verdict
@@ -2660,7 +2660,7 @@ mutate "depth example names not allowlisted" 's/\[\$d\.examples_out_of_scope\[\]
 mutate "not-applicable trusted on an open pull request" 's/if \.mergeability == "not-applicable" and \(is_closed\(\$h\) \| not\)/if false/' t_naopen
 mutate "the no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\)\n//' t_merged
 mutate "the COMPACT no longer open line dropped" 's/\+ \(if is_closed\(\$h\) then \[tx\("clamp-closed"\)\] else \[\] end\) \+ reopen_line/+ reopen_line/' t_nacompact
-mutate "the plan pass in scope at light" 's/\| if \.depth\.depth == "light" then \.coverage\.unplanned = \[\] else \. end//' t_dlight_noplan
+mutate "the plan pass in scope at light" 's/\| if \.depth\.depth == "light" then \.coverage\.unplanned \|= map\(select\(\.reason \| IN\(plan_not_run_reasons\[\]\)\)\) else \. end//' t_dlight_noplan
 mutate "triage approves at a depth" 's/\| \.triage or any\(\$g/| any(\$g/' t_dtriage
 
 # --- A profile was named and the plan pass gave no record: its own reason, never "no AWS profile
@@ -2676,8 +2676,105 @@ t_plan_failed; check "coverage: a plan pass that did not run though a profile wa
 render "$NONE" "" "" "$(runf pnr2 '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass did not run: refused"}]}')"
 check "coverage: a refused plan pass is its own reason" "$([ "$(rule)" = 4 ] && grep -qxF -- '- 1 example was not planned: plan pass did not run: refused.' "$O/comment.md"; echo $?)"
 refused "coverage: a plan pass reason outside the list" "$NONE" "" "" "$(runf pnr3 '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass did not run: oops"}]}')"
-mutate "a plan pass that did not run read as no profile" 's/"plan pass did not run: failed", "plan pass skipped/"no AWS profile named", "plan pass skipped/' t_plan_failed
+mutate "a plan pass that did not run read as no profile" 's/"plan pass did not run: failed"\] \+ plan_not_run_reasons/"no AWS profile named"] + plan_not_run_reasons/' t_plan_failed
 mutate "the behaviour line one form dropped" 's/\(if \$n == 1 then "-one" else "-many" end\); \{count: \$n\}\);/"-many"; {count: \$n});/' t_one_change
+
+# --- A plan or ladder step the host recorded as not run for an environment reason (review-run.sh
+# plan --not-run and ladder --not-run): a rule 4 unknown, STANDARD, even for an inert change and
+# with every trigger inert, never an approval; a token outside the list is refused.
+NRP='[{dir: "examples/a", reason: "plan pass not run: disk"}, {dir: "examples/b", reason: "plan pass not run: disk"}]'
+t_nr_plan() {
+  render "$NONE" "" "" "$(runf nrp ".examples = {count: 2, skipped: 0, validated: 2} | .coverage = {class: \"none\", inert: false, unplanned: $NRP}")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(tier)" = STANDARD ] && [ "$(verdict)" = "inconclusive COMMENT" ] &&
+    grep -qxF -- '- 2 examples were not planned: plan pass not run: disk.' "$O/comment.md"
+}
+t_nr_plan; check "not run: a plan step not run for disk lists its examples, rule 4, STANDARD" $?
+t_nr_plan_inert() {
+  render "$NONE" "" "" "$(runf nrpi ".examples = {count: 2, skipped: 0, validated: 2} | .coverage = {class: \"none\", inert: true, unplanned: $NRP}")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(tier)" = STANDARD ] &&
+    grep -qxF -- '- 2 examples were not planned: plan pass not run: disk.' "$O/comment.md" &&
+    ! grep -qF 'leave nothing unknown' "$O/comment.md"
+}
+t_nr_plan_inert; check "not run: a plan step not run is a rule 4 unknown even for an inert change, with no inert line" $?
+t_nr_plan_ti() {
+  render "$NONE" "" "" "$(runf nrpt ".plan_ran = false | .behaviour = {status: \"ran\", reason: null, triggers: $TI2, claims: [], capped: 0}
+    | .coverage = {class: \"none\", inert: false, unplanned: [{dir: \"examples/complete\", reason: \"plan pass not run: memory\"}]}")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qxF -- '- 1 example was not planned: plan pass not run: memory.' "$O/comment.md"
+}
+t_nr_plan_ti; check "not run: a plan step not run stays a rule 4 unknown when every trigger is inert" $?
+t_nr_ladder() {
+  render "$NONE" "" "" "$(runf nrl '.coverage = {class: "none", inert: true, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}
+    | .behaviour = {status: "not-run", reason: "ladder not run: time", triggers: [], claims: [], capped: 0}')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(tier)" = STANDARD ] &&
+    grep -qxF -- '- Behaviour check: ladder not run: time, so no change was classified or verified.' "$O/comment.md"
+}
+t_nr_ladder; check "not run: a ladder step not run is a step that did not run, rule 4, even for an inert change" $?
+refused "a plan step not run for a token outside the list" "$NONE" "" "" "$(runf nrp-bad '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass not run: lunch"}]}')"
+refused "a ladder step not run for a token outside the list" "$NONE" "" "" "$(runf nrl-bad '.behaviour = {status: "not-run", reason: "ladder not run: lunch", triggers: [], claims: [], capped: 0}')"
+t_nr_accept() { # accept --run: an approval over a not-run step does not follow; inconclusive does
+  render "$NONE" "" "" "$(runf nra ".coverage = {class: \"none\", inert: true, unplanned: $NRP}")" &&
+    [ "$(accept "$O/result.json")" = "findings accepted: full" ] || return 1
+  local r="$TMP/run-nra.json" ok
+  ok="$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$O/result.json" --rules "$RF" --run "$r")"
+  jq '.verdict = "approve"' "$O/result.json" > "$TMP/nra-forged.json"
+  [ "$ok" = "findings accepted: full" ] &&
+    [ "$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$TMP/nra-forged.json" --rules "$RF" --run "$r")" = "findings rejected: the verdict does not follow from the findings" ] &&
+    [ "$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$TMP/nra-forged.json" --rules "$RF" --run "$RUNF")" = "findings accepted: full" ] &&
+    printf '{}{}' > "$TMP/nra-two.json" &&
+    [ "$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$O/result.json" --rules "$RF" --run "$TMP/nra-two.json")" = "findings rejected: the run file is not a JSON object" ]
+}
+t_nr_accept; check "not run: accept --run takes the inconclusive render and refuses an approval over a step not run" $?
+mutate "a plan step not run not counted as a gap" 's/\(\$in\.run \| skipped_gap\) \+ \(\$in\.run \| plan_not_run_gap\) \+ /(\$in.run | skipped_gap) + /' t_nr_plan_inert
+mutate "the inert line kept beside a plan step not run" 's/\$run\.coverage\.inert and \(\$run \| plan_not_run_gap\) == 0 and/\$run.coverage.inert and/' t_nr_plan_inert
+mutate "the plan not run reasons dropped" 's/\] \+ plan_not_run_reasons \+ \["plan pass skipped/, "plan pass skipped/' t_nr_plan
+mutate "the ladder not run reasons dropped" 's/ \+ \(not_run_tokens \| map\("ladder not run: " \+ \.\)\);/;/' t_nr_ladder
+mutate_hp "accept --run not read" 's/host_verdict_run\(\$v; \$reg; \$nr\)/host_verdict(\$v; \$reg)/' t_nr_accept
+mutate_hp "accept --run not reading a plan step not run" 's/startswith\("plan pass not run: "\)/startswith("plan pass never: ")/' t_nr_accept
+# The ladder reason read by accept --run, a plan step not run kept whatever the depth's scope and
+# read the same by accept, a cause outside the COMPACT table beside a truncated description alone,
+# and the What to do count: one gap for an inert change, the examples alone for one that is not.
+t_nr_accept_ladder() {
+  render "$NONE" "" "" "$(runf nral '.coverage = {class: "none", inert: true, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}
+    | .behaviour = {status: "not-run", reason: "ladder not run: sandbox", triggers: [], claims: [], capped: 0}')"
+  [ "$(rule)" = 4 ] || return 1
+  jq '.verdict = "approve"' "$O/result.json" > "$TMP/nral-forged.json"
+  [ "$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$TMP/nral-forged.json" --rules "$RF" --run "$TMP/run-nral.json")" = "findings rejected: the verdict does not follow from the findings" ]
+}
+t_nr_accept_ladder; check "not run: accept --run refuses an approval over a ladder step not run" $?
+t_nr_scope() { # focused, the one not-run example out of scope: still rule 4, and accept --run agrees
+  render "$NONE" "" "" "$(rund nrsc focused '.examples_out_of_scope = ["examples/a"]' '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass not run: disk"}]}')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qxF -- '- 1 example was not planned: plan pass not run: disk.' "$O/comment.md" &&
+    [ "$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$O/result.json" --rules "$RF" --run "$TMP/run-nrsc.json")" = "findings accepted: full" ]
+}
+t_nr_scope; check "not run: a plan step not run stays an unknown when its examples are out of scope, and accept --run agrees" $?
+t_nr_light() { render "$NONE" "" "" "$(rund nrli light . '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "plan pass not run: time"}]}')"; [ "$ST" = 0 ] && [ "$(rule)" = 4 ]; }
+t_nr_light; check "not run: a plan step not run stays an unknown at light" $?
+t_nr_cut() { # inert change, plan step not run, description cut: the cut alone would be COMPACT
+  rc "$(F556)" "$(R556 nrcut '.coverage = {class: "none", inert: true, unplanned: [{dir: "examples/a", reason: "plan pass not run: disk"}]}')" \
+    "$(host nrcut '.could_not_run = [{kind: "prose-truncated", item: "body", omitted: 31}]')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(tier)" = STANDARD ]
+}
+t_nr_cut; check "not run: a plan step not run is a cause outside the COMPACT table beside a truncated description" $?
+NRT='.unresolved_threads = [{path: "a.tf", line: 1}]' # a box item, so What to do renders beside the gaps line
+t_nr_todo_inert() {
+  render "$NONE" "$(host nrti "$NRT")" "" "$(runf nrti ".coverage = {class: \"none\", inert: true, unplanned: $NRP}")"
+  [ "$(rule)" = 4 ] && grep -qxF -- '- 1 check could not run; see Checks that could not run.' "$O/comment.md"
+}
+t_nr_todo_inert; check "not run: What to do counts a plan step not run once for an inert change" $?
+t_nr_todo() {
+  render "$NONE" "$(host nrtn "$NRT")" "" "$(runf nrtn ".coverage = {class: \"none\", inert: false, unplanned: $NRP}")"
+  [ "$(rule)" = 4 ] && grep -qxF -- '- 2 checks could not run; see Checks that could not run.' "$O/comment.md"
+}
+t_nr_todo; check "not run: What to do counts the examples alone for a change that is not inert" $?
+t_nr_run_empty() { render "$NONE"; bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$O/result.json" --rules "$RF" --run "" > /dev/null 2>&1; [ $? = 2 ]; }
+t_nr_run_empty; check "not run: accept --run with an empty value is a usage error" $?
+mutate "a plan step not run dropped by the scope" 's/ or \(\.reason \| IN\(plan_not_run_reasons\[\]\)\)//' t_nr_scope
+mutate "a plan step not run dropped at light" 's/then \.coverage\.unplanned \|= map\(select\(\.reason \| IN\(plan_not_run_reasons\[\]\)\)\) else/then .coverage.unplanned = [] else/' t_nr_light
+mutate "a plan step not run admitted to COMPACT" 's/ or \$l\.skipped > 0 or \(\$run \| plan_not_run_gap\) > 0\)\}/ or \$l.skipped > 0)}/' t_nr_cut
+mutate "a plan step not run left out of the What to do count" 's/ \+ \(if \$l\.unplanned_open == 0 then \$in\.run \| plan_not_run_gap else 0 end\)//' t_nr_todo_inert
+mutate "a plan step not run counted beside its examples" 's/\(if \$l\.unplanned_open == 0 then \$in\.run \| plan_not_run_gap else 0 end\)/(\$in.run | plan_not_run_gap)/' t_nr_todo
+mutate_hp "accept --run not reading a ladder step not run" 's/\n  or \(\(\.behaviour\.reason\? \/\/ ""\) \| type == "string" and startswith\("ladder not run: "\)\);/;/' t_nr_accept_ladder
+mutate_hp "accept --run taking an empty value" 's/; \[ -n "\$run" \] \|\| die "--run needs a value" ;;/ ;;/' t_nr_run_empty
 
 # --- At light the host writes "plan pass skipped at light depth": no unknown, no advice; at any
 # other depth, or with no depth, a refused input.
