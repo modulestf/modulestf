@@ -1,22 +1,22 @@
 {
   "schema_version": 1,
-  "version": "v0.22.1",
+  "version": "v0.22.2",
   "platforms": {
     "darwin_amd64": {
-      "url": "https://github.com/modulestf/facts/releases/download/v0.22.1/mtf-facts_v0.22.1_darwin_amd64",
-      "sha256": "7d872daadce98e6443c62b62d18bd551c05adfa94f5d910d6a0a3262d80edde4"
+      "url": "https://github.com/modulestf/facts/releases/download/v0.22.2/mtf-facts_v0.22.2_darwin_amd64",
+      "sha256": "89add4d986cbd5e0fc268e274b5f9e5048f3953c591a6d0e65db4c5f8578d2b8"
     },
     "darwin_arm64": {
-      "url": "https://github.com/modulestf/facts/releases/download/v0.22.1/mtf-facts_v0.22.1_darwin_arm64",
-      "sha256": "c1f483bf0bb87cabb45e93794fa11c2ad6e126bd13919bca9302d0393ac9186e"
+      "url": "https://github.com/modulestf/facts/releases/download/v0.22.2/mtf-facts_v0.22.2_darwin_arm64",
+      "sha256": "2312c9d120b64917e75044a8cad1c46e9f8927189145bdb6db811f591b91b7a4"
     },
     "linux_amd64": {
-      "url": "https://github.com/modulestf/facts/releases/download/v0.22.1/mtf-facts_v0.22.1_linux_amd64",
-      "sha256": "be7b245391592e6a5830e68d570d7094c68172b453edffe620291c193d8cd453"
+      "url": "https://github.com/modulestf/facts/releases/download/v0.22.2/mtf-facts_v0.22.2_linux_amd64",
+      "sha256": "d771b395038bf62566b71074035e1d4c221de1c9c9f8168f9656340676af0db3"
     },
     "linux_arm64": {
-      "url": "https://github.com/modulestf/facts/releases/download/v0.22.1/mtf-facts_v0.22.1_linux_arm64",
-      "sha256": "cd025ed4b6944f691d2b7e1338dda834e2d1c0ad18fc97c946fd7bb3f2695c49"
+      "url": "https://github.com/modulestf/facts/releases/download/v0.22.2/mtf-facts_v0.22.2_linux_arm64",
+      "sha256": "4f47d0f797d3afa31e3326c487311eb4acb779237a3cb32225decaed4bcc5239"
     }
   }
 }
