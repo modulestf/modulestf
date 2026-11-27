@@ -1,10 +1,13 @@
 #!/bin/bash
-# Self-check for references/vendored-policy.sh, policy-hcl.pl and vendored-policy.jq of
-# terraform-module-pr-review: a vendored policy document compared with its upstream file at a
-# release tag resolved to a commit, and with the base. gh is a stub that serves fixture files and
-# logs each request. The handover step, its grammar, the equal documents and the LOW raise are
-# taken from review-run.sh and run. A negative self-check mutates temp copies and confirms each
-# one is caught. No network. Needs bash, git, jq and perl.
+# Self-check for references/vendored-policy.sh and vendored-policy.jq of terraform-module-pr-review:
+# a vendored policy document, read by the facts engine's iam-policy-docs command, compared with its
+# upstream file at a release tag resolved to a commit, and with the base. gh is a stub that serves
+# fixture files and logs each request; mtf-facts is the real binary (MTF_FACTS_BIN, else the one on
+# PATH) when its version report lists cmd:iam-policy-docs, and the suite is skipped with a note
+# without one, or fails with MTF_FACTS_REQUIRED=1. Each shape that once read as "upstream equal"
+# while Terraform evaluated another policy is a case that must not. The handover step, its grammar,
+# the equal documents and the LOW raise are taken from review-run.sh and run. A negative self-check
+# mutates temp copies and confirms each one is caught. No network. Needs bash, git, jq and perl.
 set -uo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd -P)"
@@ -38,6 +41,14 @@ cat "$f"
 EOF
 chmod +x "$TMP/bin/gh"
 export PATH="$TMP/bin:$PATH"
+# The facts engine: a link to it in the stub directory, so facts-resolve.sh finds it first.
+fb="${MTF_FACTS_BIN:-$(command -v mtf-facts 2> /dev/null)}"
+if [ -z "$fb" ] || [ ! -x "$fb" ] || ! "$fb" version --json 2> /dev/null | jq -e '.features | index("cmd:iam-policy-docs")' > /dev/null 2>&1; then
+  echo "skip vendored-policy: no mtf-facts whose version report lists cmd:iam-policy-docs (MTF_FACTS_BIN or PATH)"
+  [ "${MTF_FACTS_REQUIRED:-}" != 1 ] || { echo "FAIL MTF_FACTS_REQUIRED=1 and the facts engine is missing"; exit 1; }
+  exit 0
+fi
+ln -s "$fb" "$TMP/bin/mtf-facts"
 serve() { printf '%s' "$2" > "$FIX/$(printf '%s' "$1" | tr '/?=' '___')"; }
 # up_file <commit> <json>: the upstream file at that commit.
 up_file() {
@@ -129,13 +140,23 @@ data "aws_iam_policy_document" "other" {
 # The base: the action ValidateThing missing, AttachVolume on "*".
 BASE_TF="$(printf '%s' "$HEAD_TF" | perl -0pe 's/      "ec2:ValidateThing", \/\/ a line comment \} "with quotes"\n//; s/resources = \[\n      "arn:\$\{local.partition\}:ec2:\*:\*:instance\/\*",\n      "arn:\$\{local.partition\}:ec2:\*:\*:volume\/\*",\n    \]/resources = ["*"]/')"
 
+# The declarations the documents read, the same at both sides: a reference the engine cannot find
+# leaves the wiring undecided.
+VARS_TF='variable "create" { default = true }
+variable "extra" { default = [] }
+variable "overrides" { default = [] }
+variable "other" { default = [] }
+variable "x" { default = null }
+variable "arns" { default = [] }
+variable "mode" { default = "a" }
+locals { partition = "aws" }'
 # repo <name> <base text or -> <head text> [<extra file> <its head text>]: a clone with a base
 # commit and a head commit; prints "<clone> <base sha> <head sha>".
 repo() {
   local c="$TMP/$1"; G init -q "$c"
-  if [ "$2" != - ]; then printf '%s\n' "$2" > "$c/policies.tf"; else printf 'x\n' > "$c/other.txt"; fi
+  if [ "$2" != - ]; then printf '%s\n' "$2" > "$c/policies.tf"; printf '%s\n' "$VARS_TF" > "$c/vars.tf"; else printf 'x\n' > "$c/other.txt"; fi
   G -C "$c" add -A; G -C "$c" commit -qm base; local b; b="$(git -C "$c" rev-parse HEAD)"
-  printf '%s\n' "$3" > "$c/policies.tf"
+  printf '%s\n' "$3" > "$c/policies.tf"; printf '%s\n' "$VARS_TF" > "$c/vars.tf"
   [ -z "${4-}" ] || printf '%s\n' "$5" > "$c/$4"
   G -C "$c" add -A; G -C "$c" commit -qm head
   echo "$c $b $(git -C "$c" rev-parse HEAD)"
@@ -298,24 +319,22 @@ t_floor() { # the base names no tag: only the latest release is evidence; else n
 }
 t_floor; check "floor: a rollback to an old tag, no latest, an older tag; a tag newer than the base's" $?
 
-t_static() { # each shape the reader cannot evaluate: no evidence for the whole document
+t_static() { # each shape the engine cannot read as literal text: no evidence for the whole document
   local ok=0 x o k=0
-  for x in 's/resources = \["\*"\]/resources = var.arns/:unevaluated expression' \
-           's/"ec2:DescribeVolumes",/"ec2:DescribeVolumes", lower("X"),/:unevaluated expression' \
-           's/resources = \["\*"\]/resources = ["\${var.x}"]/:unevaluated expression' \
-           's/    condition \{\n      test     = "Null"/    dynamic "condition" {\n      test     = "Null"/:dynamic block' \
-           's/  statement \{\n    sid/  dynamic "statement" {\n    for_each = []\n    content {}\n  }\n  statement {\n    sid/:dynamic statement' \
-           's/  count = var.create \? 1 : 0\n\n  statement/  count = var.create ? 1 : 0\n  source_policy_documents = []\n\n  statement/:merged documents' \
-           's/sid     = "Attach"/sid = "%{ if true }a%{ endif }"/:template directive' \
-           's/\z/\nlocals {\n  x = <<EOT\ndata "aws_iam_policy_document" "widget" {\nEOT\n}\n/:heredoc' \
-           's/^data "aws_iam_policy_document" "other" \{/data aws_iam_policy_document other {/m:unsupported syntax' \
+  for x in 's/resources = \["\*"\]/resources = var.arns/:content not literal' \
+           's/"ec2:DescribeVolumes",/"ec2:DescribeVolumes", lower("X"),/:content not literal' \
+           's/resources = \["\*"\]/resources = ["arn:\${var.x}:s3:::b"]/:unevaluated expression' \
+           's/    condition \{\n      test     = "Null"/    dynamic "condition" {\n      test     = "Null"/:content dynamic block' \
+           's/  statement \{\n    sid/  dynamic "statement" {\n    for_each = []\n    content {}\n  }\n  statement {\n    sid/:content dynamic block' \
+           's/  count = var.create \? 1 : 0\n\n  statement/  count = var.create ? 1 : 0\n  source_policy_documents = []\n\n  statement/:content merge' \
+           's/sid     = "Attach"/sid = "%{ if true }a%{ endif }"/:content not literal' \
            's/\z/\ndata "aws_iam_policy_document" "widget" {\n}\n/:block repeated'; do
     k=$((k + 1)); o="$(variant "static$k" "${x%:*}" | head -n 1)"
     [ "$o" = "policies.tf widget unknown ${x##*:}" ] || { echo "  static: ${x##*:} gave $o" >&2; ok=1; }
   done
   return "$ok"
 }
-t_static; check "static: an expression, a dynamic block or statement, merged documents, a heredoc or bare label anywhere, a repeat" $?
+t_static; check "static: an expression, a function, a reference the profile does not name, a dynamic block or statement, merged documents, a template directive, a repeat" $?
 
 t_gate() {
   local ok=0
@@ -340,15 +359,18 @@ t_wiring() { # a policy reads the document only as the whole value of its policy
   o="$(variant output 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  policy = "{}"/; s/\z/\noutput "x" {\n  value = data.aws_iam_policy_document.widget[0].json\n}\n/')"
   [ "$o" = "policies.tf widget unknown not wired" ] || ok=1
   o="$(variant inexpr 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  policy = var.x != null ? var.x : data.aws_iam_policy_document.widget[0].json/')"
-  [ "$o" = "policies.tf widget unknown not wired" ] || ok=1
+  [ "$o" = "policies.tf widget unknown uses conditional" ] || ok=1
   o="$(variant notwhole 's/  policy = data.aws_iam_policy_document.widget\[0\].json/  policy = data.aws_iam_policy_document.widget[*].json[0]/')"
-  [ "$o" = "policies.tf widget unknown not wired" ] || ok=1
-  # the policy resource set to count = 0 beside a new inline policy: its gate changed
+  [ "$o" = "policies.tf widget unknown uses index" ] || ok=1
+  # the policy resource set to count = 0 beside a new inline policy: its wiring changed
   o="$(variant pgate 's/  count  = var.create \? 1 : 0\n  policy = data/  count  = 0\n  policy = data/; s/\z/\nresource "aws_iam_policy" "admin" {\n  policy = "{}"\n}\n/')"
   [ "$o" = "policies.tf widget unknown wiring changed" ] || ok=1
+  # a variables file: the engine compares nothing
+  read -r c b hh <<< "$(repo tfvars "$BASE_TF" "$HEAD_TF" terraform.tfvars 'create = true')"
+  [ "$(vp "$c" "$b" "$hh")" = "policies.tf widget unknown precondition failed" ] || ok=1
   return "$ok"
 }
-t_wiring; check "wiring: no policy, a comment, a string, an output, a value that is not the whole reference, a policy gate changed" $?
+t_wiring; check "wiring: no policy, a comment, a string, an output, a conditional, an index, a policy gate changed, a variables file" $?
 
 # A merge through a local, as the iam module writes it: a document whose source_policy_documents is a
 # local holding the block's json, read whole by a policy.
@@ -372,6 +394,7 @@ resource "aws_iam_policy" "this" {
 # mrepo <name> <base main.tf> <head main.tf> <head policies.tf>: base policies.tf unwired, as in t_merge.
 mrepo() {
   local c="$TMP/$1" bb; G init -q "$c"; printf '%s\n' "$MB_TF" > "$c/policies.tf"; printf '%s\n' "$2" > "$c/main.tf"
+  printf '%s\n' "$VARS_TF" > "$c/vars.tf"
   G -C "$c" add -A; G -C "$c" commit -qm base; bb="$(git -C "$c" rev-parse HEAD)"
   printf '%s\n' "$4" > "$c/policies.tf"; printf '%s\n' "$3" > "$c/main.tf"; G -C "$c" add -A; G -C "$c" commit -qm head
   echo "$c $bb $(git -C "$c" rev-parse HEAD)"
@@ -392,40 +415,45 @@ t_merge() {
 }
 t_merge; check "merge: a document merged through a local is wired; a changed merging document or a sid is not" $?
 
-t_dir() { # the whole directory is held to the reader's allowlist
+t_dir() { # the directory as Terraform reads it, and the files the engine refuses
   local ok=0 x k=0 o f t r
-  for x in 'policies_override.tf|data "aws_iam_policy_document" "widget" {}|override file' \
-           'extra.tf.json|{}|json configuration' 'policies.tofu|x = 1|opentofu file' 'a b.tf|x = 1|file name' \
-           'c.tf|locals { a = 1 /* x */ }|block comment' 'c.tf|locals { a = "$${" }|escaped interpolation' \
-           'c.tf|locals { a = "%%{" }|escaped interpolation' 'c.tf|locals { a = "x" # "y }|unbalanced quotes' \
-           'c.tf|locals { a = <<EOT|heredoc' "c.tf|locals { a = \"$(printf '\303\251')\" }|unsafe text"; do
+  for x in 'policies_override.tf|data "aws_iam_policy_document" "widget" {}|directory unsupported file' \
+           'extra.tf.json|{}|directory unsupported file' 'policies.tofu|locals { a = 1 }|directory unsupported file' \
+           'c.tf|locals { a = "x" # "y }|directory parse error' 'c.tf|locals { a = <<EOT|directory parse error' \
+           'NEWLINE|data "aws_iam_policy_document" "widget" {}|head file name'; do
     k=$((k + 1)); IFS='|' read -r f t r <<< "$x"
+    # a file name with a newline, read from the NUL-separated list
+    [ "$f" != NEWLINE ] || f="$(printf 'a\n_override.tf')"
     read -r c b hh <<< "$(repo "dir$k" "$BASE_TF" "$HEAD_TF" "$f" "$t")"
     o="$(vp "$c" "$b" "$hh" | head -n 1)"
     [ "$o" = "policies.tf widget unknown $r" ] || { echo "  dir: $f gave $o" >&2; ok=1; }
   done
-  # a file name with a newline, read from the NUL-separated list
-  read -r c b hh <<< "$(repo dirnl "$BASE_TF" "$HEAD_TF" "$(printf 'a\n_override.tf')" 'data "aws_iam_policy_document" "widget" {}')"
-  [ "$(vp "$c" "$b" "$hh" | head -n 1)" = "policies.tf widget unknown file name" ] || ok=1
+  # what Terraform reads as plain text is no refusal: a name with a space, a block comment, an
+  # escaped interpolation, a heredoc and a non-ASCII string beside the document
+  for x in 'a b.tf|locals { a = 1 }' 'c.tf|locals { a = 1 /* x */ }' 'c.tf|locals { a = "$${" }' 'c.tf|locals { a = "%%{" }' \
+           'c.tf|locals {\n  a = <<EOT\nx\nEOT\n}' "c.tf|locals { a = \"$(printf '\303\251')\" }"; do
+    k=$((k + 1)); IFS='|' read -r f t <<< "$x"
+    read -r c b hh <<< "$(repo "dir$k" "$BASE_TF" "$HEAD_TF" "$f" "$(printf '%b' "$t")")"
+    vp "$c" "$b" "$hh" | grep -qxF 'policies.tf widget upstream equal' || { echo "  dir: $f with $t not equal" >&2; ok=1; }
+  done
+  # two names alike in letter case, added through the index as a case-insensitive file system cannot
+  read -r c b hh <<< "$(repo dircase "$BASE_TF" "$HEAD_TF")"
+  G -C "$c" update-index --add --cacheinfo "100644,$(printf 'locals { b = 1 }\n' | git -C "$c" hash-object -w --stdin),VARS.tf"
+  G -C "$c" commit -qm case
+  [ "$(vp "$c" "$b" "$(git -C "$c" rev-parse HEAD)" | head -n 1)" = "policies.tf widget unknown head file name" ] || ok=1
   # a link named .tf
-  local c2="$TMP/dirlink" b2; G init -q "$c2"; printf '%s\n' "$BASE_TF" > "$c2/policies.tf"; G -C "$c2" add -A; G -C "$c2" commit -qm b
+  local c2="$TMP/dirlink" b2; G init -q "$c2"; printf '%s\n' "$BASE_TF" > "$c2/policies.tf"; printf '%s\n' "$VARS_TF" > "$c2/vars.tf"
+  G -C "$c2" add -A; G -C "$c2" commit -qm b
   b2="$(git -C "$c2" rev-parse HEAD)"; printf '%s\n' "$HEAD_TF" > "$c2/policies.tf"; ln -s /etc/hosts "$c2/zz.tf"
   G -C "$c2" add -A; G -C "$c2" commit -qm h
-  [ "$(vp "$c2" "$b2" "$(git -C "$c2" rev-parse HEAD)" | head -n 1)" = "policies.tf widget unknown link" ] || ok=1
-  # the escape that hid a real block in round 2: refused before any read
-  o="$(variant escape 's/\A/locals {\n  open = "\$\${" # " {\n}\n/')"
-  [ "$(head -n 1 <<< "$o")" = "policies.tf widget unknown escaped interpolation" ] || ok=1
-  # an ARN's "/*" inside its string is no comment
-  vp "$MAIN" "$MB" "$MH" | grep -qxF 'policies.tf widget upstream equal' || ok=1
+  [ "$(vp "$c2" "$b2" "$(git -C "$c2" rev-parse HEAD)" | head -n 1)" = "policies.tf widget unknown directory symlink" ] || ok=1
   return "$ok"
 }
-t_dir; check "directory: override, JSON, OpenTofu, odd names (a newline too), a link, block comments, escapes, quotes, heredocs, non-ASCII" $?
+t_dir; check "directory: override, JSON, OpenTofu, parse errors, a newline or a letter case clash in a name, a link; plain text Terraform reads is no refusal" $?
 
 t_empty() {
   local ok=0
   [ "$(variant emptyres 's/resources = \["\*"\]/resources = []/')" = "policies.tf widget unknown empty list" ] || ok=1
-  printf '%s' "$HEAD_TF" | perl -0pe 's/resources = \["\*"\]/resources = []/' > "$TMP/empty.tf"; printf 'local.partition aws\n' > "$TMP/subst"
-  [ "$(perl "$(dirname "$VP")/policy-hcl.pl" "$TMP/empty.tf" widget "$TMP/subst")" = "unknown empty list" ] || ok=1
   up_file "$C2" '{"Statement": [{"Effect": "Allow", "Action": [], "Resource": "*"}]}'
   [ "$(vp "$MAIN" "$MB" "$MH")" = "policies.tf widget unknown empty list" ] || ok=1
   up_file "$C2" "$UPJ"
@@ -433,12 +461,10 @@ t_empty() {
 }
 t_empty; check "empty: an empty actions or resources list, in the head or upstream, gives no evidence" $?
 
-t_large() { # the tuple product is capped before it is built, by the reader and by the jq library
-  local acts res f="$TMP/large.tf" ok=0
+t_large() { # the tuple product is capped before it is built, from either side
+  local acts res ok=0
   acts="$(for i in $(seq 1 70); do printf '"ec2:A%s", ' "$i"; done)"; res="$(for i in $(seq 1 70); do printf '"r%s", ' "$i"; done)"
-  printf '%s' "$HEAD_TF" | perl -0pe "s/\"ec2:DescribeVolumes\",/\"ec2:DescribeVolumes\", $acts/; s/resources = \\[\"\\*\"\\]/resources = [$res]/" > "$f"
-  printf 'local.partition aws\n' > "$TMP/subst"
-  [ "$(perl "$(dirname "$VP")/policy-hcl.pl" "$f" widget "$TMP/subst")" = "unknown too large" ] || ok=1
+  [ "$(variant large "s/\"ec2:DescribeVolumes\",/\"ec2:DescribeVolumes\", $acts/; s/resources = \\[\"\\*\"\\]/resources = [$res]/")" = "policies.tf widget unknown too large" ] || ok=1
   jq -n -c '{Statement: [{Effect: "Allow", Action: [range(70) | "ec2:a\(.)"], Resource: [range(70) | "r\(.)"]}]}' > "$TMP/large.json"
   [ "$(jq -r -L "$(dirname "$VP")" 'include "vendored-policy"; try (upstream | tuples | length) catch .' "$TMP/large.json")" = "too large" ] || ok=1
   return "$ok"
@@ -503,7 +529,7 @@ t_partial; check "partial clone: no evidence" $?
 
 t_prefix() {
   local c="$TMP/pfx"; G init -q "$c"; mkdir -p "$c/modules/w"
-  printf '%s\n' "$BASE_TF" > "$c/modules/w/policies.tf"; G -C "$c" add -A; G -C "$c" commit -qm b; local b; b="$(git -C "$c" rev-parse HEAD)"
+  printf '%s\n' "$BASE_TF" > "$c/modules/w/policies.tf"; printf '%s\n' "$VARS_TF" > "$c/modules/w/vars.tf"; G -C "$c" add -A; G -C "$c" commit -qm b; local b; b="$(git -C "$c" rev-parse HEAD)"
   printf '%s\n' "$HEAD_TF" > "$c/modules/w/policies.tf"; G -C "$c" commit -qam h
   sed "s# policies.tf widget # modules/w/policies.tf widget #" "$TMP/vp.keep" > "$P/vendored-policies.txt"
   echo '[{"filename": "modules/w/policies.tf", "status": "modified"}]' > "$FILES"
@@ -512,6 +538,108 @@ t_prefix() {
   grep -qxF 'policies.tf widget upstream equal' <<< "$o"
 }
 t_prefix; check "prefix: the entry is repository-relative, the line module-relative" $?
+
+# --- Each shape that once read as "upstream equal" while Terraform evaluated another policy. The
+# engine parses the files as Terraform does, so each now reads the policy Terraform evaluates, or
+# gives no evidence: never "upstream equal".
+UP_BLOCK="$(printf '%s' "$HEAD_TF" | perl -0ne 'print $1 if /^(data "aws_iam_policy_document" "widget" \{.*?^\})/ms')"
+# The real block of each case: the upstream copy and one more statement that grants everything.
+WIDE_BLOCK="$(printf '%s' "$UP_BLOCK" | perl -0pe 's/\n\}\z/\n\n  statement {\n    actions   = ["*"]\n    resources = ["*"]\n  }\n}/')"
+READER='resource "aws_iam_policy" "widget" {
+  count  = var.create ? 1 : 0
+  policy = data.aws_iam_policy_document.widget[0].json
+}'
+# A new document has no base to hold a gate to: the same block and reader with none.
+UP_NG="$(printf '%s' "$UP_BLOCK" | sed '/^  count = /d; /^    sid /d')"
+READER_NG='resource "aws_iam_policy" "widget" {
+  policy = data.aws_iam_policy_document.widget.json
+}'
+ADMIN='resource "aws_iam_policy" "admin" {
+  policy = jsonencode({ Statement = [{ Effect = "Allow", Action = "*", Resource = "*" }] })
+}'
+# rcase <name> <expected first line or "widened"> <head policies.tf> [<extra file> <text>] [new]:
+# with "widened", the run must say upstream differs and widen the grant to "*" on "*".
+rcase() {
+  local n="$1" want="$2" h="$3" o
+  if [ "${6-}" = new ]; then read -r c bb hh <<< "$(repo "rp-$n" - "$h" "${4-}" "${5-}")"
+    echo '[{"filename": "policies.tf", "status": "added"}]' > "$FILES"
+  else read -r c bb hh <<< "$(repo "rp-$n" "$BASE_TF" "$h" "${4-}" "${5-}")"; fi
+  o="$(vp "$c" "$bb" "$hh")"
+  echo '[{"filename": "policies.tf", "status": "modified"}]' > "$FILES"
+  ! grep -qxF 'policies.tf widget upstream equal' <<< "$o" || { echo "  repro $n: upstream equal" >&2; return 1; }
+  if [ "$want" = widened ]; then
+    grep -qxF 'policies.tf widget widened Allow action:* resource:*' <<< "$o" || { echo "  repro $n: $(head -n 3 <<< "$o")" >&2; return 1; }
+  else
+    [ "$(head -n 1 <<< "$o")" = "policies.tf widget $want" ] || { echo "  repro $n: $(head -n 1 <<< "$o")" >&2; return 1; }
+  fi
+}
+t_repro() {
+  local ok=0
+  # a heredoc holding a copy of the upstream block, the real block written with bare labels
+  rcase heredoc widened "$(printf 'locals {\n  decoy = <<EOT\n%s\nEOT\n}\n%s\n%s' "$UP_BLOCK" "$(printf '%s' "$WIDE_BLOCK" | sed '1s/.*/data aws_iam_policy_document widget {/')" "$READER")" || ok=1
+  # an escaped interpolation, "$${" and "%%{", before the real block, the copy in a comment
+  local e
+  for e in '$${' '%%{'; do
+    rcase "escape${e:0:1}" widened "$(printf 'locals {\n  open = "%s" # " {\n}\n%s\n/* }" }\n%s\n# */\n%s' "$e" "$WIDE_BLOCK" "$UP_BLOCK" "$READER")" || ok=1
+  done
+  # a comment holding a quote inside an interpolation, the real block between two of them
+  rcase interp widened "$(printf 'locals { c = "${ /* " */ 1 }" } # "\n%s\nlocals { e = "${ /* " */ 1 }" } /* " }\n}\n%s\n# */\n%s' "$WIDE_BLOCK" "$UP_BLOCK" "$READER")" || ok=1
+  # the same trick hiding the policy that reads the document behind a comment: only the inline one is real
+  rcase interp2 "unknown not wired" "$(printf '%s\noutput "a" { value = "${ 1 /* " */ }" /* "x" }"\n}\n%s\n# */ }\nresource "aws_iam_policy" "widget" {\n  policy = jsonencode({ Statement = [{ Effect = "Allow", Action = "*", Resource = "*" }] })\n}' "$UP_BLOCK" "$READER")" || ok=1
+  # the old reading kept only in a block comment, the policy now inline
+  rcase blockcomment "unknown not wired" "$(printf '%s\n/*\n%s\n*/\n%s' "$UP_BLOCK" "$READER" "$ADMIN")" || ok=1
+  # an override file that replaces the statements
+  rcase override "unknown directory unsupported file" "$(printf '%s\n%s' "$UP_BLOCK" "$READER")" policies_override.tf "$WIDE_BLOCK" || ok=1
+  # a dot file Terraform ignores holds the only policy that reads the document
+  rcase dotfile "unknown not wired" "$(printf '%s\n%s' "$UP_BLOCK" "$ADMIN")" .wire.tf "$READER" || ok=1
+  # the same for a new document
+  rcase dotnew "unknown not wired" "$(printf '%s\n%s' "$UP_NG" "$ADMIN")" .wire.tf "$READER_NG" new || ok=1
+  # a new document whose only policy has count = 0, beside an inline admin policy
+  rcase count0 "unknown wiring not comparable" "$(printf '%s\nresource "aws_iam_policy" "widget" {\n  count  = 0\n  policy = data.aws_iam_policy_document.widget.json\n}\n%s' "$UP_NG" "$ADMIN")" "" "" new || ok=1
+  # a new document read through a merging document with a wide statement of its own
+  rcase mergenew "unknown wiring not comparable" "$(printf '%s\ndata "aws_iam_policy_document" "merged" {\n  source_policy_documents = [data.aws_iam_policy_document.widget.json]\n  statement {\n    actions   = ["*"]\n    resources = ["*"]\n  }\n}\nresource "aws_iam_policy" "widget" {\n  policy = data.aws_iam_policy_document.merged.json\n}' "$UP_NG")" "" "" new || ok=1
+  # a source list element inside a string, in a branch never taken
+  rcase branch "unknown uses conditional" "$(printf '%s\ndata "aws_iam_policy_document" "merged" {\n  source_policy_documents = false ? ["x,data.aws_iam_policy_document.widget.json,y"] : [data.aws_iam_policy_document.widget.json]\n}\nresource "aws_iam_policy" "widget" {\n  policy = data.aws_iam_policy_document.merged.json\n}' "$UP_NG")" "" "" new || ok=1
+  # a gate that differs from the base in white space inside a string
+  local bg hg
+  bg="$(printf '%s' "$BASE_TF" | sed 's/count = var.create ? 1 : 0/count = var.mode == "a b" ? 1 : 0/')"
+  hg="$(printf '%s' "$HEAD_TF" | sed 's/count = var.create ? 1 : 0/count = var.mode == "ab" ? 1 : 0/')"
+  read -r c bb hh <<< "$(repo rp-space "$bg" "$hg")"
+  [ "$(vp "$c" "$bb" "$hh")" = "policies.tf widget unknown gate changed" ] || { echo "  repro space: $(vp "$c" "$bb" "$hh" | head -n 1)" >&2; ok=1; }
+  return "$ok"
+}
+t_repro; check "repro: a heredoc decoy, escaped interpolations, comments in interpolations, a commented reader, an override, a dot file, a gated or merged new document, a branch, white space in a gate" $?
+
+t_concat() { # a local that feeds the merge list changes what the policy merges
+  local ok=0 m2 o
+  m2="$(printf '%s' "$MERGE_TF" | sed 's/    var.extra,/    var.extra,\n    local.more,/')"
+  read -r c bb hh <<< "$(mrepo concat "$(printf '%s\nlocals { more = [] }' "$m2")" \
+    "$(printf '%s\nlocals { more = [data.aws_iam_policy_document.admin.json] }\ndata "aws_iam_policy_document" "admin" {\n  statement {\n    actions   = ["*"]\n    resources = ["*"]\n  }\n}' "$m2")" "$MH_TF")"
+  o="$(vp "$c" "$bb" "$hh")"
+  [ "$o" = "policies.tf widget unknown wiring changed" ] || { echo "  concat: $o" >&2; ok=1; }
+  return "$ok"
+}
+t_concat; check "concat: a local feeding the merge list that changed gives no evidence" $?
+
+t_engine() { # an engine without the command, a report outside its shape: no evidence
+  local ok=0 f o
+  # outside the run's directories, which the resolver refuses
+  f="$(mktemp -d "${TMPDIR:-/tmp}/vendored-policy-fake.XXXXXX")" || return 1
+  printf '#!/bin/bash\nif [ "$1" = version ]; then echo %s; exit 0; fi\nexec %q "$@"\n' \
+    "'{\"schema_version\": 1, \"version\": \"v0.0.1\", \"features\": [\"cmd:version\"]}'" "$fb" > "$f/mtf-facts"
+  chmod +x "$f/mtf-facts"
+  o="$(PATH="$f:$PATH" vp "$MAIN" "$MB" "$MH" | head -n 1)"
+  [ "$o" = "policies.tf widget unknown no facts engine" ] || { echo "  engine: $o" >&2; ok=1; }
+  printf '#!/bin/bash\nif [ "$1" = version ]; then exec %q "$@"; fi\n%q "$@" | jq -c ".schema_version = 2"\n' "$fb" "$fb" > "$f/mtf-facts"
+  o="$(PATH="$f:$PATH" vp "$MAIN" "$MB" "$MH" | head -n 1)"
+  [ "$o" = "policies.tf widget unknown facts report refused" ] || { echo "  engine: $o" >&2; ok=1; }
+  printf '#!/bin/bash\nif [ "$1" = version ]; then exec %q "$@"; fi\nexit 2\n' "$fb" > "$f/mtf-facts"
+  o="$(PATH="$f:$PATH" vp "$MAIN" "$MB" "$MH" | head -n 1)"
+  [ "$o" = "policies.tf widget unknown facts engine failed" ] || { echo "  engine: $o" >&2; ok=1; }
+  rm -rf -- "$f"
+  return "$ok"
+}
+t_engine; check "engine: no iam-policy-docs command, another schema, a failed run give no evidence" $?
 
 # --- review-run.sh: the handover step, the equal documents and the LOW raise, taken from the
 # script and run on a run directory of fixtures.
@@ -585,7 +713,7 @@ t_raise; check "render: LOW stands only inside an equal document's lines, any ot
 oc=0
 mutate() { # name, perl substitution, file, case function
   local d="$TMP/mut-$oc"; oc=$((oc + 1)); mkdir -p "$d"
-  cp "$REF/vendored-policy.sh" "$REF/policy-hcl.pl" "$REF/vendored-policy.jq" "$RR" "$d/"
+  cp "$REF/vendored-policy.sh" "$REF/facts-resolve.sh" "$REF/vendored-policy.jq" "$RR" "$d/"
   perl -0pi -e "$2" "$d/$3"
   if cmp -s "$d/$3" "$REF/$3"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
   local kv="$VP" kr="$RR" before="$fails"; VP="$d/vendored-policy.sh"; RR="$d/review-run.sh"
@@ -600,34 +728,32 @@ mutate "a tuple compared as joined text" 's/  \| unique;\n/  | map(map(if type =
 mutate "a NotAction list expanded per element" 's/else \["notaction", \(\$s\.not_action \| low\)\] end/else (\$s.not_action | low[] | ["notaction", .]) end/' vendored-policy.jq t_polarity
 mutate "a removed Deny not widened" 's/\+ \[\$m\[\] \| select\(\.\[0\] == "Deny"\) \| select\(\. as \$t \| \$b \| index\(\[\$t\]\)\)\]//' vendored-policy.jq t_polarity
 mutate "a carried extra read as widened" 's/select\(\. as \$t \| \$b \| index\(\[\$t\]\) \| not\)\]/select(true)]/' vendored-policy.jq t_carried
-mutate "a dynamic condition read as static" 's/unknown\(\$k eq .block. && \$id eq .dynamic. \? "dynamic block" : "unsupported attribute"\);/1;/; s/unknown\(\$cid eq .dynamic. \? "dynamic block" : "unsupported attribute"\)/1/; s/unknown\("dynamic block"\) if \$id eq .dynamic.;//' policy-hcl.pl t_static
-mutate "a function read as a literal" 's/  unknown\("unevaluated expression"\);\n\}\nsub list/  return \$v;\n}\nsub list/' policy-hcl.pl t_static
-mutate "a heredoc outside the block read" 's/\$t =~ \/<<-\?\[A-Za-z_\]\/ and unknown\("heredoc"\);//' policy-hcl.pl t_static
-mutate "merged documents read" 's/  unknown\("merged documents"\) if /  next if /' policy-hcl.pl t_static
-mutate "a dynamic statement read" 's/    unknown\("dynamic statement"\) if \$id eq .dynamic.;\n//' policy-hcl.pl t_static
-mutate "the reader's product cap dropped" 's/    \$cells <= 4000 or unknown\("too large"\);\n//' policy-hcl.pl t_large
+mutate "an unknown reference read as empty text" 's/if \$s \| has\(\$k\) then \$s\[\$k\] else error\("unevaluated expression"\) end/if \$s | has(\$k) then \$s[\$k] else "" end/' vendored-policy.jq t_static
+mutate "content the engine refused read" 's/elif \$d\[0\]\.content == null then \{unknown: \(\$w \+ "content " \+ \(\$d\[0\]\.content_undecidable \| why\)\)\}\n//' vendored-policy.jq t_static
+mutate "a repeated block read" 's/elif \(\$d \| length\) > 1 then \{unknown: \(\$w \+ "block repeated"\)\}\n//' vendored-policy.jq t_static
+mutate "a changed gate read" 's/if \$hd\.gate != \$bd\.gate then \{unknown: "gate changed"\}/if false then null/' vendored-policy.jq t_gate
+mutate "a gate of a new document read" 's/elif \$hd\.gate != null or \$hd\.instances != "always" then \{unknown: "gate without base"\}\n//' vendored-policy.jq t_gate
+mutate "a not wired document read" 's/if \$p == \[\] then \{unknown: "not wired"\}/if false then null/' vendored-policy.jq t_wiring
+mutate "any use taken as a policy" 's/^def policy_use: .*$/def policy_use: true;/m' vendored-policy.jq t_wiring
+mutate "uses the engine refused read" 's/elif \$hd\.uses == null then \{unknown: \("uses " \+ \(\$hd\.uses_undecidable \| why\)\)\}\n//' vendored-policy.jq t_wiring
+mutate "changed wiring read" 's/elif \$c\.uses == "differs" then \{unknown: "wiring changed"\}\n          elif \$c\.uses != "equal" then \{unknown: "wiring undecidable"\}\n//' vendored-policy.jq t_concat
+mutate "a failed precondition read" 's/elif \$r\.precondition != true or \$c == null or \$c\.presence != "both" then \{unknown: "precondition failed"\}/elif false then null/' vendored-policy.jq t_wiring
+mutate "a gated or merged use of a new document taken" 's/elif any\(\$p\[\]; \.via == \[\] and \.gates == \[\] and \.instances == "always"\) \| not then \{unknown: "wiring not comparable"\}\n//' vendored-policy.jq t_repro
+mutate "a sid read through a merge" 's/elif any\(\$hd\.content\.statements\[\]; \.sid != null\)/elif false/' vendored-policy.jq t_merge
+mutate "a directory the engine refused read" 's/if \$u != null then \{unknown: \(\$w \+ "directory " \+ \(\$u \| why\)\)\}\n        elif/if/' vendored-policy.jq t_dir
+mutate "a name with a newline taken" 's/\$rel =~ m\{\\A\[ -~\]\+\\z\}/\$rel =~ m{\\A.+\\z}s/' vendored-policy.sh t_dir
+mutate "two names alike in letter case taken" 's/my \$k = lc \$p;/my \$k = \$p;/' vendored-policy.sh t_dir
+mutate "a link taken as a file" 's/push \@out, "link\\t-\\t\$rel"/push \@out, "blob\\t\$obj\\t\$rel"/' vendored-policy.sh t_dir
+mutate "the engine run without its feature" 's/\[ "\$FACTS_STATE" = ok \] && facts_has cmd:iam-policy-docs \|\|/[ "\$FACTS_STATE" = ok ] ||/' vendored-policy.sh t_engine
+mutate "a report of another schema read" 's/and \.schema_version == 1\n/\n/' vendored-policy.sh t_engine
+mutate "the base tree not given to the engine" 's/    ba=\(--base "\$W\/base-tree"\)\n//' vendored-policy.sh t_equal
 mutate "the jq product cap dropped" 's/if cells > 4000 then error\("too large"\) else \. end/./' vendored-policy.jq t_large
-mutate "a changed gate read" 's/\|\| \{ line "unknown gate changed"; continue; \}/|| true/' vendored-policy.sh t_gate
-mutate "an override file read" 's/      override\.tf \| \*_override\.tf \| override\.tf\.json \| \*_override\.tf\.json\) echo "override file"; return 1 ;;\n//' vendored-policy.sh t_dir
-mutate "an OpenTofu file read" 's/      \*\.tofu \| \*\.tofu\.json\) echo "opentofu file"; return 1 ;;\n//' vendored-policy.sh t_dir
-mutate "the list read by line" "s/while IFS= read -r -d '' x; do/while IFS= read -r x; do/" vendored-policy.sh t_dir
-mutate "any file name taken" 's/\[\[ "\$name" =~ \^\[A-Za-z0-9_\.-\]\+\$ \]\] \|\| \{ echo "file name"; return 1; \}//' vendored-policy.sh t_dir
-mutate "a linked .tf read" 's/    \[ "\$mode" != 120000 \] \|\| \{ echo link; return 1; \}\n//' vendored-policy.sh t_dir
-mutate "a block comment outside a string allowed" 's/      \$before % 2 == 1 or unknown\("block comment"\);\n//' policy-hcl.pl t_dir
-mutate "an escaped interpolation allowed" 's/  \$t =~ \/\\\$\\\$\\\{\|%%\\\{\/ and unknown\("escaped interpolation"\);\n//' policy-hcl.pl t_dir
-mutate "unbalanced quotes allowed" 's/    \$c % 2 == 0 or unknown\("unbalanced quotes"\);\n//' policy-hcl.pl t_dir
-mutate "an empty list read" 's/      \@\$l or unknown\("empty list"\);\n//' policy-hcl.pl t_empty
 mutate "an empty upstream list read" 's/      elif any\(\$s\.action, \$s\.not_action, \$s\.resource, \$s\.not_resource; \. == \[\]\) then error\("empty list"\)\n//' vendored-policy.jq t_empty
-mutate "any mention of the reference wires" 's/defined \$v && \$v =~ \/\^data/defined \$v \&\& \$v =~ \/data/' policy-hcl.pl t_wiring
-mutate "the policy gate not compared" 's/"direct \$r->\{type\}\.\$r->\{label\} " \. \$gate->\(\$r\)/"direct \$r->{type}.\$r->{label}"/' policy-hcl.pl t_wiring
-mutate "a not wired document read" 's/\[ -s "\$d\/wire-head" \] \|\| \{ line "unknown not wired"; continue; \}//' vendored-policy.sh t_wiring
-mutate "the merging document not digested" 's/Digest::SHA::sha256_hex\("\$docs\{\$d\}\{digest\} \$val"\)/"x"/' policy-hcl.pl t_merge
-mutate "a sid read through a merge" 's/    \$docs\{\$name\}\{body\} !~ \/\(\^\|\\n\)\\s\*sid\\s\*=\/ or unknown\("sid in merged document"\);\n//' policy-hcl.pl t_merge
 mutate "a tag not the latest accepted" 's/\[ "\$t" = "\$lt" \] \|\| \{ line "unknown tag not newest"; continue; \}//' vendored-policy.sh t_floor
 mutate "the older tag accepted" 's/if \[ -n "\$bt" \] && older "\$t" "\$bt"; then/if false; then/' vendored-policy.sh t_floor
 mutate "two tags take the first" 's/\[ "\$\(wc -l <<< "\$t" \| tr -d . .\)" = 1 \] \|\|/t="\$(head -n 1 <<< "\$t")"; true ||/' vendored-policy.sh t_tags
 mutate "a profile line outside the grammar skipped" 's/  else finish\n  fi\ndone < "\$SRC"/  fi\ndone < "\$SRC"/' vendored-policy.sh t_profile
-mutate "an unchanged block compared" 's/ > \/dev\/null 2>&1 && continue/ > \/dev\/null 2>\&1 \&\& true/' vendored-policy.sh t_scope
+mutate "an unchanged block compared" 's/\.skip == true. "\$d\/entry\.json" > \/dev\/null && continue/.skip == true\x27 "\$d\/entry.json" > \/dev\/null \&\& true/' vendored-policy.sh t_scope
 mutate "the partial clone read" 's/if \[ "\$partial" = true \]; then line "unknown partial clone"; continue; fi//' vendored-policy.sh t_partial
 mutate "a comment item read as the body" 's/ kind=body\( \|\$\)\/\)/ kind=(body|conversation)( |\$)\/)/' review-run.sh t_handover
 mutate "the judgment variant given lines" 's/  \[ "\$\{MODULESTF_FACTS_VARIANT:-full\}" != judgment \] \|\| return 0\n//' review-run.sh t_handover

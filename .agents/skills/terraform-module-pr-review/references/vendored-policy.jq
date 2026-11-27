@@ -1,6 +1,6 @@
-# vendored-policy.jq: the normal form and the two diffs of vendored-policy.md. A statement, from
-# policy-hcl.pl or from an upstream IAM JSON document, expands to one tuple per action and
-# resource. A tuple is a JSON array, compared as a value, never as joined text:
+# vendored-policy.jq: the evidence of vendored-policy.md from the facts engine's iam-policy-docs
+# report, the normal form and the two diffs. A statement, from that report or from an upstream IAM
+# JSON document, expands to one tuple per action and resource. A tuple is a JSON array, compared as a value, never as joined text:
 #   [effect, ["action", a] or ["notaction", [list]], ["resource", r] or ["notresource", [list]],
 #    principal list or null, not_principal list or null, conditions or null]
 # A NotAction, NotResource or NotPrincipal list stays whole, since it is one exclusion set. Action
@@ -11,7 +11,11 @@ def arr: if type == "array" then . elif type == "string" then [.] else error("un
 def strs: arr | map(if type == "string" then . elif type == "boolean" or type == "number" then tostring
   else error("unsafe text") end);
 
-# One statement of an upstream document in policy-hcl.pl's shape.
+# The shape both sides take before tuples: {statements: [{effect, action, not_action, resource,
+# not_resource, principal, not_principal, condition}]}, each list sorted and null when absent, a
+# principal "<type>=<identifier>" and a condition {test, variable, values}.
+
+# One statement of an upstream document in that shape.
 def up_principal: if . == null then null elif . == "*" then ["*=*"]
   elif type == "object" then [to_entries[] | .key as $t | (.value | strs)[] | "\($t)=\(.)"] | sort
   else error("unsafe text") end;
@@ -32,6 +36,67 @@ def upstream:
   if type != "object" or ((keys - ["Version", "Id", "Statement"]) != []) or (.Statement == null)
   then error("upstream unreadable")
   else {statements: [.Statement | if type == "array" then .[] else . end | up_statement]} end;
+
+# A value of the report: plain text, or a template whose references are the profile's
+# substitutions ($s, an object of expression to value). Any other reference evaluates nothing.
+def facts_value($s): if type == "string" then .
+  elif type == "object" and (.template | type) == "array" then [.template[]
+    | if type == "string" then . elif type == "object" and (.ref | type) == "string" then (.ref as $k
+        | if $s | has($k) then $s[$k] else error("unevaluated expression") end) else error("unsafe text") end] | join("")
+  else error("unsafe text") end;
+def facts_list($s): if . == null then null else map(facts_value($s)) | sort end;
+def facts_principal($s): if . == null then null
+  else [.[] | .type as $t | .identifiers[] | "\($t)=\(facts_value($s))"] | sort end;
+def facts_doc($s): {statements: [.statements[] | {effect,
+  action: (.actions | facts_list($s)), not_action: (.not_actions | facts_list($s)),
+  resource: (.resources | facts_list($s)), not_resource: (.not_resources | facts_list($s)),
+  principal: (.principals | facts_principal($s)), not_principal: (.not_principals | facts_principal($s)),
+  condition: (.conditions | if . == null then null
+    else map({test, variable: (.variable | facts_value($s)), values: (.values | map(facts_value($s)) | sort)}) end)}]};
+
+# The policies that take a document whole as their policy (vendored-policy.md, step 3).
+def policy_use: .argument == "policy" and (.address | test("^aws_iam_(role_|user_|group_)?policy\\.[A-Za-z_][A-Za-z0-9_-]*$"));
+def why: "\(.code | gsub("_"; " "))";
+# vp_entry($dir; $file; $block; $s): one profile entry read from the report on input: {unknown:
+# <reason>}, {skip: true} for a block both sides read alike, or {lines, head, base}, base null with
+# no merge base and "absent" when the base has no such document.
+def vp_entry($dir; $file; $block; $s):
+  . as $r | "data.aws_iam_policy_document.\($block)" as $a
+  | def side($t; $w): ($t.directories | map(select(.dir == $dir))[0].undecidable) as $u
+      | [$t.documents[] | select(.dir == $dir and .address == $a)] as $d
+      | if $u != null then {unknown: ($w + "directory " + ($u | why))}
+        elif $d == [] then {absent: true}
+        elif ($d | length) > 1 then {unknown: ($w + "block repeated")}
+        elif $d[0].kind != "data_source" or $d[0].file != $file then {unknown: ($w + "block missing")}
+        elif $d[0].content == null then {unknown: ($w + "content " + ($d[0].content_undecidable | why))}
+        else {doc: $d[0]} end;
+  side($r.head; "") as $h
+  | (if $r.base == null then {none: true} else side($r.base; "base ") end) as $b
+  | def conv($w): try {doc: (.content | facts_doc($s))}
+      catch {unknown: ($w + (if type == "string" and test("^[a-z ]{1,40}$") then . else "unsafe text" end))};
+  if $h.unknown then $h elif $h.absent then {unknown: "block missing"}
+  elif $b.unknown then $b
+  else $h.doc as $hd | ($b.doc // null) as $bd
+  | ($hd | conv("")) as $hc | (if $bd != null then $bd | conv("base ") else {doc: null} end) as $bc
+  | if $hc.unknown then $hc elif $bc.unknown then $bc
+    elif $bd != null and $bd.content == $hd.content and $bd.gate == $hd.gate then {skip: true}
+    elif $hd.uses == null then {unknown: ("uses " + ($hd.uses_undecidable | why))}
+    else [$hd.uses[] | select(policy_use)] as $p
+    | if $p == [] then {unknown: "not wired"}
+      elif any($hd.content.statements[]; .sid != null) and any($p[].via[]; .role == "source" or .role == "override")
+        then {unknown: "sid in merged document"}
+      elif $bd != null then
+        ([$r.compare[] | select(.dir == $dir and .address == $a)][0]) as $c
+        | if $hd.gate != $bd.gate then {unknown: "gate changed"}
+          elif $r.precondition != true or $c == null or $c.presence != "both" then {unknown: "precondition failed"}
+          elif $c.uses == "differs" then {unknown: "wiring changed"}
+          elif $c.uses != "equal" then {unknown: "wiring undecidable"}
+          elif all($p[]; .instances == "none") then {unknown: "not wired"}
+          else null end
+      elif $hd.gate != null or $hd.instances != "always" then {unknown: "gate without base"}
+      elif any($p[]; .via == [] and .gates == [] and .instances == "always") | not then {unknown: "wiring not comparable"}
+      else null end
+    | . // {lines: $hd.lines, head: $hc.doc, base: (if $bd != null then $bc.doc elif $b.none then null else "absent" end)} end end;
 
 # Each atom a tuple can quote: plain text of at most 256 characters, an action of IAM's shape.
 def atom_ok: type == "string" and test("^[A-Za-z0-9:/*?._=+,@|;${}-]{1,256}$");

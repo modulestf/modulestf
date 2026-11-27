@@ -2,9 +2,9 @@
 # vendored-policy.sh: the host's comparison of a vendored upstream IAM policy with its source, as
 # vendored-policy.md sets out. For each policy document the module profile's vendored-policies.txt
 # lists for this repository and the change touches, it reads the document at the head and the
-# merge base from the clone's git objects, resolves the upstream release tag the change names to a
-# commit SHA, fetches the upstream file at that SHA, reads both statically and prints the two
-# diffs. Nothing fetched or read runs.
+# merge base from the facts engine's iam-policy-docs report on the module root's files, taken from
+# the clone's git objects; resolves the upstream release tag the change names to a commit SHA,
+# fetches the upstream file at that SHA and prints the two diffs. Nothing fetched or read runs.
 #
 #   vendored-policy.sh --clone <dir> --head <sha> [--base <sha>] --diff <files.json> [--prefix <p>]
 #       --repo <owner/name> --body <file> --profile-dir <dir> --out <dir>
@@ -37,7 +37,9 @@ seg='[A-Za-z0-9_][A-Za-z0-9._-]{0,63}'
 [ ! -e "$out/vendored.txt" ] && [ ! -e "$out/vp" ] || die "--out already holds the evidence"
 jq -e 'type == "array" and all(.[]; type == "object" and (.filename | type == "string"))' "$diff" > /dev/null 2>&1 ||
   die "--diff is not a GitHub files list"
-HERE="$(cd "$(dirname "$0")" && pwd -P)"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+# shellcheck source=facts-resolve.sh
+. "$HERE/facts-resolve.sh" || die "facts-resolve.sh cannot be read"
 W="$out/vp"; mkdir "$W" || die "no work directory"
 : > "$out/vendored.txt"
 finish() { rm -rf "$W"; cat "$out/vendored.txt"; exit 0; }
@@ -54,10 +56,11 @@ while IFS= read -r l || [ -n "$l" ]; do
   if [[ "$l" =~ $ENTRY_RE ]]; then
     [ "${BASH_REMATCH[1]}" != "$repo" ] || printf '%s %s %s %s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[4]}" \
       "${BASH_REMATCH[5]}" "${BASH_REMATCH[6]}" >> "$W/entries"
-  elif [[ "$l" =~ $SUBST_RE ]]; then printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}" >> "$W/subst"
+  elif [[ "$l" =~ $SUBST_RE ]]; then printf '%s\t%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}" >> "$W/subst"
   else finish
   fi
 done < "$SRC"
+jq -R -n '[inputs | split("\t") | {key: .[0], value: .[1]}] | from_entries' "$W/subst" > "$W/subst.json" || finish
 
 # The form of the reviewer's git-safety.md, in the clone: ls-tree and cat-file only.
 safe_git() {
@@ -128,39 +131,87 @@ latest() {
   r="$(limit gh api "repos/$1/releases/latest" 2> /dev/null | jq -r '.tag_name // empty' 2> /dev/null)"
   [[ "$r" =~ $TAG_RE ]] && printf '%s\n' "$r"
 }
-# wiring <commit> <dir> <block> <file>: the lines of policy-hcl.pl --wiring for the directory's .tf
-# files into the file; or prints why not. The whole directory is held to the reader's allowlist:
-# every entry name plain, read NUL-separated, no OpenTofu, JSON or override file, every .tf file a
-# regular file of at most 1 MiB, and at most 200 of them; --wiring holds each to the allowlist.
-wiring() {
-  local x mode type obj name n=0 r files=() wd lst
-  : > "$4"
-  wd="$(mktemp -d "$W/dir.XXXXXX")" && lst="$(mktemp "$W/list.XXXXXX")" || { echo "read failed"; return 1; }
-  local ps=(); [ -z "$2" ] || ps=("$2/")
-  safe_git ls-tree -z "$1" -- ${ps[@]+"${ps[@]}"} > "$lst" 2> /dev/null || { echo "read failed"; return 1; }
-  while IFS= read -r -d '' x; do
-    [[ "$x" =~ ^([0-7]{6})\ ([a-z]+)\ ([0-9a-f]{40,64})$'\t'(.+)$ ]] || { echo "read failed"; return 1; }
-    mode="${BASH_REMATCH[1]}" type="${BASH_REMATCH[2]}" obj="${BASH_REMATCH[3]}" name="${BASH_REMATCH[4]##*/}"
-    [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "file name"; return 1; }
-    case "$name" in
-      *.tofu | *.tofu.json) echo "opentofu file"; return 1 ;;
-      override.tf | *_override.tf | override.tf.json | *_override.tf.json) echo "override file"; return 1 ;;
-      *.tf.json) echo "json configuration"; return 1 ;;
-      *.tf) ;;
-      *) continue ;;
-    esac
-    [ "$mode" != 120000 ] || { echo link; return 1; }
-    [ "$type" = blob ] && [[ "$mode" =~ ^100(644|755)$ ]] || { echo "not a regular file"; return 1; }
-    n=$((n + 1)); [ "$n" -le 200 ] || { echo "too many files"; return 1; }
-    safe_git cat-file blob "$obj" 2> /dev/null | head -c 1048577 > "$wd/$name" || { echo "read failed"; return 1; }
-    [ "$(wc -c < "$wd/$name")" -le 1048576 ] || { echo "file over 1 mib"; return 1; }
-    files+=("$wd/$name")
-  done < "$lst"
-  [ "${#files[@]}" -gt 0 ] || { echo "read failed"; return 1; }
-  limit perl "$HERE/policy-hcl.pl" --wiring "$3" "${files[@]}" > "$4" 2> /dev/null || { echo "unreadable"; return 1; }
-  r="$(unk "$4")"; [ -z "$r" ] || { echo "$r"; return 1; }
+# TREE_PL: the entries of "ls-tree -r -l -z" on stdin, the module root prefix as its argument.
+# Prints "<kind> <object> <path>" per entry the engine reads, kind blob, link or module, or one
+# "refuse <reason>" line: a name that is not plain ASCII or holds a "." or ".." segment, two names
+# alike in letter case, a name that is also a directory, an entry that is no regular file, over
+# 4 MiB, over 4000 entries or 64 MiB in all (vendored-policy.md, step 2).
+# shellcheck disable=SC2016 # a perl program
+TREE_PL='
+my $pfx = shift; local $/ = "\0"; my (%low, @out, $n, $total);
+sub refuse { print "refuse $_[0]\n"; exit 0 }
+while (my $e = <STDIN>) {
+  chomp $e;
+  $e =~ /\A([0-7]{6}) ([a-z]+) ([0-9a-f]{40,64}) +([0-9-]+)\t(.+)\z/s or refuse("read failed");
+  my ($mode, $type, $obj, $size, $path) = ($1, $2, $3, $4, $5);
+  substr($path, 0, length $pfx) eq $pfx or refuse("read failed");
+  my $rel = substr($path, length $pfx);
+  my $leaf = $rel =~ s{.*/}{}r;
+  next unless $type eq "commit" || $leaf =~ /(\.tf|\.tf\.json|\.tofu|\.tofu\.json|\.tfvars|\.tfvars\.json)\z/ || $leaf eq ".terraform.lock.hcl";
+  length($rel) <= 1024 && $rel =~ m{\A[ -~]+\z} && "/$rel/" !~ m{/\.\.?/} && "/$rel/" !~ m{//} or refuse("file name");
+  my @seg = split m{/}, $rel; my $p = "";
+  for my $i (0 .. $#seg) {
+    $p .= ($i ? "/" : "") . $seg[$i];
+    my $k = lc $p; my $what = $i == $#seg ? "leaf" : "dir";
+    if (exists $low{$k}) { $low{$k} eq "$what $p" && $what eq "dir" or refuse("file name") }
+    else { $low{$k} = "$what $p" }
+  }
+  ++$n <= 4000 or refuse("too many files");
+  if ($type eq "commit") { push @out, "module\t-\t$rel"; next }
+  if ($mode eq "120000") { push @out, "link\t-\t$rel"; next }
+  $type eq "blob" && $mode =~ /\A100(644|755)\z/ && $size =~ /\A[0-9]+\z/ or refuse("not a regular file");
+  $size <= 4194304 or refuse("file over 4 mib");
+  ($total += $size) <= 67108864 or refuse("tree over 64 mib");
+  push @out, "blob\t$obj\t$rel";
 }
-unk() { sed -n 's/^unknown \([a-z0-9 ]*\)$/\1/p' "$1"; }
+print "$_\n" for @out;
+'
+# tree <commit> <dir>: the module root's files the engine reads at the commit, from the clone's
+# objects, into the directory; or prints why not. A link becomes a link to nowhere and a submodule an
+# empty directory, so the engine sees each for what it is and refuses it.
+tree() {
+  local kind obj rel lst
+  lst="$(mktemp "$W/list.XXXXXX")" && mkdir "$2" || { echo "read failed"; return 1; }
+  local p=""; [ -z "$prefix" ] || p="$prefix/"
+  local ps=(); [ -z "$p" ] || ps=("$p")
+  safe_git ls-tree -r -l -z "$1" -- ${ps[@]+"${ps[@]}"} 2> /dev/null | perl -e "$TREE_PL" "$p" > "$lst" || { echo "read failed"; return 1; }
+  [ "${PIPESTATUS[0]}" = 0 ] || { echo "read failed"; return 1; }
+  if grep -q '^refuse ' "$lst"; then sed -n 's/^refuse //p' "$lst" | head -n 1; return 1; fi
+  while IFS=$'\t' read -r kind obj rel; do
+    mkdir -p "$2/$(dirname -- "$rel")" || { echo "read failed"; return 1; }
+    case "$kind" in
+      module) mkdir "$2/$rel" ;;
+      link) ln -s /nonexistent "$2/$rel" ;;
+      *) safe_git cat-file blob "$obj" > "$2/$rel" 2> /dev/null ;;
+    esac || { echo "read failed"; return 1; }
+  done < "$lst"
+}
+
+# The facts engine's report (vendored-policy.md, step 2), once for every entry: mtf-facts as
+# facts-resolve.sh finds it, outside the clone and the run directory, whose version report lists
+# cmd:iam-policy-docs; run on the module root's files at the head, and at the merge base with
+# --base, under the time limit and a 16 MiB output cap. The whole report must be one document of
+# schema version 1 before any of it is read. Sets FREASON when there is no report.
+FREASON=""
+facts() {
+  [ ! -s "$W/facts.json" ] && [ -z "$FREASON" ] || return 0
+  facts_resolve "$clone" "$(dirname "$out")"
+  [ "$FACTS_STATE" = ok ] && facts_has cmd:iam-policy-docs || { FREASON="no facts engine"; return 0; }
+  local why ba=()
+  why="$(tree "$head" "$W/head-tree")" || { FREASON="head $why"; return 0; }
+  if [ -n "$base" ]; then
+    why="$(tree "$base" "$W/base-tree")" || { FREASON="base $why"; return 0; }
+    ba=(--base "$W/base-tree")
+  fi
+  (cd "$W" && FACTS_RUN_NOERR=1 facts_run 30 16777216 "$FACTS_BIN" iam-policy-docs "$W/head-tree" ${ba[@]+"${ba[@]}"} --timeout 25s) \
+    > "$W/facts.out" 2> /dev/null || { FREASON="facts engine failed"; return 0; }
+  jq -e -s --arg hb "${base:+1}" 'length == 1 and (.[0] | type == "object" and .schema_version == 1
+      and (.head | type == "object" and (.documents | type == "array") and (.directories | type == "array"))
+      and (if $hb == "1" then (.base | type == "object" and (.documents | type == "array") and (.directories | type == "array"))
+             and (.compare | type == "array") and (.precondition | type == "boolean")
+           else .base == null end))' "$W/facts.out" > /dev/null 2>&1 || { FREASON="facts report refused"; return 0; }
+  mv -- "$W/facts.out" "$W/facts.json"
+}
 
 n=0
 while read -r path block up upath; do
@@ -182,40 +233,20 @@ while read -r path block up upath; do
     elif [ "$why" != absent ]; then line "unknown base $why"; continue
     fi
   fi
-  # The static reads of head and base, each with the time limit. A block the change leaves as it
-  # was, statements and gate alike, gets no line.
-  limit perl "$HERE/policy-hcl.pl" "$d/head.tf" "$block" "$W/subst" > "$d/head.json" 2> /dev/null || { line "unknown head unreadable"; continue; }
-  if [ -n "$basefile" ]; then
-    limit perl "$HERE/policy-hcl.pl" "$basefile" "$block" "$W/subst" > "$d/base.json" 2> /dev/null || { line "unknown base unreadable"; continue; }
-    limit jq -e -s '(.[0] | del(.lines)) == (.[1] | del(.lines))' "$d/head.json" "$d/base.json" > /dev/null 2>&1 && continue
-  fi
-  r="$(unk "$d/head.json")"
+  # The engine's reading of the block and its wiring (vendored-policy.md, steps 2 and 3). A block
+  # both sides read alike, statements and gate, gets no line.
+  facts
+  [ -z "$FREASON" ] || { line "unknown $FREASON"; continue; }
+  mdir="$(dirname -- "$mpath")"
+  limit jq -n -c -L "$HERE" --slurpfile r "$W/facts.json" --slurpfile s "$W/subst.json" \
+    --arg dir "$mdir" --arg file "${mpath##*/}" --arg block "$block" \
+    'include "vendored-policy"; $r[0] | vp_entry($dir; $file; $block; $s[0])' > "$d/entry.json" 2> /dev/null ||
+    { line "unknown facts report refused"; continue; }
+  jq -e '.skip == true' "$d/entry.json" > /dev/null && continue
+  r="$(jq -r '.unknown // empty' "$d/entry.json")"
   [ -z "$r" ] || { line "unknown $r"; continue; }
-  bstate=null
-  if [ -n "$basefile" ]; then
-    r="$(unk "$d/base.json")"
-    if [ "$r" = "block missing" ]; then bstate=absent
-    elif [ -n "$r" ]; then line "unknown base $r"; continue
-    else bstate=read
-    fi
-  elif [ -n "$base" ]; then bstate=absent
-  fi
-  # The gate: a count or for_each on the document must read the same at the base.
-  hg="$(jq -r '.gate // ""' "$d/head.json")"
-  if [ "$bstate" = read ]; then
-    [ "$hg" = "$(jq -r '.gate // ""' "$d/base.json")" ] || { line "unknown gate changed"; continue; }
-  elif [ -n "$hg" ]; then line "unknown gate without base"; continue
-  fi
-  # The wiring: the directory passes the allowlist, a policy reads the document as the whole value of
-  # its "policy" argument, directly or through a merging document, and the same at the base, gates
-  # included.
-  dir="$(dirname "$path")"; [ "$dir" != . ] || dir=""
-  why="$(wiring "$head" "$dir" "$block" "$d/wire-head")" || { line "unknown $why"; continue; }
-  [ -s "$d/wire-head" ] || { line "unknown not wired"; continue; }
-  if [ "$bstate" = read ]; then
-    why="$(wiring "$base" "$dir" "$block" "$d/wire-base")" || { line "unknown base $why"; continue; }
-    cmp -s "$d/wire-head" "$d/wire-base" || { line "unknown wiring changed"; continue; }
-  fi
+  bstate="$(jq -r '.base | if . == null then "null" elif . == "absent" then "absent" else "read" end' "$d/entry.json")"
+  jq '.head' "$d/entry.json" > "$d/head.json" && jq '.base' "$d/entry.json" > "$d/base.json" || { line "unknown facts report refused"; continue; }
   # The tag: the one release tag the pull request body and the head file name for this upstream.
   # It is evidence only when it is newer than the newest tag the base file names, or, failing that,
   # when it is the upstream's latest release now. A tag older than the base's never is.
@@ -236,7 +267,6 @@ while read -r path block up upath; do
     jq -er --arg p "$upath" 'select(.type == "file" and .path == $p and .encoding == "base64" and .size <= 1048576) | .content' \
       "$d/up.raw" 2> /dev/null | tr -d '\n' | base64 -d > "$d/up.json" 2> /dev/null && [ -s "$d/up.json" ] ||
     { line "unknown fetch failed"; continue; }
-  [ "$bstate" = read ] || echo null > "$d/base.json"
   if ! limit jq -r -n -L "$HERE" --slurpfile h "$d/head.json" --slurpfile b "$d/base.json" --slurpfile u "$d/up.json" --arg bs "$bstate" '
       include "vendored-policy";
       try ({head: ($h[0] | tuples), up: ($u[0] | upstream | tuples),
@@ -247,7 +277,7 @@ while read -r path block up upath; do
   fi
   if grep -q '^unknown ' "$d/lines"; then line "$(grep -m1 '^unknown ' "$d/lines")"; continue; fi
   line "source $up $t $sha $upath"
-  line "lines $(jq -r '.lines | map(tostring) | join(" ")' "$d/head.json")"
+  line "lines $(jq -r '.lines | map(tostring) | join(" ")' "$d/entry.json")"
   while IFS= read -r x; do line "$x"; done < "$d/lines"
 done < "$W/entries"
 finish

@@ -3,10 +3,9 @@
 # vendored-policy.sh reads this file; the grammar is in its vendored-policy.md, Profile Entries.
 #
 # entry <module repository> <file> <data block name> <upstream repository> <upstream file>
-# Today only the iam load balancer controller document gives evidence: the iam ebs_csi document
-# has a dynamic condition and the two eks-pod-identity documents merge other documents, and the
-# reader answers unknown for both shapes. The entries stay so a change to them is still compared
-# once the reader handles the shape.
+# The iam ebs_csi document has a dynamic condition and the two eks-pod-identity documents merge
+# other documents; the facts engine reads neither shape as literal content, so both answer unknown.
+# The entries stay so a change to them is still compared once the engine reads the shape.
 entry terraform-aws-modules/terraform-aws-iam modules/iam-role-for-service-accounts/policies.tf load_balancer_controller kubernetes-sigs/aws-load-balancer-controller docs/install/iam_policy.json
 entry terraform-aws-modules/terraform-aws-iam modules/iam-role-for-service-accounts/policies.tf ebs_csi kubernetes-sigs/aws-ebs-csi-driver docs/example-iam-policy.json
 entry terraform-aws-modules/terraform-aws-eks-pod-identity aws_lb_controller.tf lb_controller kubernetes-sigs/aws-load-balancer-controller docs/install/iam_policy.json

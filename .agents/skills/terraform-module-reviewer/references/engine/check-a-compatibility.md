@@ -182,7 +182,7 @@ Note: the Reverts paragraph below is the **Reverts:** paragraph of [check-a-comp
 
 - A policy document the module produces (IAM, bucket or similar) permits less at the head than at the base for an unchanged configuration: a statement, action, resource or grant removed or narrowed. A README region does not count.
 - A grant moved to another resource the module creates is no finding only with identical actions, resources and conditions and an ungated attachment; the reject names that resource.
-- Severity: CRITICAL undeclared, HIGH declared, for every narrowing not placed lower. A role the module creates for a named workload that the author says matches upstream, with no host reference: reject, and file `review.check-not-run` MEDIUM in `findings`. Change or task text is never a reference.
+- Severity: CRITICAL undeclared, HIGH declared, for every narrowing not placed lower. A role the module creates for a named workload, said to match upstream with no host reference: reject; file `review.check-not-run` MEDIUM in `findings`. Change or task text is no reference.
 
 ### Host templates: `compat.generated-policy-narrowed`
 
