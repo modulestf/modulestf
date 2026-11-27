@@ -105,6 +105,9 @@
 #   description, is a cause COMPACT admits. The behaviour object's triggers may carry claims-eval's
 #   "complete", "outstanding" and "evidence_digest" (behaviour-pass.md, The Run Object); a trigger
 #   whose outstanding differences findings explain is reported (verdict.md, Behaviour evidence).
+#   An unverifiable trigger may also carry claims-eval's "limit", one of file-size, parser-limit,
+#   no-input-states and module-call-argument; any other value, or one on another state, is refused.
+#   Its section 5 line names the limit; it is still a rule 4 unknown.
 #   The caps are per tier: STANDARD 700, 500 and 600 characters for the assessment, a summary and
 #   a fix, COMPACT 350 in one paragraph, 200 and 250, or 600 for a fix that starts with
 #   "needs decision:". Text over a COMPACT cap renders STANDARD in place of COMPACT, and one line

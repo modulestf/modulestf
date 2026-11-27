@@ -113,6 +113,7 @@ def behaviour_categories: ["wrapper-change", "default-change", "count-for_each-c
   "type-validation-change", "dynamic-block-change", "locals-outputs-change", "moved-or-renamed-address",
   "provider-version-floor-change", "unknown-propagation-candidate", "literal-argument-change",
   "resource-added-or-removed", "lifecycle-change", "unclassified-change", "non-hcl-dependency"];
+def behaviour_limits: ["file-size", "parser-limit", "no-input-states", "module-call-argument"];
 def valid_behaviour:
   type == "object" and keys == ["capped", "claims", "reason", "status", "triggers"]
   and (.capped | nat)
@@ -123,7 +124,9 @@ def valid_behaviour:
         and ([.[] | select(type == "object" and (((.category | IN("provider-version-floor-change", "moved-or-renamed-address"))
                and (has("also_categories") | not)) | not))] | length) <= 40
         and all(.[]; type == "object"
-        and (keys - ["also_categories", "complete", "evidence_digest", "identical", "outstanding", "unexercised"]) == ["category", "file", "id", "line", "state"]
+        and (keys - ["also_categories", "complete", "evidence_digest", "identical", "limit", "outstanding", "unexercised"]) == ["category", "file", "id", "line", "state"]
+        # Contract 8: the review tool limit that alone keeps an unverifiable trigger unverified.
+        and ((has("limit") | not) or ((.limit | IN(behaviour_limits[])) and .state == "unverifiable"))
         and (.id | type == "string" and test("^T-[0-9]{3}$"))
         and (.file | plain_path) and (.line == null or (.line | nat and . > 0))
         and (.category | IN(behaviour_categories[]))
@@ -685,6 +688,11 @@ def texts: {
   "behaviour-not-run": "- Behaviour check: {reason}, so no change was classified or verified.",
   "behaviour-trigger": "- Behaviour change at {location} ({category}): not verified.",
   "behaviour-trigger-groups": "- {count} behaviour changes not verified: {categories}.",
+  "behaviour-trigger-limit": "- Behaviour change at {location} ({category}): not verified, a review tool limit: {limit}.",
+  "limit-file-size": "a file over the size limit the review reads",
+  "limit-parser-limit": "a file over the limits of the HCL parser",
+  "limit-no-input-states": "a reference the offline sweep has no states for",
+  "limit-module-call-argument": "a module call argument, which no plan shows",
   "behaviour-trigger-invalid": "- Behaviour change at {location} ({category}): not verified (the head does not validate in any example).",
   "behaviour-trigger-groups-invalid": "- {count} behaviour changes not verified (the head does not validate in any example): {categories}.",
   "behaviour-capped-one": "- 1 more behaviour change over the classifier cap: not verified.",
@@ -1133,7 +1141,9 @@ def gap_lines($h; $run; $b; $p; $cov):
   | $b | if . == null then []
      elif .status == "not-run" then [tx("behaviour-not-run"; {reason})]
      else [ ([.triggers[] | select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok or same_ok) | not))]
-             | if length <= 5 then .[] | tx("behaviour-trigger" + $why; trigger_at($p))
+             | if length <= 5 then .[] | if $why == "" and .limit != null
+                 then tx("behaviour-trigger-limit"; trigger_at($p) + {limit: tx("limit-" + .limit)})
+                 else tx("behaviour-trigger" + $why; trigger_at($p)) end
                # More than five: one line counting them per category; the locations are noise.
                else tx("behaviour-trigger-groups" + $why; {count: length, categories: (group_by(.category)
                       | sort_by(-length, .[0].category) | map("\(length) \(.[0].category)") | join(", "))}) end),
