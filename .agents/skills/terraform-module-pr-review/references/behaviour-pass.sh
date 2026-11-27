@@ -131,6 +131,8 @@ def valid_eval($b; $c):
         # Contract 1: complete, the sorted unexplained difference ids of this trigger, at most 256,
         # and their digest, present only with a difference.
         and ((has("complete") | not) or (.complete | type == "boolean"))
+        # Contract 8: the review tool limit that alone keeps the trigger unverified, a token of a closed list.
+        and ((has("limit") | not) or ((.limit | IN("file-size", "parser-limit", "no-input-states", "module-call-argument")) and .state == "unverifiable"))
         and (.id as $id | (has("outstanding") | not) or (.outstanding | type == "array" and length <= 256
               and all(.[]; type == "string" and test("^T-[0-9]{3}\\|L[1-4]\\|[A-Za-z0-9_.:-]{1,64}\\|[a-z_]{1,32}$")
                            and startswith($id + "|")) and . == unique))
@@ -596,7 +598,7 @@ evaluate() {
        triggers: [$b.triggers[] as $t | first($e.triggers[] | select(.id == $t.id)) as $et
                   | {id: $t.id, file: $t.file, line: $t.line, category: $t.category, state: $et.state}
                     + ($t | with_entries(select(.key == "also_categories")))
-                    + ($et | with_entries(select(.key | IN("complete", "outstanding", "evidence_digest"))))
+                    + ($et | with_entries(select(.key | IN("complete", "outstanding", "evidence_digest", "limit"))))
                     + (if unex($t; $et) then {unexercised: true} else {} end)
                     + (identical($t; $et) as $i | if $i != [] and (unex($t; $et) | not) then {identical: $i} else {} end)],
        claims: [$c.claims[] | {claim_id, state: (kstate(.claim_id) | if . == "discarded" then "unverifiable" else . end)}],
@@ -606,6 +608,7 @@ evaluate() {
           | "trigger \($t.id) `\($t.file)`\(if $t.line == null then "" else " line \($t.line)" end) \($t.category): \($et.state)"
             + (if $et.wrapper != null then ", wrapper \($et.wrapper)" else "" end)
             + (if $et.complete == true then ", complete" else "" end)
+            + (if $et.limit != null then ", limit \($et.limit)" else "" end)
             + (if unex($t; $et) then ", unexercised" else "" end)
             + (identical($t; $et) as $i | if $i != [] and (unex($t; $et) | not) then ", identical" else "" end)
             + (if ($et.outstanding // []) != [] and $et.evidence_digest != null
