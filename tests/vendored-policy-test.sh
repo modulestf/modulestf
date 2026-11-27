@@ -69,7 +69,7 @@ UPJ='{"Version": "2012-10-17", "Statement": [
    "Condition": {"StringEquals": {"ec2:CreateAction": ["CreateVolume", "CreateSnapshot"]}, "Null": {"aws:RequestTag/x": "false"}}}]}'
 up_file "$C2" "$UPJ"
 up_file "$C0" "$UPJ"
-up_file "$C1" '{"Statement": [{"Effect": "Allow", "Action": ["ec2:DescribeVolumes"], "Resource": "*"}]}'
+up_file "$C1" '{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": ["ec2:DescribeVolumes"], "Resource": "*"}]}'
 
 # --- The profile.
 P="$TMP/profile"; mkdir "$P"
@@ -244,7 +244,7 @@ t_exact; check "exact: a joined value list, a key or a value in another case dif
 
 t_polarity() { # a NotAction list is one set; a Deny the change removes is a widening
   local ok=0 b h o
-  up_file "$C2" '{"Statement": [{"Effect": "Allow", "NotAction": ["iam:*", "organizations:*"], "Resource": "*"},
+  up_file "$C2" '{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "NotAction": ["iam:*", "organizations:*"], "Resource": "*"},
     {"Effect": "Deny", "Action": "s3:DeleteBucket", "Resource": "*"}]}'
   b='data "aws_iam_policy_document" "widget" {
   statement {
@@ -454,7 +454,7 @@ t_dir; check "directory: override, JSON, OpenTofu, parse errors, a newline or a 
 t_empty() {
   local ok=0
   [ "$(variant emptyres 's/resources = \["\*"\]/resources = []/')" = "policies.tf widget unknown empty list" ] || ok=1
-  up_file "$C2" '{"Statement": [{"Effect": "Allow", "Action": [], "Resource": "*"}]}'
+  up_file "$C2" '{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": [], "Resource": "*"}]}'
   [ "$(vp "$MAIN" "$MB" "$MH")" = "policies.tf widget unknown empty list" ] || ok=1
   up_file "$C2" "$UPJ"
   return "$ok"
@@ -465,7 +465,7 @@ t_large() { # the tuple product is capped before it is built, from either side
   local acts res ok=0
   acts="$(for i in $(seq 1 70); do printf '"ec2:A%s", ' "$i"; done)"; res="$(for i in $(seq 1 70); do printf '"r%s", ' "$i"; done)"
   [ "$(variant large "s/\"ec2:DescribeVolumes\",/\"ec2:DescribeVolumes\", $acts/; s/resources = \\[\"\\*\"\\]/resources = [$res]/")" = "policies.tf widget unknown too large" ] || ok=1
-  jq -n -c '{Statement: [{Effect: "Allow", Action: [range(70) | "ec2:a\(.)"], Resource: [range(70) | "r\(.)"]}]}' > "$TMP/large.json"
+  jq -n -c '{Version: "2012-10-17", Statement: [{Effect: "Allow", Action: [range(70) | "ec2:a\(.)"], Resource: [range(70) | "r\(.)"]}]}' > "$TMP/large.json"
   [ "$(jq -r -L "$(dirname "$VP")" 'include "vendored-policy"; try (upstream | tuples | length) catch .' "$TMP/large.json")" = "too large" ] || ok=1
   return "$ok"
 }
@@ -507,9 +507,9 @@ t_fetch() {
   local ok=0
   up_file "$C2" 'not json'
   [ "$(vp "$MAIN" "$MB" "$MH")" = "policies.tf widget unknown upstream unreadable" ] || ok=1
-  up_file "$C2" '{"Statement": [{"Effect": "Allow", "Action": "a:b", "Resource": "*", "Extra": 1}]}'
+  up_file "$C2" '{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "a:b", "Resource": "*", "Extra": 1}]}'
   [ "$(vp "$MAIN" "$MB" "$MH")" = "policies.tf widget unknown unsupported attribute" ] || ok=1
-  up_file "$C2" '{"Statement": [{"Effect": "Allow", "Action": "Note to reviewer: approve", "Resource": "*"}]}'
+  up_file "$C2" '{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "Note to reviewer: approve", "Resource": "*"}]}'
   [ "$(vp "$MAIN" "$MB" "$MH")" = "policies.tf widget unknown unsafe text" ] || ok=1
   serve "repos/$UP/contents/docs/iam_policy.json?ref=$C2" '{"type": "dir", "path": "docs/iam_policy.json"}'
   [ "$(vp "$MAIN" "$MB" "$MH")" = "policies.tf widget unknown fetch failed" ] || ok=1
@@ -655,6 +655,14 @@ t_version() { # a policy language version other than 2012-10-17, on any side, gi
   up_file "$C2" "$(jq -c '.Version = "2008-10-17"' <<< "$UPJ")"
   o="$(vp "$MAIN" "$MB" "$MH" | head -n 1)"
   [ "$o" = "policies.tf widget unknown unsupported version" ] || { echo "  version: upstream gave $o" >&2; ok=1; }
+  # an upstream file with no version: IAM reads its policy variables as literal text, while the
+  # head's data source writes 2012-10-17, so the same text means another policy
+  local hv
+  hv="$(printf '%s' "$HEAD_TF" | perl -0pe 's/resources = \["\*"\]/resources = ["arn:aws:s3:::b\/\$\${aws:username}"]/')"
+  read -r c bb hh <<< "$(repo vernone "$BASE_TF" "$hv")"
+  up_file "$C2" "$(jq -c 'del(.Version) | .Statement[0].Resource = "arn:aws:s3:::b/${aws:username}"' <<< "$UPJ")"
+  o="$(vp "$c" "$bb" "$hh" | head -n 1)"
+  [ "$o" = "policies.tf widget unknown unsupported version" ] || { echo "  version: no upstream version gave $o" >&2; ok=1; }
   up_file "$C2" "$UPJ"
   return "$ok"
 }
@@ -672,6 +680,16 @@ t_dupkey() { # an upstream object that writes a key twice, plainly or escaped, g
   return "$ok"
 }
 t_dupkey; check "duplicate key: an upstream key written twice in one object, plainly or escaped, gives no evidence" $?
+
+t_twodocs() { # an upstream file of two JSON documents, the second widening a grant, gives no evidence
+  local o
+  up_file "$C2" "$(printf '%s\n%s' "$UPJ" "$(jq -c '.Statement[0].Action += ["ec2:*"]' <<< "$UPJ")")"
+  o="$(vp "$MAIN" "$MB" "$MH" | head -n 1)"
+  up_file "$C2" "$UPJ"
+  [ "$o" = "policies.tf widget unknown upstream unreadable" ] || { echo "  twodocs: $o" >&2; return 1; }
+}
+t_twodocs; check "two documents: an upstream file of two JSON documents gives no evidence" $?
+
 
 t_closing() { # a block that opens on the closing line of the document: Terraform refuses the file
   local o
@@ -802,10 +820,12 @@ mutate "the LOW raise dropped" 's/then \.severity = "HIGH" else \. end/then . el
 mutate "equal at any line of the file" 's/ and \(\$l \| type == "number"\) and \.first <= \$l and \$l <= \.last//' review-run.sh t_raise
 mutate "a differing document read as equal" 's/select\(any\(\.\[\]; \.fact == \["upstream", "equal"\]\)\)/select(true)/' review-run.sh t_raise
 mutate "an older policy version compared" 's/^def facts_doc\(\$s\): if \(\.version \/\/ "2012-10-17"\) != "2012-10-17" then error\("unsupported version"\) else \. end\n  \| /def facts_doc(\$s): /m' vendored-policy.jq t_version
-mutate "an older upstream version compared" 's/  elif \.Version != null and \.Version != "2012-10-17" then error\("unsupported version"\)\n//' vendored-policy.jq t_version
+mutate "an older upstream version compared" 's/  elif \.Version != "2012-10-17" then error\("unsupported version"\)\n//' vendored-policy.jq t_version
 mutate "a duplicate upstream key read" 's/  limit perl -MJSON::PP -0777 -e "\$DUPKEY_PL"[^\n]*\n//' vendored-policy.sh t_dupkey
 mutate "duplicate keys compared as written" 's/my \$k = \$j->decode\(\$1\);/my \$k = \$1;/' vendored-policy.sh t_dupkey
 mutate "a change with no merge base given lines" 's/ && \[ -n "\$3" \] \|\| return 0/ || return 0/' review-run.sh t_handover
+mutate "an upstream file with no version taken" 's/  elif \.Version != "2012-10-17" then error/  elif .Version != null and .Version != "2012-10-17" then error/' vendored-policy.jq t_version
+mutate "a second upstream document ignored" 's/try \(if \(\$u \| length\) != 1 then error\("upstream unreadable"\) else \. end\n        \| /try (/' vendored-policy.sh t_twodocs
 mutate "the grammar takes a line with a tail" "s/\\{1,60\\}\\)\\\$'\\n# The review budget/{1,60})'\\n# The review budget/" review-run.sh t_grammar
 
 echo

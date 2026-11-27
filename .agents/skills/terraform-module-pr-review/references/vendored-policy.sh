@@ -283,7 +283,8 @@ while read -r path block up upath; do
   limit perl -MJSON::PP -0777 -e "$DUPKEY_PL" "$d/up.json" 2> /dev/null || { line "unknown upstream duplicate key"; continue; }
   if ! limit jq -r -n -L "$HERE" --slurpfile h "$d/head.json" --slurpfile b "$d/base.json" --slurpfile u "$d/up.json" --arg bs "$bstate" '
       include "vendored-policy";
-      try ({head: ($h[0] | tuples), up: ($u[0] | upstream | tuples),
+      try (if ($u | length) != 1 then error("upstream unreadable") else . end
+        | {head: ($h[0] | tuples), up: ($u[0] | upstream | tuples),
             base: (if $bs == "read" then ($b[0] | tuples) elif $bs == "absent" then "absent" else null end)}
         | diff_lines) catch ("unknown " + (if type == "string" and test("^[a-z ]{1,40}$") then . else "upstream unreadable" end))' \
       > "$d/lines" 2> /dev/null; then

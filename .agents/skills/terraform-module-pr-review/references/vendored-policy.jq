@@ -35,7 +35,7 @@ def up_statement:
 def upstream:
   if type != "object" or ((keys - ["Version", "Id", "Statement"]) != []) or (.Statement == null)
   then error("upstream unreadable")
-  elif .Version != null and .Version != "2012-10-17" then error("unsupported version")
+  elif .Version != "2012-10-17" then error("unsupported version")
   else {statements: [.Statement | if type == "array" then .[] else . end | up_statement]} end;
 
 # A value of the report: plain text, or a template whose references are the profile's
