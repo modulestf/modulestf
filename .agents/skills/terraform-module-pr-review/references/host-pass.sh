@@ -1027,10 +1027,11 @@ cmd_record() {
 }
 
 cmd_accept() {
-  local prior="" findings="" result="" rules=""
+  local prior="" findings="" result="" rules="" run=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --prior) prior="${2-}"; shift 2 || die "--prior needs a value" ;;
+      --run) run="${2-}"; shift 2 || die "--run needs a value"; [ -n "$run" ] || die "--run needs a value" ;;
       --findings) findings="${2-}"; shift 2 || die "--findings needs a value" ;;
       --result) result="${2-}"; shift 2 || die "--result needs a value" ;;
       --rules) rules="${2-}"; shift 2 || die "--rules needs a value" ;;
@@ -1046,12 +1047,18 @@ cmd_accept() {
   head="$(jq -r '.head_sha' "$result" 2> /dev/null)"
   # A subshell: check_prior defines its own reject, which returns where this one exits.
   ( check_prior "$prior" "$head" ) > /dev/null || reject "the prior directory did not pass its check"
-  local verdict reg
+  local verdict reg nr=false
   verdict="$(jq -r '.verdict' "$result")"
+  # The render's run file, when given: a plan or ladder step recorded as not run (host-pass.md).
+  if [ -n "$run" ]; then
+    [ -f "$run" ] && [ ! -L "$run" ] && [ "$(wc -c < "$run")" -le "$CAP" ] || reject "the run file is not a regular file within its cap"
+    nr="$(IJ 'include "incremental"; if type == "object" then step_not_run else error("no object") end' "$run" 2> /dev/null)" &&
+      case "$nr" in true | false) ;; *) false ;; esac || reject "the run file is not a JSON object"
+  fi
   # The registry as render-comment.sh reads it, from the same rule-facts.md (verdict.md).
   reg="$(jq -c -R -s -L "$HERE" 'include "render-comment"; registry_ids | select(length > 0)' "$rules" 2> /dev/null)" &&
     [ -n "$reg" ] || reject "the rule facts file holds no rule"
-  IJ -e --arg v "$verdict" --argjson reg "$reg" 'include "incremental"; host_verdict($v; $reg) == $v' "$findings" > /dev/null 2>&1 ||
+  IJ -e --arg v "$verdict" --argjson reg "$reg" --argjson nr "$nr" 'include "incremental"; host_verdict_run($v; $reg; $nr) == $v' "$findings" > /dev/null 2>&1 ||
     reject "the verdict does not follow from the findings"
   if [ "$(jq -r '.mode' "$prior/meta.json")" = full ]; then echo "findings accepted: full"; return 0; fi
   local carry

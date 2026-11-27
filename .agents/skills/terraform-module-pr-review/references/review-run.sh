@@ -15,11 +15,15 @@
 #   review-run.sh verify <run> [--outside]
 #                                        the default pass; --outside re-runs, outside the sandbox
 #                                        by the user's authorization, the not-run-environment ones
-#   review-run.sh plan <run>            the plan pass (deep, focused, with a profile), then the
-#                                        plan coverage at every depth
+#   review-run.sh plan <run> [--not-run <token>]
+#                                        the plan pass (deep, focused, with a profile), then the
+#                                        plan coverage at every depth; --not-run records the pass
+#                                        as not run for an environment reason (NOT_RUN_TOKENS)
 #   review-run.sh skip-coverage <run>   skip-coverage.sh after a pass with gate skips, recorded
 #                                        exceptions or design skips
-#   review-run.sh ladder <run>          ladder-pass.sh run (not at light), then behaviour-pass.sh eval
+#   review-run.sh ladder <run> [--not-run <token>]
+#                                        ladder-pass.sh run (not at light), then behaviour-pass.sh eval;
+#                                        --not-run records the whole step as not run, eval included
 #   review-run.sh tests <run>           the test pass (test-pass.md) in the runner, with a
 #                                        non-hcl-dependency trigger
 #   review-run.sh evidence <run>        the commands above the depth needs, side by side at deep
@@ -74,6 +78,10 @@ REVIEW_BUDGET=262144
 # A family needs this many submodules with equal copies; generator sources rank first up to this many bytes.
 FAMILY_MIN=3
 GENERATOR_CAP=65536
+
+# The environment reasons a plan or ladder step may be recorded as not run for (review-run.md,
+# Steps Not Run); render-comment.jq holds the same list as not_run_tokens.
+NOT_RUN_TOKENS="disk memory network sandbox terraform time"
 
 die() { echo "review-run.sh: $1" >&2; exit 2; }
 fail() { echo "review-run.sh: $1"; exit 1; }
@@ -845,6 +853,13 @@ cmd_verify() {
   fi
 }
 
+not_run_arg() { # the step's arguments: sets NOT_RUN to the token of --not-run, or empty
+  NOT_RUN=""
+  [ $# -gt 0 ] || return 0
+  [ "$1" = --not-run ] && [ $# = 2 ] || die "usage: review-run.sh $CMD <run> [--not-run <token>]"
+  case " $NOT_RUN_TOKENS " in *" $2 "*) NOT_RUN="$2" ;; *) die "--not-run takes one of: $NOT_RUN_TOKENS" ;; esac
+}
+
 plan_dirs() { # the examples to plan, repository-relative, in selection order
   if [ "$(depth)" = focused ]; then
     # An example outside the module root, which the depth does not list, stays unless it is out of scope.
@@ -855,11 +870,15 @@ plan_dirs() { # the examples to plan, repository-relative, in selection order
 
 cmd_plan() {
   need_full plan
+  not_run_arg "$@"
   [ ! -e "$RUN/coverage.json" ] || fail "plan already ran in this run"
   local profile role mode src=(--no-plan) d dirs=() base=() rc=0 missed="" pdd=()
   profile="$(arg profile)"; role="$(arg role_arn)"; mode="$(cat "$RUN/state/mode")"
   [ -z "$MB" ] || base=(--base "$MB")
-  if [ -n "$profile" ] && [ "$(depth)" != light ]; then
+  # Not run for an environment reason: no pass, and every example not planned says why, whether or
+  # not a profile was named; the render reads it as a rule 4 unknown.
+  if [ -n "$NOT_RUN" ]; then missed="plan pass not run: $NOT_RUN"; note plan-not-run "$NOT_RUN"
+  elif [ -n "$profile" ] && [ "$(depth)" != light ]; then
     while IFS= read -r d; do plain_ok "$d" && dirs+=("$d"); done < <(plan_dirs)
     # The directories of the changes a plan diff can clear (plan-pass.md, Plan diff), from the
     # classifier; none when it did not run. One outside the pattern loses only its own plan diff.
@@ -944,7 +963,22 @@ cmd_skip_coverage() {
 
 cmd_ladder() {
   need_full ladder
+  not_run_arg "$@"
   local facts own=() opid
+  # Not run for an environment reason: the behaviour object is a step that did not run, a rule 4
+  # unknown, and nothing of the step runs. A ladder whose levels alone cannot run needs no token:
+  # it gives no record and eval still runs.
+  [ ! -e "$RUN/state/ladder-not-run" ] || fail "ladder already ran in this run"
+  if [ -n "$NOT_RUN" ]; then
+    [ ! -e "$RUN/behaviour/run-behaviour.json" ] && [ ! -e "$RUN/behaviour/record.txt" ] || fail "ladder already ran in this run"
+    [ -d "$RUN/behaviour" ] || mkdir "$RUN/behaviour"
+    note ladder-not-run "$NOT_RUN"
+    jq -n --arg r "ladder not run: $NOT_RUN" '{status: "not-run", reason: $r, triggers: [], claims: [], capped: 0}' \
+      > "$RUN/behaviour/run-behaviour.json" || fail "the behaviour object could not be written"
+    printf 'behaviour: not run: ladder not run: %s\n' "$NOT_RUN" | tee "$RUN/behaviour/record.txt"
+    facts_totals
+    return 0
+  fi
   facts_bin; opid="$(arg owner_pid)"; [ -z "$opid" ] || own=(--owner-pid "$opid")
   if [ "$(depth)" != light ] && [ -f "$RUN/behaviour/behaviour.json" ] && [ -n "$MB" ]; then
     [ -f "$RUN/coverage.json" ] || fail "ladder needs plan first"
@@ -1854,9 +1888,9 @@ case "$cmd" in
     case "$cmd" in
       schema) timed cmd_schema ;;
       verify) timed cmd_verify "$@" ;;
-      plan) timed cmd_plan ;;
+      plan) timed cmd_plan "$@" ;;
       skip-coverage) timed cmd_skip_coverage ;;
-      ladder) timed cmd_ladder ;;
+      ladder) timed cmd_ladder "$@" ;;
       tests) timed cmd_tests ;;
       evidence) cmd_evidence ;;
       handover) cmd_handover ;;

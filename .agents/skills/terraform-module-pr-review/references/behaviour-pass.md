@@ -31,7 +31,7 @@ The reasons:
 | `ladder refused` | The ladder record is not JSON, not schema 1, or names another head or base. `claims-eval` does not run |
 | `claims refused` | `claims.json` over 64 KiB, not a JSON object, over 48 claims, or a claim id that is not `C-` and digits or appears twice. `claims-eval` does not run |
 
-A not-run behaviour step is an unknown at [verdict.md](verdict.md#behaviour-evidence) rule 4. Nothing is guessed in its place. Exit 2 is a usage error: a relative path, `eval` before `classify`, or an out directory that already holds the step's files.
+A not-run behaviour step is an unknown at [verdict.md](verdict.md#behaviour-evidence) rule 4. `review-run.sh ladder --not-run <token>` writes the same object with the reason `ladder not run: <token>` and runs no evaluation ([review-run.md](review-run-details.md#steps-not-run)). Nothing is guessed in its place. Exit 2 is a usage error: a relative path, `eval` before `classify`, or an out directory that already holds the step's files.
 
 ## The Record
 
