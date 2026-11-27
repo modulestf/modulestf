@@ -1,3 +1,12 @@
+# [0.18.0](https://github.com/modulestf/modulestf/compare/v0.17.0...v0.18.0) (2026-11-27)
+
+
+### Features
+
+* **pr-review:** Build ladder fixtures with mtf-facts fixture-build when the binary has it ([#236](https://github.com/modulestf/modulestf/issues/236)) ([ae3884e](https://github.com/modulestf/modulestf/commit/ae3884ed920a8cd21fb417739df510681334afec))
+
+
+
 # [0.17.0](https://github.com/modulestf/modulestf/compare/v0.16.15...v0.17.0) (2026-11-27)
 
 

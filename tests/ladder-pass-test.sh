@@ -126,6 +126,39 @@ EOF
 cat > "$B/mtf-facts" <<EOF
 #!/bin/bash
 echo "facts \$*" >> "$ST/log"
+# fixture-build: listed in version --json with fb.on or a real builder in LADDER_TEST_FIXTURE_BUILD,
+# which then builds every fixture. The flags below stand in for a builder that fails (fb.error), exits 1
+# or 2 with the wrong report (fb.exit1ok, fb.exit1none, fb.exit2ok), refuses (fb.refuse, fb.refuse2 for
+# two documents) or answers the object in fb.valid edited by the jq filter in fb.shape (an exit 0 answer,
+# with expect trees whose canaries are in fb.canlist, and fb.canhead for the head tree) or a refusal
+# edited by the filter in fb.shape1; fb.nofeat reports a version without the feature and fb.featstr one
+# whose features is a string.
+if [ "\$1" = version ]; then
+  [ -f "$ST/fb.nofeat" ] && { echo '{"schema_version":1,"version":"v9.9.9","features":["cmd:other"]}'; exit 0; }
+  [ -f "$ST/fb.featstr" ] && { echo '{"schema_version":1,"version":"v9.9.9","features":"cmd:fixture-build"}'; exit 0; }
+  [ -f "$ST/fb.on" ] || [ -n "${LADDER_TEST_FIXTURE_BUILD:-}" ] || exit 2
+  echo '{"schema_version":1,"version":"v9.9.9","features":["cmd:fixture-build"]}'; exit 0
+fi
+if [ "\$1" = fixture-build ]; then
+  [ -f "$ST/fb.error" ] && exit 2
+  [ -f "$ST/fb.exit1ok" ] && { echo '{"ok":true,"wrap":"none","sides":["base","head"],"canaries":[],"cases":[]}'; exit 1; }
+  [ -f "$ST/fb.exit1none" ] && exit 1
+  [ -f "$ST/fb.exit2ok" ] && { echo '{"ok":true,"wrap":"none","sides":["base","head"],"canaries":[],"cases":[]}'; exit 2; }
+  if [ -f "$ST/fb.shape" ]; then
+    out=; while [ \$# -gt 0 ]; do [ "\$1" = --out ] && out=\$2; shift; done
+    can=\$(cat "$ST/fb.canlist" 2> /dev/null || echo '["canary_ladder_u_0","canary_ladder_ue_0"]')
+    canh=\$(cat "$ST/fb.canhead" 2> /dev/null || echo "\$can")
+    mkdir -p "\$out/expect"
+    for sd in base head; do c=\$can; [ \$sd = head ] && c=\$canh
+      jq -n --argjson c "\$c" '{schema_version: 1, files: {"main.tf": {blocks: ([\$c[] | {type: "output", labels: [.]}] + [{type: "output", labels: ["canary_known"]}])}}}' > "\$out/expect/\$sd.json"; done
+    jq -c "\$(cat "$ST/fb.shape")" "$ST/fb.valid"; exit 0
+  fi
+  [ -f "$ST/fb.shape1" ] && { echo '{"ok":false,"reason":"stub refusal","schema_version":1}' | jq -c "\$(cat "$ST/fb.shape1")"; exit 1; }
+  [ -f "$ST/fb.refuse2" ] && { for i in 1 2; do echo '{"ok":false,"reason":"stub refusal","schema_version":1}'; done; exit 1; }
+  [ -f "$ST/fb.refuse" ] && { echo '{"ok":false,"reason":"stub refusal","schema_version":1}'; exit 1; }
+  [ -n "${LADDER_TEST_FIXTURE_BUILD:-}" ] && exec "${LADDER_TEST_FIXTURE_BUILD:-}" "\$@"
+  exit 2
+fi
 [ "\$1" = fixture-check ] || exit 2
 shift 2; lvl=; res=; pins=; exp=; js=
 while [ \$# -gt 0 ]; do case "\$1" in --level) lvl=\$2; shift 2 ;; --resource) res=\$2; shift 2 ;; --pins) pins=\$2; shift 2 ;;
@@ -157,7 +190,7 @@ good_canary() {
     echo "end canary"
   } > "$ST/canary.txt"
 }
-reset() { rm -f "$ST"/{log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan,test.unknownvalue}; good_canary; }
+reset() { rm -f "$ST"/{fb.on,fb.refuse,fb.error,fb.exit1ok,fb.exit1none,fb.exit2ok,fb.shape,fb.shape1,fb.valid,fb.canlist,fb.canhead,fb.refuse2,fb.nofeat,fb.featstr,log,leak.log,sbx.log,plan-args.log,test-args.log,plan.fail,plan.subject,validate.fail,canary.known,canary.prov,sensitive,fc.violation,fc.error,control.bad,test.badjson,test.othererror,test.noplan,test.unknownvalue}; good_canary; }
 BASE=d72cba285514b5e2e83bea7dd1272c1c206a4f64
 HEAD=3b19adcd09b08528221d3286b30338b1e0cf6f16
 RUND="$TMP/runs/pr-review.abcdef"; mkdir -p "$RUND/clone"
@@ -197,7 +230,7 @@ check "head output in the empty case has known length 1" "$(q "$TMP/l.json" '.ru
 check "observations name the typed unknown and the case inputs" "$(q "$TMP/l.json" '.runs[0].observations.head[] | select(.case == "typical") | .unknown_inputs == ["aws_security_group.this[*].id"] and .inputs.vpc_security_group_ids.value == ["a"] and .action == null and .unchanged_vs_prior == null')"
 check "one observation per case id at each revision, in the classifier's order" "$(q "$TMP/l.json" '[.runs[0].observations.base[].case] == ["typical","empty"] and [.runs[0].observations.head[].case] == ["typical","empty"]')"
 check "the fixture tree hashes are recorded" "$(q "$TMP/l.json" '.runs[0].observations.fixture | (.base_tree_sha256 | test("^b{64}$")) and (.vars_sha256.empty | test("^[0-9a-f]{64}$"))')"
-check "fixture-check runs on both sides before the first plan" "$([ "$(grep -n . "$ST/log" | grep -E 'facts|plan' | head -3 | grep -c facts)" = 2 ]; echo $?)"
+check "fixture-check runs on both sides before the first plan" "$([ "$(grep -n . "$ST/log" | grep -E 'facts fixture-check|plan' | head -3 | grep -c 'facts fixture-check')" = 2 ]; echo $?)"
 check "fixture-check is asked for level L1 with the expected block set" "$(grep -q 'facts fixture-check .*/base --level L1 --expect .*/expect/base.json --json' "$ST/log"; echo $?)"
 check "the manifest names exactly the template's blocks and the spliced subject" "$(q "$ST/last-expect.json" '[.files["main.tf"].blocks[] | .type + ":" + (.labels | join("."))] == ["variable:ladder_esample_0","variable:ladder_esample_1","variable:ladder_mode_0","variable:ladder_mode_1","variable:ladder_sample_0","variable:ladder_sample_1","variable:ladder_unk_0","variable:ladder_unk_1","variable:ladder_val_0","variable:ladder_val_1","resource:terraform_data.ladder_u_0","resource:terraform_data.ladder_ue_0","resource:terraform_data.ladder_u_1","resource:terraform_data.ladder_ue_1","locals:","output:canary_ladder_u_0","output:canary_ladder_ue_0","output:canary_ladder_u_1","output:canary_ladder_ue_1","output:canary_known"] and .files["subject.tf"].blocks == [{type:"output",labels:["subject"]}] and .files["subject.tf"].single_expressions == [{block:"output",labels:["subject"],attribute:"value"}]')"
 check "the record holds no host path and no canary line" "$(! grep -qF -e "$TMP" -e 'denied ' "$TMP/l.json"; echo $?)"
@@ -269,7 +302,7 @@ check "a sensitive subject makes the run unverifiable" "$(r0 reason | grep -q '^
 # --- what the fixture builder refuses
 reset
 trig 'local.a' 'local.b' '[{"text":"local.a","kind":"local","type":null,"multi":null}]'; run > /dev/null
-check "a local reference is unverifiable at L1, before fixture-check" "$([ "$(r0 reason)" = 'local, module, self and other references are unverifiable at L1' ] && ! grep -q '^facts' "$ST/log"; echo $?)"
+check "a local reference is unverifiable at L1, before fixture-check" "$([ "$(r0 reason)" = 'local, module, self and other references are unverifiable at L1' ] && ! grep -q '^facts fixture-check' "$ST/log"; echo $?)"
 trig 'path.module' 'path.root' '[{"text":"path.module","kind":"path","type":null,"multi":null}]'; run > /dev/null
 check "a path reference is unverifiable at L1" "$([ "$(r0 reason)" = 'path and terraform references are unverifiable at L1' ]; echo $?)"
 trig 'aws_x.this.arn' 'aws_x.this.arn' '[{"text":"aws_x.this.arn","kind":"resource","type":null,"multi":null}]'; run > /dev/null
@@ -319,9 +352,9 @@ rm -rf "$TMP/cmut"
 
 # --- dynamic blocks: L1 on the for_each expression, never when only the content changed
 reset; trig 'var.vpc_security_group_ids' 'var.vpc_security_group_ids' '[]' dynamic-block-change; jq '.triggers[0].for_each_only = true' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run > /dev/null
-check "a dynamic block whose for_each is unchanged is unverifiable, no fixture" "$([ "$(r0 reason)" = 'the for_each is unchanged; the change is in the content' ] && ! grep -q '^facts' "$ST/log"; echo $?)"
+check "a dynamic block whose for_each is unchanged is unverifiable, no fixture" "$([ "$(r0 reason)" = 'the for_each is unchanged; the change is in the content' ] && ! grep -q '^facts fixture-' "$ST/log"; echo $?)"
 reset; trig 'var.vpc_security_group_ids' 'compact(var.vpc_security_group_ids)' '[]' dynamic-block-change; run > /dev/null
-check "a dynamic block the classifier does not mark for_each_only is unverifiable, no fixture" "$([ "$(r0 reason)" = 'the dynamic block changed beyond its for_each' ] && ! grep -q '^facts' "$ST/log"; echo $?)"
+check "a dynamic block the classifier does not mark for_each_only is unverifiable, no fixture" "$([ "$(r0 reason)" = 'the dynamic block changed beyond its for_each' ] && ! grep -q '^facts fixture-' "$ST/log"; echo $?)"
 reset; trig 'var.vpc_security_group_ids' 'compact(var.vpc_security_group_ids)' '[]' dynamic-block-change; jq '.triggers[0].for_each_only = true' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; run > /dev/null
 check "a dynamic block's for_each change runs at L1" "$([ "$(r0 level)" = L1 ] && [ "$(r0 state)" = ran ]; echo $?)"
 
@@ -626,6 +659,274 @@ check "probe exits 1 on a leak" "$(bash "$LP" probe "$RUND" > "$TMP/p.out" 2>&1;
 
 # --- the shipped pin file is valid
 check "the shipped pin file names pinned https URLs on its hosts" "$(jq -e '.schema_version == 1 and (.artifact_hosts | length) > 0 and all(.providers[].platforms[]; (.url | startswith("https://releases.hashicorp.com/")) and (.sha256 | test("^[0-9a-f]{64}$")))' "$REF/ladder-pins.json" > /dev/null; echo $?)"
+
+# --- the engine's fixture builder: used when mtf-facts lists cmd:fixture-build, FIX_PL otherwise
+reset; trig 'local.a' 'local.b' '[{"text":"local.a","kind":"local","type":null,"multi":null}]'; run > /dev/null
+[ -n "${LADDER_TEST_FIXTURE_BUILD:-}" ] || check "without cmd:fixture-build the Perl builder runs and mtf-facts builds nothing" "$([ "$(r0 reason)" = 'local, module, self and other references are unverifiable at L1' ] && ! grep -q '^facts fixture-build' "$ST/log"; echo $?)"
+reset; touch "$ST/fb.on" "$ST/fb.refuse"; trig 'x' 'y' '[]'; run > /dev/null
+grep '^facts fixture-build ' "$ST/log" > "$TMP/fb.log"
+check "with cmd:fixture-build a refusal (exit 1) is recorded with its reason, before fixture-check" "$([ "$(r0 reason)" = 'stub refusal' ] && ! grep -q '^facts fixture-check' "$ST/log"; echo $?)"
+check "at L1 fixture-build gets the trigger, the template and the fixture directory, no level" "$(grep -Eq -- " --template [^ ]*/ladder-templates/l1\\.tf\\.tmpl --out [^ ]*/fixtures/T-001\$" "$TMP/fb.log"; echo $?)"
+reset; touch "$ST/fb.on" "$ST/fb.error"; trig 'x' 'y' '[]'; run > /dev/null
+check "with cmd:fixture-build a failure (exit 2) is the fixed reason" "$([ "$(r0 reason)" = 'fixture builder failed' ]; echo $?)"
+reset; touch "$ST/fb.on" "$ST/fb.refuse"; trig2; run > /dev/null
+check "at L2 fixture-build gets --level L2 and the attribute" "$(grep '^facts fixture-build ' "$ST/log" | grep -Eq -- ' --out [^ ]*/fixtures/T-001-L2 --level L2 --attribute for_each$'; echo $?)"
+check "at L2 a refusal is recorded with its reason" "$([ "$(r2 reason)" = 'stub refusal' ]; echo $?)"
+reset; touch "$ST/fb.on" "$ST/fb.refuse"; schema_aws; trig3; run --schema "$TMP/aws-schema.json" > /dev/null
+check "at L3 fixture-build gets --level L3, the attribute, the resource and its template" "$(grep '^facts fixture-build ' "$ST/log" | grep -Eq -- ' --level L3 --attribute vpc_security_group_ids --resource aws_rds_cluster --resource-template [^ ]*/template\.tf\.tmpl$'; echo $?)"
+check "at L3 a refusal is recorded with its reason" "$([ "$(r3 reason)" = 'stub refusal' ]; echo $?)"
+
+# A faulty builder is never taken for a fixture. Nothing the ladder can know is taken from the
+# engine's answer: it is derived from the trigger and the builder's own trees (fixbuild), and each
+# case below forges one field of an otherwise valid answer, with one mutation of the check. The
+# valid answer is the one for the default trigger of trig 'x' 'y' '[]': two cases of one list(string)
+# input, its canaries u_0 and ue_0 in both trees.
+fbrun() { bash "$1" run "$RUND" --behaviour "$TMP/b.json" --base "$BASE" --head "$HEAD" --out "$TMP/l.json" > "$TMP/run.out" 2>&1; }
+FBF='fixture builder failed'
+FBVALID='{"ok":true,"schema_version":1,"wrap":"none","sides":["base","head"],"canaries":["canary_ladder_u_0","canary_ladder_ue_0"],"cases":[
+  {"id":"typical","inputs":{"vpc_security_group_ids":{"value":["a"],"unknown":false,"null":false,"omitted":false}},"unknown_inputs":[],"addr":""},
+  {"id":"empty","inputs":{"vpc_security_group_ids":{"value":[],"unknown":false,"null":false,"omitted":false}},"unknown_inputs":[],"addr":""}]}'
+fbsetup() { # filter: the builder answers the valid object edited by it, for the default trigger
+  reset; touch "$ST/fb.on" "$ST/fb.shape"; printf '%s' "$1" > "$ST/fb.shape"; printf '%s' "$FBVALID" > "$ST/fb.valid"; trig 'x' 'y' '[]'
+}
+sc_forge() { fbsetup "$1"; fbrun "$2"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_valid() { fbsetup .; fbrun "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_f_canaries() { sc_forge '.canaries = []' "$1"; }
+sc_f_sides() { sc_forge '.sides = ["base"]' "$1"; }
+sc_f_inputs() { sc_forge '.cases[0].inputs.vpc_security_group_ids.value = ["b"]' "$1"; }
+sc_f_unknown() { sc_forge '.cases[0].unknown_inputs = ["vpc_security_group_ids"]' "$1"; }
+sc_f_addr() { sc_forge '.cases[0].addr = "terraform_data.subject[0]"' "$1"; }
+sc_f_wrap() { sc_forge '.wrap = "count"' "$1"; }
+sc_f_wraplvl() { sc_forge '.wrap = "l2-count"' "$1"; }
+sc_f_extra() { sc_forge '.extra = 1' "$1"; }
+sc_f_casekey() { sc_forge '.cases[0].extra = 1' "$1"; }
+sc_f_schema() { sc_forge '.schema_version = 2' "$1"; }
+sc_f_noschema() { sc_forge 'del(.schema_version)' "$1"; }
+# ok false on exit 0 is also a failed builder at the caller, so the check of ok has no mutation of its own
+sc_f_ok() { sc_forge '.ok = false' "$1"; }
+sc_f_ids() { sc_forge '.cases[0].id = "other"' "$1"; }
+sc_f_onecase() { sc_forge '.cases = [.cases[0]]' "$1"; }
+sc_f_twodocs() { sc_forge '., .' "$1"; }
+sc_f_cantrees() { fbsetup .; printf '%s' '["canary_ladder_u_0"]' > "$ST/fb.canhead"; fbrun "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_forge1() { # filter: a refusal edited by it, on exit 1
+  reset; touch "$ST/fb.on" "$ST/fb.shape1"; printf '%s' "$1" > "$ST/fb.shape1"; trig 'x' 'y' '[]'; fbrun "$2"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_r_empty() { sc_forge1 '.reason = ""' "$1"; }
+sc_r_none() { sc_forge1 'del(.reason)' "$1"; }
+sc_r_type() { sc_forge1 '.reason = 5' "$1"; }
+sc_r_long() { sc_forge1 '.reason = ("x" * 201)' "$1"; }
+sc_r_schema() { sc_forge1 '.schema_version = 2' "$1"; }
+sc_r_extra() { sc_forge1 '.extra = 1' "$1"; }
+sc_r_ok() { sc_forge1 '.ok = true' "$1"; }
+sc_r_valid() { reset; touch "$ST/fb.on" "$ST/fb.shape1"; printf '.' > "$ST/fb.shape1"; trig 'x' 'y' '[]'; fbrun "$1"; [ "$(r0 reason)" = 'stub refusal' ]; }
+sc_r_twodocs() { reset; touch "$ST/fb.on" "$ST/fb.refuse2"; trig 'x' 'y' '[]'; fbrun "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_exit1ok() { reset; touch "$ST/fb.on" "$ST/fb.exit1ok"; trig 'x' 'y' '[]'; fbrun "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_exit1none() { reset; touch "$ST/fb.on" "$ST/fb.exit1none"; trig 'x' 'y' '[]'; fbrun "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_exit2ok() { reset; touch "$ST/fb.on" "$ST/fb.exit2ok"; trig 'x' 'y' '[]'; fbrun "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+# The trigger's own cases: the answer is derived from them, so a list the ladder cannot build an
+# answer for (none, over 32, a repeated or unsafe id, a path reference), a count.index or each.key
+# reference (the wrap and each case's instance address) and the unknown inputs all come from it.
+sc_tc() { # a jq filter for the trigger file, the answer filter, the canaries of the trees, the script
+  reset; touch "$ST/fb.on" "$ST/fb.shape"; printf '%s' "$2" > "$ST/fb.shape"; printf '%s' "$FBVALID" > "$ST/fb.valid"; printf '%s' "$3" > "$ST/fb.canlist"
+  trig 'x' 'y' '[]'; jq -c "$1" "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"; fbrun "$4"
+}
+NOIN='.triggers[0] |= (.referenced_inputs = [] | .contextual_ref_details = [] | .contextual_refs = [])'
+sc_c_many() { sc_tc "$NOIN | .triggers[0].cases = [range(33) | {id: (\"c\" + tostring), inputs: {}}]" '.canaries = [] | .cases = [range(33) | {id: ("c" + tostring), inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_dup() { sc_tc "$NOIN | .triggers[0].cases = [{id: \"a\", inputs: {}}, {id: \"a\", inputs: {}}]" '.canaries = [] | .cases = [{id: "a", inputs: {}, unknown_inputs: [], addr: ""}, {id: "a", inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_empty() { sc_tc "$NOIN | .triggers[0].cases = []" '.canaries = [] | .cases = []' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_charset() { sc_tc "$NOIN | .triggers[0].cases = [{id: \"bad id\", inputs: {}}]" '.canaries = [] | .cases = [{id: "bad id", inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_ok() { sc_tc "$NOIN | .triggers[0].cases = [{id: \"a\", inputs: {}}, {id: \"b\", inputs: {}}]" '.canaries = [] | .cases = [{id: "a", inputs: {}, unknown_inputs: [], addr: ""}, {id: "b", inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_c_kinds() { sc_tc "$NOIN | .triggers[0].contextual_ref_details = [{text: \"path.module\", kind: \"path\"}] | .triggers[0].cases = [{id: \"a\", inputs: {}}]" '.canaries = [] | .cases = [{id: "a", inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+CNT="$NOIN | .triggers[0].contextual_ref_details = [{text: \"count.index\", kind: \"count\"}] | .triggers[0].cases = [{id: \"a\", inputs: {\"count.index\": {value: 1, unknown: false, \"null\": false, omitted: false}}}]"
+sc_c_count() { sc_tc "$CNT" '.canaries = [] | .wrap = "count" | .cases = [{id: "a", inputs: {"count.index": {value: 1, unknown: false, "null": false, omitted: false, unknown_elements: []}}, unknown_inputs: [], addr: "terraform_data.subject[1]"}]' '[]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_c_countaddr() { sc_tc "$CNT" '.canaries = [] | .wrap = "count" | .cases = [{id: "a", inputs: {"count.index": {value: 1, unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: "terraform_data.subject[0]"}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+EACH="$NOIN | .triggers[0].contextual_ref_details = [{text: \"each.key\", kind: \"each\"}] | .triggers[0].cases = [{id: \"a\", inputs: {\"each.key\": {value: \"k\", unknown: false, \"null\": false, omitted: false}}}]"
+sc_c_each() { sc_tc "$EACH" '.canaries = [] | .wrap = "for_each" | .cases = [{id: "a", inputs: {"each.key": {value: "k", unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: "terraform_data.subject[\"k\"]"}]' '[]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_c_eachaddr() { sc_tc "$EACH" '.canaries = [] | .wrap = "for_each" | .cases = [{id: "a", inputs: {"each.key": {value: "k", unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: "terraform_data.subject[k]"}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+UNK="$NOIN | .triggers[0].referenced_inputs = [{name: \"v\", type: \"list(string)\"}] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: null, unknown: true, \"null\": false, omitted: false}}}, {id: \"b\", inputs: {v: {value: [\"x\"], unknown: false, \"null\": false, omitted: false, unknown_elements: [0]}}}]"
+UNKANS='.canaries = ["canary_ladder_u_0", "canary_ladder_ue_0"] | .cases = [{id: "a", inputs: {v: {value: null, unknown: true, "null": false, omitted: false}}, unknown_inputs: ["v"], addr: ""}, {id: "b", inputs: {v: {value: ["x"], unknown: false, "null": false, omitted: false, unknown_elements: [0]}}, unknown_inputs: ["v"], addr: ""}]'
+sc_c_unk() { sc_tc "$UNK" "$UNKANS" '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_c_unkforged() { sc_tc "$UNK" "$UNKANS | .cases[1].unknown_inputs = []" '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+# Round 4: a case the builder must not drop, canaries derived from the inputs, refusals FIX_PL makes
+# that the answer cannot show, and states checked key by key.
+SK='"null": false, omitted: false'
+sc_c_count10() { # count.index 1 and 10: FIX_PL refuses 10, so no answer is expected and a one-case answer is no answer
+  sc_tc "$NOIN | .triggers[0].contextual_ref_details = [{text: \"count.index\", kind: \"count\"}] | .triggers[0].cases = [{id: \"a\", inputs: {\"count.index\": {value: 1, unknown: false, $SK}}}, {id: \"b\", inputs: {\"count.index\": {value: 10, unknown: false, $SK}}}]" \
+    '.canaries = [] | .wrap = "count" | .cases = [{id: "a", inputs: {"count.index": {value: 1, unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: "terraform_data.subject[1]"}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_countunk() { # an unknown count.index
+  sc_tc "$NOIN | .triggers[0].contextual_ref_details = [{text: \"count.index\", kind: \"count\"}] | .triggers[0].cases = [{id: \"a\", inputs: {\"count.index\": {value: 3, unknown: true, \"null\": false, omitted: false}}}]" \
+    '.canaries = [] | .wrap = "count" | .cases = [{id: "a", inputs: {"count.index": {value: 3, unknown: true, "null": false, omitted: false}}, unknown_inputs: [], addr: "terraform_data.subject[3]"}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_eachnull() { # an each.key whose value is null
+  sc_tc "$NOIN | .triggers[0].contextual_ref_details = [{text: \"each.key\", kind: \"each\"}] | .triggers[0].cases = [{id: \"a\", inputs: {\"each.key\": {value: null, unknown: false, $SK}}}]" \
+    '.canaries = [] | .wrap = "for_each" | .cases = [{id: "a", inputs: {"each.key": {value: null, unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: "terraform_data.subject[\"null\"]"}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_nocanary() { # inputs but no canary in the answer or the trees
+  fbsetup '.canaries = []'; printf '[]' > "$ST/fb.canlist"; fbrun "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+SCAL="$NOIN | .triggers[0].referenced_inputs = [{name: \"s\", type: \"string\"}] | .triggers[0].cases = [{id: \"a\", inputs: {s: {value: \"x\", unknown: false, $SK}}}]"
+SCANS='.cases = [{id: "a", inputs: {s: {value: "x", unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]'
+sc_c_scalar() { # a scalar input has no element canary
+  sc_tc "$SCAL" ".canaries = [\"canary_ladder_u_0\", \"canary_ladder_ue_0\"] | $SCANS" '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_scalarok() { sc_tc "$SCAL" ".canaries = [\"canary_ladder_u_0\"] | $SCANS" '["canary_ladder_u_0"]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+LV='{name: "v", type: "list(string)"}'
+sc_c_keyset() { # a case that does not name exactly the inputs
+  sc_tc "$NOIN | .triggers[0].referenced_inputs = [$LV] | .triggers[0].cases = [{id: \"a\", inputs: {}}]" \
+    '.canaries = ["canary_ladder_u_0", "canary_ladder_ue_0"] | .cases = [{id: "a", inputs: {}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_refs() { # contextual references without their details
+  sc_tc "$NOIN | .triggers[0].contextual_refs = [\"aws_x.y.id\"] | .triggers[0].cases = [{id: \"a\", inputs: {}}]" \
+    '.canaries = [] | .cases = [{id: "a", inputs: {}, unknown_inputs: [], addr: ""}]' '[]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_omit1() { # an omitted input that is not the default being changed
+  sc_tc "$NOIN | .triggers[0].referenced_inputs = [$LV] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: null, unknown: false, \"null\": false, omitted: true}}}]" \
+    '.canaries = ["canary_ladder_u_0", "canary_ladder_ue_0"] | .cases = [{id: "a", inputs: {v: {value: null, unknown: false, "null": false, omitted: true}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_omitwrap() { # a default change in a counted context
+  sc_tc "$NOIN | .triggers[0].category = \"default-change\" | .triggers[0].address = \"var.v\" | .triggers[0].referenced_inputs = [$LV] | .triggers[0].contextual_ref_details = [{text: \"count.index\", kind: \"count\"}] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: null, unknown: false, \"null\": false, omitted: true}, \"count.index\": {value: 0, unknown: false, $SK}}}]" \
+    '.canaries = ["canary_ladder_u_0", "canary_ladder_ue_0"] | .wrap = "count" | .cases = [{id: "a", inputs: {v: {value: null, unknown: false, "null": false, omitted: true}, "count.index": {value: 0, unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: "terraform_data.subject[0]"}]' '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_c_omitl2() { # a default change at L2
+  reset; touch "$ST/fb.on" "$ST/fb.shape"; printf '%s' '.canaries = ["canary_ladder_u_0", "canary_ladder_ue_0"] | .cases = [{id: "a", inputs: {vpc_security_group_ids: {value: null, unknown: false, "null": false, omitted: true}}, unknown_inputs: [], addr: ""}]' > "$ST/fb.shape"
+  printf '%s' "$FBVALID" > "$ST/fb.valid"; printf '%s' '["canary_ladder_u_0", "canary_ladder_ue_0"]' > "$ST/fb.canlist"
+  trig2; jq -c '.triggers[0] |= (.category = "default-change" | .address = "var.vpc_security_group_ids" | .contextual_ref_details = [] | .contextual_refs = []
+    | .cases = [{id: "a", inputs: {vpc_security_group_ids: {value: null, unknown: false, "null": false, omitted: true}}}])' "$TMP/b.json" > "$TMP/b2.json" && mv "$TMP/b2.json" "$TMP/b.json"
+  fbrun "$1"; [ "$(r2 reason)" = "$FBF" ]; }
+sc_c_badstate() { # a trigger input state with a key of its own
+  sc_tc "$NOIN | .triggers[0].referenced_inputs = [$LV] | .triggers[0].cases = [{id: \"a\", inputs: {v: {value: [], unknown: false, $SK, extra: 1}}}]" \
+    '.canaries = ["canary_ladder_u_0", "canary_ladder_ue_0"] | .cases = [{id: "a", inputs: {v: {value: [], unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0", "canary_ladder_ue_0"]' "$1"; [ "$(r0 reason)" = "$FBF" ]; }
+sc_f_nullstate() { sc_forge '.cases[0].inputs.vpc_security_group_ids.unknown = null' "$1"; }
+sc_f_statekey() { sc_forge '.cases[0].inputs.vpc_security_group_ids.extra = 1' "$1"; }
+sc_c_big() { # 32 cases of 10 KB: the expected answer is far beyond one argument
+  sc_tc "$NOIN | .triggers[0].referenced_inputs = [{name: \"s\", type: \"string\"}] | .triggers[0].cases = [range(32) | {id: (\"c\" + tostring), inputs: {s: {value: (\"x\" * 10000), unknown: false, $SK}}}]" \
+    '.canaries = ["canary_ladder_u_0"] | .cases = [range(32) | {id: ("c" + tostring), inputs: {s: {value: ("x" * 10000), unknown: false, "null": false, omitted: false}}, unknown_inputs: [], addr: ""}]' '["canary_ladder_u_0"]' "$1"; [ "$(r0 reason)" != "$FBF" ]; }
+sc_relpath() { # a relative PATH entry that shadows the binary: tools finds it, facts-resolve.sh does not
+  reset; touch "$ST/fb.on"; rm -rf "${TMP:?}/relcwd"; mkdir -p "$TMP/relcwd/relbin"; cp "$B/mtf-facts" "$TMP/relcwd/relbin/mtf-facts"
+  trig 'local.a' 'local.b' '[{"text":"local.a","kind":"local","type":null,"multi":null}]'
+  (cd "$TMP/relcwd" && PATH="relbin:$PATH" fbrun "$1")
+  [ "$(r0 reason)" = "$LOCALREF" ] && ! grep -q '^facts fixture-build' "$ST/log"
+}
+sc_inrun() { # an mtf-facts inside the run directory is no engine: the Perl builder runs
+  reset; touch "$ST/fb.on"; mkdir -p "$RUND/bin"; cp "$B/mtf-facts" "$RUND/bin/mtf-facts"
+  trig 'local.a' 'local.b' '[{"text":"local.a","kind":"local","type":null,"multi":null}]'
+  local keep="$PATH"; PATH="$RUND/bin:$PATH"; fbrun "$1"; PATH="$keep"; rm -rf "${RUND:?}/bin"
+  [ "$(r0 reason)" = "$LOCALREF" ] && ! grep -q '^facts fixture-build' "$ST/log"
+}
+LOCALREF='local, module, self and other references are unverifiable at L1'
+sc_nofeat() { reset; touch "$ST/fb.nofeat"; trig 'local.a' 'local.b' '[{"text":"local.a","kind":"local","type":null,"multi":null}]'; fbrun "$1"
+  [ "$(r0 reason)" = "$LOCALREF" ] && ! grep -q '^facts fixture-build' "$ST/log"; }
+sc_featstr() { reset; touch "$ST/fb.featstr"; trig 'local.a' 'local.b' '[{"text":"local.a","kind":"local","type":null,"multi":null}]'; fbrun "$1"
+  [ "$(r0 reason)" = "$LOCALREF" ] && ! grep -q '^facts fixture-build' "$ST/log"; }
+sc_once() { reset; touch "$ST/fb.on" "$ST/fb.refuse"; trig2; fbrun "$1"; [ "$(grep -c '^facts version --json' "$ST/log")" = 1 ] && grep -q '^facts fixture-build' "$ST/log"; }
+t_sc() { local d="$1"; shift; "$@" "$LP"; check "$d" $?; }
+t_sc "the answer for the default trigger, derived from it and its trees, is taken and runs" sc_valid
+t_sc "an exit 1 with an ok:true object is a failed builder, not a fixture" sc_exit1ok
+t_sc "an exit 1 with no output is a failed builder with the fixed reason" sc_exit1none
+t_sc "an exit 2 with an ok:true object is a failed builder" sc_exit2ok
+t_sc "canaries [] where the trees hold canaries is a failed builder" sc_f_canaries
+t_sc "canaries that differ between the base and head trees are a failed builder" sc_f_cantrees
+t_sc "one side for a two-sided trigger is a failed builder" sc_f_sides
+t_sc "a changed case input is a failed builder" sc_f_inputs
+t_sc "an unknown input the case does not make unknown is a failed builder" sc_f_unknown
+t_sc "an instance address where the wrap is none is a failed builder" sc_f_addr
+t_sc "a wrap the trigger's references do not give is a failed builder" sc_f_wrap
+t_sc "an L2 wrap on an L1 fixture is a failed builder" sc_f_wraplvl
+t_sc "an extra key on the answer is a failed builder" sc_f_extra
+t_sc "an extra key on a case is a failed builder" sc_f_casekey
+t_sc "another schema version is a failed builder" sc_f_schema
+t_sc "no schema version is a failed builder" sc_f_noschema
+t_sc "an ok that is false on exit 0 is a failed builder" sc_f_ok
+t_sc "a case with another id is a failed builder" sc_f_ids
+t_sc "one case of two is a failed builder" sc_f_onecase
+t_sc "two documents on exit 0 are a failed builder" sc_f_twodocs
+t_sc "a refusal with an empty reason is a failed builder" sc_r_empty
+t_sc "a refusal with no reason is a failed builder" sc_r_none
+t_sc "a refusal whose reason is no string is a failed builder" sc_r_type
+t_sc "a refusal whose reason is over 200 characters is a failed builder" sc_r_long
+t_sc "a refusal of another schema version is a failed builder" sc_r_schema
+t_sc "a refusal with an extra key is a failed builder" sc_r_extra
+t_sc "an ok:true object on exit 1 is a failed builder" sc_r_ok
+t_sc "a refusal printed twice on exit 1 is a failed builder" sc_r_twodocs
+t_sc "a valid refusal is recorded with its reason" sc_r_valid
+t_sc "no case in the trigger is a failed builder" sc_c_empty
+t_sc "33 cases in the trigger are a failed builder" sc_c_many
+t_sc "a case id used twice is a failed builder" sc_c_dup
+t_sc "a case id outside the safe characters is a failed builder" sc_c_charset
+t_sc "a path reference in the trigger gives no answer to take" sc_c_kinds
+t_sc "two cases with no inputs are built as the trigger gives them" sc_c_ok
+t_sc "a count.index trigger: the wrap and the instance address come from it" sc_c_count
+t_sc "a count.index trigger with another instance address is a failed builder" sc_c_countaddr
+t_sc "an each.key trigger: the wrap and the instance address come from it" sc_c_each
+t_sc "an each.key trigger with another instance address is a failed builder" sc_c_eachaddr
+t_sc "the unknown inputs come from the trigger's cases" sc_c_unk
+t_sc "an unknown input left out of a case is a failed builder" sc_c_unkforged
+t_sc "count.index 1 and 10: FIX_PL refuses the 10, so a one-case answer is a failed builder" sc_c_count10
+t_sc "an unknown count.index is a failed builder" sc_c_countunk
+t_sc "an each.key whose value is null is a failed builder" sc_c_eachnull
+t_sc "no canary where the inputs need them, in the answer and the trees, is a failed builder" sc_c_nocanary
+t_sc "a scalar input with an element canary is a failed builder" sc_c_scalar
+t_sc "a scalar input with its one canary is taken" sc_c_scalarok
+t_sc "a case that does not name exactly the inputs gives no answer to take" sc_c_keyset
+t_sc "contextual references without their details give no answer to take" sc_c_refs
+t_sc "an omitted input that is not the default being changed gives no answer to take" sc_c_omit1
+t_sc "a default change in a counted context gives no answer to take" sc_c_omitwrap
+t_sc "a default change at L2 gives no answer to take" sc_c_omitl2
+t_sc "a trigger input state with a key of its own gives no answer to take" sc_c_badstate
+t_sc "an input state with a null flag is a failed builder" sc_f_nullstate
+t_sc "an input state with an extra key is a failed builder" sc_f_statekey
+t_sc "32 cases of 10 KB are taken: the expected answer goes through a file" sc_c_big
+t_sc "a relative PATH entry that shadows the binary: the engine is not used" sc_relpath
+t_sc "a valid version report without cmd:fixture-build runs the Perl builder" sc_nofeat
+t_sc "a features string that contains the name is no feature" sc_featstr
+t_sc "the version report is read once per run" sc_once
+t_sc "an mtf-facts inside the run directory is not the engine: the Perl builder runs" sc_inrun
+fbmut() { # label, perl -0 substitution, the scenario that must now fail
+  rm -rf "${TMP:?}/fbmut"; mkdir -p "$TMP/fbmut"; cp -R "$REF"/. "$TMP/fbmut/"; perl -0pi -e "$2" "$TMP/fbmut/ladder-pass.sh"
+  if cmp -s "$LP" "$TMP/fbmut/ladder-pass.sh"; then check "self-check: $1 (the mutation changed nothing)" 1; return; fi
+  "$3" "$TMP/fbmut/ladder-pass.sh" > /dev/null 2>&1; st=$?
+  check "self-check: $1 is caught" "$([ "$st" != 0 ]; echo $?)"
+}
+fbmut "the feature check dropped" 's/ && facts_has cmd:fixture-build//' sc_nofeat
+fbmut "the version report read without the resolver" 's/if \[ "\$FACTS_STATE" = ok \].*; then FB_GO=1; fi/if "\$FACTS" version --json 2> \/dev\/null | grep -q cmd:fixture-build; then FB_GO=1; fi/' sc_featstr
+fbmut "exit 2 taken as success" 's/    \*\) return 1 ;;\n  esac/    *) ;;\n  esac/' sc_exit2ok
+fbmut "the exit 1 object not required to be a refusal" 's/ and\n         and \.ok == false and \.schema_version == 1//; s/\n         and \.ok == false and \.schema_version == 1/\n         and .schema_version == 1/' sc_r_ok
+fbmut "the canaries not compared" 's/\n         and \.canaries == \$e\.canaries//' sc_f_canaries
+fbmut "the canaries of the two trees not required to agree" 's/else \[ "\$c" = "\$cj" \] \|\| return 1; fi/else :; fi/' sc_f_cantrees
+fbmut "the sides not compared" 's/\n         and \.sides == \$e\.sides//' sc_f_sides
+fbmut "the case inputs not compared" 's/\n         and \[\.cases\[\]\.inputs \| norm\] == \[\$e\.cases\[\]\.inputs\]//' sc_f_inputs
+fbmut "the unknown inputs not compared" 's/\n         and \[\.cases\[\]\.unknown_inputs\] == \[\$e\.cases\[\]\.unknown_inputs\]//' sc_f_unknown
+fbmut "the instance addresses not compared" 's/\n         and \[\.cases\[\]\.addr\] == \[\$e\.cases\[\]\.addr\]//' sc_f_addr
+fbmut "the wrap not compared" 's/\n         and \.wrap == \$e\.wrap//' sc_f_wrap
+fbmut "the wrap not derived from the trigger" 's/elif \(\$kinds \| index\("each"\)\) != null then "for_each" else "none" end/elif ($kinds | index("each")) != null then "for_each" else "none" end/; s/if \(\$kinds \| index\("count"\)\) != null then "count"/if (false) then "count"/' sc_c_count
+fbmut "any wrap string taken" 's/\n         and \.wrap == \$e\.wrap/\n         and (.wrap | type == "string")/' sc_f_wraplvl
+fbmut "the keys of the answer not checked" 's/\n         and keys == \["canaries", "cases", "ok", "schema_version", "sides", "wrap"\]//' sc_f_extra
+fbmut "the keys of a case not checked" 's/ and all\(\.\[\]; type == "object" and keys == \["addr", "id", "inputs", "unknown_inputs"\]\)/ and all(.[]; type == "object")/' sc_f_casekey
+fbmut "the schema version of the answer not checked" 's/\n         and \.schema_version == 1\n         and \.wrap/\n         and .wrap/' sc_f_schema
+fbmut "the case ids not compared" 's/\n         and \[\.cases\[\]\.id\] == \[\$e\.cases\[\]\.id\]//' sc_f_ids
+fbmut "one document not required on exit 0" 's/\x27\$e\[0\] as \$e \| length == 1 and \(\.\[0\] \| type == "object"/\x27\$e[0] as \$e | (.[0] | type == "object"/' sc_f_twodocs
+fbmut "one document not required on exit 1" 's/\x27length == 1 and \(\.\[0\] \| type == "object" and keys == \["ok", "reason", "schema_version"\]/\x27(.[0] | type == "object" and keys == ["ok", "reason", "schema_version"]/' sc_r_twodocs
+fbmut "the refusal reason length cap dropped" 's/ and length <= 200//' sc_r_long
+fbmut "an empty refusal reason taken" 's/\(\.reason \| type == "string" and length > 0 and length <= 200\)/(.reason | type == "string" and length <= 200)/' sc_r_empty
+fbmut "the refusal schema version not checked" 's/\n         and \.ok == false and \.schema_version == 1/\n         and .ok == false/' sc_r_schema
+fbmut "the refusal keys not checked" 's/ and keys == \["ok", "reason", "schema_version"\]//' sc_r_extra
+fbmut "an empty case list given an answer" 's/\(\$cs \| length\) == 0 or //' sc_c_empty
+fbmut "more than 32 cases given an answer" 's/ or \(\$cs \| length\) > 32//' sc_c_many
+fbmut "repeated case ids given an answer" 's/\n     or \(\$cs \| map\(\.id\) \| unique \| length\) != \(\$cs \| length\)//' sc_c_dup
+fbmut "the case id charset not checked" 's/ and \(\.id \| type == "string" and test\("\^\[A-Za-z0-9_\.:-\]\{1,64\}\\\\z"\)\)//' sc_c_charset
+fbmut "a path or terraform reference given an answer" 's/\n     or \(\$kinds \| all\(\.\[\]; \. == "resource" or \. == "data" or \. == "count" or \. == "each"\) \| not\)//' sc_c_kinds
+fbmut "the instance address of a count not derived" 's/"terraform_data\.subject\[" \+ \. \+ "\]"/""/' sc_c_count
+fbmut "the instance address of an each not derived" 's/"terraform_data\.subject\[\\"" \+ \. \+ "\\"\]"/""/' sc_c_each
+fbmut "the unknown inputs not derived from the cases" 's/unknown_inputs: \[\$names\[\] \| select\([^\n]*\n/unknown_inputs: [],\n/' sc_c_unk
+fbmut "a count.index the pattern drops is dropped with its case" 's/("terraform_data\.subject\[" \+ \. \+ "\]") else bad end/$1 else empty end/' sc_c_count10
+fbmut "an unknown count.index or each.key taken" 's/and \(if \$winput == null then true else \(\.inputs\[\$winput\][^\n]*\) end\)\)\n/and true)\n/' sc_c_countunk
+fbmut "the type of a count.index or each.key value not checked" 's/if type == "number" or type == "string" then tostring else bad end/tostring/g' sc_c_eachnull
+fbmut "the canaries taken from the trees" 's/canaries: \$canaries,/canaries: \$trees,/; s/\n\| \(if \$trees != \$canaries then bad else \. end\)//' sc_c_nocanary
+fbmut "an element canary for every input" 's/e: \(\.type \| test\([^\n]*?\)\)\}/e: true}/' sc_c_scalar
+fbmut "the case input keys not compared with the inputs" 's/ and \(\(\.inputs \| keys\) == [^\n]*\n/\n/' sc_c_keyset
+fbmut "contextual references without details taken" 's/\n     or \(\(\(\$t\.contextual_refs \/\/ \[\]\) \| type == "array" and length > 0\) and \(\$det \| length\) == 0\)//' sc_c_refs
+fbmut "an omitted input taken whatever it is" 's/\n        and \(\.inputs \| to_entries \| all\(\.\[\]; if \.value\.omitted == true then [^\n]*\n/\n/' sc_c_omit1
+fbmut "a default change in a counted context taken" 's/\(\$wrap != "none" or \$lvl != "l1"\)/(\$lvl != "l1")/' sc_c_omitwrap
+fbmut "a default change at L2 taken" 's/\(\$wrap != "none" or \$lvl != "l1"\)/(\$wrap != "none")/' sc_c_omitl2
+fbmut "the states of the trigger not checked" 's/\n        and \(\.inputs \| to_entries \| all\(\.\[\]; \.value \| okstate\)\)//' sc_c_badstate
+fbmut "the states of the answer not checked" 's/\n         and \(\[\.cases\[\]\.inputs\[\]\] \| all\(\.\[\]; okstate\)\)//' sc_f_nullstate
+fbmut "the binary match alone dropped" 's/ && \[ "\$FACTS_BIN" = "\$FACTS" \]//' sc_relpath
+fbmut "the engine inside the run directory accepted" 's/facts_resolve "\$RUN"\n/facts_resolve\n/' sc_inrun
+fbmut "the run directory and the binary match both dropped" 's/facts_resolve "\$RUN"\n/facts_resolve\n/; s/ \&\& \[ "\$FACTS_BIN" = "\$FACTS" \]//' sc_inrun
+fbmut "the version report read in each builder call" 's/(fixbuild\(\) \{\n)/$1  facts_resolve "\$RUN"\n/' sc_once
+rm -rf "${TMP:?}/fbmut"
+reset
 
 # --- live: pull request 556 with the real terraform, mtf-facts and sandbox, when they exist.
 # The only connections are the canary's, made inside the sandbox it is proving. With
