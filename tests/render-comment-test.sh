@@ -3209,6 +3209,27 @@ t_id_compat() { t_id_keep . "$(f compat.default-changed LOW main.tf 3 "The chang
 t_id_compat; check "identical: a compat finding in the directory keeps the triggers unknowns" $?
 t_id_low() { render "$UXL" "" "" "$(RID l)"; [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && idsec | cmp -s - "$TMP/want-id.txt"; }
 t_id_low; check "identical: a LOW finding elsewhere is an ordinary LOW beside them" $?
+# A new managed resource behaviour-pass.sh marked identical, gated on new variables alone, reads
+# the same way; merged with another category it stays an unknown.
+cat > "$TMP/want-id-res.txt" <<'WANT'
+### Changes the examples plan the same
+
+- Same plan: `variables.tf:40` (unclassified-change): `examples/complete`, `examples/minimal`, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown.
+- Same plan: `main.tf:9` (resource-added-or-removed): `examples/complete`, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown.
+WANT
+t_id_res() {
+  render "$NONE" "" "" "$(RID res '.behaviour.triggers[1].category = "resource-added-or-removed"')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && [ "$(tier)" = STANDARD ] \
+    && grep -qxF "$IDL" "$O/comment.md" && idsec | cmp -s - "$TMP/want-id-res.txt" \
+    && [ "$(accept "$O/result.json")" = "findings accepted: full" ]
+}
+t_id_res; check "identical: a new resource marked identical is approve with nits, STANDARD, listed with its examples, accepted by host-pass.sh" $?
+t_id_resalso() {
+  render "$NONE" "" "" "$(RID resa '.behaviour.triggers[1] |= (.category = "resource-added-or-removed" | .also_categories = ["unclassified-change"])')"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && grep -qE '^- Behaviour change at `main\.tf:9` \([a-z-]+\): not verified\.$' "$O/comment.md" \
+    && ! grep -qF 'Same plan: `main.tf:9`' "$O/comment.md"
+}
+t_id_resalso; check "identical: a new resource merged with another category stays an unknown" $?
 refused "an identical trigger that is not unverifiable" "$NONE" "" "" "$(RID r1 '.behaviour.triggers[0].state = "covered"')"
 refused "an identical mark that is no list" "$NONE" "" "" "$(RID r2 '.behaviour.triggers[0].identical = true')"
 refused "an identical mark beside unexercised" "$NONE" "" "" "$(RID r3 '.behaviour.triggers[0].unexercised = true')"
@@ -3216,7 +3237,9 @@ refused "an identical example outside the path grammar" "$NONE" "" "" "$(RID r4 
 t_id_state() { render "$NONE" "" "" "$(RID r5 '.behaviour.triggers[0].state = "covered"')"; [ "$ST" != 0 ]; }
 t_id_beside() { render "$NONE" "" "" "$(RID r6 '.behaviour.triggers[0].unexercised = true')"; [ "$ST" != 0 ]; }
 mutate "an unmarked identical trigger cleared" 's/and \(\.identical \| type == "array"\)/and true/' t_id_mark
-mutate "any category read as identical" 's/and \(\[\.category, \(\.also_categories \/\/ \[\]\)\[\]\] - same_categories == \[\]\)/and true/' t_id_cat
+mutate "any category read as identical" 's/and \(\(\[\.category, \(\.also_categories \/\/ \[\]\)\[\]\] - same_categories == \[\]\)\n[^\n]*\n[^\n]*\n(             and \$nocompat)/and true\n$1/' t_id_cat
+mutate "a new resource not read as identical" 's/\n                  # A managed resource the change adds, gated on new variables alone, never merged\.\n                  or \(\.category == "resource-added-or-removed" and \(\(\.also_categories \/\/ \[\]\) == \[\]\)\)\)/)/' t_id_res
+mutate "a merged new resource read as identical" 's/or \(\.category == "resource-added-or-removed" and \(\(\.also_categories \/\/ \[\]\) == \[\]\)\)/or (.category == "resource-added-or-removed")/' t_id_resalso
 mutate "identical triggers counted as gaps" 's/select\(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\), \.claims/select((ci_gated or floor_ok or demo_ok) | not)), .claims/' t_id
 mutate "rule 7 not reached by identical plans" 's/ or \.identical > 0 or / or /' t_id
 mutate "the identical section dropped" 's/     \+ section\("Changes the examples plan the same"/     + [] + section("dropped"/' t_id
