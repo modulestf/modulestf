@@ -525,6 +525,19 @@ def mark_undemonstrated($findings; $run):
   end;
 def demo_count: if . == null then 0 else [.triggers[] | select(demo_ok)] | length end;
 def same_count: if . == null then 0 else [.triggers[] | select(same_ok)] | length end;
+# A covered trigger that adds or removes a resource (verdict.md, Added resources): the plan shows the
+# resource plans, not that existing callers get what they had, so it keeps the verdict off rule 8.
+def added_ok: .state == "covered" and any(.category, (.also_categories // [])[]; . == "resource-added-or-removed");
+def added_count: if . == null then 0 else [.triggers[] | select(added_ok)] | length end;
+# A rule 7 cause the render reads from the run file alone (verdict.md, The Ladder): a covered
+# trigger that adds or removes a resource, an unexercised or identical trigger, a trigger outside
+# Terraform that is not inert (nonhcl_cap), or covered skips of a change that is not inert. With
+# any of them the render never approves; host-pass.sh accept --run refuses an approve beside one. Input: the run file. It may be true where the render reads the cause
+# as an unknown instead, which is no approval either.
+def run_rule7_cause: behaviour_of(.) as $b
+  | ($b != null and $b.status == "ran" and any($b.triggers[]; added_ok or .unexercised == true or (.identical | type == "array")
+      or (.state != "inert" and any(.category, (.also_categories // [])[]; . == "non-hcl-dependency"))))
+    or (((.coverage.covered_skips // []) != []) and (.coverage.inert | not) and ($b | triggers_inert | not));
 # A location is a code span; under --links (link_base set) a link to the file at the head when
 # the path is in the allowed set, and is not the module root `.`, so the URL holds no character the pull request could choose.
 def link_base: $ARGS.named.link_base // "";
@@ -575,7 +588,7 @@ def ladder:
     then {rule: 4, verdict: "inconclusive"}
   elif ($m | not) and .unresolved > 0 then {rule: 5, verdict: "changes suggested"}
   elif has_sev("MEDIUM") then {rule: 6, verdict: "block"}
-  elif has_sev("LOW") or .covered > 0 or .undemonstrated > 0 or .identical > 0 or $g.checks == "jobless" or .nonhcl_cap then {rule: 7, verdict: "approve with nits"}
+  elif has_sev("LOW") or .covered > 0 or .undemonstrated > 0 or .identical > 0 or .added > 0 or $g.checks == "jobless" or .nonhcl_cap then {rule: 7, verdict: "approve with nits"}
   else {rule: 8, verdict: "approve"} end;
 
 def verdict_line: {
@@ -633,6 +646,7 @@ def texts: {
   "rationale-5": "Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5).",
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
   "rationale-7-undemonstrated": "No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7).",
+  "rationale-7-added": "No finding is open, and a change adds or removes a resource that the examples plan. A plan shows the resource plans, not that existing callers keep what they had, so approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-identical": "No finding is open, and an added input planned the same as before in the existing examples, which shows only its default. With such a change, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-identical-nonhcl": "No finding is open, an added input planned the same as before in the existing examples, which shows only its default, and a behaviour change is outside Terraform, where a plan does not show what the changed file does. With such changes, approve with nits is the best verdict (ladder rule 7).",
   "rationale-7-covered": "No finding is open, and some examples were not planned. With examples not planned, approve with nits is the best verdict (ladder rule 7).",
@@ -708,6 +722,7 @@ def texts: {
   "behaviour-floor-judged": "Provider floor changes judged by Check A, which no behaviour level verifies: {count}.",
   "behaviour-undemonstrated": "Changes to a resource no planned example creates, which no plan can show: {count}.",
   "undemonstrated-trigger": "- Not demonstrated: {location} ({category}): no planned example creates this resource, so no plan shows the change.",
+  "added-trigger": "- Added or removed: {location} ({category}): an example plans it; existing callers that reach it get the change on their next apply.",
   "behaviour-identical": "Added inputs the existing examples plan the same as before, on their default only: {count}.",
   "identical-trigger": "- Same plan: {location} ({category}): {examples}, as at the merge base, planned the same with the base and the head module, from empty state; the new path is not shown.",
   "behaviour-evidence": "Behaviour evidence: {changes} classified: {verified} verified, {covered} covered by a plan, {inert} inert, {refuted} refuted, {unverifiable} not verified; {claim_count}: {claims_verified} verified, {claims_refuted} refuted, {claims_unverifiable} not verified.",
@@ -880,6 +895,7 @@ def rationale($in):
     # Rule 7 with no LOW finding: covered skips alone keep the verdict off rule 8.
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.covered > 0 then tx("rationale-7-covered")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.undemonstrated > 0 then tx("rationale-7-undemonstrated")
+    elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.added > 0 then tx("rationale-7-added")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.identical > 0 and $in.nonhcl_cap then tx("rationale-7-identical-nonhcl")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.identical > 0 then tx("rationale-7-identical")
     elif $r == 7 and (any($f[]; .severity == "LOW") | not) and $in.nonhcl_cap then tx("rationale-7-nonhcl")
@@ -1365,6 +1381,7 @@ def causes($l; $h; $run; $b):
 def compact_ok($l; $v; $c; $run; $b):
   ($l.findings | map(select(routed | not))) as $counted
   | ($v.rule | IN(4, 7, 8)) and $l.signals.checks != "jobless" and ($l.own_block | not)
+  and $l.added == 0
   and (any($l.findings[]; .severity | IN("CRITICAL", "HIGH", "MEDIUM")) | not)
   and ($counted | length) <= 3
   and (any($l.findings[]; .rule_id == "review.tool-disputed") | not)
@@ -1510,7 +1527,7 @@ def render($in):
      skipped: ($in.run | skipped_gap),
      gaps: (($in.run | skipped_gap) + ($in.run | plan_not_run_gap) + ($h.could_not_run | cnr_count) + ($unreg | length) + ($in.run.verify_gaps | length) + ($b | behaviour_gaps)),
      unplanned: (if $in.run.coverage.inert then 0 else $in.run.coverage.unplanned | length end),
-     undemonstrated: ($b | demo_count), identical: ($b | same_count), own_block: own_block($h)};
+     undemonstrated: ($b | demo_count), identical: ($b | same_count), added: ($b | added_count), own_block: own_block($h)};
   # Triggers that are all inert make the change inert for plan coverage (triggers_inert), unless
   # another rule 4 unknown is present: then the coverage stays required.
   ledger($in) as $l0
@@ -1551,7 +1568,7 @@ def render($in):
      + evidence_lines($b)
      + tests_lines($in.run.tests; $b)
      # Rule 7 reached by covered skips alone has no optional item to list.
-     + (if $v.rule == 8 or $quiet or (($cov != [] or $l.undemonstrated > 0 or $l.identical > 0 or $l.nonhcl_cap) and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items; $h.state.state == "closed" and ($h.state.merged | not))] end)
+     + (if $v.rule == 8 or $quiet or (($cov != [] or $l.undemonstrated > 0 or $l.identical > 0 or $l.added > 0 or $l.nonhcl_cap) and $items == []) then [] else ["### What to do\n\n" + todo_md($v.rule; $items; $h.state.state == "closed" and ($h.state.merged | not))] end)
      + (if $in.findings == [] then [] else ["### Findings\n\n" + ($in.findings | findings_md($v.rule; 10; $p))] end)
      # Covered skips leave no gap, so section 5 then holds only their witness lines, which no
      # check that could not run describes.
@@ -1562,6 +1579,8 @@ def render($in):
        + skipped_lines($in.run; $p); "\n")
      # Undemonstrated changes are information, no gap: their own section, one line per trigger.
      + section("Changes no example creates"; [($b // {triggers: []}).triggers[] | select(demo_ok) | tx("undemonstrated-trigger"; trigger_at($p))]; "\n")
+     # Added or removed resources are information too: one line per trigger.
+     + section("Resources added or removed"; [($b // {triggers: []}).triggers[] | select(added_ok) | tx("added-trigger"; trigger_at($p))]; "\n")
      # Identical plans are information too: one line per trigger, naming its examples.
      + section("Changes the examples plan the same"; [($b // {triggers: []}).triggers[] | select(same_ok)
          | tx("identical-trigger"; trigger_at($p) + {examples: (.identical | map("`" + . + "`") | join(", "))})]; "\n")
