@@ -1,3 +1,12 @@
+## [0.20.6](https://github.com/modulestf/modulestf/compare/v0.20.5...v0.20.6) (2026-11-28)
+
+
+### Bug Fixes
+
+* **reviewer:** Fetch a provider page before calling its fact missing, and anchor the documented-intent band ([#326](https://github.com/modulestf/modulestf/issues/326)) ([a894510](https://github.com/modulestf/modulestf/commit/a89451026a80c111ef104cd8b85032f631665213))
+
+
+
 ## [0.20.5](https://github.com/modulestf/modulestf/compare/v0.20.4...v0.20.5) (2026-11-28)
 
 
