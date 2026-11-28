@@ -504,7 +504,7 @@ def mark_floors($findings; $run; $h):
 # planned, it is no triage run, its categories are on the list, and no compat.* finding, at any
 # severity, sits in its directory.
 # A trigger behaviour-pass.sh marked identical (verdict.md, Identical plans) reads the same way,
-# under the same conditions, on its own categories.
+# under the same conditions, on its own categories, and on resource-added-or-removed alone.
 def demo_categories: ["dynamic-block-change", "unclassified-change"];
 def same_categories: ["dynamic-block-change", "unclassified-change"];
 def mark_undemonstrated($findings; $run):
@@ -517,7 +517,10 @@ def mark_undemonstrated($findings; $run):
              and ([.category, (.also_categories // [])[]] - demo_categories == []) and $nocompat
           then . + {demo: true}
           elif $whole and .state == "unverifiable" and (.identical | type == "array")
-             and ([.category, (.also_categories // [])[]] - same_categories == []) and $nocompat
+             and (([.category, (.also_categories // [])[]] - same_categories == [])
+                  # A managed resource the change adds, gated on new variables alone, never merged.
+                  or (.category == "resource-added-or-removed" and ((.also_categories // []) == [])))
+             and $nocompat
           then . + {same: true} else . end)
   end;
 def demo_count: if . == null then 0 else [.triggers[] | select(demo_ok)] | length end;

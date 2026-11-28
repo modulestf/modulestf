@@ -217,7 +217,7 @@ def diff_kind($t; $b; $nv): if $t.change_kind != "added" or ($t.address | type !
     and $t.category == "resource-added-or-removed" and (($t.also_categories // []) == []) and (($b.capped // 0) == 0)
     and ($t.gate.attribute | IN("count", "for_each"))
     and $t.gate.contextual_refs == [] and $t.gate.pure == true
-    and ($t.gate.referenced_inputs | type == "array")
+    and ($t.gate.referenced_inputs | type == "array" and length > 0)
     and (($t.file | tdir) as $d | all($t.gate.referenced_inputs[];
       (.name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]*$")) and (.name as $n
         | any($b.triggers[]; .address == ("var." + $n) and .change_kind == "added" and .category == "unclassified-change"

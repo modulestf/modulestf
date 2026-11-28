@@ -752,6 +752,17 @@ t_pd_resvar() { { res '.triggers |= map(if .id == "T-021" then .gate.referenced_
 t_pd_resvar; check "identical: a gate input whose name is no string is not marked" $?
 t_pd_resnullin() { { res '.triggers |= map(if .id == "T-021" then .gate.referenced_inputs = null else . end)'; [ "$rv" = 1 ]; }; }
 t_pd_resnullin; check "identical: a gate whose inputs are no list is not marked" $?
+t_pd_resnoin() { { res '.triggers |= map(if .id == "T-021" then .gate |= (.referenced_inputs = [] | .expr = "0") else . end)'; [ "$rv" = 1 ]; }; }
+t_pd_resnoin; check "identical: a new resource whose gate reads no variable is not marked" $?
+t_pd_resnoindiff() { { res '.triggers |= map(if .id == "T-021" then .gate |= (.referenced_inputs = [] | .expr = "1") else . end)' \
+    '.plan_diff[1] |= (.result = "differs" | .addresses = [])'; [ "$rv" = 1 ]; }; }
+t_pd_resnoindiff; check "identical: a new resource whose gate reads no variable, a plan that differs, is not marked" $?
+t_pd_reskind() { { res '.triggers |= map(if .id == "T-018" then .change_kind = "modified" else . end)'; [ "$rv" = 1 ]; }; }
+t_pd_reskind; check "identical: a new resource gated on a variable the change modifies is not marked" $?
+t_pd_resvcat() { { res '.triggers |= map(if .id == "T-018" then .category = "default-change" else . end)'; [ "$rv" = 1 ]; }; }
+t_pd_resvcat; check "identical: a new resource gated on a variable trigger of another category is not marked" $?
+t_pd_resvalso() { { res '.triggers |= map(if .id == "T-018" then .also_categories = ["type-validation-change"] else . end)'; [ "$rv" = 1 ]; }; }
+t_pd_resvalso; check "identical: a new resource gated on a variable trigger with a merged category is not marked" $?
 t_pd_wrap() { pdx . . '.triggers |= map(if .id == "T-008" then .head_expr = "coalesce(var.new_idle, 60)" else . end)' \
   && q '.triggers[] | select(.id == "T-008") | has("identical") | not' | grep -qx 0; }
 t_pd_wrap; check "identical: a function around the new variable is not marked" $?
@@ -848,6 +859,45 @@ t_pd_dirs() { local SCHEMA="$TMP/schema-u.json"; setup
   [ "$(bash "$BP" diff-dirs --out "$O")" = "$(printf '.\nmodules/b\nmodules/c')" ] \
     && [ "$(bash "$BP" diff-dirs --out "$O" --prefix mods/x/)" = "$(printf 'mods/x\nmods/x/modules/b\nmods/x/modules/c')" ]; }
 t_pd_dirs; check "identical: diff-dirs prints the directories of the closed list and of the variables the change adds, repository-relative" $?
+# End to end with a real mtf-facts that reports behaviour.resource-gate (MTF_FACTS_BIN): the module
+# the recorded additive plans of tests/plan-diff-fixture/ were made from, classified and evaluated
+# with a plan diff that plan-pass.sh's PDIFF_JQ computes from those plans. A new security group
+# whose count reads a new bool defaulting to false, and its variable, are identical; at true the
+# plan diff ends unknown and neither is. Skipped with a note without such a binary.
+e2e_gate() { # head variant (gate-off or gate-on): prints the identical trigger categories, sorted
+  local m="$TMP/e2e-gate" o pd res addrs h b
+  h="$(printf 'a%.0s' $(seq 40))"; b="$(printf 'b%.0s' $(seq 40))"
+  rm -rf "$m"; mkdir -p "$m/base/examples/complete" "$m/head/examples/complete"
+  printf 'resource "aws_security_group" "this" {\n  name = "sg"\n}\n' > "$m/base/main.tf"
+  cp "$m/base/main.tf" "$m/head/main.tf"
+  printf 'resource "aws_security_group" "extra" {\n  count = var.create_extra ? 1 : 0\n  name  = "extra"\n}\nvariable "create_extra" {\n  type    = bool\n  default = %s\n}\n' \
+    "$([ "$1" = gate-off ] && echo false || echo true)" >> "$m/head/main.tf"
+  for d in base head; do
+    printf 'terraform {\n  required_providers {\n    aws = { source = "hashicorp/aws", version = "6.74.0" }\n  }\n}\n' > "$m/$d/versions.tf"
+    printf 'module "this" {\n  source = "../../"\n}\n' > "$m/$d/examples/complete/main.tf"
+  done
+  o="$TMP/e2e-gate-out-$1"; rm -rf "$o"; mkdir -p "$o"
+  bash "$BP" classify --facts "$MTF_FACTS_BIN" --dir "$m/head" --base "$m/base" --out "$o" > /dev/null 2>&1 || return 1
+  pd="$(sed -n "/^PDIFF_JQ='\$/,/^'\$/p" "$REF/plan-pass.sh" | sed '1d;$d')"
+  res="$(jq -n -c --slurpfile a "$PDFX/additive-base.json" --slurpfile b "$PDFX/additive-$1.json" --slurpfile s "$PDFX/additive-schema.json" "$pd")" || return 1
+  addrs="$(jq -c '[.resource_changes[].address | gsub("\\[[^\\]]*\\]"; "")] | unique' "$PDFX/additive-$1.json")"
+  jq -n --argjson r "$res" --argjson a "$addrs" '{schema_version: 1, class: "complete", examples: [], plan_diff: [{dir: "examples/complete",
+    result: $r.result, reason: $r.reason, addresses: (if $r.result == "equal" then $a else [] end),
+    module_calls: (if $r.result == "equal" then {this: "."} else {} end)}]}' > "$o/cov.json"
+  jq -n --arg h "$h" --arg b "$b" --argjson a "$addrs" '{schema_version: 1, head_sha: $h, base_sha: $b, terraform_version: "1.17.0", pins: [], runs: [],
+    coverage: {class: "complete", examples: [{dir: "examples/complete", head: "planned", base: null, addresses: $a, module_calls: {this: "."}}]}}' > "$o/ladder.json"
+  bash "$BP" eval --facts "$MTF_FACTS_BIN" --out "$o" --head "$h" --base-sha "$b" --ladder "$o/ladder.json" --plan-diff "$o/cov.json" > /dev/null 2>&1 || return 1
+  jq -e '.status == "ran"' "$o/run-behaviour.json" > /dev/null || return 1
+  jq -c '[.triggers[] | select(has("identical")) | .category] | sort' "$o/run-behaviour.json"
+}
+PDFX="$SRC/tests/plan-diff-fixture"
+if [ -n "${MTF_FACTS_BIN:-}" ] && [ -x "$MTF_FACTS_BIN" ] \
+   && "$MTF_FACTS_BIN" version --json 2> /dev/null | jq -e '.features | index("behaviour.resource-gate") != null' > /dev/null 2>&1; then
+  t_e2e_gate() { [ "$(e2e_gate gate-off)" = '["resource-added-or-removed","unclassified-change"]' ] && [ "$(e2e_gate gate-on)" = '[]' ]; }
+  t_e2e_gate; check "identical: live, a new resource gated on a new bool and its variable are identical at false and not at true" $?
+else
+  echo "skip identical live: MTF_FACTS_BIN names no mtf-facts that lists behaviour.resource-gate"
+fi
 
 # --- Inert: no trigger, the record says so and the run object is empty.
 setup
@@ -1541,7 +1591,7 @@ wmutate "identical: a new resource read by its exact address" 's/then any\(\$pa\
 wmutate "identical: a gate that is neither count nor for_each" 's/ and \(\$t\.gate\.attribute \| IN\("count", "for_each"\)\)//' t_pd_resattr
 wmutate "identical: a gate that reads a local" 's/    and \$t\.gate\.contextual_refs == \[\] and \$t\.gate\.pure == true/    and \$t.gate.pure == true/' t_pd_resctx
 wmutate "identical: an impure gate" 's/ and \$t\.gate\.pure == true//' t_pd_respure
-wmutate "identical: gate inputs that are no list" 's/\n    and \(\$t\.gate\.referenced_inputs \| type == "array"\)//' t_pd_resnullin
+wmutate "identical: gate inputs that are no list" 's/\n    and \(\$t\.gate\.referenced_inputs \| type == "array" and length > 0\)//' t_pd_resnullin
 wmutate "identical: a gate over any variable" 's/\(\.name as \$n\n        \| any\(\$b\.triggers\[\]; \.address == \("var\." \+ \$n\).*?\(\.file \| tdir\) == \$d\)\)/true/s' t_pd_resold
 wmutate "identical: a gate over a variable with a level" 's/ and \.levels == \[\] and \.declaration\.added == true\n          and \(\.declaration\.default/ and .declaration.added == true\n          and (.declaration.default/' t_pd_reslvl
 wmutate "identical: a gate over a default that is no literal" 's/\n          and \(\.declaration\.default \| IN\("null", "literal"\)\)/\n          and true/' t_pd_resdef
@@ -1552,6 +1602,10 @@ wmutate "identical: a new resource at any level" 's/\$t\.levels == \["L4"\]\n   
 wmutate "identical: a gate on any category" 's/    and \$t\.category == "resource-added-or-removed" and/    and/' t_pd_rescat
 wmutate "identical: a new resource with merged categories" 's/ and \$t\.category == "resource-added-or-removed" and \(\(\$t\.also_categories \/\/ \[\]\) == \[\]\)/ and \$t.category == "resource-added-or-removed"/' t_pd_resalso
 wmutate "identical: a new resource marked over the classifier cap" 's/(\$t\.category == "resource-added-or-removed" and \(\(\$t\.also_categories \/\/ \[\]\) == \[\]\)) and \(\(\$b\.capped \/\/ 0\) == 0\)/$1/' t_pd_rescap
+wmutate "identical: a gate that reads no variable" 's/\(\$t\.gate\.referenced_inputs \| type == "array" and length > 0\)/(\$t.gate.referenced_inputs | type == "array")/' t_pd_resnoin
+wmutate "identical: a gate over a variable the change does not add" 's/\| any\(\$b\.triggers\[\]; \.address == \("var\." \+ \$n\) and \.change_kind == "added" and \.category/| any(\$b.triggers[]; .address == ("var." + \$n) and .category/' t_pd_reskind
+wmutate "identical: a gate over a variable trigger of any category" 's/ and \.change_kind == "added" and \.category == "unclassified-change"\n          and \(\(\.also_categories/ and .change_kind == "added"\n          and ((.also_categories/' t_pd_resvcat
+wmutate "identical: a gate over a variable trigger with merged categories" 's/\n          and \(\(\.also_categories \/\/ \[\]\) == \[\]\) and \.levels == \[\] and \.declaration\.added == true\n          and \(\.declaration\.default \| IN/\n          and .levels == [] and .declaration.added == true\n          and (.declaration.default | IN/' t_pd_resvalso
 wmutate "identical: the list not sorted" 's/\| unique \| \.\[:20\]/| .[:20]/' t_pd_sort
 wmutate "identical: the list not capped" 's/\| unique \| \.\[:20\]/| unique/' t_pd_cap
 wmutate "identical: beside unexercised" 's/if \$i != \[\] and \(unex\(\$t; \$et\) \| not\) then \{identical/if \$i != [] then {identical/' t_pd_unex
