@@ -229,18 +229,18 @@ ladder "a HIGH finding and a failing check" "block REQUEST_CHANGES" 2 "$(one str
 ladder "a failing check" "block REQUEST_CHANGES" 3 "$NONE" "" "$(checks fail fail)"
 grep -qxF 'Failing host signal: checks. A failing host signal blocks merge (ladder rule 3).' "$O/comment.md"; check "ladder: rule 3 names the signal" $?
 ladder "a conflict with a queued check" "block COMMENT" 3 "$NONE" "$(host conflict '.signals.mergeability = "fail"')" "$(checks unknown unknown)"
-grep -qxF 'The branch has a merge conflict, and no finding or other host signal blocks merge, so this review is a comment and requests no changes (ladder rule 3). Some checks could not run, so the review is also inconclusive.' "$O/comment.md"; check "ladder: the conflict is named and the queued check is an unknown beside it" $?
+grep -qxF 'The branch has a merge conflict, and no finding or other host signal blocks merge, so this review is a comment and requests no changes (ladder rule 3). Some checks could not run, so a maintainer must also check them.' "$O/comment.md"; check "ladder: the conflict is named and the queued check is an unknown beside it" $?
 ladder "changes requested by a reviewer" "block REQUEST_CHANGES" 3 "$NONE" "$(host cr '.signals.review_decision = "fail"')"
-ladder "a queued check" "inconclusive COMMENT" 4 "$NONE" "" "$(checks unknown unknown)"
-ladder "thread resolution unread and no finding" "inconclusive COMMENT" 4 "$NONE" "$(host tu '.signals.threads = "unknown"')"
-ladder "reviews unread" "inconclusive COMMENT" 4 "$NONE" "$(host ru '.signals.review_decision = "unknown"')"
-ladder "mergeability null twice" "inconclusive COMMENT" 4 "$NONE" "$(host mu '.signals.mergeability = "unknown"')"
-ladder "a review.check-not-run finding" "inconclusive COMMENT" 4 "$(one review.check-not-run MEDIUM . null "Check B did not run." "no code change: none.")"
-ladder "a review.no-change-identified finding" "inconclusive COMMENT" 4 "$(one review.no-change-identified MEDIUM . null "The workspace is stale." "no code change: none.")"
+ladder "a queued check" "not approved COMMENT" 4 "$NONE" "" "$(checks unknown unknown)"
+ladder "thread resolution unread and no finding" "not approved COMMENT" 4 "$NONE" "$(host tu '.signals.threads = "unknown"')"
+ladder "reviews unread" "not approved COMMENT" 4 "$NONE" "$(host ru '.signals.review_decision = "unknown"')"
+ladder "mergeability null twice" "not approved COMMENT" 4 "$NONE" "$(host mu '.signals.mergeability = "unknown"')"
+ladder "a review.check-not-run finding" "not approved COMMENT" 4 "$(one review.check-not-run MEDIUM . null "Check B did not run." "no code change: none.")"
+ladder "a review.no-change-identified finding" "not approved COMMENT" 4 "$(one review.no-change-identified MEDIUM . null "The workspace is stale." "no code change: none.")"
 # A rule that is no row of the reviewer's rule-facts.md is an unknown at rule 4 at any severity
 # (verdict.md): kept in section 4 and findings.json, named in section 5, never read at rules 0 to 2, 6 or 7.
 UNREG='- `structure.third-party-promotion` at `a.tf:3`: rule not in the registry, so this MEDIUM finding does not decide the verdict.'
-ladder "an unregistered rule at MEDIUM" "inconclusive COMMENT" 4 "$(one structure.third-party-promotion MEDIUM a.tf 3 "S." "F.")"
+ladder "an unregistered rule at MEDIUM" "not approved COMMENT" 4 "$(one structure.third-party-promotion MEDIUM a.tf 3 "S." "F.")"
 t_unreg_lines() {
   grep -qxF -- "$UNREG" "$O/comment.md" &&
     grep -qxF -- "$(jq -nr -L "$REF" 'include "render-comment"; texts["rationale-4-unregistered"]')" "$O/comment.md" &&
@@ -248,9 +248,9 @@ t_unreg_lines() {
     jq -e 'map(.rule_id) == ["structure.third-party-promotion"]' "$O/findings.json" > /dev/null
 }
 t_unreg_lines; check "unregistered rule: section 5 names it, the rationale says why, section 4 and findings.json keep it" $?
-ladder "an unregistered rule at HIGH" "inconclusive COMMENT" 4 "$(one structure.third-party-promotion HIGH a.tf 3 "S." "F.")"
+ladder "an unregistered rule at HIGH" "not approved COMMENT" 4 "$(one structure.third-party-promotion HIGH a.tf 3 "S." "F.")"
 grep -qxF -- "${UNREG/MEDIUM/HIGH}" "$O/comment.md"; check "unregistered rule: the HIGH line names the rule" $?
-ladder "an unregistered compat rule at CRITICAL" "inconclusive COMMENT" 4 "$(one compat.made-up-break CRITICAL a.tf 3 "S." "F.")"
+ladder "an unregistered compat rule at CRITICAL" "not approved COMMENT" 4 "$(one compat.made-up-break CRITICAL a.tf 3 "S." "F.")"
 ladder "a registry HIGH beside an unregistered MEDIUM" "block REQUEST_CHANGES" 2 "$(pair structure.docs-contradict-code HIGH structure.third-party-promotion MEDIUM)"
 ladder "a registry MEDIUM" "block REQUEST_CHANGES" 6 "$(one structure.grouping MEDIUM a.tf 3 "S." "F.")"
 t_no_registry() {
@@ -339,33 +339,33 @@ inc() { # verdict, findings as JSON objects without id -> the accept line
 INSCOPE='{"file": "main.tf", "line": 2, "rule_id": "structure.missing-description", "severity": "LOW", "summary": "T.", "suggested_fix": "G."}'
 t_inc_verdict() { [ "$(inc approve "$CARRIED" "$INSCOPE")" = "findings rejected: the verdict does not follow from the findings" ]; }
 t_inc_verdict; check "accept incremental: an approval beside LOW findings is rejected" $?
-ladder "a patch unavailable" "inconclusive COMMENT" 4 "$NONE" "$(host pu '.could_not_run = [{kind: "patch-unavailable", path: "main.tf"}]')"
-ladder "an example not verified" "inconclusive COMMENT" 4 "$NONE" "" "" "$(runf gap '.verify_gaps = [{dir: "examples/complete", reason: "not run: environment"}]')"
+ladder "a patch unavailable" "not approved COMMENT" 4 "$NONE" "$(host pu '.could_not_run = [{kind: "patch-unavailable", path: "main.tf"}]')"
+ladder "an example not verified" "not approved COMMENT" 4 "$NONE" "" "" "$(runf gap '.verify_gaps = [{dir: "examples/complete", reason: "not run: environment"}]')"
 grep -qxF -- '- Verification of `examples/complete`: not run: environment.' "$O/comment.md"; check "ladder: the unverified example is listed in section 5" $?
 # Plan coverage (verify-pass.md, Plan coverage): a non-inert change without complete coverage is
 # an unknown, whatever the findings below rule 4; each unplanned example is listed after the
 # verification gaps, and the What to do count takes them.
-ladder "coverage none for want of a profile" "inconclusive COMMENT" 4 "$NONE" "" "" \
+ladder "coverage none for want of a profile" "not approved COMMENT" 4 "$NONE" "" "" \
   "$(runf cov-none '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}, {dir: "examples/b", reason: "no AWS profile named"}]}')"
 t_cov_lines() {
   awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" > "$TMP/cov-s5.txt"
   printf '%s\n' '' '- 2 examples were not planned: no AWS profile named.' '  - `examples/a`' '  - `examples/b`' | cmp -s - "$TMP/cov-s5.txt" &&
-    [ -z "$(todo)" ] && sed -n 3,5p "$O/comment.md" | cmp -s - <(printf '%s\n' '**Inconclusive.**' '' 'To get a conclusive review: name an AWS profile.') &&
+    [ -z "$(todo)" ] && sed -n 3,5p "$O/comment.md" | cmp -s - <(printf '%s\n' '**Not approved. A maintainer must check the points below before merge.**' '' 'To get a conclusive review: name an AWS profile.') &&
     grep -qxF -- "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-listed"]')" "$O/comment.md"
 }
 t_cov_lines; check "coverage: the unplanned examples are section 5, one clause per reason with the names under it, golden; the action line in place of What to do" $?
 render "$NONE" "$(host covcnt '.signals.mergeability = "unknown"')" "" "$TMP/run-cov-none.json"
 grep -qxF -- '- 2 checks could not run; see Checks that could not run.' "$O/comment.md" && ! grep -qF 'To get a conclusive review' "$O/comment.md"
 check "coverage: beside another rule 4 item, What to do counts the unplanned examples and no action line renders" $?
-ladder "partial coverage under a LOW finding" "inconclusive COMMENT" 4 "$(one structure.grouping LOW a.tf 1 "S." "F.")" "" "" \
+ladder "partial coverage under a LOW finding" "not approved COMMENT" 4 "$(one structure.grouping LOW a.tf 1 "S." "F.")" "" "" \
   "$(runf cov-part '.verify_gaps = [{dir: "examples/c", reason: "init failed"}] | .coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/d", reason: "plan gate G1"}]}')"
 grep -A4 -xF '### Checks that could not run' "$O/comment.md" | tail -n 3 | cmp -s - <(printf '%s\n' '- Verification of `examples/c`: `init` failed.' '- 1 example was not planned: plan gate G1.' '  - `examples/d`')
 check "coverage: the verification gaps come first, then the unplanned examples" $?
-ladder "an example ended by the environment" "inconclusive COMMENT" 4 "$NONE" "" "" \
+ladder "an example ended by the environment" "not approved COMMENT" 4 "$NONE" "" "" \
   "$(runf cov-env '.coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/d", reason: "environment (access-denied)"}]}')"
 grep -A3 -xF '### Checks that could not run' "$O/comment.md" | tail -n 2 | cmp -s - <(printf '%s\n' '- 1 example was not planned: environment (access-denied).' '  - `examples/d`')
 check "coverage: an environment class renders with its fixed reason token" $?
-ladder "a module with no example directory" "inconclusive COMMENT" 4 "$NONE" "" "" \
+ladder "a module with no example directory" "not approved COMMENT" 4 "$NONE" "" "" \
   "$(runf cov-noex '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples", reason: "no example directory"}]}')"
 awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" |
   cmp -s - <(printf '%s\n' '' "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["unplanned-no-examples"]')")
@@ -377,7 +377,7 @@ awk '/^### Checks that could not run$/ { on = 1; next } on' "$O/comment.md" |
 check "coverage: an inert change lists its unplanned examples under the inert line" $?
 ! grep -qF 'checks could not run' "$O/comment.md" && ! grep -qF 'check could not run' "$O/comment.md"
 check "coverage: an inert change counts no unplanned example as a gap" $?
-ladder "a triage run with a LOW finding" "inconclusive COMMENT" 4 "$(one structure.grouping LOW a.tf 1 "S." "F.")" "" "" "$(runf triage '.triage = true')"
+ladder "a triage run with a LOW finding" "not approved COMMENT" 4 "$(one structure.grouping LOW a.tf 1 "S." "F.")" "" "" "$(runf triage '.triage = true')"
 grep -qxF 'Triage only: the full review of this change has not run yet.' "$O/comment.md"; check "ladder: the triage line follows the verdict" $?
 ladder "a triage run with a HIGH finding" "block REQUEST_CHANGES" 2 "$(one structure.docs-contradict-code HIGH a.tf 1 "S." "F.")" "" "" "$TMP/run-triage.json"
 ladder "an unresolved thread" "changes suggested COMMENT" 5 "$(one structure.grouping LOW a.tf 1 "S." "F.")" "$(host ut '.unresolved_threads = [{path: "a.tf", line: 1}, {path: "b.tf", line: null}]')"
@@ -396,7 +396,7 @@ ladder "a draft with a MEDIUM finding" "block COMMENT" 6 "$(one structure.groupi
 ladder "a closed pull request with nothing" "approve COMMENT" 8 "$NONE" "$(host closed '.state.state = "closed"')"
 ladder "a merged pull request with nothing" "approve COMMENT" 8 "$NONE" "$(host merged '.state.state = "closed" | .state.merged = true')"
 CR="$(checks rejected pass)"; touch "$CR/extra"
-ladder "a rejected checks file" "inconclusive COMMENT" 4 "$NONE" "" "$CR"
+ladder "a rejected checks file" "not approved COMMENT" 4 "$NONE" "" "$CR"
 grep -qxF "Checks: the host's check runs file was rejected." "$O/comment.md"; check "ladder: the rejected checks file is said" $?
 
 # --- Collapsing: the check-not-run rule, and the disputed note outside the count.
@@ -529,7 +529,7 @@ The change looks right.
 
 **Rebase needed before merge.**
 
-The branch has a merge conflict, and no finding or other host signal blocks merge, so this review is a comment and requests no changes (ladder rule 3). Some checks could not run, so the review is also inconclusive.
+The branch has a merge conflict, and no finding or other host signal blocks merge, so this review is a comment and requests no changes (ladder rule 3). Some checks could not run, so a maintainer must also check them.
 
 ### What to do
 
@@ -698,7 +698,7 @@ refused "a run file with empty counts" "$G" "" "" "$(runf emptycounts '.counts =
 SKIPPED='["modules/a/main.tf", "wrappers/a/main.tf"]'
 t_skipped() {
   render "$(one structure.grouping LOW a.tf 1 "S." "F.")" "" "" "$(runf skipped ".skipped_files = $SKIPPED")"
-  [ "$ST" = 0 ] && [ "$(verdict)" = "inconclusive COMMENT" ] && [ "$(rule)" = 4 ] &&
+  [ "$ST" = 0 ] && [ "$(verdict)" = "not approved COMMENT" ] && [ "$(rule)" = 4 ] &&
     grep -qxF -- "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-skipped"]')" "$O/comment.md" &&
     awk '/^### Checks that could not run$/ { on = 1; next } on && /^### / { exit } on' "$O/comment.md" |
       cmp -s - <(printf '%s\n' '' '- 2 changed files were over the review budget and were not reviewed:' '  - `modules/`: 1 file' '    - `modules/a/main.tf`' '  - `wrappers/`: 1 file' '    - `wrappers/a/main.tf`')
@@ -909,8 +909,8 @@ t_quiet_action() {
   render "$(f structure.grouping LOW a.tf 1 "S." "F." | list wt-r4qa)" "" "" \
     "$(runf wt-r4qa '.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/a", reason: "no AWS profile named"}]}')"
   [ "$(rule)" = 4 ] && [ -z "$(todo)" ] && grep -qxF -- '- `structure.grouping` - `a.tf:1` - S.' "$O/comment.md" &&
-    sed -n 3,7p "$O/comment.md" | cmp -s - <(printf '%s\n' '**Inconclusive.**' '' 'To get a conclusive review: name an AWS profile.' '' \
-      'A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).')
+    sed -n 3,7p "$O/comment.md" | cmp -s - <(printf '%s\n' '**Not approved. A maintainer must check the points below before merge.**' '' 'To get a conclusive review: name an AWS profile.' '' \
+      'A check this review needs could not run, as listed below. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).')
 }
 t_quiet_action; check "what to do: rule 4 with quiet items and table causes alone: the action line right under the verdict" $?
 t_r4_threads() { render "$NONE" "$H2"; [ "$(rule)" = 4 ]; }
@@ -1243,7 +1243,7 @@ BUV="$(brun uv "[$(bt T-001 wrapper-change unverifiable), $(bt T-002 unknown-pro
 render "$LOWF" "" "" "$BUV"
 grep -qxF 'Behaviour evidence: 2 changes classified: 0 verified, 0 covered by a plan, 0 inert, 0 refuted, 2 not verified; 1 claim: 0 verified, 0 refuted, 1 not verified.' "$O/comment.md"
 check "behaviour: the evidence line follows the rationale" $?
-awk 'p == "A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4)." && /^$/ { getline; print; exit } { p = $0 }' "$O/comment.md" | grep -q '^Behaviour evidence: '
+awk 'p == "A check this review needs could not run, as listed below. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4)." && /^$/ { getline; print; exit } { p = $0 }' "$O/comment.md" | grep -q '^Behaviour evidence: '
 check "behaviour: the evidence line is the paragraph after the rationale" $?
 render "$LOWF" "" "" "$(brun one-uv "[$(bt T-001 wrapper-change verified)]" '[{claim_id: "C-1", state: "verified"}, {claim_id: "C-2", state: "unverifiable"}]')"
 t_one_change() { render "$LOWF" "" "" "$(brun one-uv "[$(bt T-001 wrapper-change verified)]" '[{claim_id: "C-1", state: "verified"}, {claim_id: "C-2", state: "unverifiable"}]')"
@@ -1357,20 +1357,20 @@ t_ti_precedence; check "inert triggers: a classifier-inert change keeps its own 
 t_ti_noexdir; check "inert triggers: no example directory renders no inert line" $?
 t_ti_compact; check "inert triggers: COMPACT names the example, its reason and the inert reading, byte for byte" $?
 t_ti_covered; check "inert triggers: a covered safety-gate skip beside inert triggers reaches rule 8 with no covered line" $?
-ladder "an unverified trigger with a LOW finding" "inconclusive COMMENT" 4 "$LOWF" "" "" "$BUV"
-grep -qxF 'A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).' "$O/comment.md"
+ladder "an unverified trigger with a LOW finding" "not approved COMMENT" 4 "$LOWF" "" "" "$BUV"
+grep -qxF 'A check this review needs could not run, as listed below. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).' "$O/comment.md"
 check "behaviour: rule 4 names the listed checks" $?
 render "$LOWF" "" "$(checks bcount unknown)" "$BUV"
 grep -qxF -- '- 3 checks could not run; see Checks that could not run.' "$O/comment.md"; check "behaviour: What to do counts each unverified trigger and claim" $?
-ladder "an unverified claim alone" "inconclusive COMMENT" 4 "$NONE" "" "" "$(brun uc "[$(bt T-001 wrapper-change verified)]" '[{claim_id: "C-2", state: "unverifiable"}]')"
+ladder "an unverified claim alone" "not approved COMMENT" 4 "$NONE" "" "" "$(brun uc "[$(bt T-001 wrapper-change verified)]" '[{claim_id: "C-2", state: "unverifiable"}]')"
 grep -qxF -- '- Claim C-2 from the description: not verified.' "$O/comment.md"; check "behaviour: the unverified claim is listed" $?
-ladder "triggers over the cap" "inconclusive COMMENT" 4 "$NONE" "" "" "$(brun cap '[]' '[]' 2)"
+ladder "triggers over the cap" "not approved COMMENT" 4 "$NONE" "" "" "$(brun cap '[]' '[]' 2)"
 grep -qxF -- '- 2 more behaviour changes over the classifier cap: not verified.' "$O/comment.md"; check "behaviour: the capped line" $?
-ladder "the behaviour step not run" "inconclusive COMMENT" 4 "$NONE" "" "" \
+ladder "the behaviour step not run" "not approved COMMENT" 4 "$NONE" "" "" \
   "$(runf bnr '.behaviour = {status: "not-run", reason: "mtf-facts not installed", triggers: [], claims: [], capped: 0}')"
 grep -qxF -- '- Behaviour check: mtf-facts not installed, so no change was classified or verified.' "$O/comment.md"; check "behaviour: the not-run line" $?
-ladder "a review.verification-incomplete finding" "inconclusive COMMENT" 4 "$(one review.verification-incomplete MEDIUM . null "S." "no code change: none.")"
-grep -qxF 'The behaviour evidence handed to the review was incomplete, so a behaviour change may be unchecked. Any unknown makes the review inconclusive (ladder rule 4).' "$O/comment.md"
+ladder "a review.verification-incomplete finding" "not approved COMMENT" 4 "$(one review.verification-incomplete MEDIUM . null "S." "no code change: none.")"
+grep -qxF 'The behaviour evidence handed to the review was incomplete, so a behaviour change may be unchecked. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).' "$O/comment.md"
 check "behaviour: the verification-incomplete rationale" $?
 ladder "a refuted claim" "block REQUEST_CHANGES" 2 "$(one claim.refuted HIGH main.tf 2 "S." "F.")" "" "" "$(brun ref "[$(bt T-001 wrapper-change refuted)]" '[{claim_id: "C-1", state: "refuted"}]')"
 ladder "a fix that does not take effect" "block REQUEST_CHANGES" 2 "$(one claim.fix-not-effective HIGH main.tf 2 "S." "F.")" "" "" "$(brun fne "[$(bt T-001 wrapper-change refuted), $(bt T-002 unknown-propagation-candidate unverifiable)]" '[{claim_id: "C-2", state: "refuted"}]')"
@@ -1577,7 +1577,7 @@ t_jobless_medium; check "checks: job-less with a MEDIUM finding blocks at rule 6
 # Ambiguous reads stay unknown: another conclusion, a queued check, a pending status, a failed read.
 t_jobless_amb() { # name, checks update -> rule 4 with the job-less rationale
   render "$NONE" "" "$(checks "jla-$1" unknown "$2")"
-  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "inconclusive COMMENT" ] \
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "not approved COMMENT" ] \
     && grep -qxF "$(jq -nr -L "$(dirname "$RCU")" 'include "render-comment"; texts["rationale-4-checks-jobless"]')" "$O/comment.md" \
     && grep -qF 'Checks: unknown, as a workflow ended without starting a job.' "$O/comment.md" \
     && grep -qF -- '- [ ] Maintainer: approve or re-run the workflow' "$O/comment.md"
@@ -1641,10 +1641,10 @@ mutate "the evidence line kept when every trigger and claim passed" 's/or \(\$b\
 mutate "any trigger state accepted" 's/\(\.state \| IN\("inert", "verified", "covered", "refuted", "unverifiable"\)\)/true/' t_bstate
 # A run file without the behaviour key: outside a triage run the host did not run the step, an
 # unknown with its line; in a triage run nothing more.
-ladder "a run file with no behaviour key" "inconclusive COMMENT" 4 "$LOWF" "" "" "$(runf nob 'del(.behaviour)')"
+ladder "a run file with no behaviour key" "not approved COMMENT" 4 "$LOWF" "" "" "$(runf nob 'del(.behaviour)')"
 grep -qxF -- '- Behaviour check: not run by the host, so no change was classified or verified.' "$O/comment.md"
 check "behaviour: an absent key is the host's step not run" $?
-ladder "a triage run file with no behaviour key" "inconclusive COMMENT" 4 "$NONE" "" "" "$(runf nobt 'del(.behaviour) | .triage = true')"
+ladder "a triage run file with no behaviour key" "not approved COMMENT" 4 "$NONE" "" "" "$(runf nobt 'del(.behaviour) | .triage = true')"
 ! grep -q 'Behaviour check' "$O/comment.md"; check "behaviour: an absent key in triage adds no line" $?
 BREF="$(brun refu "[$(bt T-001 wrapper-change refuted)]" '[{claim_id: "C-1", state: "refuted"}]')"
 # A refuted state blocks by itself at rule 2, whatever the review reported; a claim.* finding
@@ -1738,7 +1738,7 @@ EOF
 cat > "$TMP/want-556.md" <<'EOF'
 Dropping `compact()` fixes the plan: with an unknown group id the base kept the old value and the head shows an update. It also keeps null and empty-string elements of `vpc_security_group_ids`, and a null element now fails the plan; the description mentions only empty strings.
 
-**Inconclusive.** `validate` passed in all 9 examples; 6 were planned. Not checked: the description past 8000 bytes (200 cut), 3 of 9 examples not planned (example code is not run with credentials outside an isolated runner; a limit of the review, not a finding).
+**Not approved. A maintainer must check the points below before merge.** `validate` passed in all 9 examples; 6 were planned. Not checked: the description past 8000 bytes (200 cut), 3 of 9 examples not planned (example code is not run with credentials outside an isolated runner; a limit of the review, not a finding).
 
 To get a conclusive review: shorten the description under 8000 bytes, and plan the 3 skipped examples in runner mode, an isolated container.
 
@@ -1759,7 +1759,7 @@ reported_in() { grep -qF 'reported: judged in' "$O/comment.md"; }
 
 t_556() { rc "$(F556)" "$(R556 gold)"; [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 4 ] && cmp -s "$O/comment.md" "$TMP/want-556.md"; }
 t_556; check "tiers: pull request 556 renders COMPACT, the literal byte for byte" $?
-check "tiers: pull request 556 is inconclusive at rule 4, proposes COMMENT" "$([ "$(verdict)" = "inconclusive COMMENT" ]; echo $?)"
+check "tiers: pull request 556 is inconclusive at rule 4, proposes COMMENT" "$([ "$(verdict)" = "not approved COMMENT" ]; echo $?)"
 check "tiers: COMPACT findings.json lists the routed finding last" "$(jq -e 'map(.id) == ["F-001", "F-002"] and all(.[]; keys == ["file","id","line","rule_id","severity","suggested_fix","summary"])' "$O/findings.json" > /dev/null; echo $?)"
 check "tiers: the COMPACT body of pull request 556 is at most 1400 bytes" "$([ "$(wc -c < "$O/comment.md")" -le 1400 ]; echo $?)"
 # Pull request 556 with the description finding: the body states only the empty strings, the
@@ -1778,13 +1778,13 @@ F556C() {
   sed -n '9,$p' "$TMP/want-556.md"; } > "$TMP/want-556c.md"
 t_556c() { rc "$(F556C)" "$(R556 claimdesc)"; [ "$ST" = 0 ] && [ "$(tier)" = COMPACT ] && [ "$(rule)" = 4 ] && cmp -s "$O/comment.md" "$TMP/want-556c.md"; }
 t_556c; check "tiers: pull request 556 with its LOW description finding renders COMPACT, byte for byte" $?
-check "tiers: the LOW description finding blocks nothing, inconclusive at rule 4" "$([ "$(verdict)" = "inconclusive COMMENT" ]; echo $?)"
+check "tiers: the LOW description finding blocks nothing, inconclusive at rule 4" "$([ "$(verdict)" = "not approved COMMENT" ]; echo $?)"
 rc "$(F556)" "$(R556 gold-std)" "" --standard
 # STANDARD at rule 4 with only Optional items and the gaps line: no What to do, the COMPACT
 # action line under the verdict, and no evidence line, since every trigger and claim passed or
 # was reported.
 { sed -n '1,4p' "$TMP/want-556.md"; sed -n '5,6p' "$TMP/want-556.md"
-  printf '%s\n' 'A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).' '' \
+  printf '%s\n' 'A check this review needs could not run, as listed below. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).' '' \
     '### Findings' '' '**LOW**' '' \
     '- `compat.expression-behaviour-changed` - `main.tf:156` - null and empty-string elements of `var.vpc_security_group_ids` now reach the provider, and a null fails the plan.' \
     '  - Fix: reject them with a `validation` block in `variables.tf`, or say in the description that they now fail.' \
@@ -1922,7 +1922,7 @@ t_noplan() {
   rc "$NONE" "$(runf noplan '.examples = {count: 2, skipped: 0, validated: 2}
     | .coverage = {class: "none", inert: false, unplanned: [{dir: "examples/b", reason: "no AWS profile named"}, {dir: "examples/a", reason: "no AWS profile named"}]}')" "$HOST"
   [ "$(tier)" = COMPACT ] && cmp -s "$O/comment.md" <(printf '%s\n' "$(cat "$TMP/assess-556.txt")" '' \
-    '**Inconclusive.** Not checked: no plan was run (no AWS profile named).' '' 'To get a conclusive review: name an AWS profile.' '' \
+    '**Not approved. A maintainer must check the points below before merge.** Not checked: no plan was run (no AWS profile named).' '' 'To get a conclusive review: name an AWS profile.' '' \
     '<details><summary>Evidence and notes</summary>' '' '- Not planned: `examples/a`, `examples/b`.' '</details>')
 }
 t_noplan; check "tiers: coverage none for want of a profile, byte for byte" $?
@@ -2398,7 +2398,7 @@ mutate "rule 8 reachable with covered skips" 's/elif has_sev\("LOW"\) or \.cover
 mutate "all or nothing dropped" 's/and all\(\$u\[\]; \. as \$x \| any\(\$cs\[\];/and all(\$u[]; true or any(\$cs[];/' t_cov_partial
 mutate "a covered entry that is no skip accepted" 's/and all\(\$cs\[\]; \. as \$x \| any\(\$u\[\];/and all(\$cs[]; true or any(\$u[];/' t_cov_extra
 mutate "the plan mode not checked" 's/and all\(\$cs\[\]; \.gate == "design" or \(\.gate \| skip_mode == \$run\.plan_mode\)\)//' t_cov_runner
-mutate "the head not checked" 's/\$cs != \[\] and \$cv\.skip_head_sha == \$in\.host\.head_sha/\$cs != []/' t_cov_head
+mutate "the head not checked" 's/\| \$cv\.skip_head_sha == \$h\.head_sha and /| /' t_cov_head
 mutate "inert not checked" 's/and \(\$cv\.inert \| not\)//' t_cov_inert
 mutate "duplicate skips accepted" 's/and \(\$u \| map\(\.dir\) \| length == \(unique \| length\)\)//' t_cov_dup
 mutate "a skipped example accepted as a witness" 's/and all\(\$cs\[\]\.witnesses\[\]; \.example as \$e \| all\(\$u\[\]; \.dir != \$e\)\)//' t_cov_witself
@@ -2419,7 +2419,7 @@ mutate "What to do with no item rendered" 's/ or \(\(\$cov != \[\] or \$l\.undem
 mutate "What to do with no item rendered beside undemonstrated coverage" 's/\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.identical > 0 or \$l\.added > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/(\$cov != [] or \$l.identical > 0 or \$l.added > 0 or \$l.nonhcl_cap) and \$items == []/' t_ux
 mutate "What to do with no item rendered beside identical plans" 's/ or \$l\.identical > 0 or \$l\.added > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/ or \$l.added > 0 or \$l.nonhcl_cap) and \$items == []/' t_id
 mutate "the rule 7 rationale for covered skips alone dropped" 's/elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.covered > 0 then tx\("rationale-7-covered"\)\n//' t_cov_rule8_std
-mutate "the base not checked" 's/ and \$cv\.skip_base_sha == \$in\.host\.merge_base//' t_cov_base
+mutate "the base not checked" 's/ and \$h\.merge_base != null and \$cv\.skip_base_sha == \$h\.merge_base//' t_cov_base
 mutate "a plan pass that did not run accepted" 's/and \$run\.plan_ran and \(\$cv\.inert/and (\$cv.inert/' t_cov_noplan
 mutate "inert triggers: one inert trigger enough" 's/all\(\.triggers\[\]; \.state == "inert"\)/any(.triggers[]; .state == "inert")/' t_ti_mixed
 mutate "inert triggers: no trigger counts" 's/ and \(\.triggers \| length\) > 0\n//' t_ti_none
@@ -2470,8 +2470,8 @@ t_dlight; check "depth: light states its depth, reason and the checks out of sco
 NOPLAN='.coverage = {class: "none", inert: false, unplanned: [{dir: "examples/complete", reason: "no AWS profile named"}]}'
 t_dlight_noplan() { render "$NONE" "" "" "$(rund d-lnp light . "$NOPLAN")"; [ "$ST" = 0 ] && [ "$(rule)" = 8 ] && ! grep -qF 'not planned' "$O/comment.md"; }
 t_dlight_noplan; check "depth: light, the plan pass out of scope, an example not planned is no unknown (rule 8)" $?
-ladder "focused, an example in scope not planned" "inconclusive COMMENT" 4 "$NONE" "" "" "$(rund d-fnp focused . "$NOPLAN")"
-ladder "light, an example that did not validate" "inconclusive COMMENT" 4 "$NONE" "" "" "$(rund d-lgap light . '.verify_gaps = [{dir: "examples/complete", reason: "init failed"}]')"
+ladder "focused, an example in scope not planned" "not approved COMMENT" 4 "$NONE" "" "" "$(rund d-fnp focused . "$NOPLAN")"
+ladder "light, an example that did not validate" "not approved COMMENT" 4 "$NONE" "" "" "$(rund d-lgap light . '.verify_gaps = [{dir: "examples/complete", reason: "init failed"}]')"
 GAPS='.verify_gaps = [{dir: "examples/other", reason: "not run: budget"}] | .coverage = {class: "none", inert: false, unplanned: [{dir: "examples/other", reason: "no AWS profile named"}]}'
 t_dfocused() {
   render "$NONE" "" "" "$(rund d-foc focused . "$GAPS")"
@@ -2496,13 +2496,13 @@ for bad in '{label: "shipped:../x", tree: "none"}' '{label: "custom", tree: "abc
   render "$NONE" "" "" "$(runf p-bad ".profile = $bad")"
   [ "$ST" != 0 ] && empty_out; check "profile: a malformed profile is refused ($bad)" $?
 done
-ladder "focused, the same gaps in an example in scope" "inconclusive COMMENT" 4 "$NONE" "" "" \
+ladder "focused, the same gaps in an example in scope" "not approved COMMENT" 4 "$NONE" "" "" \
   "$(rund d-foc-in focused . "$(printf '%s' "$GAPS" | sed 's/examples\/other/examples\/complete/g')")"
 grep -qxF -- '- Verification of `examples/complete`: not run: budget.' "$O/comment.md"; check "depth: an example in scope that did not verify is still listed in section 5" $?
-ladder "deep, an unverified example" "inconclusive COMMENT" 4 "$NONE" "" "" "$(rund d-deep deep . '.verify_gaps = [{dir: "examples/complete", reason: "init failed"}]')"
+ladder "deep, an unverified example" "not approved COMMENT" 4 "$NONE" "" "" "$(rund d-deep deep . '.verify_gaps = [{dir: "examples/complete", reason: "init failed"}]')"
 check "depth: deep states its depth and reasons, nothing out of scope" "$(dsec | cmp -s - <(printf '%s\n' 'Review depth: deep. Reasons: `deep-policy`.'); echo $?)"
 ladder "deep, a MEDIUM finding" "block REQUEST_CHANGES" 6 "$(one structure.grouping MEDIUM a.tf 1 "S." "F.")" "" "" "$(rund d-deep6 deep)"
-t_dtriage() { render "$NONE" "" "" "$(rund d-tri light . '.triage = true')"; [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "inconclusive COMMENT" ]; }
+t_dtriage() { render "$NONE" "" "" "$(rund d-tri light . '.triage = true')"; [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "not approved COMMENT" ]; }
 t_dtriage; check "depth: a triage run at light never approves" $?
 render "$NONE" "" "" "$(rund d-tri-f focused . '.triage = true')"
 check "depth: a triage run at focused never approves" "$([ "$(rule)" = 4 ]; echo $?)"
@@ -2576,6 +2576,9 @@ if git -C "$SRC" cat-file -e b3f74cf^{commit} 2> /dev/null; then
     jq 'del(.state.locked, .state.lock_reason)' "${2:-$HOST}" > "$oh"
     jq 'del(.examples.skipped)' "${4:-$RUNF}" > "$orun"
     RCU="$OLD/render-comment.sh"; render "$1" "$oh" "${3:-}" "$orun" "${@:5}"; local a="$O/comment.md" s1="$ST"
+    # Binary resolution of rule 4 came later: its verdict line and rationale use new words.
+    perl -pi -e 's/\*\*Inconclusive\.\*\*/**Not approved. A maintainer must check the points below before merge.**/;
+      s/Any unknown makes the review inconclusive \(ladder rule 4\)\./An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4)./' "$a"
     RCU="$keep"; render "$@"; [ "$s1" = 0 ] && [ "$ST" = 0 ] && cmp -s "$a" "$O/comment.md"
   }
   t_same "$NONE"; check "depth absent: nothing open renders as before, byte for byte" $?
@@ -2685,7 +2688,7 @@ mutate "the behaviour line one form dropped" 's/\(if \$n == 1 then "-one" else "
 NRP='[{dir: "examples/a", reason: "plan pass not run: disk"}, {dir: "examples/b", reason: "plan pass not run: disk"}]'
 t_nr_plan() {
   render "$NONE" "" "" "$(runf nrp ".examples = {count: 2, skipped: 0, validated: 2} | .coverage = {class: \"none\", inert: false, unplanned: $NRP}")"
-  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(tier)" = STANDARD ] && [ "$(verdict)" = "inconclusive COMMENT" ] &&
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(tier)" = STANDARD ] && [ "$(verdict)" = "not approved COMMENT" ] &&
     grep -qxF -- '- 2 examples were not planned: plan pass not run: disk.' "$O/comment.md"
 }
 t_nr_plan; check "not run: a plan step not run for disk lists its examples, rule 4, STANDARD" $?
@@ -2729,7 +2732,7 @@ mutate "the inert line kept beside a plan step not run" 's/\$run\.coverage\.iner
 mutate "the plan not run reasons dropped" 's/\] \+ plan_not_run_reasons \+ \["plan pass skipped/, "plan pass skipped/' t_nr_plan
 mutate "the ladder not run reasons dropped" 's/ \+ \(not_run_tokens \| map\("ladder not run: " \+ \.\)\);/;/' t_nr_ladder
 mutate_hp "accept --run not read" 's/host_verdict_run\(\$v; \$reg; \$nr; \$r7\)/host_verdict(\$v; \$reg)/' t_nr_accept
-mutate_hp "accept --run not reading a plan step not run" 's/startswith\("plan pass not run: "\)/startswith("plan pass never: ")/' t_nr_accept
+mutate_hp "accept --run not reading a plan step not run" 's/startswith\("plan pass not run: "\)/startswith("plan pass never: ")/; s/    if \[ "\$nr" = false \]; then\n.*?\n    fi\n//s;' t_nr_accept
 # The ladder reason read by accept --run, a plan step not run kept whatever the depth's scope and
 # read the same by accept, a cause outside the COMPACT table beside a truncated description alone,
 # and the What to do count: one gap for an inert change, the examples alone for one that is not.
@@ -2773,7 +2776,7 @@ mutate "a plan step not run dropped at light" 's/then \.coverage\.unplanned \|= 
 mutate "a plan step not run admitted to COMPACT" 's/ or \$l\.skipped > 0 or \(\$run \| plan_not_run_gap\) > 0\)\}/ or \$l.skipped > 0)}/' t_nr_cut
 mutate "a plan step not run left out of the What to do count" 's/ \+ \(if \$l\.unplanned_open == 0 then \$in\.run \| plan_not_run_gap else 0 end\)//' t_nr_todo_inert
 mutate "a plan step not run counted beside its examples" 's/\(if \$l\.unplanned_open == 0 then \$in\.run \| plan_not_run_gap else 0 end\)/(\$in.run | plan_not_run_gap)/' t_nr_todo
-mutate_hp "accept --run not reading a ladder step not run" 's/\n  or \(\(\.behaviour\.reason\? \/\/ ""\) \| type == "string" and startswith\("ladder not run: "\)\);/;/' t_nr_accept_ladder
+mutate_hp "accept --run not reading a ladder step not run" 's/\n  or \(\(\.behaviour\.reason\? \/\/ ""\) \| type == "string" and startswith\("ladder not run: "\)\);/;/; s/    if \[ "\$nr" = false \]; then\n.*?\n    fi\n//s;' t_nr_accept_ladder
 mutate_hp "accept --run taking an empty value" 's/; \[ -n "\$run" \] \|\| die "--run needs a value" ;;/ ;;/' t_nr_run_empty
 
 # --- At light the host writes "plan pass skipped at light depth": no unknown, no advice; at any
@@ -2993,7 +2996,7 @@ t_km_threads() { render "$KM" "$(host kmt '.unresolved_threads = [{path: "a.tf",
 t_km_threads; check "known MEDIUM: blocks at rule 6 over unresolved threads" $?
 t_km_triage() { render "$KM" "" "" "$(runf kmtr '.triage = true | del(.behaviour)')"; [ "$(rule)" = 6 ] && grep -qxF 'Triage only: the full review of this change has not run yet.' "$O/comment.md"; }
 t_km_triage; check "known MEDIUM: a triage run blocks at rule 6, still never approves" $?
-t_km_gap() { render "$(one review.check-not-run MEDIUM . null "Check B did not run." "no code change: none." '{"source": "host", "subject": "coverage.argument-unexposed@."}')"; [ "$(rule)" = 4 ] && [ "$(verdict)" = "inconclusive COMMENT" ]; }
+t_km_gap() { render "$(one review.check-not-run MEDIUM . null "Check B did not run." "no code change: none." '{"source": "host", "subject": "coverage.argument-unexposed@."}')"; [ "$(rule)" = 4 ] && [ "$(verdict)" = "not approved COMMENT" ]; }
 t_km_gap; check "known MEDIUM: a MEDIUM review.check-not-run stays an unknown at rule 4" $?
 t_bvi; check "known MEDIUM: a MEDIUM review.verification-incomplete stays an unknown at rule 4" $?
 t_km_gap_and() { render "$(pair review.verification-incomplete MEDIUM structure.grouping MEDIUM)" "$HKM"; [ "$(rule)" = 6 ]; }
@@ -3320,13 +3323,13 @@ t_acc7_nonhcl_also() { acc7_caps "$(runf acsna '.behaviour.triggers = [{id: "T-0
 t_acc7_nonhcl_also; check "accept --run: a forged approve over a trigger merged with one outside Terraform is refused" $?
 mutate_hp "accept --run not reading the rule 7 causes" 's/host_verdict_run\(\$v; \$reg; \$nr; \$r7\)/host_verdict_run(\$v; \$reg; \$nr)/' t_acc7_added
 mutate_hp "the rule 7 cause not capping an approve" 's/if \$cause and \. == "approve" then/if false then/' t_acc7_added
-mutate_hp "a covered added resource not a rule 7 cause" 's/any\(\$b\.triggers\[\]; added_ok or \.unexercised/any(\$b.triggers[]; .unexercised/' t_acc7_added
+mutate_hp "a covered added resource not a rule 7 cause" 's/def rule7_trigger: added_ok or \.unexercised/def rule7_trigger: .unexercised/' t_acc7_added
 mutate_hp "an unexercised trigger not a rule 7 cause" 's/ or \.unexercised == true or \(\.identical/ or (.identical/' t_acc7_ux
 mutate_hp "an identical trigger not a rule 7 cause" 's/ or \(\.identical \| type == "array"\)\n/\n/' t_acc7_id
 mutate_hp "covered skips not a rule 7 cause" 's/\(\(\(\.coverage\.covered_skips \/\/ \[\]\) != \[\]\)/((false)/' t_acc7_skip
 mutate_hp "covered skips of an inert change a rule 7 cause" 's/ and \(\.coverage\.inert \| not\) and \(\$b \| triggers_inert/ and (\$b | triggers_inert/' t_acc7_inert
 mutate_hp "covered skips beside inert triggers a rule 7 cause" 's/ and \(\$b \| triggers_inert \| not\)\);/);/' t_acc7_tinert
-mutate_hp "a trigger outside Terraform not a rule 7 cause" 's/\n      or \(\.state != "inert" and any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "non-hcl-dependency"\)\)//' t_acc7_nonhcl
+mutate_hp "a trigger outside Terraform not a rule 7 cause" 's/\n  or \(\.state != "inert" and any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "non-hcl-dependency"\)\);/;/' t_acc7_nonhcl
 mutate_hp "a merged trigger outside Terraform not a rule 7 cause" 's/any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "non-hcl-dependency"\)/any(.category; . == "non-hcl-dependency")/' t_acc7_nonhcl_also
 mutate_hp "any covered trigger a rule 7 cause" 's/def added_ok: \.state == "covered" and any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "resource-added-or-removed"\);/def added_ok: .state == "covered";/' t_acc7_plain
 
@@ -3497,14 +3500,14 @@ refused "a floors none beside an old floor" "$NONE" "" "" "$(RFL b12 ".floors = 
 t_fl_none_bad() { render "$NONE" "" "" "$(RFL b13 ".floors = $FLN | .floors.dirs[1].old_floor_none = \"unknown\"")"; [ "$ST" = 2 ]; }
 mutate "a floors none of any kind accepted" 's/\(\.old_floor_none \| IN\("no_entry", "no_lower_bound"\)\) and //' t_fl_none_bad
 PM="$(f review.path-missing MEDIUM main.tf null "The change names a path the workspace does not have." "no code change: none." | list pm)"
-t_pm_unknown() { render "$PM" "$HKM"; [ "$(rule)" = 4 ] && [ "$(verdict)" = "inconclusive COMMENT" ]; }
+t_pm_unknown() { render "$PM" "$HKM"; [ "$(rule)" = 4 ] && [ "$(verdict)" = "not approved COMMENT" ]; }
 t_pm_unknown; check "known MEDIUM: review.path-missing with an unknown stays inconclusive at rule 4" $?
 t_pm_alone() { render "$PM"; [ "$(rule)" = 6 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ]; }
 t_pm_alone; check "known MEDIUM: review.path-missing alone still blocks at rule 6" $?
 # Only a registry rule is a known MEDIUM blocker: an unregistered MEDIUM alone is an unknown at rule
 # 4, named in section 5; beside a registered MEDIUM and an unknown the registered one blocks at rule 6.
 t_unreg_alone() { render "$(one structure.third-party-promotion MEDIUM a.tf 3 "S." "F.")"
-  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "inconclusive COMMENT" ] && grep -qxF -- "$UNREG" "$O/comment.md" &&
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "not approved COMMENT" ] && grep -qxF -- "$UNREG" "$O/comment.md" &&
     grep -qxF -- "$(jq -nr -L "$REF" 'include "render-comment"; texts["rationale-4-unregistered"]')" "$O/comment.md"; }
 t_unreg_alone; check "known MEDIUM: an unregistered MEDIUM alone is inconclusive at rule 4, named in section 5 with its rationale" $?
 t_unreg_beside() { render "$(pair structure.grouping MEDIUM structure.third-party-promotion MEDIUM)" "$HKM"
@@ -3563,7 +3566,7 @@ t_acc_vi; check "accept: a forged changes suggested over review.verification-inc
 t_acc_hold_forged() { t_acc_hold > /dev/null 2>&1 || return 1; jq '.verdict = "approve"' "$O/result.json" > "$O/r2.json" && mv "$O/r2.json" "$O/result.json"; ! acc; }
 t_acc_hold_forged; check "accept: a forged approve over a CRITICAL compat finding is refused" $?
 # Toward stricter only: a forged lenient verdict over a known MEDIUM is refused.
-t_acc_forged() { t_km > /dev/null 2>&1 || return 1; jq '.verdict = "inconclusive"' "$O/result.json" > "$O/r2.json" && mv "$O/r2.json" "$O/result.json"; ! acc; }
+t_acc_forged() { t_km > /dev/null 2>&1 || return 1; jq '.verdict = "not approved"' "$O/result.json" > "$O/r2.json" && mv "$O/r2.json" "$O/result.json"; ! acc; }
 t_acc_forged; check "accept: an inconclusive verdict over a known MEDIUM is refused" $?
 t_acc_approve() { t_jobless > /dev/null 2>&1 || return 1; jq '.verdict = "approve"' "$O/result.json" > "$O/r2.json" && mv "$O/r2.json" "$O/result.json"; acc; }
 t_acc_approve; check "accept: approve with no finding still follows from the findings" $?
@@ -3783,7 +3786,7 @@ t_mc_medium() { render "$(one structure.wrong-file MEDIUM a.tf 1 "S." "F.")" "$(
 t_mc_medium; check "merge conflict: beside a known MEDIUM blocker, block still proposes REQUEST_CHANGES" $?
 t_mc_unknown() { render "$NONE" "$(host mc4 "$MC"' | .signals.threads = "unknown"')"
   [ "$ST" = 0 ] && [ "$(rule)" = 3 ] && [ "$(verdict)" = "block COMMENT" ] && mc_body &&
-  grep -qxF "$MCWHY Some checks could not run, so the review is also inconclusive." "$O/comment.md"; }
+  grep -qxF "$MCWHY Some checks could not run, so a maintainer must also check them." "$O/comment.md"; }
 t_mc_unknown; check "merge conflict: beside an unknown, block proposes COMMENT and names the unknown" $?
 t_mc_checks() { render "$NONE" "$(host mc5 "$MC")" "$(checks mc5 fail)"
   [ "$ST" = 0 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ] && grep -qxF -- '- [ ] Resolve the merge conflict.' "$O/comment.md"; }
@@ -3794,8 +3797,8 @@ t_mc_own; check "merge conflict: over our earlier block, proposes COMMENT and th
 mutate "a conflict alone proposing REQUEST_CHANGES" 's/\(if \$conflict then "COMMENT" else/(if false then "COMMENT" else/' t_mc_alone
 mutate "a conflict beside a LOW finding held as more than a conflict" 's/def conflict_only: \.signals\.mergeability == "fail"/def conflict_only: .findings == [] and .signals.mergeability == "fail"/' t_mc_low
 mutate "a conflict beside a MEDIUM read as a conflict alone" 's/\n  and \(\(\.signals\.mergeability = "pass" \| ladder\)\.verdict != "block"\)//' t_mc_medium
-mutate "a conflict beside an unknown held as more than a conflict" 's/\(\(\.signals\.mergeability = "pass" \| ladder\)\.verdict != "block"\)/((.signals.mergeability = "pass" | ladder).verdict | IN("block", "inconclusive") | not)/' t_mc_unknown
-mutate "the unknown left out of the conflict rationale" 's/ \+ \(if \(\$in \| \.signals\.mergeability = "pass" \| ladder\)\.verdict == "inconclusive" then " " \+ tx\("rationale-3-conflict-unknown"\) else "" end\)//' t_mc_unknown
+mutate "a conflict beside an unknown held as more than a conflict" 's/\(\(\.signals\.mergeability = "pass" \| ladder\)\.verdict != "block"\)/((.signals.mergeability = "pass" | ladder).verdict | IN("block", "not approved") | not)/' t_mc_unknown
+mutate "the unknown left out of the conflict rationale" 's/ \+ \(if \(\$in \| \.signals\.mergeability = "pass" \| ladder\)\.verdict == "not approved" then " " \+ tx\("rationale-3-conflict-unknown"\) else "" end\)//' t_mc_unknown
 mutate "a conflict beside a failing check read as a conflict alone" 's/def conflict_only: \.signals\.mergeability == "fail" and ladder\.rule == 3\n  and \(\(\.signals\.mergeability = "pass" \| ladder\)\.verdict != "block"\)/def conflict_only: .signals.mergeability == "fail" and ladder.rule == 3 and (.findings | known_medium | not)/' t_mc_checks
 t_mc_confirmed() { render "$NONE" "$(host mc7 "$MC")" "" "" "" --event REQUEST_CHANGES
   [ "$ST" = 0 ] && [ "$(verdict)" = "block COMMENT" ] && ! grep -qxF "$MCWHY" "$O/comment.md" &&
@@ -3815,5 +3818,165 @@ mutate "a conflict beside a reviewer's request for changes read as a conflict al
 mutate "the rebase item dropped" 's/then "todo-rebase" else/then "todo-mergeability" else/' t_mc_alone
 mutate "the conflict verdict line dropped" 's/if \$conflict then tx\("verdict-conflict"\) else //; s/ \| verdict_line end\) \+ "\*\*"\]/ | verdict_line) + "**"]/' t_mc_alone
 
+# --- Binary resolution of rule 4 (verdict.md, Binary Resolution): every unknown left at rule 4 is
+# yes or no. All yes is approve with nits, proposing COMMENT; one no is not approved, proposing
+# COMMENT, never REQUEST_CHANGES. The one yes class is an example not planned that skip coverage
+# witnessed, bound to the head and the merge base. Code under examples/ or tests/ is no class.
+bxt() { # id, file, category -> one unverifiable trigger
+  jq -nc --arg i "$1" --arg f "$2" --arg c "$3" '{id: $i, file: $f, line: 3, category: $c, state: "unverifiable"}'
+}
+brx() { # name, triggers json [, jq update] -> run file with the plan pass run and every example planned
+  runf "bx-$1" ".plan_ran = true | .plan_mode = \"runner\" | .examples = {count: 3, skipped: 0, validated: 3}
+    | .behaviour = {status: \"ran\", reason: null, triggers: $2, claims: [], capped: 0} | ${3-.}"
+}
+BXWIT='.coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/eks", reason: "environment (refused-host)"}],
+  covered_skips: [{dir: "examples/eks", gate: "design", reason: "refused-host",
+    witnesses: [{attribute: "x", example: "examples/complete", address: "aws_x.this"}]}],
+  skip_head_sha: "'"$HEAD"'", skip_base_sha: "'"$BASE"'"}'
+# A change outside Terraform the Checks signal gates is no gap, and keeps the covered skip rule shut,
+# so the witnessed example reaches rule 4 alone.
+BXCI="$(bxt T-001 src/index.py non-hcl-dependency)"
+BXCHK="$(checks bx-ci pass "$RUN1")"
+t_bx_wit() { render "$NONE" "" "$BXCHK" "$(brx wit "[$BXCI]" "$BXWIT")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "approve with nits COMMENT" ] &&
+  grep -qxF '**Good to merge, with nits.**' "$O/comment.md" &&
+  grep -qF 'Such gaps alone mean approve with nits, with their risk named (ladder rule 4).' "$O/comment.md" &&
+  grep -qF 'examples/eks' "$O/comment.md"; }
+t_bx_wit; check "binary: an example skip coverage witnessed is approve with nits at rule 4, its risk listed" $?
+bx_no() { # name, render args -> holds when the render is not approved at rule 4
+  render "$@"; [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "not approved COMMENT" ]; }
+t_bx_test() { bx_no "$NONE" "" "$BXCHK" "$(brx tst "[$BXCI, $(bxt T-002 tests/fixture/main.tf literal-argument-change)]" "$BXWIT")" &&
+  grep -qxF '**Not approved. A maintainer must check the points below before merge.**' "$O/comment.md"; }
+t_bx_test; check "binary: a trigger in test code is not approved, proposing COMMENT" $?
+t_bx_helper() { bx_no "$NONE" "" "$BXCHK" "$(brx hlp "[$BXCI, $(bxt T-002 examples/helper/main.tf literal-argument-change)]" "$BXWIT")"; }
+t_bx_helper; check "binary: a trigger in an examples/ directory the module can load is not approved" $?
+t_bx_prefix() { bx_no "$NONE" "$(host bx-pfx '.prefix = "modules/db"')" "$BXCHK" "$(brx pfx "[$BXCI, $(bxt T-002 examples/complete/main.tf literal-argument-change)]" "$BXWIT")"; }
+t_bx_prefix; check "binary: an example trigger under a module root prefix is not approved" $?
+t_bx_tfjson() { bx_no "$NONE" "" "$BXCHK" "$(brx tfj "[$BXCI, $(bxt T-002 tests/basic.tftest.json literal-argument-change)]" "$BXWIT")"; }
+t_bx_tfjson; check "binary: a trigger in a .tftest.json file is not approved" $?
+t_bx_tsetup() { bx_no "$NONE" "" "$BXCHK" "$(brx tsu "[$BXCI, $(bxt T-002 tests/setup/main.tf literal-argument-change)]" "$BXWIT")"; }
+t_bx_tsetup; check "binary: a trigger in a tests/ helper module is not approved" $?
+t_bx_module() { bx_no "$NONE" "" "$BXCHK" "$(brx mod "[$BXCI, $(bxt T-002 main.tf unclassified-change)]" "$BXWIT")"; }
+t_bx_module; check "binary: a module trigger beside a witnessed example is not approved" $?
+t_bx_signal() { bx_no "$NONE" "$(host bx-tu '.signals.review_decision = "unknown"')" "$BXCHK" "$(brx sig "[$BXCI]" "$BXWIT")"; }
+t_bx_signal; check "binary: an unknown host signal beside a witnessed example is not approved" $?
+t_bx_claim() { bx_no "$NONE" "" "$BXCHK" "$(brx cl "[$BXCI]" "$BXWIT"' | .behaviour.claims = [{claim_id: "C-1", state: "unverifiable"}]')"; }
+t_bx_claim; check "binary: an unverified claim beside a witnessed example is not approved" $?
+t_bx_cnr() { bx_no "$(one review.check-not-run MEDIUM main.tf 2 "S." "F.")" "" "$BXCHK" "$(brx cnr "[$BXCI]" "$BXWIT")"; }
+t_bx_cnr; check "binary: a review.check-not-run finding beside a witnessed example is not approved" $?
+t_bx_noplan() { bx_no "$NONE" "" "$BXCHK" "$(brx np "[$BXCI]" "$BXWIT"' | .plan_ran = false')"; }
+t_bx_noplan; check "binary: a witnessed example with no plan pass run is not approved" $?
+t_bx_unbound() { bx_no "$NONE" "" "$BXCHK" "$(brx unb "[$BXCI]" "$BXWIT"' | .coverage.skip_base_sha = "'"$HEAD"'"')"; }
+t_bx_unbound; check "binary: a witness list bound to another merge base is not approved" $?
+t_bx_env() { bx_no "$NONE" "" "$BXCHK" "$(brx env "[$BXCI]" '.coverage = {class: "partial", inert: false, unplanned: [{dir: "examples/eks", reason: "environment (refused-host)"}]}')"; }
+t_bx_env; check "binary: an example not planned for the environment with no witness is not approved" $?
+t_bx_selfwit() { bx_no "$NONE" "" "$BXCHK" "$(brx sw "[$BXCI]" "$BXWIT"' | .coverage.unplanned += [{dir: "examples/complete", reason: "environment (refused-host)"}]
+    | .coverage.covered_skips += [{dir: "examples/complete", gate: "design", reason: "refused-host", witnesses: [{attribute: "x", example: "examples/eks", address: "aws_x.this"}]}]')"; }
+t_bx_selfwit; check "binary: a witness that was itself not planned is not approved" $?
+# Rule 5 decides over a yes outcome: a yes unknown never hides unresolved threads.
+t_bx_thread() { render "$NONE" "$(host bx-th '.unresolved_threads = [{path: "main.tf", line: 2}]')" "$BXCHK" "$(brx th "[$BXCI]" "$BXWIT")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 5 ] && [ "$(verdict)" = "changes suggested COMMENT" ]; }
+t_bx_thread; check "binary: unresolved threads beside a witnessed example are changes suggested at rule 5" $?
+# Property: adding a yes unknown never improves the verdict of the same ledger without it.
+t_bx_monotone() {
+  jq -L "$REF" -e -n 'include "render-comment";
+    def good: {"approve": 3, "approve with nits": 2, "changes suggested": 1}[.] // 0;
+    [ ([], [{rule_id: "structure.wrong-file", severity: "LOW"}], [{rule_id: "structure.wrong-file", severity: "MEDIUM"}],
+       [{rule_id: "structure.wrong-file", severity: "HIGH"}], [{rule_id: "compat.default-changed", severity: "CRITICAL"}],
+       (("review.path-missing", "review.untrusted-instruction", "review.quoted-claim-unverifiable") as $r
+        | ("MEDIUM", "HIGH", "CRITICAL") as $sv | [{rule_id: $r, severity: $sv}])) as $f
+      | (0, 1) as $u | ("pass", "fail", "jobless") as $ck | (0, 1) as $cov | (false, true) as $cap
+      | {findings: $f, signals: {checks: $ck, threads: "pass", review_decision: "none", mergeability: "pass"},
+         unresolved: $u, triage: false, gaps: 0, refuted: 0, unplanned_open: 0, covered: $cov,
+         undemonstrated: 0, identical: 0, nonhcl_cap: $cap} as $l
+      | (($l | ladder.verdict | good) >= ($l | .unplanned_open = 1 | .binary_yes = true | ladder.verdict | good)) ]
+    | length > 0 and all' > /dev/null; }
+t_bx_monotone; check "binary: a yes unknown never improves the verdict of any ledger without it" $?
+# A registered review.* MEDIUM that is no gap rule blocks alone at rule 6; a witnessed example beside
+# it must not turn that into approve with nits.
+t_bx_pathmissing() { render "$(one review.path-missing MEDIUM main.tf 2 "S." "F.")" "" "$BXCHK" "$(brx pm "[$BXCI]" "$BXWIT")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 6 ] && [ "$(verdict)" = "block REQUEST_CHANGES" ]; }
+t_bx_pathmissing; check "binary: a review.path-missing MEDIUM beside a witnessed example still blocks at rule 6" $?
+t_bx_accept() { # incremental.jq host_verdict: the rule 4 outcomes follow from the findings
+  jq -L "$REF" -e -n --argjson reg "$REGISTRY" 'include "incremental"; ([] | host_verdict("not approved"; $reg)) == "not approved"
+    and ([] | host_verdict("approve with nits"; $reg)) == "approve with nits"
+    and ([{rule_id: "review.check-not-run", severity: "MEDIUM"}] | host_verdict("approve with nits"; $reg)) == "not approved"
+    and ([] | host_verdict_run("approve with nits"; $reg; true)) == "not approved"' > /dev/null; }
+t_bx_accept; check "binary: the host verdict reads not approved for a verification gap and takes a rule 4 approve with nits" $?
+# host-pass.sh accept --run recomputes the no class from the run file with the render's own def.
+t_bx_run_accept() {
+  render "$NONE" "" "$BXCHK" "$(brx racc "[$BXCI]" "$BXWIT")"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve with nits COMMENT" ] || return 1
+  local r="$TMP/run-bx-racc.json" bad="$TMP/run-bx-racc-no.json"
+  jq '.behaviour.triggers += [{id: "T-002", file: "examples/helper/main.tf", line: 3, category: "literal-argument-change", state: "unverifiable"}]' "$r" > "$bad"
+  [ "$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$O/result.json" --rules "$RF" --run "$r")" = "findings accepted: full" ] &&
+  [ "$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$O/result.json" --rules "$RF" --run "$bad")" = "findings rejected: the verdict does not follow from the findings" ]; }
+t_bx_run_accept; check "binary: accept --run takes a witnessed approve with nits and refuses it beside a no-class trigger in the run file" $?
+# accept --run applies the host-free shape of the witness list as the render does: a self-witness and
+# a validate count short of the selection are refused beside an approve with nits.
+t_bx_run_shape() {
+  render "$NONE" "" "$BXCHK" "$(brx rsh "[$BXCI]" "$BXWIT")"; [ "$ST" = 0 ] && [ "$(verdict)" = "approve with nits COMMENT" ] || return 1
+  local r="$TMP/run-bx-rsh.json" sw="$TMP/run-bx-rsh-sw.json" vc="$TMP/run-bx-rsh-vc.json"
+  jq '.coverage.unplanned += [{dir: "examples/complete", reason: "environment (refused-host)"}]
+    | .coverage.covered_skips += [{dir: "examples/complete", gate: "design", reason: "refused-host", witnesses: [{attribute: "x", example: "examples/eks", address: "aws_x.this"}]}]' "$r" > "$sw"
+  jq '.examples.validated = 1' "$r" > "$vc"
+  [ "$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$O/result.json" --rules "$RF" --run "$sw")" = "findings rejected: the verdict does not follow from the findings" ] &&
+  [ "$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$O/result.json" --rules "$RF" --run "$vc")" = "findings rejected: the verdict does not follow from the findings" ]; }
+t_bx_run_shape; check "binary: accept --run refuses an approve with nits over a self-witness or a short validate count" $?
+mutate "a trigger in example code read as yes" 's/select\(\.state == "unverifiable" and \(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\); false\)/select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok or same_ok) | not)); .file | test("^examples\/"))/; s/and \(rule7_trigger \| not\)\n/and (rule7_trigger | not) and (.file | test("^examples\/") | not)\n/; s/\n  and \$l\.gaps == 0 and \$open != \[\]/\n  and \$open != []/' t_bx_helper
+mutate "a trigger under a module root prefix read as yes" 's/select\(\.state == "unverifiable" and \(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\); false\)/select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok or same_ok) | not)); .file | test("^examples\/"))/; s/and \(rule7_trigger \| not\)\n/and (rule7_trigger | not) and (.file | test("^examples\/") | not)\n/; s/\n  and \$l\.gaps == 0 and \$open != \[\]/\n  and \$open != []/' t_bx_prefix
+mutate "a trigger in tests/ read as yes" 's/select\(\.state == "unverifiable" and \(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\); false\)/select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok or same_ok) | not)); .file | test("^tests\/"))/; s/and \(rule7_trigger \| not\)\n/and (rule7_trigger | not) and (.file | test("^tests\/") | not)\n/; s/\n  and \$l\.gaps == 0 and \$open != \[\]/\n  and \$open != []/' t_bx_tsetup
+mutate "a .tftest.json file read as yes" 's/select\(\.state == "unverifiable" and \(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\); false\)/select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok or same_ok) | not)); .file | test("^tests\/"))/; s/and \(rule7_trigger \| not\)\n/and (rule7_trigger | not) and (.file | test("^tests\/") | not)\n/; s/\n  and \$l\.gaps == 0 and \$open != \[\]/\n  and \$open != []/' t_bx_tfjson
+mutate "a module trigger read as yes" 's/select\(\.state == "unverifiable" and \(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\); false\)/select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok or same_ok) | not)); true)/; s/  or \(\$b != null and \(\$b\.status != "ran"/  or (false and ($b.status != "ran"/; s/\n  and \$l\.gaps == 0 and \$open != \[\]/\n  and \$open != []/' t_bx_module
+mutate "the plan pass run dropped from the yes class" 's/  and \(\$run\.triage \| not\) and \$run\.plan_ran\n/  and ($run.triage | not)\n/; s/\$cs != \[\] and \$run\.plan_ran and/\$cs != [] and/' t_bx_noplan
+mutate "an unknown host signal read as yes" 's/\n  and \(any\(\$l\.signals\[\]; \. == "unknown"\) \| not\)//' t_bx_signal
+mutate "an unverified claim read as yes" 's/\n  and all\(\$b\.claims\[\]; \.state != "unverifiable"\)//; s/\n       or any\(\$b\.claims\[\]; \.state == "unverifiable"\)//; s/\n  and \$l\.gaps == 0 and \$open != \[\]/\n  and \$open != []/' t_bx_claim
+mutate "a verification gap finding read as yes" 's/\n  and \(any\(\$l\.findings\[\]; \.rule_id \| IN\(gap_rules\[\]\)\) \| not\)//; s/\n  or any\(\$findings\[\]; \.rule_id \| IN\(gap_rules\[\]\)\)//' t_bx_cnr
+mutate "the witness list read unbound" 's/\$cv\.skip_head_sha == \$h\.head_sha and \$h\.merge_base != null and \$cv\.skip_base_sha == \$h\.merge_base\n    and/true\n    and/' t_bx_unbound
+mutate "an environment skip read as yes without a witness" 's/all\(\$open\[\]; \. as \$x \| \$bound\n      and any\(\$cs\[\]; \.dir == \$x\.dir and entry_reason == \$x\.reason\)\)/true/; s/\n  or \(\(\$run\.coverage\.inert \| not\).*?\| not\)\);/;/s' t_bx_env
+mutate "a witness that was not planned taken" 's/\n       and all\(\$cs\[\]\.witnesses\[\]; \.example as \$e \| all\(\$u\[\]; \.dir != \$e\)\)//' t_bx_selfwit
+mutate "a yes outcome over unresolved threads" 's/\n       and \(\(\.binary_yes == true and .*?\| not\)\) \| not\)//s' t_bx_thread
+mutate "a yes outcome over a registered review MEDIUM" 's/\n       and \(\(\.binary_yes == true and .*?\| not\)\) \| not\)//s' t_bx_pathmissing
+mutate_hp "accept without the witness list shape" 's/\(\$run \| skips_run_shape \| not\)/false/' t_bx_run_shape
+mutate "the yes outcome of rule 4 dropped" 's/if \.binary_yes == true then "approve with nits" else "not approved" end/"not approved"/' t_bx_wit
+mutate "the yes rationale dropped" 's/    elif \$r == 4 and \$in\.binary_yes == true then tx\("rationale-4-yes"\)\n//' t_bx_wit
+mutate_hp "accept without the run file's no class" 's/    if \[ "\$nr" = false \]; then\n.*?\n    fi\n//s' t_bx_run_accept
+# The yes outcome beside the rule 7 causes the run file holds: a covered trigger that adds or
+# removes a resource and a change outside Terraform keep it at approve with nits, never rule 8, an
+# unverifiable added resource is no class, and accept --run agrees with the render on each.
+BXADDC="$(jq -nc '{id: "T-003", file: "main.tf", line: 9, category: "resource-added-or-removed", state: "covered"}')"
+BXADDU="$(jq -nc '{id: "T-003", file: "main.tf", line: 9, category: "resource-added-or-removed", state: "unverifiable"}')"
+bx_acc() { # result file, run file -> accept's line
+  bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$1" --rules "$RF" --run "$2"; }
+t_bx_added() {
+  render "$NONE" "" "$BXCHK" "$(brx addc "[$BXCI, $BXADDC]" "$BXWIT")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "approve with nits COMMENT" ] || return 1
+  local r="$TMP/run-bx-addc.json"; jq '.verdict = "approve" | .proposed_event = "APPROVE"' "$O/result.json" > "$O/forged.json"
+  [ "$(bx_acc "$O/result.json" "$r")" = "findings accepted: full" ] &&
+  [ "$(bx_acc "$O/forged.json" "$r")" = "findings rejected: the verdict does not follow from the findings" ]; }
+t_bx_added; check "binary: a witnessed example beside a covered added resource is approve with nits at rule 4, never approve, and accept agrees" $?
+t_bx_added_u() {
+  render "$NONE" "" "$BXCHK" "$(brx addu "[$BXCI, $BXADDU]" "$BXWIT")"
+  [ "$ST" = 0 ] && [ "$(rule)" = 4 ] && [ "$(verdict)" = "not approved COMMENT" ] || return 1
+  local r="$TMP/run-bx-addu.json"; jq '.verdict = "approve with nits"' "$O/result.json" > "$O/forged.json"
+  [ "$(bx_acc "$O/result.json" "$r")" = "findings accepted: full" ] &&
+  [ "$(bx_acc "$O/forged.json" "$r")" = "findings rejected: the verdict does not follow from the findings" ]; }
+t_bx_added_u; check "binary: an unverifiable added resource beside a witnessed example is not approved, and accept agrees" $?
+t_bx_nonhcl_acc() {
+  render "$NONE" "" "$BXCHK" "$(brx nha "[$BXCI]" "$BXWIT")"
+  [ "$ST" = 0 ] && [ "$(verdict)" = "approve with nits COMMENT" ] || return 1
+  local r="$TMP/run-bx-nha.json"; jq '.verdict = "approve" | .proposed_event = "APPROVE"' "$O/result.json" > "$O/forged.json"
+  [ "$(bx_acc "$O/result.json" "$r")" = "findings accepted: full" ] &&
+  [ "$(bx_acc "$O/forged.json" "$r")" = "findings rejected: the verdict does not follow from the findings" ]; }
+t_bx_nonhcl_acc; check "binary: accept takes the approve with nits and refuses an approve over a witnessed example beside a change outside Terraform" $?
+t_bx_never8() { # every yes outcome of the ladder is approve with nits, whatever rule 7 or 8 cause the ledger holds
+  jq -L "$REF" -e -n 'include "render-comment";
+    [ ([], [{rule_id: "structure.wrong-file", severity: "LOW"}]) as $f | (0, 1) as $a | (false, true) as $cap
+      | {findings: $f, signals: {checks: "pass", threads: "pass", review_decision: "none", mergeability: "pass"},
+         unresolved: 0, triage: false, gaps: 0, refuted: 0, unplanned_open: 1, binary_yes: true, covered: 0,
+         undemonstrated: 0, identical: 0, added: $a, nonhcl_cap: $cap} | ladder | .rule == 4 and .verdict == "approve with nits" ]
+    | all' > /dev/null; }
+t_bx_never8; check "binary: the yes outcome is approve with nits at rule 4 with or without a rule 7 cause, never rule 8" $?
+mutate "an unverifiable added resource read as yes" 's/select\(\.state == "unverifiable" and \(\(ci_gated or floor_ok or demo_ok or same_ok\) \| not\)\); false\)/select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok or same_ok) | not)); .category == "resource-added-or-removed")/; s/\n  and \$l\.gaps == 0 and \$open != \[\]/\n  and \$open != []/; s/\.complete != true and \(rule7_trigger \| not\)/.complete != true and (rule7_trigger | not) and .category != "resource-added-or-removed"/' t_bx_added_u
+mutate_hp "accept reading a rule 7 trigger as no class" 's/\.complete != true and \(rule7_trigger \| not\)/.complete != true/' t_bx_nonhcl_acc
 echo
 if [ "$fails" -eq 0 ]; then echo "render comment: all checks hold"; else echo "render comment: $fails failed"; exit 1; fi

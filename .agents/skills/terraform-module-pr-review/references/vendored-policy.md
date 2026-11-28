@@ -5,7 +5,7 @@
 
 ## What It Answers
 
-Some modules ship an IAM policy document copied from a workload's own published policy, such as a Kubernetes controller's or a storage driver's. Pull requests sync the copy to a new upstream release and say it "matches upstream". The reviewer cannot read the upstream file: it either takes the claim unchecked or refuses to judge a narrowing and ends inconclusive. [vendored-policy.sh](vendored-policy.sh) reads the upstream file on the host instead, at a commit it resolves and records, reads the module's document and the policies that use it with the facts engine, and states the differences as facts.
+Some modules ship an IAM policy document copied from a workload's own published policy, such as a Kubernetes controller's or a storage driver's. Pull requests sync the copy to a new upstream release and say it "matches upstream". The reviewer cannot read the upstream file: it either takes the claim unchecked or refuses to judge a narrowing and ends not approved. [vendored-policy.sh](vendored-policy.sh) reads the upstream file on the host instead, at a commit it resolves and records, reads the module's document and the policies that use it with the facts engine, and states the differences as facts.
 
 ## Profile Entries
 
@@ -28,7 +28,7 @@ For each entry of the base repository whose file the change touches, every step 
 5. Resolve the tag to its commit with `gh api repos/<upstream>/git/ref/tags/<tag>`, and an annotated tag through `git/tags/<sha>`, then read the upstream file at that commit with `gh api repos/<upstream>/contents/<file>?ref=<commit>`. A tag not found, a failed read, or an upstream file that writes a key twice in one object, which JSON readers resolve in different ways, gives no evidence.
 6. Hold the policy language version to `2012-10-17`: the head and the base may also write none, which the provider's data source reads as `2012-10-17`, but the upstream file must write `"Version": "2012-10-17"`, since IAM reads a policy with no version, or an older one, under rules that take policy variables such as `${aws:username}` as literal text. Any other version gives no evidence. Normalize each statement of the head, the base and the upstream file into one tuple per action and resource: effect, action, resource, principals and conditions (operator, key and values). A tuple is a JSON array and is compared as one, never as joined text. A `NotAction`, `NotResource` or `NotPrincipal` list stays one sorted list, as it is one exclusion set. Action names compare in lower case; condition keys and values, resources and principals compare as written. Compute the head against upstream and the head against the base.
 
-Nothing fetched or read runs. A host that selects the reviewer's judgment variant ([facts-variant.md](facts-variant.md)) gets no lines, since that variant's prefix leaves the reviewer's evidence section out for its size cap: such a run keeps the rules it had, and at worst ends inconclusive.
+Nothing fetched or read runs. A host that selects the reviewer's judgment variant ([facts-variant.md](facts-variant.md)) gets no lines, since that variant's prefix leaves the reviewer's evidence section out for its size cap: such a run keeps the rules it had, and at worst ends not approved.
 
 ## Output
 
