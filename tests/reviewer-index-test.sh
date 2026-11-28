@@ -502,6 +502,13 @@ an other section unlinked~unlinked section~references/run/check-f.md~/^| \[Decis
 a rule named in a check file with no row~missing row~references/check-g-behaviour.md~s/^`rule_id` prefixes: /`claim.new-rule`; &/
 a summary the workflow does not link~skill links~references/workflow.md~s/(run\/check-e\.md)/(run\/check-e.md#rules)/
 the ignored-input band without its null default~sentences~references/check-g-behaviour.md~s/, and its default is `null`\.$/./
+the fetch before a provider fact gap dropped~sentences~SKILL.md~s/: start the helper first, and never file this finding in place of that fetch\. /. /
+the provider fact gap allowed with no fetch~sentences~SKILL.md~s/only after a fetch helper started for that entry reported it not found or failed, or when the host can start no helper/when no page was read/
+the fetch rule widened past the entries the Budget hands out~sentences~SKILL.md~s/ lets the lead hand out, within the cap and the lookup limits at a resolved version,/,/
+the Budget gaps made to wait for a fetch~sentences~SKILL.md~s/ An entry the Budget does not hand out, past the cap or the lookup limits, a type or version it cannot resolve, or a need outside the list, stays the gap the Budget names, filed at once with no helper started\.$//
+the example's key name dropped from condition 2~sentences~references/check-g-behaviour.md~s/The key's name already says what it does, so condition 2 holds even where the description does not name the key\. //
+the documented-intent example given a MEDIUM band~sentences~references/check-g-behaviour.md~s/^\(.*\)It is never MEDIUM: this rule has no MEDIUM band, and/\1It may be MEDIUM, and/
+the documented-intent example unlinked~unlinked section~references/run/check-g.md~/Worked Example: A Key a Dynamic Block Dropped/d
 the classifier cap read as a missing trigger line~calibration guard~references/check-g-behaviour.md~s/ Neither is a changed file with no `trigger` line when the `behaviour:` line counts one or more changes over the cap: [^.]*\.//
 the verification gap handed to the author~calibration guard~references/check-g-behaviour.md~s/For the maintainers, not the author: review this head again once/Rerun the caller's behaviour step so/
 a sentence of the spec rewritten~sentences~references/check-g-behaviour.md~s/^- `claim.refuted`: a `claim` line has state `refuted`/- `claim.refuted`: a `claim` line says `refuted`/
