@@ -27,9 +27,10 @@
 #
 # diff-dirs prints, one per line and repository-relative, the directory of each trigger in
 # <out>/behaviour.json whose category is on the plan diff's closed list (behaviour-pass.md, The
-# Run Object), for the plan pass's --diff-dir. eval with --plan-diff reads the coverage's
-# plan_diff and marks such a trigger identical when every merge base example that reaches it
-# planned the same against the base and the head module.
+# Run Object), or that is a variable the change adds, for the plan pass's --diff-dir. eval with
+# --plan-diff reads the coverage's plan_diff and marks a trigger on the closed list
+# identical when every merge base example that reaches it planned the same against the base and
+# the head module.
 #
 # classify writes <out>/behaviour.json, the checked classifier output, or <out>/status, the reason
 # nothing was classified, and prints one line. eval writes <out>/run-behaviour.json, the run file's
@@ -208,7 +209,26 @@ def diff_kind($t; $b; $nv): if $t.change_kind != "added" or ($t.address | type !
       and (any($b.triggers[]; .address == $t.address and .change_kind != "added"
         and ((.attribute | type) != "string" or ((.attribute | ltrimstr("dynamic.") | split(".")[0]) == $bt))) | not))
   then "argument"
+  # A managed resource the change adds whose gate, its count or for_each (behaviour.resource-gate),
+  # reads variables the change adds in the same directory with no level and a null or literal
+  # default, and nothing else: no existing caller sets any of them, so at the defaults it makes the
+  # same instances for every existing caller, and an equal plan diff shows it makes none.
+  elif ($t.address | test("^[a-z][a-z0-9]*_[a-z0-9_]+\\.[A-Za-z_][A-Za-z0-9_-]*$")) and $t.levels == ["L4"]
+    and $t.category == "resource-added-or-removed" and (($t.also_categories // []) == []) and (($b.capped // 0) == 0)
+    and ($t.gate.attribute | IN("count", "for_each"))
+    and $t.gate.contextual_refs == [] and $t.gate.pure == true
+    and ($t.gate.referenced_inputs | type == "array" and length > 0)
+    and (($t.file | tdir) as $d | all($t.gate.referenced_inputs[];
+      (.name | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]*$")) and (.name as $n
+        | any($b.triggers[]; .address == ("var." + $n) and .change_kind == "added" and .category == "unclassified-change"
+          and ((.also_categories // []) == []) and .levels == [] and .declaration.added == true
+          and (.declaration.default | IN("null", "literal")) and (.file | type == "string") and (.file | tdir) == $d))))
+  then "resource"
   else null end;
+# diff_dir: a trigger whose directory gets a plan diff: one on the closed list, or a variable the
+# change adds, whatever its level. A plan diff gathers evidence only; the mark stays the closed list.
+def diff_dir($t; $b; $nv): diff_kind($t; $b; $nv) != null
+  or ($t.change_kind == "added" and ($t.address | type == "string" and test("^var\\.[A-Za-z_][A-Za-z0-9_-]*$")));
 def valid_claims: type == "object" and (.claims | type == "array" and length <= 48
   and all(.[]; type == "object" and (.claim_id | cid)) and (map(.claim_id) | length == (unique | length)));
 '
@@ -784,7 +804,8 @@ wrapper_pairs() {
   cat "$out/wrappers.txt"
 }
 
-# diff_dirs: the directories of the closed list's triggers, repository-relative, for --diff-dir.
+# diff_dirs: the directories of the closed list's triggers and of the variables the change adds,
+# repository-relative, for --diff-dir.
 diff_dirs() {
   [ -f "$out/behaviour.json" ] || die "run classify first"
   prefix="${prefix%/}"
@@ -793,7 +814,7 @@ diff_dirs() {
   local nv='[]'
   [ ! -f "$out/nullvars.json" ] || nv="$(jq -c 'if type == "array" then . else [] end' "$out/nullvars.json" 2> /dev/null)" || nv='[]'
   jq -r --arg pre "$prefix" --argjson nv "${nv:-[]}" "$JQ_DEFS"' . as $b
-    | [.triggers[] | select(diff_kind(.; $b; $nv) != null) | .file | tdir
+    | [.triggers[] | select(diff_dir(.; $b; $nv)) | .file | tdir
        | if $pre == "" then . elif . == "." then $pre else $pre + "/" + . end] | unique[]' "$out/behaviour.json"
 }
 

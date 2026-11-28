@@ -1,3 +1,21 @@
+## [0.20.5](https://github.com/modulestf/modulestf/compare/v0.20.4...v0.20.5) (2026-11-28)
+
+
+### Bug Fixes
+
+* **pr-review:** Plan diff every directory a new variable is in and mark a new resource gated on new variables ([#322](https://github.com/modulestf/modulestf/issues/322)) ([5488bd4](https://github.com/modulestf/modulestf/commit/5488bd480d1f596e597a45ccce5d21dae49f9a28)), closes [#291](https://github.com/modulestf/modulestf/issues/291) [#293](https://github.com/modulestf/modulestf/issues/293) [modulestf/facts#163](https://github.com/modulestf/facts/issues/163) [modulestf/facts#163](https://github.com/modulestf/facts/issues/163)
+
+
+
+## [0.20.4](https://github.com/modulestf/modulestf/compare/v0.20.3...v0.20.4) (2026-11-28)
+
+
+### Bug Fixes
+
+* **pr-review:** Pin mtf-facts v0.23.0 ([#325](https://github.com/modulestf/modulestf/issues/325)) ([bee6a87](https://github.com/modulestf/modulestf/commit/bee6a87444a15d75736ea0aee20e7c10be37ba7b)), closes [modulestf/facts#163](https://github.com/modulestf/facts/issues/163) [#291](https://github.com/modulestf/modulestf/issues/291)
+
+
+
 ## [0.20.3](https://github.com/modulestf/modulestf/compare/v0.20.2...v0.20.3) (2026-11-27)
 
 
