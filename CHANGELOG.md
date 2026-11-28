@@ -1,3 +1,12 @@
+# [0.21.0](https://github.com/modulestf/modulestf/compare/v0.20.7...v0.21.0) (2026-11-28)
+
+
+### Features
+
+* **pr-review:** Resolve every rule 4 unknown to approve with nits or not approved ([#324](https://github.com/modulestf/modulestf/issues/324)) ([ccad15a](https://github.com/modulestf/modulestf/commit/ccad15a9acd4d5f748eef84f6efa4cff770bc809))
+
+
+
 ## [0.20.7](https://github.com/modulestf/modulestf/compare/v0.20.6...v0.20.7) (2026-11-28)
 
 
