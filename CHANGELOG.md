@@ -1,3 +1,12 @@
+## [0.20.7](https://github.com/modulestf/modulestf/compare/v0.20.6...v0.20.7) (2026-11-28)
+
+
+### Bug Fixes
+
+* **pr-review:** Cap a covered added or removed resource at approve with nits ([#330](https://github.com/modulestf/modulestf/issues/330)) ([f4ad7de](https://github.com/modulestf/modulestf/commit/f4ad7deee273db08e1e409ce57d94f0d615467c7)), closes [#328](https://github.com/modulestf/modulestf/issues/328)
+
+
+
 ## [0.20.6](https://github.com/modulestf/modulestf/compare/v0.20.5...v0.20.6) (2026-11-28)
 
 
