@@ -95,6 +95,10 @@ def step_not_run:
   or ((.behaviour.reason? // "") | type == "string" and startswith("ladder not run: "));
 def host_verdict_run($model; $reg; $not_run):
   host_verdict(if $not_run and $model != "block" then "inconclusive" else $model end; $reg);
+# A rule 7 cause of the run file (render-comment.jq run_rule7_cause), $cause: the render never
+# approves beside one, so the host reads an approve as approve with nits and the model's approve fails.
+def host_verdict_run($model; $reg; $not_run; $cause):
+  host_verdict_run($model; $reg; $not_run) | if $cause and . == "approve" then "approve with nits" else . end;
 
 # Paths relative to the module root, for the reviewer; null for a path outside it.
 def rel($prefix):

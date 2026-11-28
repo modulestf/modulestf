@@ -1143,17 +1143,17 @@ mutate "the classifier cap counted among the changes not verified" 's/unverifiab
 mutate "skipped files no cause outside the COMPACT table" 's/ or \$l\.skipped > 0 or / or /' t_skipped_clean
 mutate "unregistered rules not counted as gaps" 's/ \+ \(\$unreg \| length\) \+ \(\$in\.run/ + (\$in.run/' t_unreg
 mutate "the registry read from every table row" 's/\| if \$h == null then \[\] else/| if true then [\$l[] | capture("^\\\\| `(?<id>" + rule_pat + ")` \\\\|") | .id] else/' t_bad_fenced
-mutate_hp() { # name, perl substitution on host-pass.sh and incremental.jq, case function
+mutate_hp() { # name, perl substitution on host-pass.sh, incremental.jq and render-comment.jq, case function
   local d="$TMP/muthp-$oc/terraform-module-pr-review/references" keep="$HPA" before="$fails"; mkdir -p "$d"
   cp "$REF/host-pass.sh" "$REF/incremental.jq" "$REF/render-comment.jq" "$REF/host-records.jq" "$d/"
-  perl -0pi -e "$2" "$d/host-pass.sh" "$d/incremental.jq"
-  if cmp -s "$d/host-pass.sh" "$REF/host-pass.sh" && cmp -s "$d/incremental.jq" "$REF/incremental.jq"; then
+  perl -0pi -e "$2" "$d/host-pass.sh" "$d/incremental.jq" "$d/render-comment.jq"
+  if cmp -s "$d/host-pass.sh" "$REF/host-pass.sh" && cmp -s "$d/incremental.jq" "$REF/incremental.jq" && cmp -s "$d/render-comment.jq" "$REF/render-comment.jq"; then
     check "self-check: $1 (the mutation changed nothing)" 1; return
   fi
   HPA="$d/host-pass.sh"; "$3" > /dev/null 2>&1; local s=$?; HPA="$keep"; fails="$before"
   check "self-check: $1 is caught" "$([ "$s" != 0 ]; echo $?)"
 }
-mutate_hp "accept without the registry" 's/host_verdict_run\(\$v; \$reg; \$nr\)/host_verdict_known(\$v)/' t_accept_high
+mutate_hp "accept without the registry" 's/host_verdict_run\(\$v; \$reg; \$nr; \$r7\)/host_verdict_known(\$v)/' t_accept_high
 mutate_hp "host_verdict reading unregistered rules" 's/map\(select\(\(\.rule_id \| IN\(\$reg\[\]\)\) or \.severity == "LOW"\)\) as \$k/. as \$k/' t_accept_crit
 mutate_hp "host_verdict holding an unregistered LOW as an unknown" 's/ or \.severity == "LOW"\)\) as \$k/)) as \$k/' t_accept_low
 mutate_hp "the verdict check skipped" 's/\|\|\n    reject "the verdict does not follow from the findings"/|| true/' t_inc_verdict
@@ -2728,7 +2728,7 @@ mutate "a plan step not run not counted as a gap" 's/\(\$in\.run \| skipped_gap\
 mutate "the inert line kept beside a plan step not run" 's/\$run\.coverage\.inert and \(\$run \| plan_not_run_gap\) == 0 and/\$run.coverage.inert and/' t_nr_plan_inert
 mutate "the plan not run reasons dropped" 's/\] \+ plan_not_run_reasons \+ \["plan pass skipped/, "plan pass skipped/' t_nr_plan
 mutate "the ladder not run reasons dropped" 's/ \+ \(not_run_tokens \| map\("ladder not run: " \+ \.\)\);/;/' t_nr_ladder
-mutate_hp "accept --run not read" 's/host_verdict_run\(\$v; \$reg; \$nr\)/host_verdict(\$v; \$reg)/' t_nr_accept
+mutate_hp "accept --run not read" 's/host_verdict_run\(\$v; \$reg; \$nr; \$r7\)/host_verdict(\$v; \$reg)/' t_nr_accept
 mutate_hp "accept --run not reading a plan step not run" 's/startswith\("plan pass not run: "\)/startswith("plan pass never: ")/' t_nr_accept
 # The ladder reason read by accept --run, a plan step not run kept whatever the depth's scope and
 # read the same by accept, a cause outside the COMPACT table beside a truncated description alone,
@@ -3289,6 +3289,40 @@ mutate "the added rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; 
 mutate "the added section dropped" 's/     \+ section\("Resources added or removed"/     + [] + section("dropped"/' t_ad
 mutate "the What to do section kept for added resources" 's/ or \$l\.identical > 0 or \$l\.added > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/ or \$l.identical > 0 or \$l.nonhcl_cap) and \$items == []/' t_ad
 mutate "COMPACT taken beside added resources" 's/\n  and \$l\.added == 0\n/\n/' t_ad_tier
+
+# --- accept --run and the rule 7 causes of the run file (render-comment.jq run_rule7_cause): the
+# render never approves beside a covered added or removed resource, an unexercised or identical
+# trigger, or covered skips of a change that is not inert, so accept refuses a forged approve.
+acc7() { # run file, verdict -> ACC, the accept line for no finding and that verdict; renders in this shell so oc counts
+  render "$NONE"; jq --arg v "$2" '.verdict = $v' "$O/result.json" > "$TMP/acc7-$oc.json"
+  ACC="$(bash "$HPA" accept --prior "$PRIOR" --findings "$O/findings.json" --result "$TMP/acc7-$oc.json" --rules "$RF" --run "$1")"
+}
+REJ='findings rejected: the verdict does not follow from the findings'
+acc7_caps() { acc7 "$1" approve; [ "$ACC" = "$REJ" ] || return 1; acc7 "$1" "approve with nits"; [ "$ACC" = "findings accepted: full" ]; }
+ACS='.coverage.covered_skips = [{dir: "examples/x", gate: "G1", path: "main.tf", witnesses: []}]'
+t_acc7_added() { acc7_caps "$(RAD acc)"; }
+t_acc7_added; check "accept --run: a forged approve over a covered added resource is refused, approve with nits taken" $?
+t_acc7_ux() { acc7_caps "$(RUX acc)"; }
+t_acc7_ux; check "accept --run: a forged approve over unexercised triggers is refused" $?
+t_acc7_id() { acc7_caps "$(RID acc)"; }
+t_acc7_id; check "accept --run: a forged approve over identical triggers is refused" $?
+t_acc7_skip() { acc7_caps "$(runf acs "$ACS")"; }
+t_acc7_skip; check "accept --run: a forged approve over covered skips is refused" $?
+t_acc7_inert() { acc7 "$(runf acsi "$ACS | .coverage.inert = true")" approve; [ "$ACC" = "findings accepted: full" ]; }
+t_acc7_inert; check "accept --run: covered skips of an inert change do not refuse an approve" $?
+t_acc7_tinert() { acc7 "$(runf acst "$ACS"' | .behaviour.triggers = [{id: "T-001", file: "main.tf", line: 1, category: "wrapper-change", state: "inert"}]')" approve; [ "$ACC" = "findings accepted: full" ]; }
+t_acc7_tinert; check "accept --run: covered skips beside triggers all inert do not refuse an approve" $?
+t_acc7_plain() { acc7 "$(runf acsp '.behaviour.triggers = [{id: "T-001", file: "main.tf", line: 1, category: "dynamic-block-change", state: "covered"}]')" approve; [ "$ACC" = "findings accepted: full" ]; }
+t_acc7_plain; check "accept --run: a covered trigger of another category does not refuse an approve" $?
+mutate_hp "accept --run not reading the rule 7 causes" 's/host_verdict_run\(\$v; \$reg; \$nr; \$r7\)/host_verdict_run(\$v; \$reg; \$nr)/' t_acc7_added
+mutate_hp "the rule 7 cause not capping an approve" 's/if \$cause and \. == "approve" then/if false then/' t_acc7_added
+mutate_hp "a covered added resource not a rule 7 cause" 's/any\(\$b\.triggers\[\]; added_ok or \.unexercised/any(\$b.triggers[]; .unexercised/' t_acc7_added
+mutate_hp "an unexercised trigger not a rule 7 cause" 's/ or \.unexercised == true or \(\.identical/ or (.identical/' t_acc7_ux
+mutate_hp "an identical trigger not a rule 7 cause" 's/ or \(\.identical \| type == "array"\)\)\)/))/' t_acc7_id
+mutate_hp "covered skips not a rule 7 cause" 's/\(\(\(\.coverage\.covered_skips \/\/ \[\]\) != \[\]\)/((false)/' t_acc7_skip
+mutate_hp "covered skips of an inert change a rule 7 cause" 's/ and \(\.coverage\.inert \| not\) and \(\$b \| triggers_inert/ and (\$b | triggers_inert/' t_acc7_inert
+mutate_hp "covered skips beside inert triggers a rule 7 cause" 's/ and \(\$b \| triggers_inert \| not\)\);/);/' t_acc7_tinert
+mutate_hp "any covered trigger a rule 7 cause" 's/def added_ok: \.state == "covered" and any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "resource-added-or-removed"\);/def added_ok: .state == "covered";/' t_acc7_plain
 
 # --- Recorded exceptions join the covered skips (verdict.md, Covered safety-gate skips): a
 # runner-mode run whose every unplanned example is a recorded exception witnessed by a planned
