@@ -1061,7 +1061,7 @@ nr_rr() { # review-run.sh copy -> 0 when every rule holds
     printf '%s\n' "$l" | grep '^behaviour eval ' | grep -qE -- '--plan-diff [^ ]*/coverage\.json( |$)' &&
     grep -qE '^plan: plan pass not run: disk \([0-9]+s\)$' "$TMP/nr-pl.out" && [ ! -e "$RUN/state/plan" ] &&
     [ "$(jq -r '[.unplanned[].reason] | unique | join(",")' "$RUN/coverage.json")" = "plan pass not run: disk" ] &&
-    [ "$(jq -r .verdict "$TMP/nr-render/result.json")" = inconclusive ] &&
+    [ "$(jq -r .verdict "$TMP/nr-render/result.json")" = "not approved" ] &&
     grep -qF 'were not planned: plan pass not run: disk.' "$TMP/nr-render/comment.md" || return 1
   run_rr cleanup "$RUN" > /dev/null; rm -rf "$TMP/nr-render"
   DEPTH_STUB=deep prep --profile p1 --role-arn arn:aws:iam::000000000000:role/review
@@ -1079,7 +1079,7 @@ nr_rr() { # review-run.sh copy -> 0 when every rule holds
     [ "$(q "$RUN/behaviour/run-behaviour.json" '. == {status: "not-run", reason: "ladder not run: time", triggers: [], claims: [], capped: 0}')" = 0 ] &&
     grep -qxF 'behaviour: not run: ladder not run: time' "$RUN/handover/record.txt" &&
     [ "$(q "$RUN/facts-stats.json" '.fallbacks.behaviour_not_run == true')" = 0 ] &&
-    [ "$(jq -r .verdict "$TMP/nr-render/result.json")" = inconclusive ] &&
+    [ "$(jq -r .verdict "$TMP/nr-render/result.json")" = "not approved" ] &&
     grep -qxF -- '- Behaviour check: ladder not run: time, so no change was classified or verified.' "$TMP/nr-render/comment.md" || return 1
   run_rr cleanup "$RUN" > /dev/null; rm -rf "$TMP/nr-render"
 }
@@ -2492,7 +2492,7 @@ check "large change: the run file carries skipped_files, the render lists them a
      grep -qxF -- '- 3 changed files were over the review budget and were not reviewed:' "$TMP/render-large/comment.md" &&
      grep -qxF -- '  - `wrappers/`: 1 file' "$TMP/render-large/comment.md" && grep -qxF -- '    - `wrappers/x.tf`' "$TMP/render-large/comment.md" &&
      grep -qxF -- '  - `docs/`: 1 file' "$TMP/render-large/comment.md" && grep -qxF -- '    - name withheld' "$TMP/render-large/comment.md" &&
-     [ "$(q "$TMP/render-large/result.json" '.verdict == "inconclusive"')" = 0 ]; echo $?)"
+     [ "$(q "$TMP/render-large/result.json" '.verdict == "not approved"')" = 0 ]; echo $?)"
 echo '[]' > "$RUN/skipped.json"
 run_rr render "$RUN" --findings "$TMP/f0.json" --assessment "$TMP/a0.txt" --out "$TMP/render-large2" > "$TMP/re-l2.out" 2>&1
 check "large change: a skipped list emptied after the handover stops the run, nothing rendered" \
@@ -2703,6 +2703,8 @@ mkrepo widget; ghfiles open false APPROVED
 # Updated for Step 5.5: skip-coverage.sh also decides the design skips, examples denied a data
 # source read at the head and at the base.
 # Updated for Step 12 keeping the post record with review-run.sh record (github-io.md, The Post Record).
+# Updated for the binary rule 4 (verdict.md, Binary Resolution): the rule 4 sentences of SKILL.md
+# and Step 5.5 say not approved in place of inconclusive.
 sentences() {
   cat "$@" | awk '/^```/{f=!f; next} f{next} /^#/{next} /^\|/{next} /^>/{next} {print}' |
     perl -pe 's/\]\([^)]*\)/]/g; s/^\s*-\s+//; s/\*\*//g; s/\. (?=[A-Z`\[*(])/.\n/g' |
@@ -2711,7 +2713,7 @@ sentences() {
 sentences "$SKILL/SKILL.md" "$SKILL/references/workflow.md" "$SKILL/references/inputs.md" > "$TMP/sentences"
 [ -z "${REVIEW_RUN_SENTENCES:-}" ] || cp "$TMP/sentences" "$REVIEW_RUN_SENTENCES"
 got="$(git hash-object "$TMP/sentences" | cut -c1-12)"
-want=9230a96b9de7
+want=e17e62c73666
 check "SKILL.md is at most 16384 bytes, the run guide review-run.md at most 10240" \
   "$([ "$(wc -c < "$SKILL/SKILL.md")" -le 16384 ] && [ "$(wc -c < "$SKILL/references/review-run.md")" -le 10240 ]; echo $?)"
 check "the workflow move keeps the sentence multiset ($got)" "$([ "$got" = "$want" ]; echo $?)"

@@ -170,7 +170,7 @@ jq -n --slurpfile b "$O/run-behaviour.json" '{format: 1, triage: false, plan_ran
 printf 'Dropping compact() keeps the list length known.\n' > "$TMP/assess.txt"
 msg="$(bash "$RCU" --head "$HEAD" --findings "$TMP/findings.json" --host "$TMP/host.json" --checks "$TMP/checks" \
   --run "$TMP/run.json" --assessment "$TMP/assess.txt" --run-dir "$TMP/rundir" --out "$TMP/render" 2>&1)"
-check "acceptance: the replay renders inconclusive at rule 4" "$([ "$msg" = "rendered inconclusive (ladder rule 4), proposed event COMMENT, tier STANDARD" ]; echo $?)"
+check "acceptance: the replay renders inconclusive at rule 4" "$([ "$msg" = "rendered not approved (ladder rule 4), proposed event COMMENT, tier STANDARD" ]; echo $?)"
 [ -f "$TMP/render/comment.md" ] && ! grep -qF 'with nits' "$TMP/render/comment.md"; check "acceptance: never approve with nits" $?
 cat > "$TMP/want-gaps" <<'EOF'
 ### Checks that could not run
@@ -380,7 +380,7 @@ urender() { # behaviour jq select -> the render message
 t_unex_render() {
   unex . '.triggers |= map(if .id == "T-017" then .follows = ["T-008", "T-014"] else . end)' || return 1
   for id in T-001 T-002 T-003 T-004 T-006 T-007 T-010 T-012 T-016 T-019 T-020; do
-    case "$(urender ".id == \"$id\"")" in "rendered inconclusive (ladder rule 4),"*) ;; *) echo "$id"; return 1 ;; esac
+    case "$(urender ".id == \"$id\"")" in "rendered not approved (ladder rule 4),"*) ;; *) echo "$id"; return 1 ;; esac
   done
   case "$(urender '.id | IN("T-008", "T-014", "T-017")')" in "rendered approve with nits (ladder rule 7), proposed event COMMENT, tier STANDARD") ;; *) return 1 ;; esac
 }
@@ -482,7 +482,7 @@ udirs() { # [behaviour jq update] [eval jq update]: classify on the two director
 # The examples of the two-directory runs call the root and modules/a directly, so both are loaded.
 jq '.coverage.examples[0].module_calls += {a: "modules/a"}' "$TMP/ladder-unex.json" > "$TMP/ladder-dirs.json"
 t_unex_dirs() { udirs && [ "$(marked)" = '["T-002","T-003"]' ] && [ "$(cat "$O/nullvars.json")" = '[{"dir":"modules/a","name":"deletion_protection"}]' ] \
-  && case "$(urender '.id == "T-001"')" in "rendered inconclusive (ladder rule 4),"*) ;; *) false ;; esac; }
+  && case "$(urender '.id == "T-001"')" in "rendered not approved (ladder rule 4),"*) ;; *) false ;; esac; }
 t_unex_dirs; check "unexercised: a root pass-through of a variable that defaults to true is not marked when a submodule adds the same name with a null default" $?
 t_unex_dirs_both() { t_unex_dirs_both_with '["T-001"]'; }
 t_unex_dirs_both_with() { cp "$UMOD2/variables.tf" "$TMP/vars-keep"; printf 'variable "deletion_protection" {\n  default = true\n}\n' > "$UMOD2/variables.tf"
@@ -499,7 +499,7 @@ t_unex_unloaded() { printf 'variable "deletion_protection" {\n  type    = map(st
   ULAD="$TMP/ladder-unex.json" udirs; local r=$?
   printf 'variable "deletion_protection" {\n  default = null\n}\n' > "$UMOD2/modules/a/variables.tf"
   [ "$r" = 0 ] && [ "$(marked)" = '[]' ] && [ "$(cat "$O/nullvars.json")" = '[{"dir":"modules/a","name":"deletion_protection"}]' ] \
-    && case "$(urender '.id | IN("T-002", "T-003")')" in "rendered inconclusive (ladder rule 4),"*) ;; *) false ;; esac; }
+    && case "$(urender '.id | IN("T-002", "T-003")')" in "rendered not approved (ladder rule 4),"*) ;; *) false ;; esac; }
 t_unex_unloaded; check "unexercised: a change in a directory no planned example loads is not marked and renders inconclusive" $?
 t_unex_loaded() { udirs && [ "$(marked)" = '["T-002","T-003"]' ] \
     && case "$(urender '.id | IN("T-002", "T-003")')" in "rendered approve with nits (ladder rule 7),"*) ;; *) false ;; esac; }
@@ -1862,7 +1862,7 @@ t_caller_render() { # prefix -> the render message in RMSG; called directly, so 
     --run "$TMP/run-c.json" --assessment "$TMP/assess.txt" --run-dir "$TMP/rundir" --out "$rd" 2>&1)"
 }
 t_caller_render_none() { t_caller_render "" && case "$RMSG" in "rendered approve (ladder rule 8),"*) ;; *) return 1 ;; esac; }
-t_caller_render_pfx() { t_caller_render "$CPFX" && case "$RMSG" in "rendered inconclusive (ladder rule 4),"*) ;; *) return 1 ;; esac; }
+t_caller_render_pfx() { t_caller_render "$CPFX" && case "$RMSG" in "rendered not approved (ladder rule 4),"*) ;; *) return 1 ;; esac; }
 # A caller_code that is not a boolean is refused, so a string or a number never leaves a trigger inert
 # under a prefix.
 t_caller_type() { # value of caller_code as JSON -> refused with a prefix

@@ -53,7 +53,7 @@ One JSON object with exactly these six keys and no others:
 | `number` | number, an integer of at least 1 | `N`, the pull request number |
 | `head_sha` | string, 40 lowercase hex characters | `headRefOid`, pinned at Step 2 |
 | `base_sha` | string, 40 lowercase hex characters | `base.sha` from the same Step 2 metadata read |
-| `verdict` | string | The verdict from [The Ladder](verdict.md#the-ladder), one of `hold for the next major`, `block`, `inconclusive`, `changes suggested`, `approve with nits`, `approve` |
+| `verdict` | string | The verdict from [The Ladder](verdict.md#the-ladder), one of `hold for the next major`, `block`, `not approved`, `changes suggested`, `approve with nits`, `approve` |
 | `proposed_event` | string | One of `COMMENT`, `APPROVE`, `REQUEST_CHANGES`, as set out below |
 
 `proposed_event` follows the mapping at the end of [verdict.md](verdict.md#clamps): `block` proposes `REQUEST_CHANGES`, except a merge conflict alone, which proposes `COMMENT` ([verdict.md](verdict.md#clamps)), `approve` proposes `APPROVE`, and every other verdict proposes `COMMENT`, with [Our Earlier Block](verdict.md#our-earlier-block) over the posting login's own request for changes. Of the clamps, only the draft and the closed or merged rows apply, and each turns the event into `COMMENT`. The render-only rows and the self-authored row are left out: they describe the login this run resolved at Step 1, not the account the adapter will post as. The adapter applies its own.

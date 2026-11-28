@@ -1057,6 +1057,11 @@ cmd_accept() {
     # A rule 7 cause of the run file: the render never approves beside one (verdict.md, The Ladder).
     r7="$(jq -L "$HERE" 'include "render-comment"; run_rule7_cause' "$run" 2> /dev/null)" &&
       case "$r7" in true | false) ;; *) false ;; esac || reject "the run file is not a JSON object"
+    # A rule 4 unknown in no yes class (verdict.md, Binary Resolution), read by the render's own def.
+    if [ "$nr" = false ]; then
+      nr="$(jq -L "$HERE" --slurpfile f "$findings" 'include "render-comment"; scoped_run | run_no_unknown($f[0])' "$run" 2> /dev/null)" &&
+        case "$nr" in true | false) ;; *) false ;; esac || reject "the run file could not be read for rule 4"
+    fi
   fi
   # The registry as render-comment.sh reads it, from the same rule-facts.md (verdict.md).
   reg="$(jq -c -R -s -L "$HERE" 'include "render-comment"; registry_ids | select(length > 0)' "$rules" 2> /dev/null)" &&

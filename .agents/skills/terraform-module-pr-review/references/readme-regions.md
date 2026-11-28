@@ -27,6 +27,6 @@ A pull request that regenerates a README table, often after a terraform-docs ver
 | `unknown version unreadable` | As `differs`, but the workflow's pin is not a plain version. |
 | `unknown <reason>` | Any other refusal: the pass's own stale reason in lower case, or the host's (`link`, `not a regular file`, `file over 1 mib`, `entry name`, `case collision`, `not a documentation region`, `partial clone`, `read failed`, `deadline`, `pass failed`). |
 
-A judgment run's prefix leaves out the reviewer's Host README Evidence for its size cap, so such a run keeps today's rules for these lines: at worst it ends inconclusive, never with a wrong approval.
+A judgment run's prefix leaves out the reviewer's Host README Evidence for its size cap, so such a run keeps today's rules for these lines: at worst it ends not approved, never with a wrong approval.
 
 `review-run.sh handover` states each line as `README regions: <path> <result>` in the skill's own task text, outside a triage run, only when every line of the file is in that grammar; otherwise it states none. The reviewer's [Host README Evidence](../../terraform-module-reviewer/references/check-e-profile.md#host-readme-evidence) says what each result means for Check E. A failed step is no evidence, and the run goes on as before.

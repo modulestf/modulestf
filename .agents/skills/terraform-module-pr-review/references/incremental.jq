@@ -70,9 +70,9 @@ def host_verdict_known($model):
     elif ($ch | length) > 0 then "block"
     elif $model == "block" then "block"
     elif $m then "block"
-    elif $model == "inconclusive"
+    elif $model == "not approved"
       or any($f[]; .rule_id | IN("review.check-not-run", "review.no-change-identified", "review.verification-incomplete"))
-      then "inconclusive"
+      then "not approved"
     elif $model == "changes suggested" then "changes suggested"
     elif any($f[]; .severity == "MEDIUM") then "block"
     elif any($f[]; .severity == "LOW") or $model == "approve with nits" then "approve with nits"
@@ -85,7 +85,7 @@ def host_verdict_known($model):
 def host_verdict($model; $reg):
   map(select((.rule_id | IN($reg[])) or .severity == "LOW")) as $k
   | if length == ($k | length) then host_verdict_known($model)
-    else $k | host_verdict_known(if $model == "block" then "block" else "inconclusive" end) end;
+    else $k | host_verdict_known(if $model == "block" then "block" else "not approved" end) end;
 
 # A plan or ladder step the host recorded as not run for an environment reason (review-run.sh
 # plan --not-run and ladder --not-run), read from the render's run file: a rule 4 unknown, as an
@@ -94,7 +94,7 @@ def step_not_run:
   any((.coverage.unplanned // [])[]; .reason | type == "string" and startswith("plan pass not run: "))
   or ((.behaviour.reason? // "") | type == "string" and startswith("ladder not run: "));
 def host_verdict_run($model; $reg; $not_run):
-  host_verdict(if $not_run and $model != "block" then "inconclusive" else $model end; $reg);
+  host_verdict(if $not_run and $model != "block" then "not approved" else $model end; $reg);
 # A rule 7 cause of the run file (render-comment.jq run_rule7_cause), $cause: the render never
 # approves beside one, so the host reads an approve as approve with nits and the model's approve fails.
 def host_verdict_run($model; $reg; $not_run; $cause):

@@ -534,9 +534,11 @@ def added_count: if . == null then 0 else [.triggers[] | select(added_ok)] | len
 # Terraform that is not inert (nonhcl_cap), or covered skips of a change that is not inert. With
 # any of them the render never approves; host-pass.sh accept --run refuses an approve beside one. Input: the run file. It may be true where the render reads the cause
 # as an unknown instead, which is no approval either.
+# One trigger that is such a cause; run_no_unknown (Binary Resolution) leaves these to the host too.
+def rule7_trigger: added_ok or .unexercised == true or (.identical | type == "array")
+  or (.state != "inert" and any(.category, (.also_categories // [])[]; . == "non-hcl-dependency"));
 def run_rule7_cause: behaviour_of(.) as $b
-  | ($b != null and $b.status == "ran" and any($b.triggers[]; added_ok or .unexercised == true or (.identical | type == "array")
-      or (.state != "inert" and any(.category, (.also_categories // [])[]; . == "non-hcl-dependency"))))
+  | ($b != null and $b.status == "ran" and any($b.triggers[]; rule7_trigger))
     or (((.coverage.covered_skips // []) != []) and (.coverage.inert | not) and ($b | triggers_inert | not));
 # A location is a code span; under --links (link_base set) a link to the file at the head when
 # the path is in the allowed set, and is not the module root `.`, so the URL holds no character the pull request could choose.
@@ -584,8 +586,14 @@ def ladder:
   elif has_sev("CRITICAL") then {rule: 1, verdict: "block"}
   elif has_sev("HIGH") or .refuted > 0 then {rule: 2, verdict: "block"}
   elif any($g.checks, $g.review_decision, $g.mergeability; . == "fail") then {rule: 3, verdict: "block"}
+  # Rule 4 is binary (verdict.md, Binary Resolution): every unknown in a yes class lands at approve
+  # with nits; any other unknown is not approved, a point a maintainer must check.
+  # A yes outcome never improves a verdict: it is taken only where the same ledger without the
+  # witnessed examples gives approve or approve with nits; otherwise the rung below decides.
   elif ($m | not) and (has_unknown or .unplanned_open > 0)
-    then {rule: 4, verdict: "inconclusive"}
+       and ((.binary_yes == true and ((.unplanned_open = 0 | .binary_yes = false | ladder.verdict)
+             | IN("approve", "approve with nits") | not)) | not)
+    then {rule: 4, verdict: (if .binary_yes == true then "approve with nits" else "not approved" end)}
   elif ($m | not) and .unresolved > 0 then {rule: 5, verdict: "changes suggested"}
   elif has_sev("MEDIUM") then {rule: 6, verdict: "block"}
   elif has_sev("LOW") or .covered > 0 or .undemonstrated > 0 or .identical > 0 or .added > 0 or $g.checks == "jobless" or .nonhcl_cap then {rule: 7, verdict: "approve with nits"}
@@ -593,7 +601,7 @@ def ladder:
 
 def verdict_line: {
   "hold for the next major": "Breaking. Hold for the next major release.",
-  "block": "Changes requested before merge.", "inconclusive": "Inconclusive.",
+  "block": "Changes requested before merge.", "not approved": "Not approved. A maintainer must check the points below before merge.",
   "changes suggested": "Changes suggested.", "approve with nits": "Good to merge, with nits.",
   "approve": "Good to merge."}[.];
 
@@ -629,20 +637,21 @@ def texts: {
   "rationale-3-one": "Failing host signal: {signals}. A failing host signal blocks merge (ladder rule 3).",
   "rationale-3-many": "Failing host signals: {signals}. A failing host signal blocks merge (ladder rule 3).",
   "rationale-3-conflict": "The branch has a merge conflict, and no finding or other host signal blocks merge, so this review is a comment and requests no changes (ladder rule 3).",
-  "rationale-3-conflict-unknown": "Some checks could not run, so the review is also inconclusive.",
+  "rationale-3-conflict-unknown": "Some checks could not run, so a maintainer must also check them.",
+  "rationale-4-yes": "Some examples were not planned, and a planned example witnessed each, as listed below. Such gaps alone mean approve with nits, with their risk named (ladder rule 4).",
   "verdict-conflict": "Rebase needed before merge.",
-  "rationale-4-triage": "A triage run leaves its deferred checks unknown. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-checks": "The check results could not be read, so a failing check may exist. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-checks-jobless": "A workflow ended without starting a job, so the repository's CI did not run. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-threads": "Review thread resolution could not be read, so an open objection may exist. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-review-decision": "The reviews could not be read, so a request for changes may exist. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-mergeability": "Mergeability could not be read, so a merge conflict may exist. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-no-change": "The workspace did not hold the change. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-check-not-run": "A check did not run, so a defect it covers may be open. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-verification-incomplete": "The behaviour evidence handed to the review was incomplete, so a behaviour change may be unchecked. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-unregistered": "A finding names a rule that is not in the rule registry, so its severity cannot decide the verdict. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-skipped": "The change is over the review budget, so some changed files were not reviewed, as listed below. Any unknown makes the review inconclusive (ladder rule 4).",
-  "rationale-4-listed":"A check this review needs could not run, as listed below. Any unknown makes the review inconclusive (ladder rule 4).",
+  "rationale-4-triage": "A triage run leaves its deferred checks unknown. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-checks": "The check results could not be read, so a failing check may exist. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-checks-jobless": "A workflow ended without starting a job, so the repository's CI did not run. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-threads": "Review thread resolution could not be read, so an open objection may exist. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-review-decision": "The reviews could not be read, so a request for changes may exist. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-mergeability": "Mergeability could not be read, so a merge conflict may exist. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-no-change": "The workspace did not hold the change. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-check-not-run": "A check did not run, so a defect it covers may be open. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-verification-incomplete": "The behaviour evidence handed to the review was incomplete, so a behaviour change may be unchecked. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-unregistered": "A finding names a rule that is not in the rule registry, so its severity cannot decide the verdict. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-skipped": "The change is over the review budget, so some changed files were not reviewed, as listed below. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
+  "rationale-4-listed":"A check this review needs could not run, as listed below. An unknown other than an example a planned example witnessed is a point a maintainer must check (ladder rule 4).",
   "rationale-5": "Review threads are still unresolved. Unresolved threads mean changes are suggested (ladder rule 5).",
   "rationale-7": "Only LOW findings remain. LOW findings alone mean approve with nits (ladder rule 7).",
   "rationale-7-undemonstrated": "No finding is open, and a change sets a resource no planned example creates, so no plan shows it. With such a change, approve with nits is the best verdict (ladder rule 7).",
@@ -873,12 +882,13 @@ def rationale($in):
     elif $r == 3 then
       # The conflict wording says the review is a comment, so it needs the event to be one.
       if ($in | conflict_only) and $in.event == "COMMENT" then tx("rationale-3-conflict")
-        + (if ($in | .signals.mergeability = "pass" | ladder).verdict == "inconclusive" then " " + tx("rationale-3-conflict-unknown") else "" end)
+        + (if ($in | .signals.mergeability = "pass" | ladder).verdict == "not approved" then " " + tx("rationale-3-conflict-unknown") else "" end)
       else
       [("checks", "review-decision", "mergeability") as $s
        | select($g[$s | gsub("-"; "_")] == "fail") | tx("signal-name-" + $s)] as $n
         | tx(if ($n | length) > 1 then "rationale-3-many" else "rationale-3-one" end; {signals: ($n | and_join)})
       end
+    elif $r == 4 and $in.binary_yes == true then tx("rationale-4-yes")
     elif $r == 4 then
       tx(if $in.triage then "rationale-4-triage"
          elif $g.checks == "unknown" and $in.jobless != [] then "rationale-4-checks-jobless"
@@ -1452,10 +1462,12 @@ def compact_body($in; $l; $v; $c; $b; $p; $cov):
 # --- Covered safety-gate skips (verdict.md, Covered safety-gate skips). The run file's
 # covered_skips counts only when every condition holds for every skipped example, all or nothing;
 # else it is ignored and the run renders as without it. host.json's head_sha is --head, checked.
-def covered_of($in; $l; $b):
-  $in.run as $run | $run.coverage as $cv | ($cv.covered_skips // []) as $cs | $cv.unplanned as $u
-  | if $cs != [] and $cv.skip_head_sha == $in.host.head_sha and $cv.skip_base_sha == $in.host.merge_base
-       and $run.plan_ran and ($cv.inert | not)
+# The shape of the witness list that both covered skips and the witnessed class of Binary
+# Resolution read: bound, one mode, bounded, all or nothing, witnesses planned, validate passed.
+# The part that needs no host file: host-pass.sh accept reads it too (run_no_unknown).
+def skips_run_shape:
+  . as $run | $run.coverage as $cv | ($cv.covered_skips // []) as $cs | $cv.unplanned as $u
+  | $cs != [] and $run.plan_ran and ($cv.inert | not)
        # one mode for the whole run: laptop gate skips, or runner-mode recorded exceptions; a design
        # skip stands beside either, and needs a mode too
        and ($run.plan_mode | IN("laptop", "runner"))
@@ -1470,6 +1482,14 @@ def covered_of($in; $l; $b):
        and all($cs[]; . as $x | any($u[]; .dir == $x.dir and .reason == ($x | entry_reason)))
        # a witness is a planned example, never one of the skipped ones
        and all($cs[].witnesses[]; .example as $e | all($u[]; .dir != $e))
+       and ($run | has("examples")) and $run.examples.validated + $run.examples.skipped == $run.examples.count;
+def skips_shape($run; $h):
+  $run.coverage as $cv
+  | $cv.skip_head_sha == $h.head_sha and $h.merge_base != null and $cv.skip_base_sha == $h.merge_base
+    and ($run | skips_run_shape);
+def covered_of($in; $l; $b):
+  $in.run as $run | ($run.coverage.covered_skips // []) as $cs
+  | if skips_shape($run; $in.host)
        and $b != null and $b.status == "ran" and $b.capped == 0 and ($b.triggers + $b.claims) != []
        and all($b.triggers[]; (.state | IN("verified", "covered", "inert", "reported")) or floor_ok)
        and all($b.claims[]; .state == "verified")
@@ -1505,6 +1525,57 @@ def nonhcl_lines($nh):
   ($nh | length) as $p
   | if $p == 0 then [] elif $p == 1 then [tx("nonhcl-unreached-one")] else [tx("nonhcl-unreached-many"; {count: $p})] end;
 
+# --- Binary resolution of rule 4 (verdict.md, Binary Resolution). After every evidence step, each
+# unknown left at rule 4 is yes or no, and the verdict is yes only when every one is yes; anything
+# not on the yes list is no, so the function fails closed. The one yes class is an example not
+# planned that the skip coverage step lists with a planned witness, bound to the head and the merge
+# base. Every other unknown touches the interface, state or security, or is missing evidence. Code
+# under examples/ is no class of its own: the module can load it, and a literal of example code the
+# classifier seals as caller code is already inert outside a module root prefix.
+
+# The unknowns the run file alone shows to be no, on the scoped run file and the findings. The render
+# and host-pass.sh accept read this one def; accept has no host file and no checks file, so the def
+# reads nothing that needs them, and it leaves out every trigger a host read could still clear (a
+# change outside Terraform, a provider floor, an undemonstrated, identical or reported trigger): it
+# is never stricter than the render.
+def run_no_unknown($findings):
+  . as $run | behaviour_of($run) as $b | ($run.coverage.covered_skips // []) as $cs
+  | $run.triage or skipped_gap > 0 or plan_not_run_gap > 0 or $run.verify_gaps != []
+  or any($findings[]; .rule_id | IN(gap_rules[]))
+  or ($b != null and ($b.status != "ran" or $b.capped > 0
+       or any($b.claims[]; .state == "unverifiable")
+       or any($b.triggers[]; .state == "unverifiable" and .complete != true and (rule7_trigger | not)
+            and all(.category, (.also_categories // [])[]; . != "provider-version-floor-change"))))
+  # an example not planned, where the render needs plan coverage, with no witness entry or a witness
+  # list whose shape the render refuses
+  or (($run.coverage.inert | not) and ($b | triggers_inert | not) and ($run | has("nonhcl") | not)
+      and $run.coverage.unplanned != []
+      and (($run | skips_run_shape | not)
+           or any($run.coverage.unplanned[]; . as $x | any($cs[]; .dir == $x.dir and entry_reason == $x.reason) | not)));
+
+def binary_yes($in; $l; $b; $cov; $nh):
+  $in.run as $run | $in.host as $h | $run.coverage as $c
+  | ([$cov[].dir] + [$nh[].dir]) as $gone
+  | (if $c.inert then [] else [$c.unplanned[] | select(.dir as $d | $gone | index($d) | not)] end) as $open
+  | ($c.covered_skips // []) as $cs
+  | skips_shape($run; $h) as $bound
+  | ($run | run_no_unknown($l.findings) | not)
+  and ($run.triage | not) and $run.plan_ran
+  and (any($l.signals[]; . == "unknown") | not)
+  and (any($l.findings[]; .rule_id | IN(gap_rules[])) | not)
+  and $l.unregistered == [] and $l.skipped == 0 and ($run | plan_not_run_gap) == 0
+  and ($h.could_not_run | length) == 0 and $run.verify_gaps == []
+  and $b != null and $b.status == "ran" and $b.capped == 0
+  and all($b.claims[]; .state != "unverifiable")
+  # no behaviour gap at all: every trigger passed or was read by the host
+  and all($b.triggers[] | select(.state == "unverifiable" and ((ci_gated or floor_ok or demo_ok or same_ok) | not)); false)
+  and all($open[]; . as $x | $bound
+      and any($cs[]; .dir == $x.dir and entry_reason == $x.reason))
+  # the ledger holds no other gap, and at least one witnessed example is what rule 4 resolves
+  and $l.gaps == 0 and $open != []
+  # a run whose behaviour step classified nothing has no change a witness could stand for
+  and ($b.triggers + $b.claims) != [];
+
 # --- The whole render. $in: {findings, host, checks, run, assessment, standard, registry}.
 
 def render($in):
@@ -1537,6 +1608,7 @@ def render($in):
   | covered_of($in; $l; $b) as $cov
   | nonhcl_of($in; $l; $b; $cov) as $nh
   | ($l + {covered: ($cov | length), nonhcl: ($nh | length), nonhcl_cap: nonhcl_cap($b)} | .unplanned_open = .unplanned - .covered - .nonhcl) as $l
+  | ($l + {binary_yes: binary_yes($in; $l; $b; $cov; $nh)}) as $l
   | ($l | ladder) as $v
   | earlier_of($in) as $e
   # APPROVE replaces the block only where the ladder itself would approve: every earlier blocking
