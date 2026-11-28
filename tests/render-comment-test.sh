@@ -2109,7 +2109,7 @@ mutate "the file and line match dropped" 's/and \.file == \$t\.file and \.line =
 mutate "complete not required" 's/and \.complete == true and/and/' t_incomplete
 mutate "the floor not named" 's/&& die "a finding that explains differences is rated below LOW/\&\& true "/' t_floor
 mutate "the version floor condition dropped" 's/and \(any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "provider-version-floor-change"\) \| not\)/and true/' t_floorcat
-mutate "also_categories not read for the version floor" 's/any\(\.category, \(\.also_categories \/\/ \[\]\)\[\];/any(.category;/' t_alsofloor
+mutate "also_categories not read for the version floor" 's/any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "provider-version-floor-change"\)/any(.category; . == "provider-version-floor-change")/' t_alsofloor
 mutate "prose-truncated entries each counted" 's/def cnr_count: .*/def cnr_count: length;/' t_prose_once
 mutate "gate advice after a runner-mode pass" 's/or \(\$run\.plan_mode != "laptop" and/or (false and/' t_runner
 mutate "the one form of an action clause dropped" 's/\(if \.count == 1 then "-one" else "-many" end\)/"-many"/' t_g0
@@ -2415,9 +2415,9 @@ mutate "the skip SHAs accepted alone" 's/and \(\[has\("covered_skips", "skip_bas
 mutate "covered names not allowlisted" 's/dir: \(\$c\.dir \| nm\(allowed\)\)/dir: (\$c.dir | nm(true))/' t_cov_names
 mutate "the witness lines left out of section 5" 's/if \$cov != \[\] then covered_lines\("unplanned-covered"; \$cov; \$run\) else/if false then [] else/' t_cov_std
 mutate "the COMPACT sentence dropped" 's/\+ \(if \$cov != \[\] then " " \+ covered_sentence\("compact-covered"; \$run; \$cov\)/+ (if false then " " + covered_sentence("compact-covered"; \$run; \$cov)/' t_cov_gold
-mutate "What to do with no item rendered" 's/ or \(\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.identical > 0 or \$l\.nonhcl_cap\) and \$items == \[\]\)//' t_cov_rule8_std
-mutate "What to do with no item rendered beside undemonstrated coverage" 's/\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.identical > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/(\$cov != [] or \$l.identical > 0 or \$l.nonhcl_cap) and \$items == []/' t_ux
-mutate "What to do with no item rendered beside identical plans" 's/ or \$l\.identical > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/ or \$l.nonhcl_cap) and \$items == []/' t_id
+mutate "What to do with no item rendered" 's/ or \(\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.identical > 0 or \$l\.added > 0 or \$l\.nonhcl_cap\) and \$items == \[\]\)//' t_cov_rule8_std
+mutate "What to do with no item rendered beside undemonstrated coverage" 's/\(\$cov != \[\] or \$l\.undemonstrated > 0 or \$l\.identical > 0 or \$l\.added > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/(\$cov != [] or \$l.identical > 0 or \$l.added > 0 or \$l.nonhcl_cap) and \$items == []/' t_ux
+mutate "What to do with no item rendered beside identical plans" 's/ or \$l\.identical > 0 or \$l\.added > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/ or \$l.added > 0 or \$l.nonhcl_cap) and \$items == []/' t_id
 mutate "the rule 7 rationale for covered skips alone dropped" 's/elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.covered > 0 then tx\("rationale-7-covered"\)\n//' t_cov_rule8_std
 mutate "the base not checked" 's/ and \$cv\.skip_base_sha == \$in\.host\.merge_base//' t_cov_base
 mutate "a plan pass that did not run accepted" 's/and \$run\.plan_ran and \(\$cv\.inert/and (\$cv.inert/' t_cov_noplan
@@ -3247,6 +3247,48 @@ mutate "the identical and outside-Terraform rationale dropped" 's/\n    elif \$r
 mutate "the identical rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.identical > 0 then tx\("rationale-7-identical"\)//' t_id
 mutate "an identical mark on a trigger that passed accepted" 's/and \. == unique\) and \.state == "unverifiable"/and . == unique)/' t_id_state
 mutate "an identical mark beside unexercised accepted" 's/ or has\("evidence_digest"\) or has\("unexercised"\) \| not\)/ or has("evidence_digest") | not)/' t_id_beside
+
+# --- Added resources (verdict.md, Added resources): a covered resource-added-or-removed trigger
+# shows the new resource plans, not that existing callers keep what they had: approve with nits at
+# best, listed as information, never approve.
+AT='{id: "T-001", file: "main.tf", line: 12, category: "resource-added-or-removed", state: "covered"}'
+RAD() { runf "ad-$1" '.plan_ran = true | .behaviour.triggers = ['"$AT"'] | '"${2:-.}"; }
+ADRAT='No finding is open, and a change adds or removes a resource that the examples plan. A plan shows the resource plans, not that existing callers keep what they had, so approve with nits is the best verdict (ladder rule 7).'
+cat > "$TMP/want-ad.md" <<'WANT'
+The change looks right.
+
+**Good to merge, with nits.**
+
+No finding is open, and a change adds or removes a resource that the examples plan. A plan shows the resource plans, not that existing callers keep what they had, so approve with nits is the best verdict (ladder rule 7).
+
+### Resources added or removed
+
+- Added or removed: `main.tf:12` (resource-added-or-removed): an example plans it; existing callers that reach it get the change on their next apply.
+WANT
+t_ad() {
+  render "$NONE" "" "" "$(RAD f)"
+  [ "$ST" = 0 ] && [ "$(rule)" = 7 ] && [ "$(verdict)" = "approve with nits COMMENT" ] && [ "$(tier)" = STANDARD ] \
+    && cmp -s "$O/comment.md" "$TMP/want-ad.md" && [ "$(accept "$O/result.json")" = "findings accepted: full" ]
+}
+t_ad; check "added resources: a covered resource-added-or-removed trigger alone is approve with nits, COMMENT, STANDARD, byte for byte, accepted by host-pass.sh" $?
+t_ad_also() { render "$NONE" "" "" "$(RAD a '.behaviour.triggers[0] |= (.category = "unclassified-change" | .also_categories = ["resource-added-or-removed"])')"; [ "$(rule)" = 7 ] && grep -qxF "$ADRAT" "$O/comment.md"; }
+t_ad_also; check "added resources: a covered trigger with the category merged in reads the same way" $?
+t_ad_other() { render "$NONE" "" "" "$(RAD o '.behaviour.triggers[0].category = "dynamic-block-change"')"; [ "$(rule)" = 8 ] && [ "$(verdict)" = "approve APPROVE" ] && ! grep -qF 'Added or removed:' "$O/comment.md"; }
+t_ad_other; check "added resources: a covered trigger of another category still approves" $?
+t_ad_unv() { render "$NONE" "" "" "$(RAD u '.behaviour.triggers[0].state = "unverifiable"')"; [ "$(rule)" = 4 ] && ! grep -qF 'Added or removed:' "$O/comment.md"; }
+t_ad_unv; check "added resources: an unverifiable resource-added-or-removed trigger stays an unknown at rule 4" $?
+t_ad_low() { render "$UXL" "" "" "$(RAD l)"; [ "$(rule)" = 7 ] && ! grep -qxF "$ADRAT" "$O/comment.md" && grep -qF 'Added or removed: `main.tf:12`' "$O/comment.md"; }
+t_ad_low; check "added resources: beside a LOW finding the LOW rationale stands and the trigger is still listed" $?
+t_ad_tier() { rc "$(F556)" "$(R556 ad '.behaviour.triggers += ['"$(jq -nc "$AT"' | .id = "T-002"')"']')"; [ "$ST" = 0 ] && [ "$(tier)" = STANDARD ] && grep -qF 'Added or removed: `main.tf:12`' "$O/comment.md"; }
+t_ad_tier; check "added resources: a body that would be COMPACT renders STANDARD with the trigger listed" $?
+mutate "rule 7 not reached by added resources" 's/ or \.added > 0 or \$g\.checks == "jobless"/ or \$g.checks == "jobless"/' t_ad
+mutate "any covered category read as added" 's/\(\.also_categories \/\/ \[\]\)\[\]; \. == "resource-added-or-removed"\)/(.also_categories \/\/ [])[]; true)/' t_ad_other
+mutate "the merged categories not read for added" 's/any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "resource-added-or-removed"\)/any(.category; . == "resource-added-or-removed")/' t_ad_also
+mutate "an unverifiable added trigger listed" 's/def added_ok: \.state == "covered" and /def added_ok: /' t_ad_unv
+mutate "the added rationale dropped" 's/\n    elif \$r == 7 and \(any\(\$f\[\]; \.severity == "LOW"\) \| not\) and \$in\.added > 0 then tx\("rationale-7-added"\)//' t_ad
+mutate "the added section dropped" 's/     \+ section\("Resources added or removed"/     + [] + section("dropped"/' t_ad
+mutate "the What to do section kept for added resources" 's/ or \$l\.identical > 0 or \$l\.added > 0 or \$l\.nonhcl_cap\) and \$items == \[\]/ or \$l.identical > 0 or \$l.nonhcl_cap) and \$items == []/' t_ad
+mutate "COMPACT taken beside added resources" 's/\n  and \$l\.added == 0\n/\n/' t_ad_tier
 
 # --- Recorded exceptions join the covered skips (verdict.md, Covered safety-gate skips): a
 # runner-mode run whose every unplanned example is a recorded exception witnessed by a planned
