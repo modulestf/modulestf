@@ -3314,14 +3314,17 @@ t_acc7_tinert() { acc7 "$(runf acst "$ACS"' | .behaviour.triggers = [{id: "T-001
 t_acc7_tinert; check "accept --run: covered skips beside triggers all inert do not refuse an approve" $?
 t_acc7_plain() { acc7 "$(runf acsp '.behaviour.triggers = [{id: "T-001", file: "main.tf", line: 1, category: "dynamic-block-change", state: "covered"}]')" approve; [ "$ACC" = "findings accepted: full" ]; }
 t_acc7_plain; check "accept --run: a covered trigger of another category does not refuse an approve" $?
+t_acc7_nonhcl() { acc7_caps "$(runf acsn '.behaviour.triggers = [{id: "T-001", file: "lambda/app.py", line: 1, category: "non-hcl-dependency", state: "unverifiable"}]')"; }
+t_acc7_nonhcl; check "accept --run: a forged approve over a trigger outside Terraform is refused" $?
 mutate_hp "accept --run not reading the rule 7 causes" 's/host_verdict_run\(\$v; \$reg; \$nr; \$r7\)/host_verdict_run(\$v; \$reg; \$nr)/' t_acc7_added
 mutate_hp "the rule 7 cause not capping an approve" 's/if \$cause and \. == "approve" then/if false then/' t_acc7_added
 mutate_hp "a covered added resource not a rule 7 cause" 's/any\(\$b\.triggers\[\]; added_ok or \.unexercised/any(\$b.triggers[]; .unexercised/' t_acc7_added
 mutate_hp "an unexercised trigger not a rule 7 cause" 's/ or \.unexercised == true or \(\.identical/ or (.identical/' t_acc7_ux
-mutate_hp "an identical trigger not a rule 7 cause" 's/ or \(\.identical \| type == "array"\)\)\)/))/' t_acc7_id
+mutate_hp "an identical trigger not a rule 7 cause" 's/ or \(\.identical \| type == "array"\)\n/\n/' t_acc7_id
 mutate_hp "covered skips not a rule 7 cause" 's/\(\(\(\.coverage\.covered_skips \/\/ \[\]\) != \[\]\)/((false)/' t_acc7_skip
 mutate_hp "covered skips of an inert change a rule 7 cause" 's/ and \(\.coverage\.inert \| not\) and \(\$b \| triggers_inert/ and (\$b | triggers_inert/' t_acc7_inert
 mutate_hp "covered skips beside inert triggers a rule 7 cause" 's/ and \(\$b \| triggers_inert \| not\)\);/);/' t_acc7_tinert
+mutate_hp "a trigger outside Terraform not a rule 7 cause" 's/\n      or \(\.state != "inert" and any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "non-hcl-dependency"\)\)//' t_acc7_nonhcl
 mutate_hp "any covered trigger a rule 7 cause" 's/def added_ok: \.state == "covered" and any\(\.category, \(\.also_categories \/\/ \[\]\)\[\]; \. == "resource-added-or-removed"\);/def added_ok: .state == "covered";/' t_acc7_plain
 
 # --- Recorded exceptions join the covered skips (verdict.md, Covered safety-gate skips): a

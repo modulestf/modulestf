@@ -530,12 +530,13 @@ def same_count: if . == null then 0 else [.triggers[] | select(same_ok)] | lengt
 def added_ok: .state == "covered" and any(.category, (.also_categories // [])[]; . == "resource-added-or-removed");
 def added_count: if . == null then 0 else [.triggers[] | select(added_ok)] | length end;
 # A rule 7 cause the render reads from the run file alone (verdict.md, The Ladder): a covered
-# trigger that adds or removes a resource, an unexercised or identical trigger, or covered skips of a
-# change that is not inert. With any of them the render never approves; host-pass.sh accept --run
-# refuses an approve beside one. Input: the run file. It may be true where the render reads the cause
+# trigger that adds or removes a resource, an unexercised or identical trigger, a trigger outside
+# Terraform that is not inert (nonhcl_cap), or covered skips of a change that is not inert. With
+# any of them the render never approves; host-pass.sh accept --run refuses an approve beside one. Input: the run file. It may be true where the render reads the cause
 # as an unknown instead, which is no approval either.
 def run_rule7_cause: behaviour_of(.) as $b
-  | ($b != null and $b.status == "ran" and any($b.triggers[]; added_ok or .unexercised == true or (.identical | type == "array")))
+  | ($b != null and $b.status == "ran" and any($b.triggers[]; added_ok or .unexercised == true or (.identical | type == "array")
+      or (.state != "inert" and any(.category, (.also_categories // [])[]; . == "non-hcl-dependency"))))
     or (((.coverage.covered_skips // []) != []) and (.coverage.inert | not) and ($b | triggers_inert | not));
 # A location is a code span; under --links (link_base set) a link to the file at the head when
 # the path is in the allowed set, and is not the module root `.`, so the URL holds no character the pull request could choose.
